@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-## Project Status: Phase 6 Complete - File-Level Operations with CAS
+## Project Status: Phase 7 Complete - Dependency Resolution
 
 ### Current State
 - [COMPLETE] **Phase 0**: Vision and architecture documented
@@ -10,7 +10,8 @@
 - [COMPLETE] **Phase 4**: Package Format Support (RPM parser)
 - [COMPLETE] **Phase 5**: Changeset Transaction Model with rollback & validation
 - [COMPLETE] **Phase 6**: File-Level Operations with content-addressable storage
-- [PENDING] **Phase 7**: Dependency Resolution (next)
+- [COMPLETE] **Phase 7**: Dependency Resolution with graph-based solver
+- [PENDING] **Phase 8**: Repository Management (next)
 
 ### Phase 1 Deliverables [COMPLETE]
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -106,6 +107,45 @@
   - All code clippy-clean (only minor test warnings)
   - CAS module has 8 comprehensive unit tests
 - Added tempfile dependency for RPM extraction
+
+### Phase 7 Deliverables [COMPLETE]
+- Version handling system (src/version/mod.rs):
+  - `RpmVersion` struct for epoch:version-release parsing (e.g., "1:2.3.4-5.el8")
+  - `VersionConstraint` enum with full operator support (>=, <=, <, >, =, !=)
+  - Compound constraints with And combinator (e.g., ">= 1.0.0, < 2.0.0")
+  - Semver integration for version comparison
+  - 14 comprehensive unit tests for version parsing and constraints
+- Dependency database model (src/db/models.rs):
+  - `DependencyEntry` struct with full CRUD operations
+  - Stores package dependencies with version constraints
+  - Methods: find_by_trove, find_dependents, find_providers
+  - Cascade delete when parent trove is removed
+- Dependency resolution system (src/resolver/mod.rs):
+  - `DependencyGraph` with nodes (packages) and edges (dependencies)
+  - Topological sorting using Kahn's algorithm for install order
+  - Cycle detection with DFS for circular dependency errors
+  - Conflict detection for version constraint violations
+  - `Resolver` with full resolution planning:
+    - Missing dependency detection
+    - Version constraint checking
+    - Circular dependency detection
+    - Breaking package identification for removals
+  - 17 comprehensive unit tests for graph and resolver operations
+- CLI commands for dependency queries:
+  - `conary depends <package>` - show package dependencies
+  - `conary rdepends <package>` - show reverse dependencies (what depends on it)
+  - `conary whatbreaks <package>` - show packages that would break if removed
+- Enhanced install command:
+  - Automatically stores package dependencies in database
+  - Dependencies extracted from RPM metadata during installation
+- Enhanced remove command:
+  - Checks for reverse dependencies before removal
+  - Prevents removal of packages with dependents
+  - Clear error messages with breaking package list
+- Testing and quality:
+  - 61 tests passing (44 lib + 7 bin + 10 integration, 1 ignored)
+  - All code clippy-clean with zero warnings
+  - Added semver crate dependency (v1.0)
 
 ### Architecture Decisions
 
@@ -345,3 +385,96 @@ Phase 6 Success Criteria Met:
 - Content-addressable storage with deduplication ✓
 - Atomic file operations ✓
 - Comprehensive testing ✓
+
+**Session 9** (2025-11-14) - **Phase 7 Complete: Dependency Resolution**
+
+Part 1 - Version System and Database Foundation:
+- Added semver crate dependency (v1.0) to Cargo.toml
+- Created src/version/mod.rs with comprehensive version handling:
+  - `RpmVersion` struct parsing epoch:version-release format
+  - Support for all RPM version components (epoch defaults to 0)
+  - `VersionConstraint` enum with operators: >=, <=, <, >, =, !=, And
+  - Compound constraint parsing (e.g., ">= 1.0.0, < 2.0.0")
+  - Semver integration for version comparison with fallback to string comparison
+  - Full Ord/PartialOrd implementation for version ordering
+  - 14 comprehensive unit tests covering all version operations
+- Enhanced DependencyEntry model in src/db/models.rs:
+  - Full CRUD operations: insert, find_by_trove, find_dependents, find_providers, delete
+  - Stores dependency name, version, type (runtime/build/optional), and constraints
+  - Database integration with proper foreign keys
+  - Cascade delete when parent trove removed
+- Updated install command to store dependencies:
+  - Extracts dependencies from RPM metadata during installation
+  - Stores each dependency with type information in database
+  - Foundation for future automatic dependency resolution
+
+Part 2 - Dependency Graph and Resolution:
+- Created src/resolver/mod.rs with comprehensive dependency resolution:
+  - `PackageNode` struct representing packages with version and trove ID
+  - `DependencyEdge` struct with version constraints and dependency types
+  - `DependencyGraph` with forward and reverse edge tracking
+  - Graph construction from database (build_from_db)
+  - Topological sorting using Kahn's algorithm
+  - Reverses output to provide install order (dependencies before dependents)
+  - Cycle detection using DFS with recursion stack
+  - Constraint checking against installed versions
+  - Breaking package identification (transitive closure of reverse deps)
+- `Resolver` for high-level dependency operations:
+  - Resolution planning with ResolutionPlan struct
+  - Missing dependency detection
+  - Conflict detection for version constraints
+  - Circular dependency error reporting
+  - Check removal safety before uninstalling packages
+- Comprehensive conflict types:
+  - UnsatisfiableConstraint: installed version doesn't meet requirement
+  - ConflictingConstraints: multiple packages need incompatible versions
+  - CircularDependency: packages form a dependency cycle
+  - MissingPackage: required dependency not installed
+- 17 unit tests for resolver operations:
+  - Graph construction, node/edge operations
+  - Topological sort with simple chains and diamond dependencies
+  - Cycle detection in various graph structures
+  - Constraint satisfaction and violation
+  - Resolution planning for install and removal
+  - Breaking package identification
+
+Part 3 - CLI Integration and Safety:
+- Added three new CLI commands:
+  - `conary depends <package>` - show package dependencies with types and constraints
+  - `conary rdepends <package>` - show reverse dependencies (what needs this package)
+  - `conary whatbreaks <package>` - identify all packages affected by removal
+- Enhanced remove command with dependency safety:
+  - Builds dependency graph before removal
+  - Checks for packages that depend on package being removed
+  - Refuses removal if dependencies exist
+  - Clear error messages listing breaking packages
+  - Suggests using whatbreaks command for details
+- All commands properly handle:
+  - Package not found errors
+  - Empty dependency lists
+  - Multiple dependents with clear formatting
+
+Part 4 - Code Quality and Testing:
+- Fixed all clippy warnings to achieve zero-warning build:
+  - Replaced or_insert_with(Vec::new) with or_default()
+  - Collapsed nested if statements for readability
+  - Changed write! with newlines to writeln!
+- Final testing results:
+  - 61 tests passing (44 lib + 7 bin + 10 integration, 1 ignored)
+  - Breakdown: 30 original + 14 version + 17 resolver = 61 lib tests
+  - All code clippy-clean with -D warnings flag
+  - No breaking changes to existing functionality
+- Performance considerations:
+  - In-memory graph construction for fast operations
+  - Efficient topological sort (O(V+E) complexity)
+  - DFS cycle detection with early termination
+
+Phase 7 Success Criteria Met:
+- Version parsing and constraint system ✓
+- Dependency graph construction and algorithms ✓
+- Topological sorting for install order ✓
+- Cycle detection for circular dependencies ✓
+- Conflict detection for version incompatibilities ✓
+- CLI commands for dependency queries ✓
+- Safe package removal with dependency checking ✓
+- Comprehensive testing and zero clippy warnings ✓

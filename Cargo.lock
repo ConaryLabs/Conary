@@ -343,6 +343,7 @@ dependencies = [
  "clap",
  "rpm",
  "rusqlite",
+ "semver",
  "sha2",
  "tempfile",
  "thiserror",

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use conary::packages::rpm::RpmPackage;
+use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
 use std::fs::File;
 use std::io::Read;
@@ -86,6 +87,30 @@ enum Commands {
         /// Install root directory (default: /)
         #[arg(short, long, default_value = "/")]
         root: String,
+    },
+    /// Show dependencies of a package
+    Depends {
+        /// Package name
+        package_name: String,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+    /// Show reverse dependencies (what depends on this package)
+    Rdepends {
+        /// Package name
+        package_name: String,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+    /// Show what packages would break if this package is removed
+    Whatbreaks {
+        /// Package name
+        package_name: String,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
     },
 }
 
@@ -276,6 +301,24 @@ fn main() -> Result<()> {
                     )?;
                 }
 
+                // Store dependencies in database
+                for dep in rpm.dependencies() {
+                    let dep_type_str = match dep.dep_type {
+                        DependencyType::Runtime => "runtime",
+                        DependencyType::Build => "build",
+                        DependencyType::Optional => "optional",
+                    };
+
+                    let mut dep_entry = conary::db::models::DependencyEntry::new(
+                        trove_id,
+                        dep.name.clone(),
+                        dep.version.clone(),
+                        dep_type_str.to_string(),
+                        None, // version_constraint parsing comes later
+                    );
+                    dep_entry.insert(tx)?;
+                }
+
                 // Mark changeset as applied
                 changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
 
@@ -333,6 +376,27 @@ fn main() -> Result<()> {
 
             let trove = &troves[0];
             let trove_id = trove.id.unwrap();
+
+            // Check for reverse dependencies
+            let resolver = conary::resolver::Resolver::new(&conn)?;
+            let breaking = resolver.check_removal(&package_name)?;
+
+            if !breaking.is_empty() {
+                println!(
+                    "WARNING: Removing '{}' would break the following packages:",
+                    package_name
+                );
+                for pkg in &breaking {
+                    println!("  {}", pkg);
+                }
+                println!("\nRefusing to remove package with dependencies.");
+                println!("Use 'conary whatbreaks {}' for more information.", package_name);
+                return Err(anyhow::anyhow!(
+                    "Cannot remove '{}': {} packages depend on it",
+                    package_name,
+                    breaking.len()
+                ));
+            }
 
             // Count files before removal for reporting
             let file_count = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?.len();
@@ -640,6 +704,121 @@ fn main() -> Result<()> {
 
             if modified_count > 0 || missing_count > 0 {
                 return Err(anyhow::anyhow!("Verification failed"));
+            }
+
+            Ok(())
+        }
+        Some(Commands::Depends {
+            package_name,
+            db_path,
+        }) => {
+            info!("Showing dependencies for package: {}", package_name);
+
+            let conn = conary::db::open(&db_path)?;
+
+            // Find the trove
+            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
+            let trove = troves
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
+
+            // Get dependencies
+            let deps = conary::db::models::DependencyEntry::find_by_trove(
+                &conn,
+                trove.id.unwrap(),
+            )?;
+
+            if deps.is_empty() {
+                println!("Package '{}' has no dependencies", package_name);
+            } else {
+                println!("Dependencies for package '{}':", package_name);
+                for dep in deps {
+                    print!("  {} ({})", dep.depends_on_name, dep.dependency_type);
+                    if let Some(version) = dep.depends_on_version {
+                        print!(" - version: {}", version);
+                    }
+                    if let Some(constraint) = dep.version_constraint {
+                        print!(" - constraint: {}", constraint);
+                    }
+                    println!();
+                }
+            }
+
+            Ok(())
+        }
+        Some(Commands::Rdepends {
+            package_name,
+            db_path,
+        }) => {
+            info!(
+                "Showing reverse dependencies for package: {}",
+                package_name
+            );
+
+            let conn = conary::db::open(&db_path)?;
+
+            // Find packages that depend on this one
+            let dependents =
+                conary::db::models::DependencyEntry::find_dependents(&conn, &package_name)?;
+
+            if dependents.is_empty() {
+                println!(
+                    "No packages depend on '{}' (or package not installed)",
+                    package_name
+                );
+            } else {
+                println!("Packages that depend on '{}':", package_name);
+                for dep in dependents {
+                    // Get the trove name for the dependent
+                    if let Ok(Some(trove)) =
+                        conary::db::models::Trove::find_by_id(&conn, dep.trove_id)
+                    {
+                        print!("  {} ({})", trove.name, dep.dependency_type);
+                        if let Some(constraint) = dep.version_constraint {
+                            print!(" - requires: {}", constraint);
+                        }
+                        println!();
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        Some(Commands::Whatbreaks {
+            package_name,
+            db_path,
+        }) => {
+            info!(
+                "Checking what would break if '{}' is removed...",
+                package_name
+            );
+
+            let conn = conary::db::open(&db_path)?;
+
+            // Check if package exists
+            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
+            let _trove = troves
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
+
+            // Build dependency graph and find breaking packages
+            let resolver = conary::resolver::Resolver::new(&conn)?;
+            let breaking = resolver.check_removal(&package_name)?;
+
+            if breaking.is_empty() {
+                println!(
+                    "Package '{}' can be safely removed (no dependencies)",
+                    package_name
+                );
+            } else {
+                println!(
+                    "Removing '{}' would break the following packages:",
+                    package_name
+                );
+                for pkg in &breaking {
+                    println!("  {}", pkg);
+                }
+                println!("\nTotal: {} packages would be affected", breaking.len());
             }
 
             Ok(())
