@@ -1,12 +1,13 @@
 # PROGRESS.md
 
-## Project Status: Phase 2 Complete - Database Schema & Core Layer
+## Project Status: Phase 3 Complete - Full Core Abstractions
 
 ### Current State
 - ✅ **Phase 0**: Vision and architecture documented
 - ✅ **Phase 1**: Foundation & Project Setup complete
 - ✅ **Phase 2**: Database Schema & Core Layer complete
-- 🔄 **Phase 3**: Core Abstractions & Data Models (next)
+- ✅ **Phase 3**: Core Abstractions & Data Models complete
+- 🔄 **Phase 4**: Package Format Support (next)
 
 ### Phase 1 Deliverables ✅
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -37,6 +38,19 @@
 - Cascade delete support (files deleted when trove is deleted)
 - All code clippy-clean with zero warnings
 
+### Phase 3 Deliverables ✅
+- Completed remaining core data models (src/db/models.rs):
+  - `Flavor` model with full CRUD operations (insert, find_by_trove, find_by_key, delete)
+  - `Provenance` model with full CRUD operations (insert, find_by_trove, update, delete)
+- Build-time variation tracking via flavors (key-value pairs)
+- Supply chain tracking via provenance (source URL, branch, commit, builder, build host)
+- Unit tests for Flavor CRUD (4 tests including cascade delete)
+- Unit tests for Provenance CRUD (2 tests including cascade delete)
+- Integration test demonstrating troves with flavors and provenance together
+- Full test suite: 22 tests passing (16 unit + 6 integration)
+- All models support cascade delete when parent trove is removed
+- Clippy-clean with zero warnings
+
 ### Architecture Decisions
 
 **Database-First**
@@ -56,10 +70,7 @@
 - rusqlite (synchronous SQLite interface)
 - File-level granularity for delta updates and rollback
 
-### Next Steps (Phase 3)
-Note: Phase 2 actually included implementing core abstractions and data models,
-so Phase 3 has been partially completed. Moving to Phase 4 next.
-
+### Next Steps (Phase 4)
 **Phase 4: Package Format Support (First Format)**
 1. Choose first package format (recommend RPM as most complex)
 2. Implement RPM file parser (header, payload extraction)
@@ -67,6 +78,7 @@ so Phase 3 has been partially completed. Moving to Phase 4 next.
 4. Extract file list with hashes
 5. Convert to Trove representation
 6. Integration tests with real RPM files
+7. Error handling for malformed packages
 
 ### Open Questions
 - Delta update implementation strategy (binary diff tools: bsdiff, xdelta3, zstd?)
@@ -104,5 +116,16 @@ so Phase 3 has been partially completed. Moving to Phase 4 next.
 - Implemented cascade delete support (foreign key constraints)
 - Fixed all clippy warnings (redundant closures, FromStr trait implementations)
 - Verified Phase 2 success criteria: migrations work, CRUD operations functional
-- Note: Phase 2 included Phase 3 scope (core abstractions already implemented)
+- Committed to GitHub and pushed
+
+**Session 4** (2025-11-14) - **Phase 3 Complete**
+- Completed remaining core data models in src/db/models.rs:
+  - Flavor model with full CRUD (insert, find_by_trove, find_by_key, delete)
+  - Provenance model with full CRUD (insert, find_by_trove, update, delete)
+- Added 6 unit tests for Flavor and Provenance CRUD operations
+- Added integration test for troves with flavors and provenance (e.g., nginx[ssl,http3] with supply chain tracking)
+- All 22 tests passing (16 unit + 6 integration)
+- Cascade delete support verified for flavors and provenance
+- All code clippy-clean and formatted
+- Verified Phase 3 success criteria: all core models complete with full CRUD
 - Next: Phase 4 - Package Format Support (RPM parser)

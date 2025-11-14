@@ -200,3 +200,77 @@ fn test_transaction_rollback_on_error() {
         "No troves should be in database after rollback"
     );
 }
+
+#[test]
+fn test_trove_with_flavors_and_provenance() {
+    use conary::db;
+    use conary::db::models::{Flavor, Provenance, Trove, TroveType};
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let db_path = temp_file.path().to_str().unwrap().to_string();
+    drop(temp_file);
+
+    db::init(&db_path).unwrap();
+    let conn = db::open(&db_path).unwrap();
+
+    // Create a trove with specific flavors (nginx with SSL and HTTP/3 support)
+    let mut trove = Trove::new(
+        "nginx".to_string(),
+        "1.21.0".to_string(),
+        TroveType::Package,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    trove.description = Some("HTTP server with SSL and HTTP/3".to_string());
+
+    let trove_id = trove.insert(&conn).unwrap();
+
+    // Add flavors to represent build configuration
+    let mut ssl_flavor = Flavor::new(trove_id, "ssl".to_string(), "openssl-3.0".to_string());
+    ssl_flavor.insert(&conn).unwrap();
+
+    let mut http3_flavor = Flavor::new(trove_id, "http3".to_string(), "enabled".to_string());
+    http3_flavor.insert(&conn).unwrap();
+
+    let mut arch_flavor = Flavor::new(trove_id, "arch".to_string(), "x86_64".to_string());
+    arch_flavor.insert(&conn).unwrap();
+
+    // Add provenance information
+    let mut prov = Provenance::new(trove_id);
+    prov.source_url = Some("https://github.com/nginx/nginx".to_string());
+    prov.source_branch = Some("release-1.21".to_string());
+    prov.source_commit = Some("abc123def456789".to_string());
+    prov.build_host = Some("builder.example.com".to_string());
+    prov.build_time = Some("2025-11-14T12:00:00Z".to_string());
+    prov.builder = Some("ci-bot".to_string());
+    prov.insert(&conn).unwrap();
+
+    // Verify we can retrieve the full picture
+    let retrieved_trove = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+    assert_eq!(retrieved_trove.name, "nginx");
+    assert_eq!(retrieved_trove.version, "1.21.0");
+
+    let flavors = Flavor::find_by_trove(&conn, trove_id).unwrap();
+    assert_eq!(flavors.len(), 3);
+
+    // Verify flavors are ordered by key
+    assert_eq!(flavors[0].key, "arch");
+    assert_eq!(flavors[1].key, "http3");
+    assert_eq!(flavors[2].key, "ssl");
+    assert_eq!(flavors[2].value, "openssl-3.0");
+
+    let provenance = Provenance::find_by_trove(&conn, trove_id).unwrap().unwrap();
+    assert_eq!(
+        provenance.source_url,
+        Some("https://github.com/nginx/nginx".to_string())
+    );
+    assert_eq!(
+        provenance.source_commit,
+        Some("abc123def456789".to_string())
+    );
+    assert_eq!(provenance.builder, Some("ci-bot".to_string()));
+
+    // Test querying by flavor
+    let ssl_packages = Flavor::find_by_key(&conn, "ssl").unwrap();
+    assert_eq!(ssl_packages.len(), 1);
+    assert_eq!(ssl_packages[0].trove_id, trove_id);
+}

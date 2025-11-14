@@ -403,6 +403,185 @@ impl FileEntry {
     }
 }
 
+/// A Flavor represents a build-time variation (e.g., architecture, features, toolchain)
+#[derive(Debug, Clone)]
+pub struct Flavor {
+    pub id: Option<i64>,
+    pub trove_id: i64,
+    pub key: String,
+    pub value: String,
+}
+
+impl Flavor {
+    /// Create a new Flavor
+    pub fn new(trove_id: i64, key: String, value: String) -> Self {
+        Self {
+            id: None,
+            trove_id,
+            key,
+            value,
+        }
+    }
+
+    /// Insert this flavor into the database
+    pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        conn.execute(
+            "INSERT INTO flavors (trove_id, key, value) VALUES (?1, ?2, ?3)",
+            params![&self.trove_id, &self.key, &self.value],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        self.id = Some(id);
+        Ok(id)
+    }
+
+    /// Find all flavors for a trove
+    pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, key, value FROM flavors WHERE trove_id = ?1 ORDER BY key",
+        )?;
+
+        let flavors = stmt
+            .query_map([trove_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(flavors)
+    }
+
+    /// Find flavors by key name across all troves
+    pub fn find_by_key(conn: &Connection, key: &str) -> Result<Vec<Self>> {
+        let mut stmt =
+            conn.prepare("SELECT id, trove_id, key, value FROM flavors WHERE key = ?1")?;
+
+        let flavors = stmt
+            .query_map([key], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(flavors)
+    }
+
+    /// Delete a flavor by ID
+    pub fn delete(conn: &Connection, id: i64) -> Result<()> {
+        conn.execute("DELETE FROM flavors WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Convert a database row to a Flavor
+    fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: Some(row.get(0)?),
+            trove_id: row.get(1)?,
+            key: row.get(2)?,
+            value: row.get(3)?,
+        })
+    }
+}
+
+/// Provenance tracks the supply chain for a trove
+#[derive(Debug, Clone)]
+pub struct Provenance {
+    pub id: Option<i64>,
+    pub trove_id: i64,
+    pub source_url: Option<String>,
+    pub source_branch: Option<String>,
+    pub source_commit: Option<String>,
+    pub build_host: Option<String>,
+    pub build_time: Option<String>,
+    pub builder: Option<String>,
+}
+
+impl Provenance {
+    /// Create a new Provenance
+    pub fn new(trove_id: i64) -> Self {
+        Self {
+            id: None,
+            trove_id,
+            source_url: None,
+            source_branch: None,
+            source_commit: None,
+            build_host: None,
+            build_time: None,
+            builder: None,
+        }
+    }
+
+    /// Insert this provenance into the database
+    pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        conn.execute(
+            "INSERT INTO provenance (trove_id, source_url, source_branch, source_commit, build_host, build_time, builder)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &self.trove_id,
+                &self.source_url,
+                &self.source_branch,
+                &self.source_commit,
+                &self.build_host,
+                &self.build_time,
+                &self.builder,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        self.id = Some(id);
+        Ok(id)
+    }
+
+    /// Find provenance for a trove
+    pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Option<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, source_url, source_branch, source_commit, build_host, build_time, builder
+             FROM provenance WHERE trove_id = ?1",
+        )?;
+
+        let provenance = stmt.query_row([trove_id], Self::from_row).optional()?;
+
+        Ok(provenance)
+    }
+
+    /// Update provenance information
+    pub fn update(&self, conn: &Connection) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::InitError("Cannot update provenance without ID".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE provenance SET source_url = ?1, source_branch = ?2, source_commit = ?3,
+             build_host = ?4, build_time = ?5, builder = ?6 WHERE id = ?7",
+            params![
+                &self.source_url,
+                &self.source_branch,
+                &self.source_commit,
+                &self.build_host,
+                &self.build_time,
+                &self.builder,
+                id,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Delete provenance by trove ID
+    pub fn delete(conn: &Connection, trove_id: i64) -> Result<()> {
+        conn.execute("DELETE FROM provenance WHERE trove_id = ?1", [trove_id])?;
+        Ok(())
+    }
+
+    /// Convert a database row to a Provenance
+    fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: Some(row.get(0)?),
+            trove_id: row.get(1)?,
+            source_url: row.get(2)?,
+            source_branch: row.get(3)?,
+            source_commit: row.get(4)?,
+            build_host: row.get(5)?,
+            build_time: row.get(6)?,
+            builder: row.get(7)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +730,136 @@ mod tests {
         // Verify file is gone
         let file_exists = FileEntry::find_by_path(&conn, "/usr/bin/test").unwrap();
         assert!(file_exists.is_none());
+    }
+
+    #[test]
+    fn test_flavor_crud() {
+        let (_temp, conn) = create_test_db();
+
+        // Create a trove first
+        let mut trove = Trove::new(
+            "nginx".to_string(),
+            "1.21.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+
+        // Create flavors
+        let mut flavor1 = Flavor::new(trove_id, "ssl".to_string(), "enabled".to_string());
+        let id1 = flavor1.insert(&conn).unwrap();
+        assert!(id1 > 0);
+
+        let mut flavor2 = Flavor::new(trove_id, "http3".to_string(), "enabled".to_string());
+        flavor2.insert(&conn).unwrap();
+
+        // Find by trove
+        let flavors = Flavor::find_by_trove(&conn, trove_id).unwrap();
+        assert_eq!(flavors.len(), 2);
+        assert_eq!(flavors[0].key, "http3"); // Ordered by key
+        assert_eq!(flavors[1].key, "ssl");
+
+        // Find by key
+        let ssl_flavors = Flavor::find_by_key(&conn, "ssl").unwrap();
+        assert_eq!(ssl_flavors.len(), 1);
+        assert_eq!(ssl_flavors[0].value, "enabled");
+
+        // Delete
+        Flavor::delete(&conn, id1).unwrap();
+        let remaining = Flavor::find_by_trove(&conn, trove_id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].key, "http3");
+    }
+
+    #[test]
+    fn test_provenance_crud() {
+        let (_temp, conn) = create_test_db();
+
+        // Create a trove first
+        let mut trove = Trove::new(
+            "nginx".to_string(),
+            "1.21.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+
+        // Create provenance
+        let mut prov = Provenance::new(trove_id);
+        prov.source_url = Some("https://github.com/nginx/nginx".to_string());
+        prov.source_branch = Some("main".to_string());
+        prov.source_commit = Some("abc123def456".to_string());
+        prov.build_host = Some("builder01.example.com".to_string());
+        prov.builder = Some("builder-bot".to_string());
+
+        let id = prov.insert(&conn).unwrap();
+        assert!(id > 0);
+
+        // Find by trove
+        let found = Provenance::find_by_trove(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(
+            found.source_url,
+            Some("https://github.com/nginx/nginx".to_string())
+        );
+        assert_eq!(found.source_commit, Some("abc123def456".to_string()));
+        assert_eq!(found.builder, Some("builder-bot".to_string()));
+
+        // Update
+        let mut updated_prov = found.clone();
+        updated_prov.source_commit = Some("new_commit_hash".to_string());
+        updated_prov.update(&conn).unwrap();
+
+        let reloaded = Provenance::find_by_trove(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(reloaded.source_commit, Some("new_commit_hash".to_string()));
+
+        // Delete
+        Provenance::delete(&conn, trove_id).unwrap();
+        let deleted = Provenance::find_by_trove(&conn, trove_id).unwrap();
+        assert!(deleted.is_none());
+    }
+
+    #[test]
+    fn test_flavor_cascade_delete() {
+        let (_temp, conn) = create_test_db();
+
+        // Create a trove with flavors
+        let mut trove = Trove::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+
+        let mut flavor = Flavor::new(trove_id, "feature".to_string(), "enabled".to_string());
+        flavor.insert(&conn).unwrap();
+
+        // Delete the trove - flavors should be cascade deleted
+        Trove::delete(&conn, trove_id).unwrap();
+
+        // Verify flavors are gone
+        let flavors = Flavor::find_by_trove(&conn, trove_id).unwrap();
+        assert_eq!(flavors.len(), 0);
+    }
+
+    #[test]
+    fn test_provenance_cascade_delete() {
+        let (_temp, conn) = create_test_db();
+
+        // Create a trove with provenance
+        let mut trove = Trove::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+
+        let mut prov = Provenance::new(trove_id);
+        prov.source_url = Some("https://example.com".to_string());
+        prov.insert(&conn).unwrap();
+
+        // Delete the trove - provenance should be cascade deleted
+        Trove::delete(&conn, trove_id).unwrap();
+
+        // Verify provenance is gone
+        let prov_exists = Provenance::find_by_trove(&conn, trove_id).unwrap();
+        assert!(prov_exists.is_none());
     }
 }
