@@ -52,6 +52,16 @@ Keep the dependency tree lean. This is system-level infrastructure.
 - Database tests use in-memory SQLite or temp files
 - Test coverage matters for a package manager
 
+**No Emojis**
+- No emojis in source code
+- No emojis in documentation files (README.md, PROGRESS.md, CLAUDE.md, ROADMAP.md)
+- No emojis in commit messages (title or body)
+- Use plain text markers instead:
+  - Use `[COMPLETE]` or `(complete)` instead of ✅
+  - Use `[IN PROGRESS]` or `(in progress)` instead of 🔄
+  - Use `[FAILED]` or `(failed)` instead of ❌
+  - Use `NEW` or `(new)` instead of ⭐
+
 ### Architecture Concepts
 
 **Conary-Inspired Terminology**
