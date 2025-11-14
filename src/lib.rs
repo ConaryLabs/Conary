@@ -15,6 +15,7 @@
 
 pub mod db;
 mod error;
+pub mod filesystem;
 pub mod packages;
 
 pub use error::{Error, Result};

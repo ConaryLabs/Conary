@@ -14,6 +14,16 @@ pub struct PackageFile {
     pub sha256: Option<String>,
 }
 
+/// A file extracted from a package with its content
+#[derive(Debug, Clone)]
+pub struct ExtractedFile {
+    pub path: String,
+    pub content: Vec<u8>,
+    pub size: i64,
+    pub mode: i32,
+    pub sha256: Option<String>,
+}
+
 /// Dependency information
 #[derive(Debug, Clone)]
 pub struct Dependency {

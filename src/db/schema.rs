@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -77,6 +77,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
     match version {
         1 => migrate_v1(conn),
         2 => migrate_v2(conn),
+        3 => migrate_v3(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -205,6 +206,50 @@ fn migrate_v2(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 2 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 3: Add content-addressable storage tracking
+///
+/// Adds tables for tracking file contents and file history:
+/// - file_contents: Maps SHA-256 hashes to stored content locations
+/// - file_history: Tracks file states per changeset for rollback support
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 3");
+
+    conn.execute_batch(
+        "
+        -- File contents stored in CAS (content-addressable storage)
+        CREATE TABLE file_contents (
+            sha256_hash TEXT PRIMARY KEY,
+            content_path TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            stored_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_file_contents_stored_at ON file_contents(stored_at);
+
+        -- File history for rollback support
+        -- Tracks file states at each changeset
+        CREATE TABLE file_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changeset_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            sha256_hash TEXT,
+            action TEXT NOT NULL CHECK(action IN ('add', 'modify', 'delete')),
+            previous_hash TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (changeset_id) REFERENCES changesets(id) ON DELETE CASCADE,
+            FOREIGN KEY (sha256_hash) REFERENCES file_contents(sha256_hash),
+            FOREIGN KEY (previous_hash) REFERENCES file_contents(sha256_hash)
+        );
+
+        CREATE INDEX idx_file_history_changeset ON file_history(changeset_id);
+        CREATE INDEX idx_file_history_path ON file_history(path);
+        ",
+    )?;
+
+    info!("Schema version 3 applied successfully");
     Ok(())
 }
 

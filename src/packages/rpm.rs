@@ -4,14 +4,16 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
-use crate::packages::traits::{Dependency, DependencyType, PackageFile, PackageFormat};
+use crate::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat};
 use rpm::Package;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::PathBuf;
 use tracing::debug;
 
 /// RPM package representation
 pub struct RpmPackage {
+    package_path: PathBuf,
     name: String,
     version: String,
     architecture: Option<String>,
@@ -126,6 +128,7 @@ impl PackageFormat for RpmPackage {
         );
 
         Ok(Self {
+            package_path: PathBuf::from(path),
             name,
             version,
             architecture,
@@ -203,6 +206,79 @@ impl RpmPackage {
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
     }
+
+    /// Extract all files with their contents from the RPM package
+    ///
+    /// This extracts files from the RPM payload (CPIO archive) to a temporary directory,
+    /// then reads them into memory. Uses rpm2cpio and cpio system commands.
+    pub fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        debug!("Extracting file contents from RPM: {:?}", self.package_path);
+
+        // Create temp directory for extraction
+        let temp_dir = TempDir::new()
+            .map_err(|e| Error::InitError(format!("Failed to create temp dir: {}", e)))?;
+
+        // Extract RPM to temp directory using rpm2cpio | cpio
+        // rpm2cpio package.rpm | cpio -idmv -D /tmp/extract
+        let rpm2cpio_output = Command::new("rpm2cpio")
+            .arg(&self.package_path)
+            .output()
+            .map_err(|e| Error::InitError(format!("Failed to run rpm2cpio: {}. Is rpm2cpio installed?", e)))?;
+
+        if !rpm2cpio_output.status.success() {
+            return Err(Error::InitError(format!(
+                "rpm2cpio failed: {}",
+                String::from_utf8_lossy(&rpm2cpio_output.stderr)
+            )));
+        }
+
+        // Extract cpio archive
+        let cpio_status = Command::new("cpio")
+            .args(["-idm", "--quiet"])
+            .current_dir(temp_dir.path())
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.as_mut().unwrap().write_all(&rpm2cpio_output.stdout)?;
+                child.wait()
+            })
+            .map_err(|e| Error::InitError(format!("Failed to run cpio: {}. Is cpio installed?", e)))?;
+
+        if !cpio_status.success() {
+            return Err(Error::InitError("cpio extraction failed".to_string()));
+        }
+
+        // Read extracted files
+        let mut extracted_files = Vec::new();
+
+        for file_meta in &self.files {
+            let full_path = temp_dir.path().join(file_meta.path.trim_start_matches('/'));
+
+            // Skip if not a regular file (directory, symlink, etc.)
+            if !full_path.is_file() {
+                continue;
+            }
+
+            // Read file content
+            let content = std::fs::read(&full_path)
+                .map_err(|e| Error::InitError(format!("Failed to read {}: {}", file_meta.path, e)))?;
+
+            extracted_files.push(ExtractedFile {
+                path: file_meta.path.clone(),
+                content,
+                size: file_meta.size,
+                mode: file_meta.mode,
+                sha256: file_meta.sha256.clone(),
+            });
+        }
+
+        debug!("Extracted {} files from RPM", extracted_files.len());
+        Ok(extracted_files)
+    }
 }
 
 #[cfg(test)]
@@ -227,6 +303,7 @@ mod tests {
     fn test_to_trove_conversion() {
         // Create a minimal RpmPackage for testing
         let rpm = RpmPackage {
+            package_path: PathBuf::from("/fake/path.rpm"),
             name: "test-package".to_string(),
             version: "1.0.0".to_string(),
             architecture: Some("x86_64".to_string()),
@@ -251,6 +328,7 @@ mod tests {
     #[test]
     fn test_provenance_accessors() {
         let rpm = RpmPackage {
+            package_path: PathBuf::from("/fake/test.rpm"),
             name: "test".to_string(),
             version: "1.0".to_string(),
             architecture: None,

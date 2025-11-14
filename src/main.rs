@@ -39,6 +39,9 @@ enum Commands {
         /// Database path (default: /var/lib/conary/conary.db)
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+        /// Install root directory (default: /)
+        #[arg(short, long, default_value = "/")]
+        root: String,
     },
     /// Remove an installed package
     Remove {
@@ -69,6 +72,20 @@ enum Commands {
         /// Database path (default: /var/lib/conary/conary.db)
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+        /// Install root directory (default: /)
+        #[arg(short, long, default_value = "/")]
+        root: String,
+    },
+    /// Verify installed files match their stored hashes
+    Verify {
+        /// Package name to verify (optional, verifies all if omitted)
+        package: Option<String>,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+        /// Install root directory (default: /)
+        #[arg(short, long, default_value = "/")]
+        root: String,
     },
 }
 
@@ -136,6 +153,7 @@ fn main() -> Result<()> {
         Some(Commands::Install {
             package_path,
             db_path,
+            root,
         }) => {
             info!("Installing package: {}", package_path);
 
@@ -178,8 +196,21 @@ fn main() -> Result<()> {
                 }
             }
 
+            // Extract file contents from RPM
+            info!("Extracting file contents from package...");
+            let extracted_files = rpm.extract_file_contents()?;
+            info!("Extracted {} files", extracted_files.len());
+
+            // Initialize CAS and file deployer
+            let objects_dir = std::path::Path::new(&db_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("objects");
+            let install_root = std::path::PathBuf::from(&root);
+            let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+
             // Perform installation within a changeset transaction
-            conary::db::transaction(&mut conn, |tx| {
+            let _changeset_id = conary::db::transaction(&mut conn, |tx| {
                 // Create changeset for this installation
                 let mut changeset = conary::db::models::Changeset::new(format!(
                     "Install {}-{}",
@@ -193,25 +224,71 @@ fn main() -> Result<()> {
                 trove.installed_by_changeset_id = Some(changeset_id);
                 let trove_id = trove.insert(tx)?;
 
-                // Store file metadata in database
-                for file in rpm.files() {
+                // Process each file: conflict check, store in CAS, deploy, track in DB
+                for file in &extracted_files {
+                    // Conflict detection
+                    if deployer.file_exists(&file.path) {
+                        // Check if file is tracked in database
+                        if let Some(existing) = conary::db::models::FileEntry::find_by_path(tx, &file.path)? {
+                            // File exists and is tracked - check ownership
+                            let owner_trove = conary::db::models::Trove::find_by_id(tx, existing.trove_id)?;
+                            if let Some(owner) = owner_trove
+                                && owner.name != rpm.name() {
+                                return Err(conary::Error::InitError(format!(
+                                    "File conflict: {} is owned by package {}",
+                                    file.path, owner.name
+                                )));
+                            }
+                            // Same package owns it - this is an update, allow
+                        } else {
+                            // File exists but not tracked - orphan file
+                            return Err(conary::Error::InitError(format!(
+                                "File conflict: {} exists but is not tracked by any package",
+                                file.path
+                            )));
+                        }
+                    }
+
+                    // Store content in CAS
+                    let hash = deployer.cas().store(&file.content)?;
+
+                    // Store file content metadata in database
+                    tx.execute(
+                        "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+                        [&hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
+                    )?;
+
+                    // Store file metadata in database
                     let mut file_entry = conary::db::models::FileEntry::new(
                         file.path.clone(),
-                        file.sha256.clone().unwrap_or_default(),
+                        hash.clone(),
                         file.size,
                         file.mode,
                         trove_id,
                     );
                     file_entry.insert(tx)?;
+
+                    // Track in file history
+                    let action = if deployer.file_exists(&file.path) { "modify" } else { "add" };
+                    tx.execute(
+                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                        [&changeset_id.to_string(), &file.path, &hash, action],
+                    )?;
                 }
 
                 // Mark changeset as applied
                 changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
 
-                Ok(())
+                Ok(changeset_id)
             })?;
 
-            // TODO: Actually deploy files to filesystem (Phase 2 of this feature)
+            // Deploy files to filesystem (outside transaction for safety)
+            info!("Deploying files to filesystem...");
+            for file in &extracted_files {
+                let hash = conary::filesystem::CasStore::compute_hash(&file.content);
+                deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
+            }
+            info!("Successfully deployed {} files", extracted_files.len());
 
             println!("Installed package: {} version {}", rpm.name(), rpm.version());
             println!("  Architecture: {}", rpm.architecture().unwrap_or("none"));
@@ -360,10 +437,19 @@ fn main() -> Result<()> {
         Some(Commands::Rollback {
             changeset_id,
             db_path,
+            root,
         }) => {
             info!("Rolling back changeset: {}", changeset_id);
 
             let mut conn = conary::db::open(&db_path)?;
+
+            // Initialize file deployer for filesystem operations
+            let objects_dir = std::path::Path::new(&db_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("objects");
+            let install_root = std::path::PathBuf::from(&root);
+            let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
             // Find the changeset to rollback
             let changeset = conary::db::models::Changeset::find_by_id(&conn, changeset_id)?
@@ -384,6 +470,17 @@ fn main() -> Result<()> {
                     changeset_id
                 ));
             }
+
+            // Query file history for this changeset before the transaction
+            let files_to_rollback: Vec<(String, String)> = {
+                let mut stmt = conn.prepare(
+                    "SELECT path, action FROM file_history WHERE changeset_id = ?1"
+                )?;
+                let rows = stmt.query_map([changeset_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
 
             // Perform rollback in a transaction
             conary::db::transaction(&mut conn, |tx| {
@@ -443,7 +540,107 @@ fn main() -> Result<()> {
                 Ok(troves.len())
             })?;
 
+            // Remove files from filesystem (outside transaction)
+            info!("Removing files from filesystem...");
+            for (path, action) in &files_to_rollback {
+                if action == "add" || action == "modify" {
+                    deployer.remove_file(path)?;
+                    info!("Removed file: {}", path);
+                }
+            }
+
             println!("Rollback complete. Changeset {} has been reversed.", changeset_id);
+            println!("  Removed {} files from filesystem", files_to_rollback.len());
+
+            Ok(())
+        }
+        Some(Commands::Verify {
+            package,
+            db_path,
+            root,
+        }) => {
+            info!("Verifying installed files...");
+
+            let conn = conary::db::open(&db_path)?;
+
+            // Initialize file deployer for verification
+            let objects_dir = std::path::Path::new(&db_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("objects");
+            let install_root = std::path::PathBuf::from(&root);
+            let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+
+            // Get files to verify
+            let files: Vec<(String, String, String)> = if let Some(pkg_name) = package {
+                // Verify specific package
+                let troves = conary::db::models::Trove::find_by_name(&conn, &pkg_name)?;
+                if troves.is_empty() {
+                    return Err(anyhow::anyhow!("Package '{}' is not installed", pkg_name));
+                }
+
+                let mut all_files = Vec::new();
+                for trove in &troves {
+                    let trove_files = conary::db::models::FileEntry::find_by_trove(&conn, trove.id.unwrap())?;
+                    for file in trove_files {
+                        all_files.push((file.path, file.sha256_hash, trove.name.clone()));
+                    }
+                }
+                all_files
+            } else {
+                // Verify all installed files
+                let mut stmt = conn.prepare(
+                    "SELECT f.path, f.sha256_hash, t.name FROM files f
+                     JOIN troves t ON f.trove_id = t.id
+                     ORDER BY t.name, f.path"
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            if files.is_empty() {
+                println!("No files to verify");
+                return Ok(());
+            }
+
+            // Verify each file
+            let mut ok_count = 0;
+            let mut modified_count = 0;
+            let mut missing_count = 0;
+
+            for (path, expected_hash, pkg_name) in &files {
+                match deployer.verify_file(path, expected_hash) {
+                    Ok(true) => {
+                        ok_count += 1;
+                        info!("OK: {} (from {})", path, pkg_name);
+                    }
+                    Ok(false) => {
+                        modified_count += 1;
+                        println!("MODIFIED: {} (from {})", path, pkg_name);
+                    }
+                    Err(_) => {
+                        missing_count += 1;
+                        println!("MISSING: {} (from {})", path, pkg_name);
+                    }
+                }
+            }
+
+            // Print summary
+            println!("\nVerification summary:");
+            println!("  OK: {} files", ok_count);
+            println!("  Modified: {} files", modified_count);
+            println!("  Missing: {} files", missing_count);
+            println!("  Total: {} files", files.len());
+
+            if modified_count > 0 || missing_count > 0 {
+                return Err(anyhow::anyhow!("Verification failed"));
+            }
 
             Ok(())
         }

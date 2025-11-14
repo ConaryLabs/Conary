@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-## Project Status: Phase 5 Complete - Changeset Transaction Model
+## Project Status: Phase 6 Complete - File-Level Operations with CAS
 
 ### Current State
 - [COMPLETE] **Phase 0**: Vision and architecture documented
@@ -9,7 +9,8 @@
 - [COMPLETE] **Phase 3**: Core Abstractions & Data Models complete
 - [COMPLETE] **Phase 4**: Package Format Support (RPM parser)
 - [COMPLETE] **Phase 5**: Changeset Transaction Model with rollback & validation
-- [PENDING] **Phase 6**: File-Level Operations (next)
+- [COMPLETE] **Phase 6**: File-Level Operations with content-addressable storage
+- [PENDING] **Phase 7**: Dependency Resolution (next)
 
 ### Phase 1 Deliverables [COMPLETE]
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -71,6 +72,40 @@
   - Full test suite: 28 tests passing (22 unit + 6 integration, 1 ignored)
 - All code clippy-clean with zero warnings
 - Ready for package imports via CLI
+
+### Phase 6 Deliverables [COMPLETE]
+- Content-addressable storage system (src/filesystem/mod.rs):
+  - `CasStore` for git-style hash-based file storage
+  - Deduplication: same content = same hash = stored once
+  - Storage format: objects/{first2chars}/{rest_of_hash}
+  - `FileDeployer` for atomic file deployment with permissions
+- Schema v3 migration:
+  - `file_contents` table: tracks stored content by SHA-256 hash
+  - `file_history` table: tracks file states per changeset (add/modify/delete)
+  - Enables efficient rollback with file restoration
+- RPM file extraction with rpm2cpio + cpio:
+  - `ExtractedFile` struct for files with content
+  - `extract_file_contents()` method extracts all files from RPM payload
+  - Uses system commands for CPIO archive extraction
+- Enhanced install command:
+  - `--root` option for custom install directory (default: /)
+  - Extracts file contents from package
+  - Conflict detection: errors on untracked files, allows same-package updates
+  - Stores files in CAS and deploys to filesystem
+  - Tracks file history for rollback support
+- Enhanced rollback command:
+  - Restores files from CAS or removes added files
+  - Queries file_history to determine actions
+  - Fully reverses filesystem changes
+- Verify command (conary verify [package]):
+  - Verifies installed files against stored SHA-256 hashes
+  - Reports OK, modified, or missing files
+  - Per-package or system-wide verification
+- Testing and quality:
+  - 47 tests passing (30 lib + 7 bin + 10 integration, 1 ignored)
+  - All code clippy-clean (only minor test warnings)
+  - CAS module has 8 comprehensive unit tests
+- Added tempfile dependency for RPM extraction
 
 ### Architecture Decisions
 
@@ -242,3 +277,71 @@ Phase 5 Success Criteria Met:
 - File conflict detection (database level) ✓
 - Transaction logging and history ✓
 - Comprehensive tests ✓
+
+**Session 8** (2025-11-14) - **Phase 6 Complete: File-Level Operations**
+
+Part 1 - Content-Addressable Storage:
+- Created src/filesystem/mod.rs module:
+  - `CasStore` for git-style content-addressable storage
+  - Files stored by SHA-256 hash: objects/{first2}/{rest}
+  - Automatic deduplication (same content = single storage)
+  - Atomic file operations (write to temp, then rename)
+  - 8 comprehensive unit tests for CAS operations
+- `FileDeployer` for filesystem management:
+  - Deploys files from CAS to install root (configurable via --root)
+  - Sets file permissions (mode), ownership support for root users
+  - Verification: compute hash and compare to expected
+  - File removal for rollback operations
+
+Part 2 - Schema and Package Extraction:
+- Schema v3 migration:
+  - `file_contents` table: maps SHA-256 to storage path and size
+  - `file_history` table: tracks file operations per changeset (add/modify/delete)
+  - Enables rollback with file restoration
+- Enhanced RPM parser (src/packages/rpm.rs):
+  - Added `ExtractedFile` struct (path, content, size, mode, hash)
+  - `extract_file_contents()` method using rpm2cpio + cpio
+  - Extracts all regular files from RPM CPIO payload
+  - Added tempfile dependency for extraction workspace
+
+Part 3 - File Deployment and Conflict Detection:
+- Enhanced install command:
+  - Added `--root` option (default: /) for flexible installation
+  - Extracts file contents from package before installation
+  - Smart conflict detection:
+    - If file exists and tracked by different package → error
+    - If file exists but untracked → error (orphan file)
+    - If file owned by same package → allow (update)
+  - Stores content in CAS before deployment
+  - Tracks in file_contents and file_history tables
+  - Deploys files atomically outside database transaction
+- All operations integrated with changeset model
+
+Part 4 - Rollback and Verification:
+- Enhanced rollback command:
+  - Added `--root` option for consistency
+  - Queries file_history for changeset being rolled back
+  - Removes files added by the changeset from filesystem
+  - Fully reverses filesystem changes
+- Implemented verify command:
+  - `conary verify [package]` - verify specific package or all
+  - Reads files from filesystem and computes SHA-256
+  - Compares against stored hash in database
+  - Reports: OK, modified, or missing files
+  - Summary statistics with error exit if issues found
+
+Part 5 - Testing and Quality:
+- All 47 tests passing (30 lib + 7 bin + 10 integration, 1 ignored)
+- CAS module: 8 unit tests (store, retrieve, dedup, deploy, verify, remove)
+- All existing integration tests still pass
+- Clippy clean (only trivial test warnings)
+- No breaking changes to existing functionality
+
+Phase 6 Success Criteria Met:
+- Files deployed to filesystem during install ✓
+- SHA-256 verification of installed files ✓
+- Conflict detection (filesystem + database) ✓
+- Rollback with file restoration ✓
+- Content-addressable storage with deduplication ✓
+- Atomic file operations ✓
+- Comprehensive testing ✓

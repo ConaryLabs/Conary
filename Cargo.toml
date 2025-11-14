@@ -31,8 +31,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Package format parsing
 rpm = "0.14"
 
-[dev-dependencies]
+# Temp files for RPM extraction
 tempfile = "3.10"
+
+[dev-dependencies]
 
 [profile.release]
 lto = true
