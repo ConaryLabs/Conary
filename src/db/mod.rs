@@ -8,6 +8,9 @@
 //! - Transaction handling
 //! - CRUD operations for troves, changesets, files, etc.
 
+pub mod models;
+pub mod schema;
+
 use crate::error::{Error, Result};
 use rusqlite::Connection;
 use std::path::Path;
@@ -47,10 +50,10 @@ pub fn init(db_path: &str) -> Result<()> {
         ",
     )?;
 
-    info!("Database initialized successfully");
+    // Run schema migrations to set up or upgrade the database
+    schema::migrate(&conn)?;
 
-    // Schema creation will be added in Phase 2
-    // For now, just verify we can open the database
+    info!("Database initialized successfully");
     Ok(())
 }
 
@@ -79,6 +82,29 @@ pub fn open(db_path: &str) -> Result<Connection> {
     )?;
 
     Ok(conn)
+}
+
+/// Execute a function within a transaction
+///
+/// If the function returns Ok, the transaction is committed.
+/// If it returns Err, the transaction is rolled back.
+///
+/// # Arguments
+///
+/// * `conn` - Database connection
+/// * `f` - Function to execute within the transaction
+///
+/// # Returns
+///
+/// * `Result<T>` - Result of the function
+pub fn transaction<T, F>(conn: &mut Connection, f: F) -> Result<T>
+where
+    F: FnOnce(&rusqlite::Transaction) -> Result<T>,
+{
+    let tx = conn.transaction()?;
+    let result = f(&tx)?;
+    tx.commit()?;
+    Ok(result)
 }
 
 #[cfg(test)]
