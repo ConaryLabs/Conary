@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+
+# Note: Cargo.lock is committed because this is a binary crate
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test databases
+*.db
+*.db-shm
+*.db-wal
