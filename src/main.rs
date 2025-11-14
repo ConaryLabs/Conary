@@ -40,6 +40,36 @@ enum Commands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
+    /// Remove an installed package
+    Remove {
+        /// Package name to remove
+        package_name: String,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+    /// Query installed packages
+    Query {
+        /// Package name pattern (optional, shows all if omitted)
+        pattern: Option<String>,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+    /// Show changeset history
+    History {
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+    /// Rollback a changeset
+    Rollback {
+        /// Changeset ID to rollback
+        changeset_id: i64,
+        /// Database path (default: /var/lib/conary/conary.db)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
 }
 
 /// Detect package format from file extension and magic bytes
@@ -182,6 +212,225 @@ fn main() -> Result<()> {
             if let Some(vendor) = rpm.vendor() {
                 println!("  Vendor: {}", vendor);
             }
+
+            Ok(())
+        }
+        Some(Commands::Remove {
+            package_name,
+            db_path,
+        }) => {
+            info!("Removing package: {}", package_name);
+
+            // Open database connection
+            let mut conn = conary::db::open(&db_path)?;
+
+            // Find the package to remove
+            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
+
+            if troves.is_empty() {
+                return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+            }
+
+            if troves.len() > 1 {
+                println!("Multiple versions of '{}' found:", package_name);
+                for trove in &troves {
+                    println!("  - version {}", trove.version);
+                }
+                return Err(anyhow::anyhow!(
+                    "Please specify version (future enhancement)"
+                ));
+            }
+
+            let trove = &troves[0];
+            let trove_id = trove.id.unwrap();
+
+            // Count files before removal for reporting
+            let file_count = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?.len();
+
+            // Perform removal within a changeset transaction
+            conary::db::transaction(&mut conn, |tx| {
+                // Create changeset for this removal
+                let mut changeset = conary::db::models::Changeset::new(format!(
+                    "Remove {}-{}",
+                    trove.name, trove.version
+                ));
+                changeset.insert(tx)?;
+
+                // Delete the trove (files will be cascade-deleted due to foreign key)
+                conary::db::models::Trove::delete(tx, trove_id)?;
+
+                // Mark changeset as applied
+                changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+
+                Ok(())
+            })?;
+
+            // TODO: Actually delete files from filesystem (Phase 6)
+
+            println!("Removed package: {} version {}", trove.name, trove.version);
+            println!("  Architecture: {}", trove.architecture.as_deref().unwrap_or("none"));
+            println!("  Files removed: {}", file_count);
+
+            Ok(())
+        }
+        Some(Commands::Query { pattern, db_path }) => {
+            let conn = conary::db::open(&db_path)?;
+
+            // Get all troves or filter by pattern
+            let troves = if let Some(pattern) = pattern {
+                conary::db::models::Trove::find_by_name(&conn, &pattern)?
+            } else {
+                // Get all troves
+                let mut stmt = conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves ORDER BY name, version")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(conary::db::models::Trove {
+                        id: Some(row.get(0)?),
+                        name: row.get(1)?,
+                        version: row.get(2)?,
+                        trove_type: row.get::<_, String>(3)?.parse().unwrap(),
+                        architecture: row.get(4)?,
+                        description: row.get(5)?,
+                        installed_at: row.get(6)?,
+                        installed_by_changeset_id: row.get(7)?,
+                    })
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            if troves.is_empty() {
+                println!("No packages found.");
+            } else {
+                println!("Installed packages:");
+                for trove in &troves {
+                    print!("  {} {} ({:?})", trove.name, trove.version, trove.trove_type);
+                    if let Some(arch) = &trove.architecture {
+                        print!(" [{}]", arch);
+                    }
+                    println!();
+                }
+                println!("\nTotal: {} package(s)", troves.len());
+            }
+
+            Ok(())
+        }
+        Some(Commands::History { db_path }) => {
+            let conn = conary::db::open(&db_path)?;
+
+            let changesets = conary::db::models::Changeset::list_all(&conn)?;
+
+            if changesets.is_empty() {
+                println!("No changeset history.");
+            } else {
+                println!("Changeset history:");
+                for changeset in &changesets {
+                    let timestamp = changeset
+                        .applied_at
+                        .as_ref()
+                        .or(changeset.rolled_back_at.as_ref())
+                        .or(changeset.created_at.as_ref())
+                        .map(|s| s.as_str())
+                        .unwrap_or("pending");
+
+                    println!(
+                        "  [{}] {} - {} ({:?})",
+                        changeset.id.unwrap(),
+                        timestamp,
+                        changeset.description,
+                        changeset.status
+                    );
+                }
+                println!("\nTotal: {} changeset(s)", changesets.len());
+            }
+
+            Ok(())
+        }
+        Some(Commands::Rollback {
+            changeset_id,
+            db_path,
+        }) => {
+            info!("Rolling back changeset: {}", changeset_id);
+
+            let mut conn = conary::db::open(&db_path)?;
+
+            // Find the changeset to rollback
+            let changeset = conary::db::models::Changeset::find_by_id(&conn, changeset_id)?
+                .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
+
+            // Check if already rolled back
+            if changeset.status == conary::db::models::ChangesetStatus::RolledBack {
+                return Err(anyhow::anyhow!(
+                    "Changeset {} is already rolled back",
+                    changeset_id
+                ));
+            }
+
+            // Check if not yet applied
+            if changeset.status == conary::db::models::ChangesetStatus::Pending {
+                return Err(anyhow::anyhow!(
+                    "Cannot rollback pending changeset {}",
+                    changeset_id
+                ));
+            }
+
+            // Perform rollback in a transaction
+            conary::db::transaction(&mut conn, |tx| {
+                // Find all troves installed by this changeset
+                let troves = {
+                    let mut stmt = tx.prepare(
+                        "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id
+                         FROM troves WHERE installed_by_changeset_id = ?1",
+                    )?;
+                    let rows = stmt.query_map([changeset_id], |row| {
+                        Ok(conary::db::models::Trove {
+                            id: Some(row.get(0)?),
+                            name: row.get(1)?,
+                            version: row.get(2)?,
+                            trove_type: row.get::<_, String>(3)?.parse().unwrap(),
+                            architecture: row.get(4)?,
+                            description: row.get(5)?,
+                            installed_at: row.get(6)?,
+                            installed_by_changeset_id: row.get(7)?,
+                        })
+                    })?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()?
+                };
+
+                if troves.is_empty() {
+                    return Err(conary::Error::InitError(
+                        "No troves found for this changeset. Cannot rollback Remove operations yet.".to_string()
+                    ));
+                }
+
+                // Create a new changeset for the rollback operation
+                let mut rollback_changeset = conary::db::models::Changeset::new(format!(
+                    "Rollback of changeset {} ({})",
+                    changeset_id, changeset.description
+                ));
+                let rollback_changeset_id = rollback_changeset.insert(tx)?;
+
+                // Delete all troves that were installed by the original changeset
+                for trove in &troves {
+                    conary::db::models::Trove::delete(tx, trove.id.unwrap())?;
+                    println!("Removed {} version {}", trove.name, trove.version);
+                }
+
+                // Mark the rollback changeset as applied
+                rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+
+                // Mark the original changeset as rolled back and link to rollback changeset
+                tx.execute(
+                    "UPDATE changesets
+                     SET status = 'rolled_back',
+                         rolled_back_at = CURRENT_TIMESTAMP,
+                         reversed_by_changeset_id = ?1
+                     WHERE id = ?2",
+                    [rollback_changeset_id, changeset_id],
+                )?;
+
+                Ok(troves.len())
+            })?;
+
+            println!("Rollback complete. Changeset {} has been reversed.", changeset_id);
 
             Ok(())
         }

@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-## Project Status: Phase 4 Complete - RPM Package Format Support
+## Project Status: Phase 5 In Progress - Changeset Transaction Model
 
 ### Current State
 - [COMPLETE] **Phase 0**: Vision and architecture documented
@@ -8,7 +8,7 @@
 - [COMPLETE] **Phase 2**: Database Schema & Core Layer complete
 - [COMPLETE] **Phase 3**: Core Abstractions & Data Models complete
 - [COMPLETE] **Phase 4**: Package Format Support (RPM parser)
-- [PENDING] **Phase 5**: Next phase TBD
+- [IN PROGRESS] **Phase 5**: Changeset Transaction Model (rollback & validation)
 
 ### Phase 1 Deliverables [COMPLETE]
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -189,3 +189,33 @@
   - Full test suite: 35 tests (29 unit + 6 integration, 1 ignored) all passing
 - All code clippy-clean with zero warnings
 - Note: File deployment to filesystem not yet implemented (metadata-only for now)
+
+**Session 7** (2025-11-14) - **Phase 5 Progress: Core Changeset Operations**
+- Implemented Remove command (conary remove <package>):
+  - Finds installed package by name
+  - Creates removal changeset
+  - Deletes trove and files within transaction
+  - Marks changeset as Applied
+- Implemented Query command (conary query [pattern]):
+  - Lists all installed packages
+  - Optional pattern matching by package name
+  - Shows package name, version, type, and architecture
+- Implemented History command (conary history):
+  - Shows all changesets with status
+  - Displays timestamp, description, and status
+  - Ordered by creation time
+- Enhanced Changeset model for rollback tracking:
+  - Added reversed_by_changeset_id field
+  - Created schema migration v2 for the new column
+  - Updated all Changeset methods to handle rollback tracking
+- Implemented Rollback command (conary rollback <changeset-id>):
+  - Validates changeset can be rolled back
+  - Reverses Install operations by deleting troves
+  - Creates new changeset for rollback operation
+  - Marks original changeset as RolledBack
+  - Links rollback changeset via reversed_by_changeset_id
+  - Note: Cannot rollback Remove operations yet (requires data preservation)
+- Testing:
+  - All 35 tests passing (29 unit + 6 integration, 1 ignored)
+  - All code clippy-clean with zero warnings
+- Next: Pre-transaction validation, more comprehensive tests, validation for dependencies

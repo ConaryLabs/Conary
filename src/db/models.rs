@@ -192,6 +192,7 @@ pub struct Changeset {
     pub created_at: Option<String>,
     pub applied_at: Option<String>,
     pub rolled_back_at: Option<String>,
+    pub reversed_by_changeset_id: Option<i64>,
 }
 
 impl Changeset {
@@ -204,6 +205,7 @@ impl Changeset {
             created_at: None,
             applied_at: None,
             rolled_back_at: None,
+            reversed_by_changeset_id: None,
         }
     }
 
@@ -222,7 +224,7 @@ impl Changeset {
     /// Find a changeset by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, description, status, created_at, applied_at, rolled_back_at
+            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id
              FROM changesets WHERE id = ?1",
         )?;
 
@@ -234,7 +236,7 @@ impl Changeset {
     /// List all changesets
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, description, status, created_at, applied_at, rolled_back_at
+            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id
              FROM changesets ORDER BY created_at DESC",
         )?;
 
@@ -294,6 +296,7 @@ impl Changeset {
             created_at: row.get(3)?,
             applied_at: row.get(4)?,
             rolled_back_at: row.get(5)?,
+            reversed_by_changeset_id: row.get(6)?,
         })
     }
 }

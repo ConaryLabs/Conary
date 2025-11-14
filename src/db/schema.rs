@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -76,6 +76,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
     match version {
         1 => migrate_v1(conn),
+        2 => migrate_v2(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -187,6 +188,23 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 1 created successfully");
+    Ok(())
+}
+
+/// Schema Version 2: Add rollback tracking to changesets
+///
+/// Adds reversed_by_changeset_id to track which changeset reversed another
+fn migrate_v2(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 2");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE changesets ADD COLUMN reversed_by_changeset_id INTEGER
+            REFERENCES changesets(id) ON DELETE SET NULL;
+        ",
+    )?;
+
+    info!("Schema version 2 applied successfully");
     Ok(())
 }
 
