@@ -167,3 +167,25 @@
 - All code clippy-clean with zero warnings
 - Verified Phase 4 success criteria: can parse RPM files and import into database
 - Next: See ROADMAP.md for Phase 5 options
+
+**Session 6** (2025-11-14) - **Unified Install Command**
+- Renamed import to install command for better UX:
+  - Changed from 'conary import' to 'conary install'
+  - Unified command interface regardless of package format
+- Added automatic package format detection:
+  - Detects RPM, DEB, and Arch packages from file extension
+  - Fallback to magic bytes detection (RPM: 0xEDABEEDB, DEB: !<arch>, Arch: zstd/xz)
+  - Returns appropriate error for unknown formats
+- Enhanced install command with changeset integration:
+  - Wraps installation in atomic changeset transaction
+  - Creates changeset: "Install package-name-version"
+  - Associates trove with changeset for rollback capability
+  - Stores all file metadata in database (path, size, mode, sha256)
+  - Marks changeset as Applied on success
+  - Transaction rollback on any error
+- Comprehensive testing:
+  - Added 7 unit tests for format auto-detection
+  - Updated integration test to use install workflow with changeset
+  - Full test suite: 35 tests (29 unit + 6 integration, 1 ignored) all passing
+- All code clippy-clean with zero warnings
+- Note: File deployment to filesystem not yet implemented (metadata-only for now)

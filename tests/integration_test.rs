@@ -277,18 +277,19 @@ fn test_trove_with_flavors_and_provenance() {
 
 #[test]
 #[ignore] // Ignored by default since it requires a real RPM file
-fn test_rpm_import_workflow() {
+fn test_rpm_install_workflow() {
     use conary::db;
+    use conary::db::models::{Changeset, ChangesetStatus, FileEntry, Trove};
     use conary::packages::rpm::RpmPackage;
     use conary::packages::PackageFormat;
 
     // This test requires a real RPM file to be present
     // To run: place an RPM file at /tmp/test.rpm and run:
-    // cargo test test_rpm_import_workflow -- --ignored
+    // cargo test test_rpm_install_workflow -- --ignored
 
     let rpm_path = "/tmp/test.rpm";
     if !std::path::Path::new(rpm_path).exists() {
-        eprintln!("Skipping RPM import test: no RPM file at {}", rpm_path);
+        eprintln!("Skipping RPM install test: no RPM file at {}", rpm_path);
         return;
     }
 
@@ -298,7 +299,7 @@ fn test_rpm_import_workflow() {
 
     // Initialize database
     db::init(&db_path).unwrap();
-    let conn = db::open(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
 
     // Parse the RPM
     let rpm = RpmPackage::parse(rpm_path).expect("Failed to parse RPM");
@@ -310,18 +311,47 @@ fn test_rpm_import_workflow() {
         "Package version should not be empty"
     );
 
-    // Convert to trove and insert
-    let mut trove = rpm.to_trove();
-    let trove_id = trove.insert(&conn).expect("Failed to insert trove");
+    // Perform installation within changeset (simulating the install command)
+    db::transaction(&mut conn, |tx| {
+        let mut changeset = Changeset::new(format!("Install {}-{}", rpm.name(), rpm.version()));
+        let changeset_id = changeset.insert(tx)?;
 
-    // Verify it was stored
-    let retrieved = conary::db::models::Trove::find_by_id(&conn, trove_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(retrieved.name, rpm.name());
-    assert_eq!(retrieved.version, rpm.version());
+        let mut trove = rpm.to_trove();
+        trove.installed_by_changeset_id = Some(changeset_id);
+        let trove_id = trove.insert(tx)?;
 
-    println!("Successfully imported RPM package:");
+        // Store file metadata
+        for file in rpm.files() {
+            let mut file_entry = FileEntry::new(
+                file.path.clone(),
+                file.sha256.clone().unwrap_or_default(),
+                file.size,
+                file.mode,
+                trove_id,
+            );
+            file_entry.insert(tx)?;
+        }
+
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok(())
+    })
+    .unwrap();
+
+    // Verify it was stored correctly
+    let troves = Trove::find_by_name(&conn, rpm.name()).unwrap();
+    assert_eq!(troves.len(), 1);
+    assert_eq!(troves[0].version, rpm.version());
+
+    // Verify changeset was created
+    let changesets = Changeset::list_all(&conn).unwrap();
+    assert_eq!(changesets.len(), 1);
+    assert_eq!(changesets[0].status, ChangesetStatus::Applied);
+
+    // Verify files were stored
+    let files = FileEntry::find_by_trove(&conn, troves[0].id.unwrap()).unwrap();
+    assert_eq!(files.len(), rpm.files().len());
+
+    println!("Successfully installed RPM package:");
     println!("  Name: {}", rpm.name());
     println!("  Version: {}", rpm.version());
     println!("  Files: {}", rpm.files().len());
