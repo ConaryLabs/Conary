@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -79,6 +79,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         2 => migrate_v2(conn),
         3 => migrate_v3(conn),
         4 => migrate_v4(conn),
+        5 => migrate_v5(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -307,6 +308,59 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 4 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 5: Add delta update support
+///
+/// Adds tables for tracking available deltas and bandwidth metrics:
+/// - package_deltas: Available delta files with metadata
+/// - delta_stats: Bandwidth savings metrics per changeset
+fn migrate_v5(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 5");
+
+    conn.execute_batch(
+        "
+        -- Package deltas: Available delta files for updates
+        CREATE TABLE package_deltas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            from_version TEXT NOT NULL,
+            to_version TEXT NOT NULL,
+            from_hash TEXT NOT NULL,
+            to_hash TEXT NOT NULL,
+            delta_url TEXT NOT NULL,
+            delta_size INTEGER NOT NULL,
+            delta_checksum TEXT NOT NULL,
+            full_size INTEGER NOT NULL,
+            compression_ratio REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (from_hash) REFERENCES file_contents(sha256_hash),
+            FOREIGN KEY (to_hash) REFERENCES file_contents(sha256_hash)
+        );
+
+        CREATE INDEX idx_package_deltas_package ON package_deltas(package_name);
+        CREATE INDEX idx_package_deltas_from_hash ON package_deltas(from_hash);
+        CREATE INDEX idx_package_deltas_to_hash ON package_deltas(to_hash);
+        CREATE UNIQUE INDEX idx_package_deltas_transition ON package_deltas(package_name, from_version, to_version);
+
+        -- Delta statistics: Bandwidth metrics per changeset
+        CREATE TABLE delta_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changeset_id INTEGER NOT NULL,
+            total_bytes_saved INTEGER NOT NULL,
+            deltas_applied INTEGER NOT NULL,
+            full_downloads INTEGER NOT NULL,
+            delta_failures INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (changeset_id) REFERENCES changesets(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_delta_stats_changeset ON delta_stats(changeset_id);
+        ",
+    )?;
+
+    info!("Schema version 5 applied successfully");
     Ok(())
 }
 

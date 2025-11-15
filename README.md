@@ -68,7 +68,8 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - `conary repo-disable <name>` - Disable a repository
 - `conary repo-sync [name]` - Synchronize repository metadata
 - `conary search <pattern>` - Search for packages in repositories
-- `conary update [package]` - Update packages (basic implementation)
+- `conary update [package]` - Update packages with delta-first logic
+- `conary delta-stats` - Show delta update statistics and bandwidth savings
 - `conary completions <shell>` - Generate shell completion scripts
 
 **Core Features Implemented:**
@@ -77,10 +78,12 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - **Full Rollback**: Database changes AND filesystem changes reversed atomically
 - **Conflict Detection**: Smart detection of file conflicts, errors on untracked files
 - **File Integrity**: SHA-256 verification of all installed files
-- **Schema Migrations**: Database evolves cleanly (currently v3)
+- **Schema Migrations**: Database evolves cleanly (currently v5)
 - **Changeset Model**: Every operation tracked as a changeset for complete auditability
 - **Dependency Resolution**: Graph-based solver with topological sort and cycle detection
 - **Version Constraints**: Full RPM version support with semver comparison
+- **Delta Updates**: Binary delta compression using zstd dictionary compression (90%+ space savings)
+- **Bandwidth Tracking**: Statistics on delta effectiveness and bytes saved across all updates
 
 **Shell Completions:**
 
@@ -138,8 +141,8 @@ conary search nginx
 ```
 
 **Testing:**
-- 67 tests passing (50 lib + 7 bin + 10 integration)
-- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, and core operations
+- 90 tests passing (73 lib + 7 bin + 10 integration)
+- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, and core operations
 - Integration tests for full install/remove/rollback workflows
 
 **Core Features Implemented (continued):**
@@ -147,7 +150,9 @@ conary search nginx
 - **HTTP Downloads**: Automatic retry with exponential backoff for reliable downloads
 - **JSON Metadata**: Simple JSON-based repository index format
 - **Metadata Caching**: Configurable expiry time to minimize bandwidth usage
+- **Delta-First Updates**: Automatic fallback from delta to full download if delta unavailable or fails
+- **zstd Compression**: Dictionary-based compression using old file as dictionary for excellent ratios
 
 ### What's Next
 
-Phase 9B and beyond: delta updates, additional package formats (DEB, Arch), full update command with dependency resolution, package signing. See ROADMAP.md for details.
+Additional package formats (DEB, Arch), full update command with package installation, dependency resolution during updates, package signing and GPG verification. See ROADMAP.md for details.

@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-## Project Status: Phase 9A Complete - Repository Management
+## Project Status: Phase 9B Complete - Delta Updates
 
 ### Current State
 - [COMPLETE] **Phase 0**: Vision and architecture documented
@@ -13,7 +13,7 @@
 - [COMPLETE] **Phase 7**: Dependency Resolution with graph-based solver
 - [COMPLETE] **Phase 8**: CLI Interface with shell completions and man pages
 - [COMPLETE] **Phase 9A**: Repository Management with HTTP downloads and metadata sync
-- [PENDING] **Phase 9B**: Delta Updates (next)
+- [COMPLETE] **Phase 9B**: Delta Updates with zstd compression and bandwidth tracking
 
 ### Phase 1 Deliverables [COMPLETE]
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -644,5 +644,112 @@ Phase 9A Success Criteria Met:
 - Metadata expiry and caching ✓
 - Comprehensive tests (67 total, 6 new) ✓
 - Zero clippy warnings ✓
+
+**Session 12** (2025-11-14) - **Phase 9B Complete: Delta Updates**
+
+Part 1 - Delta Core Module:
+- Created src/delta/mod.rs with compression infrastructure (426 lines):
+  - `DeltaMetrics` struct tracks sizes, compression ratios, and bandwidth savings
+  - `DeltaGenerator` creates deltas using zstd dictionary compression
+  - `DeltaApplier` reconstructs new files from old file + delta
+  - Delta format: `delta = zstd_compress(new_content, dictionary=old_content)`
+  - COMPRESSION_LEVEL = 3 (fast with good compression)
+  - MAX_DELTA_RATIO = 0.9 (deltas must be <90% of full size to be worthwhile)
+  - Automatic fallback if delta not worthwhile
+  - Full integration with existing CAS infrastructure
+  - 6 comprehensive unit tests including hash mismatch detection
+
+Part 2 - Database Schema v5:
+- Updated SCHEMA_VERSION to 5
+- Added two new tables in migrate_v5():
+  - `package_deltas`: tracks available deltas with URLs, checksums, compression ratios
+    - Maps package transitions (from_version → to_version)
+    - Foreign keys to file_contents table for hash validation
+    - Unique index on (package_name, from_version, to_version)
+  - `delta_stats`: bandwidth metrics per changeset
+    - Tracks total_bytes_saved, deltas_applied, full_downloads, delta_failures
+    - Foreign key to changesets for transaction tracking
+- All delta metadata stored in database (no config files per CLAUDE.md)
+
+Part 3 - Delta Models:
+- Added PackageDelta model to src/db/models.rs (138 lines):
+  - new(), insert(), find_by_id()
+  - find_delta() - looks up specific version transition
+  - find_by_package() - all available deltas for a package
+  - Automatic compression_ratio calculation
+  - Full CRUD operations with proper error handling
+- Added DeltaStats model to src/db/models.rs (84 lines):
+  - new(), insert()
+  - get_total_stats() - aggregates statistics across all changesets
+  - Tracks success/failure rates for delta updates
+  - Provides bandwidth savings metrics
+
+Part 4 - Repository Integration:
+- Extended repository module with delta support:
+  - Added DeltaInfo struct with delta metadata
+  - Extended PackageMetadata with optional delta_from field
+  - Implemented download_delta() function with retry support
+  - Updated sync_repository() to parse and store delta metadata
+  - Delta information synchronized during repository metadata fetch
+  - Automatic checksum verification for delta files
+- All delta downloads use same retry infrastructure as package downloads
+
+Part 5 - Update Command Implementation:
+- Replaced stub Update command with full delta-first implementation (220+ lines):
+  - Checks for updates across all installed packages or specific package
+  - Delta-first logic: tries delta before falling back to full download
+  - For each update:
+    1. Query database for available delta (from current → new version)
+    2. If delta exists: download, apply, verify hash
+    3. If delta fails/unavailable: fall back to full package download
+  - Tracks detailed statistics (bytes saved, success/failure rates)
+  - Creates changeset for update transaction
+  - Stores DeltaStats in database for metrics
+  - Prints comprehensive summary with bandwidth savings
+
+Part 6 - Delta Statistics CLI:
+- Added `delta-stats` command to CLI:
+  - Shows total bandwidth saved across all updates
+  - Displays delta success rate percentage
+  - Lists recent operations with individual metrics
+  - Aggregates statistics from delta_stats table
+  - Helpful for users to understand delta effectiveness
+  - Formatted output with MB conversions
+
+Part 7 - Dependencies and Error Handling:
+- Added zstd v0.13 for delta compression with dictionary support
+- Added DeltaError variant to error types
+- Wired up delta module in src/lib.rs
+- All delta operations with comprehensive error handling
+- Proper use of zstd::dict::EncoderDictionary::copy() and DecoderDictionary::copy()
+- Automatic cleanup of temporary delta files
+
+Part 8 - Testing and Code Quality:
+- Fixed zstd API usage through multiple iterations:
+  - Initial attempt with set_dictionary() - method not found
+  - Second attempt with compress_using_dict() - function doesn't exist
+  - Third attempt with EncoderDictionary::new() - lifetime errors
+  - Final solution: EncoderDictionary::copy() and DecoderDictionary::copy()
+- Fixed test CAS directory sharing issues
+- All 6 delta unit tests passing
+- Test coverage: delta generation, application, hash verification, edge cases
+- Test results: 90 tests passing (73 lib + 7 bin + 10 integration, 1 ignored)
+- Gained 6 new tests from delta module
+- Zero clippy warnings with -D warnings
+- Added #[allow(clippy::too_many_arguments)] for PackageDelta::new()
+
+Phase 9B Success Criteria Met:
+- Delta generation with zstd dictionary compression ✓
+- Delta application with hash verification ✓
+- Database schema v5 with delta tables ✓
+- PackageDelta and DeltaStats models ✓
+- Repository metadata extended with delta support ✓
+- Delta download infrastructure ✓
+- Full Update command with delta-first logic ✓
+- Delta statistics tracking and CLI ✓
+- Automatic fallback to full downloads ✓
+- Comprehensive tests (90 total, 6 new) ✓
+- Zero clippy warnings ✓
+- Documentation updated ✓
 
 Note: Full `update` command with dependency resolution deferred to future work. Phase 9A provides the foundation for repository-based package discovery and management.

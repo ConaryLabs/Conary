@@ -14,6 +14,7 @@
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
 pub mod db;
+pub mod delta;
 mod error;
 pub mod filesystem;
 pub mod packages;

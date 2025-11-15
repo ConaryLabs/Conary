@@ -8,7 +8,7 @@
 //! - Downloading packages with retry and resume support
 //! - Verifying package checksums
 
-use crate::db::models::{Repository, RepositoryPackage};
+use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use reqwest::blocking::Client;
 use rusqlite::Connection;
@@ -36,6 +36,17 @@ pub struct RepositoryMetadata {
     pub packages: Vec<PackageMetadata>,
 }
 
+/// Delta update information for a package
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaInfo {
+    pub from_version: String,
+    pub from_hash: String,
+    pub delta_url: String,
+    pub delta_size: i64,
+    pub delta_checksum: String,
+    pub compression_ratio: f64,
+}
+
 /// Package metadata in repository index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageMetadata {
@@ -47,6 +58,8 @@ pub struct PackageMetadata {
     pub size: i64,
     pub download_url: String,
     pub dependencies: Option<Vec<String>>,
+    /// Available delta updates from previous versions
+    pub delta_from: Option<Vec<DeltaInfo>>,
 }
 
 /// HTTP client wrapper with retry support
@@ -194,6 +207,8 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
     // Insert new package metadata
     let mut count = 0;
+    let mut delta_count = 0;
+
     for pkg_meta in metadata.packages {
         let deps_json = pkg_meta.dependencies.as_ref().map(|deps| {
             serde_json::to_string(deps).unwrap_or_default()
@@ -201,9 +216,9 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
         let mut repo_pkg = RepositoryPackage::new(
             repo.id.unwrap(),
-            pkg_meta.name,
-            pkg_meta.version,
-            pkg_meta.checksum,
+            pkg_meta.name.clone(),
+            pkg_meta.version.clone(),
+            pkg_meta.checksum.clone(),
             pkg_meta.size,
             pkg_meta.download_url,
         );
@@ -214,13 +229,36 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
         repo_pkg.insert(conn)?;
         count += 1;
+
+        // Store delta metadata if available
+        if let Some(deltas) = pkg_meta.delta_from {
+            for delta_info in deltas {
+                let mut delta = PackageDelta::new(
+                    pkg_meta.name.clone(),
+                    delta_info.from_version,
+                    pkg_meta.version.clone(),
+                    delta_info.from_hash,
+                    pkg_meta.checksum.clone(),
+                    delta_info.delta_url,
+                    delta_info.delta_size,
+                    delta_info.delta_checksum,
+                    pkg_meta.size,
+                );
+
+                delta.insert(conn)?;
+                delta_count += 1;
+            }
+        }
     }
 
     // Update last_sync timestamp
     repo.last_sync = Some(current_timestamp());
     repo.update(conn)?;
 
-    info!("Synchronized {} packages from repository {}", count, repo.name);
+    info!(
+        "Synchronized {} packages and {} deltas from repository {}",
+        count, delta_count, repo.name
+    );
     Ok(count)
 }
 
@@ -268,6 +306,57 @@ pub fn download_package(
 
     // Verify checksum
     verify_checksum(&dest_path, &repo_pkg.checksum)?;
+
+    Ok(dest_path)
+}
+
+/// Download a delta update file
+///
+/// # Arguments
+/// * `delta_info` - Delta metadata from repository
+/// * `package_name` - Name of the package (for filename construction)
+/// * `to_version` - Target version (for filename construction)
+/// * `dest_dir` - Destination directory for the delta file
+///
+/// # Returns
+/// Path to the downloaded and verified delta file
+pub fn download_delta(
+    delta_info: &DeltaInfo,
+    package_name: &str,
+    to_version: &str,
+    dest_dir: &Path,
+) -> Result<PathBuf> {
+    let client = RepositoryClient::new()?;
+
+    // Construct destination path
+    let default_filename = format!(
+        "{}-{}-to-{}.delta",
+        package_name, delta_info.from_version, to_version
+    );
+    let filename = delta_info
+        .delta_url
+        .split('/')
+        .next_back()
+        .unwrap_or(&default_filename);
+
+    let dest_path = dest_dir.join(filename);
+
+    info!(
+        "Downloading delta for {} ({} -> {})",
+        package_name, delta_info.from_version, to_version
+    );
+
+    // Download the delta file
+    client.download_file(&delta_info.delta_url, &dest_path)?;
+
+    // Verify checksum
+    verify_checksum(&dest_path, &delta_info.delta_checksum)?;
+
+    info!(
+        "Delta downloaded successfully: {} bytes (compression ratio: {:.1}%)",
+        delta_info.delta_size,
+        delta_info.compression_ratio * 100.0
+    );
 
     Ok(dest_path)
 }

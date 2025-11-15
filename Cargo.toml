@@ -48,6 +48,9 @@ serde_json = "1.0"
 # Date/time handling for repository sync timestamps
 chrono = "0.4"
 
+# Delta compression for efficient updates
+zstd = "0.13"
+
 [dev-dependencies]
 
 [build-dependencies]

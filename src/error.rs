@@ -44,6 +44,10 @@ pub enum Error {
     /// Parse error
     #[error("Parse error: {0}")]
     ParseError(String),
+
+    /// Delta operation error
+    #[error("Delta operation failed: {0}")]
+    DeltaError(String),
 }
 
 /// Result type alias using Conary's Error type

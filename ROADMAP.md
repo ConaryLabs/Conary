@@ -1,10 +1,10 @@
 # Conary Package Manager - Phased Roadmap
 
 ## Current State
-**Phase 9A Complete** - Repository management foundation is solid with 67 tests passing. Core package management functionality is working: install, remove, rollback, verify, query, dependency resolution, and repository management all functional with full filesystem deployment, atomic transactions, and remote package discovery.
+**Phase 9B Complete** - Delta updates with zstd compression implemented with 90 tests passing. Core package management functionality is working: install, remove, rollback, verify, query, dependency resolution, repository management, and delta updates all functional with full filesystem deployment, atomic transactions, remote package discovery, and bandwidth-efficient updates.
 
-**Completed:** Phases 0-8, Phase 9A (Database, schema, core models, RPM support, changeset transactions, file operations with CAS, dependency resolution, CLI polish, repository management)
-**Next:** Phase 9B (Delta Updates) and beyond
+**Completed:** Phases 0-8, Phase 9A-9B (Database, schema, core models, RPM support, changeset transactions, file operations with CAS, dependency resolution, CLI polish, repository management, delta updates)
+**Next:** Phase 10 (Multi-Format Support) and beyond
 
 See PROGRESS.md for detailed session-by-session implementation notes.
 
@@ -179,19 +179,20 @@ See PROGRESS.md for detailed session-by-session implementation notes.
 
 ---
 
-## Phase 9B: Delta Updates
+## Phase 9B: Delta Updates ✓ (COMPLETE)
 **Goal**: Implement efficient binary delta updates
 
-**Decision Point**: Choose delta algorithm (recommend **zstd** for simplicity + compression)
+**Implementation**: zstd dictionary compression (using old file as dictionary)
 
 **Deliverables**:
-- Delta generation between file versions
-- Delta application and verification
-- Bandwidth usage metrics
-- Fallback to full file download on delta failure
-- Tests with real-world package updates
+- Delta generation between file versions using zstd ✓
+- Delta application and verification with hash checking ✓
+- Bandwidth usage metrics tracked in database ✓
+- Fallback to full file download on delta failure ✓
+- Tests with comprehensive delta scenarios ✓
+- CLI command for viewing delta statistics ✓
 
-**Success Criteria**: Updates download only changed portions of files
+**Success Criteria**: Updates download only changed portions of files ✓
 
 ---
 
