@@ -51,6 +51,14 @@ chrono = "0.4"
 # Delta compression for efficient updates
 zstd = "0.13"
 
+# Parallel processing for concurrent downloads
+rayon = "1.8"
+
+# GPG signature verification (pure Rust OpenPGP implementation)
+# Note: Using RustCrypto backend with experimental and variable-time flags
+# This is acceptable for a package manager use case
+sequoia-openpgp = { version = "1.17", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+
 [dev-dependencies]
 
 [build-dependencies]

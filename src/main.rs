@@ -527,10 +527,11 @@ fn main() -> Result<()> {
                 .collect();
 
             if !dep_names.is_empty() {
-                info!("Resolving {} dependencies...", dep_names.len());
+                info!("Resolving {} dependencies transitively...", dep_names.len());
                 println!("Checking dependencies for {}...", rpm.name());
 
-                match repository::resolve_dependencies(&conn, &dep_names) {
+                // Use transitive resolver with max depth of 10
+                match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
                     Ok(to_download) => {
                         if !to_download.is_empty() {
                             if dry_run {

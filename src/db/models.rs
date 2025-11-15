@@ -5,7 +5,7 @@
 //! This module defines Rust structs that correspond to database tables
 //! and provides methods for creating, reading, updating, and deleting records.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::str::FromStr;
 
@@ -983,6 +983,26 @@ impl RepositoryPackage {
     pub fn delete(conn: &Connection, id: i64) -> Result<()> {
         conn.execute("DELETE FROM repository_packages WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// Parse dependencies from JSON field
+    ///
+    /// Returns a list of dependency package names. Filters out rpmlib() and file path dependencies.
+    pub fn parse_dependencies(&self) -> Result<Vec<String>> {
+        if let Some(deps_json) = &self.dependencies {
+            let deps: Vec<String> = serde_json::from_str(deps_json)
+                .map_err(|e| Error::ParseError(format!("Failed to parse dependencies: {}", e)))?;
+
+            // Filter out rpmlib() and file path dependencies (same as resolve_dependencies)
+            let filtered: Vec<String> = deps
+                .into_iter()
+                .filter(|dep| !dep.starts_with("rpmlib(") && !dep.starts_with('/'))
+                .collect();
+
+            Ok(filtered)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Convert a database row to a RepositoryPackage
