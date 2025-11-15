@@ -26,13 +26,14 @@ fn build_cli() -> Command {
         )
         .subcommand(
             Command::new("install")
-                .about("Install a package (auto-detects RPM, DEB, Arch formats)")
-                .arg(Arg::new("package_path").required(true).help("Path to the package file"))
+                .about("Install a package from file or repository")
+                .arg(Arg::new("package").required(true).help("Package file path or package name"))
                 .arg(
                     Arg::new("db_path")
                         .short('d')
                         .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
+                        .default_value("/var/lib/conary/conary.db")
+                        .help("Database path"),
                 )
                 .arg(
                     Arg::new("root")
@@ -40,6 +41,22 @@ fn build_cli() -> Command {
                         .long("root")
                         .default_value("/")
                         .help("Install root directory"),
+                )
+                .arg(
+                    Arg::new("version")
+                        .long("version")
+                        .help("Specific version to install"),
+                )
+                .arg(
+                    Arg::new("repo")
+                        .long("repo")
+                        .help("Specific repository to use"),
+                )
+                .arg(
+                    Arg::new("dry_run")
+                        .long("dry-run")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Dry run - show what would be installed without installing"),
                 ),
         )
         .subcommand(

@@ -52,7 +52,7 @@ The goal isn't to replace distros - it's to decouple package management from dis
 
 **Commands Available:**
 - `conary init` - Initialize database and storage
-- `conary install <package>` - Install RPM packages with full file deployment
+- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run)
 - `conary remove <package>` - Remove installed packages (checks dependencies)
 - `conary query [pattern]` - List installed packages
 - `conary verify [package]` - Verify file integrity with SHA-256
@@ -84,6 +84,11 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - **Version Constraints**: Full RPM version support with semver comparison
 - **Delta Updates**: Binary delta compression using zstd dictionary compression (90%+ space savings)
 - **Bandwidth Tracking**: Statistics on delta effectiveness and bytes saved across all updates
+- **Repository-Based Installation**: Install packages by name from remote repositories
+- **Automatic Dependency Resolution**: Missing dependencies automatically downloaded and installed
+- **Smart Version Selection**: Latest version from highest-priority repository, with --version override
+- **Auto-Upgrade**: Install command automatically upgrades to newer versions
+- **Dry Run Mode**: Preview installations without making changes (--dry-run flag)
 
 **Shell Completions:**
 
@@ -136,12 +141,21 @@ conary repo-sync
 # Search for packages
 conary search nginx
 
-# Install from repository (coming soon)
-# conary install nginx
+# Install from repository by name
+conary install nginx
+
+# Install specific version
+conary install nginx --version=1.20.1
+
+# Install from specific repository
+conary install nginx --repo=myrepo
+
+# Preview installation without installing
+conary install nginx --dry-run
 ```
 
 **Testing:**
-- 90 tests passing (73 lib + 7 bin + 10 integration)
+- 93 tests passing (76 lib + 7 bin + 10 integration)
 - Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, and core operations
 - Integration tests for full install/remove/rollback workflows
 
@@ -155,4 +169,4 @@ conary search nginx
 
 ### What's Next
 
-Additional package formats (DEB, Arch), full update command with package installation, dependency resolution during updates, package signing and GPG verification. See ROADMAP.md for details.
+Additional package formats (DEB, Arch), package signing and GPG verification, parallel downloads for dependencies, transitive dependency resolution. See ROADMAP.md for details.

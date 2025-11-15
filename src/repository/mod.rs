@@ -8,6 +8,10 @@
 //! - Downloading packages with retry and resume support
 //! - Verifying package checksums
 
+pub mod selector;
+
+pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+
 use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use reqwest::blocking::Client;
@@ -460,6 +464,75 @@ pub fn set_repository_enabled(conn: &Connection, name: &str, enabled: bool) -> R
 pub fn search_packages(conn: &Connection, pattern: &str) -> Result<Vec<RepositoryPackage>> {
     let packages = RepositoryPackage::search(conn, pattern)?;
     Ok(packages)
+}
+
+/// Resolve dependencies and return list of packages to download
+///
+/// This function takes a list of dependency names and searches repositories
+/// for matching packages. It checks which dependencies are already installed
+/// and returns only the ones that need to be downloaded.
+///
+/// Returns: Vec<(dependency_name, PackageWithRepo)>
+pub fn resolve_dependencies(
+    conn: &Connection,
+    dependencies: &[String],
+) -> Result<Vec<(String, PackageWithRepo)>> {
+    use crate::db::models::Trove;
+
+    let mut to_download = Vec::new();
+
+    for dep_name in dependencies {
+        // Skip rpmlib dependencies and file paths
+        if dep_name.starts_with("rpmlib(") || dep_name.starts_with('/') {
+            continue;
+        }
+
+        // Check if already installed
+        let installed = Trove::find_by_name(conn, dep_name)?;
+        if !installed.is_empty() {
+            debug!("Dependency {} already installed, skipping", dep_name);
+            continue;
+        }
+
+        // Search repositories for this dependency
+        let options = SelectionOptions::default();
+        match PackageSelector::find_best_package(conn, dep_name, &options) {
+            Ok(pkg_with_repo) => {
+                info!(
+                    "Found dependency {} version {} in repository {}",
+                    dep_name, pkg_with_repo.package.version, pkg_with_repo.repository.name
+                );
+                to_download.push((dep_name.clone(), pkg_with_repo));
+            }
+            Err(e) => {
+                // Dependency not found - this is a critical error
+                return Err(Error::NotFoundError(format!(
+                    "Required dependency '{}' not found in any repository: {}",
+                    dep_name, e
+                )));
+            }
+        }
+    }
+
+    Ok(to_download)
+}
+
+/// Download all dependencies to a directory
+///
+/// Returns: Vec<(dependency_name, downloaded_path)>
+pub fn download_dependencies(
+    dependencies: &[(String, PackageWithRepo)],
+    dest_dir: &Path,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut downloaded = Vec::new();
+
+    for (dep_name, pkg_with_repo) in dependencies {
+        info!("Downloading dependency: {}", dep_name);
+        let path = download_package(&pkg_with_repo.package, dest_dir)?;
+        downloaded.push((dep_name.clone(), path));
+    }
+
+    Ok(downloaded)
 }
 
 #[cfg(test)]

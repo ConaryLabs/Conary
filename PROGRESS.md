@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-## Project Status: Phase 9B Complete - Delta Updates
+## Project Status: Repository-Based Installation Complete
 
 ### Current State
 - [COMPLETE] **Phase 0**: Vision and architecture documented
@@ -14,6 +14,7 @@
 - [COMPLETE] **Phase 8**: CLI Interface with shell completions and man pages
 - [COMPLETE] **Phase 9A**: Repository Management with HTTP downloads and metadata sync
 - [COMPLETE] **Phase 9B**: Delta Updates with zstd compression and bandwidth tracking
+- [COMPLETE] **Repository Installation**: Install packages by name with automatic dependency resolution
 
 ### Phase 1 Deliverables [COMPLETE]
 - Cargo.toml with core dependencies (rusqlite, thiserror, anyhow, clap, sha2, tracing)
@@ -753,3 +754,134 @@ Phase 9B Success Criteria Met:
 - Documentation updated ✓
 
 Note: Full `update` command with dependency resolution deferred to future work. Phase 9A provides the foundation for repository-based package discovery and management.
+
+**Session 13** (2025-11-14) - **Repository-Based Installation with Dependency Auto-Resolution**
+
+Part 1 - Package Selection Infrastructure:
+- Created src/repository/selector.rs module (230 lines):
+  - `PackageSelector` for choosing best package from multiple matches
+  - `SelectionOptions` struct with version, repository, architecture filters
+  - `PackageWithRepo` combines package with repository information
+  - Architecture detection using std::env::consts::ARCH
+  - Architecture compatibility checking (respects "noarch")
+  - Smart version comparison using existing RpmVersion module
+  - Selection criteria: repository priority (higher better) → version (latest) → first match
+  - 3 unit tests for architecture detection and compatibility
+- Wired up selector module in src/repository/mod.rs
+- All compilation successful with zero warnings
+
+Part 2 - Enhanced Install Command:
+- Updated Install command structure in src/main.rs:
+  - Renamed package_path → package (accepts file path OR package name)
+  - Added --version flag for specific version selection
+  - Added --repo flag for specific repository selection
+  - Added --dry-run flag for preview without installation
+- Implemented package name vs file path detection:
+  - Path::new(package).exists() → use as file path
+  - Otherwise → search repositories and download
+- Repository search and download integration:
+  - Build SelectionOptions from CLI flags
+  - PackageSelector::find_best_package() for repository search
+  - Download to temp directory with TempDir
+  - Continue with existing installation logic
+- Auto-upgrade logic:
+  - Compare installed version with new version using RpmVersion
+  - If newer: upgrade (remove old, install new)
+  - If same: error (already installed)
+  - If older: error (cannot downgrade)
+  - Changeset description shows "Upgrade X from Y to Z"
+
+Part 3 - Complete Update Command:
+- Created install_package_from_file() helper function (160 lines):
+  - Extracts common installation logic for reuse
+  - Handles package format detection and parsing
+  - File extraction and CAS storage
+  - Conflict detection with upgrade support
+  - Database transaction with changeset creation
+  - Filesystem deployment
+  - Accepts optional old_trove parameter for upgrades
+- Updated Update command to actually install downloaded packages:
+  - Replaced TODO at line 1343 with install_package_from_file() call
+  - Passes installed_trove for proper upgrade handling
+  - Full downloads now result in package installation
+  - Maintains delta statistics tracking
+
+Part 4 - Dependency Auto-Resolution:
+- Added dependency resolution functions to src/repository/mod.rs:
+  - `resolve_dependencies()` - searches repos for missing dependencies
+    - Skips rpmlib() and file path dependencies
+    - Checks if already installed
+    - Returns list of dependencies to download with PackageWithRepo
+    - Errors if required dependency not found in any repository
+  - `download_dependencies()` - downloads all dependencies to directory
+    - Returns list of (dep_name, downloaded_path) tuples
+- Integrated into Install command (lines 519-576):
+  - Extract dependency names from parsed package
+  - Call resolve_dependencies() to find missing deps
+  - Download all missing dependencies
+  - Install each dependency using install_package_from_file()
+  - Sequential installation (can parallelize later)
+  - Clear error messages for dependency resolution failures
+  - Shows dependency installation progress to user
+
+Part 5 - Dry Run Support:
+- Added --dry-run flag to Install command struct
+- Implemented dry-run logic:
+  - Still searches repositories and parses packages
+  - Shows what dependencies would be installed
+  - Shows main package information
+  - Exits before actual installation
+  - Message: "Dry run complete. No changes made."
+- Useful for previewing installations without side effects
+
+Part 6 - Testing and Quality:
+- All 93 tests passing (76 lib + 7 bin + 10 integration, 1 ignored)
+- Gained 3 new tests from selector module
+- Zero clippy warnings with -D warnings flag
+- No breaking changes to existing functionality
+- Existing integration tests verify end-to-end workflows
+
+Part 7 - Documentation Updates:
+- Updated README.md:
+  - Changed install command description to show repository support
+  - Added examples of --version, --repo, --dry-run flags
+  - Added 5 new core features to feature list
+  - Updated test count to 93 tests
+  - Updated "What's Next" section (removed completed features)
+  - Added repository installation examples
+- Will update PROGRESS.md (this file) with session log
+- Will update build.rs for man page generation
+
+Phase Success Criteria Met:
+- Install accepts package names from repositories ✓
+- PackageSelector chooses best version/repository ✓
+- Automatic dependency download and installation ✓
+- Smart version selection with --version override ✓
+- Auto-upgrade on newer versions ✓
+- Repository priority respected ✓
+- Dry-run mode for preview ✓
+- All tests passing ✓
+- Zero clippy warnings ✓
+- Documentation updated ✓
+
+Key Implementation Decisions:
+1. Simple depth-first dependency resolution (one level, no recursion yet)
+2. Sequential dependency installation (parallel can be added later)
+3. Helper function install_package_from_file() for code reuse
+4. Architecture filtering uses system architecture by default
+5. Dry-run implementation stops before database transaction
+6. Update command reuses install helper for consistency
+
+Known Limitations:
+- Dependencies resolved one level only (transitive deps not yet recursive)
+- No parallel downloads yet (sequential is simpler and safer)
+- No dependency cycle detection during download phase
+- DEB and Arch formats still not implemented
+- No GPG signature verification yet
+
+Next Steps:
+- Update build.rs with new CLI flags for man pages
+- Phase 10: Multi-Format Support (DEB, Arch)
+- Recursive/transitive dependency resolution
+- Parallel dependency downloads
+- GPG signature verification

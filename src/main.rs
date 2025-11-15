@@ -8,10 +8,12 @@ use conary::delta::DeltaApplier;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
-use conary::repository;
+use conary::repository::{self, PackageSelector, SelectionOptions};
+use conary::version::RpmVersion;
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 use tracing::{info, warn};
 
 /// Package format types
@@ -38,16 +40,25 @@ enum Commands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
-    /// Install a package (auto-detects RPM, DEB, Arch formats)
+    /// Install a package from file or repository
     Install {
-        /// Path to the package file
-        package_path: String,
+        /// Package file path or package name
+        package: String,
         /// Database path (default: /var/lib/conary/conary.db)
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
         /// Install root directory (default: /)
         #[arg(short, long, default_value = "/")]
         root: String,
+        /// Specific version to install
+        #[arg(long)]
+        version: Option<String>,
+        /// Specific repository to use
+        #[arg(long)]
+        repo: Option<String>,
+        /// Dry run - show what would be installed without installing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove an installed package
     Remove {
@@ -253,6 +264,170 @@ fn detect_package_format(path: &str) -> Result<PackageFormatType> {
     ))
 }
 
+/// Install a package from a file path
+///
+/// This function handles the core installation logic and can be used by both
+/// Install and Update commands.
+///
+/// # Arguments
+/// * `package_path` - Path to the package file
+/// * `conn` - Database connection (must be mutable for transactions)
+/// * `root` - Install root directory
+/// * `old_trove` - Optional existing trove to upgrade (None for fresh install)
+fn install_package_from_file(
+    package_path: &Path,
+    conn: &mut rusqlite::Connection,
+    root: &str,
+    old_trove: Option<&conary::db::models::Trove>,
+) -> Result<()> {
+    // Auto-detect package format
+    let format = detect_package_format(package_path.to_str().unwrap())?;
+    info!("Detected package format: {:?}", format);
+
+    // Parse the package based on format
+    let rpm = match format {
+        PackageFormatType::Rpm => RpmPackage::parse(package_path.to_str().unwrap())?,
+        PackageFormatType::Deb => {
+            return Err(anyhow::anyhow!("DEB format not yet implemented"));
+        }
+        PackageFormatType::Arch => {
+            return Err(anyhow::anyhow!("Arch format not yet implemented"));
+        }
+    };
+
+    info!(
+        "Parsed package: {} version {} ({} files, {} dependencies)",
+        rpm.name(),
+        rpm.version(),
+        rpm.files().len(),
+        rpm.dependencies().len()
+    );
+
+    // Extract file contents from RPM
+    info!("Extracting file contents from package...");
+    let extracted_files = rpm.extract_file_contents()?;
+    info!("Extracted {} files", extracted_files.len());
+
+    // Initialize CAS and file deployer
+    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
+    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let install_root = PathBuf::from(root);
+    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+
+    // Perform installation within a changeset transaction
+    conary::db::transaction(conn, |tx| {
+        // Create changeset for this installation
+        let changeset_desc = if let Some(old) = old_trove {
+            format!(
+                "Upgrade {} from {} to {}",
+                rpm.name(),
+                old.version,
+                rpm.version()
+            )
+        } else {
+            format!("Install {}-{}", rpm.name(), rpm.version())
+        };
+        let mut changeset = conary::db::models::Changeset::new(changeset_desc);
+        let changeset_id = changeset.insert(tx)?;
+
+        // If upgrading, remove the old trove first
+        if let Some(old) = old_trove {
+            if let Some(old_id) = old.id {
+                info!("Removing old version {} before upgrade", old.version);
+                conary::db::models::Trove::delete(tx, old_id)?;
+            }
+        }
+
+        // Convert to Trove and associate with changeset
+        let mut trove = rpm.to_trove();
+        trove.installed_by_changeset_id = Some(changeset_id);
+        let trove_id = trove.insert(tx)?;
+
+        // Process each file: conflict check, store in CAS, deploy, track in DB
+        for file in &extracted_files {
+            // Conflict detection (skip if upgrading same package)
+            if deployer.file_exists(&file.path) {
+                if let Some(existing) = conary::db::models::FileEntry::find_by_path(tx, &file.path)? {
+                    let owner_trove = conary::db::models::Trove::find_by_id(tx, existing.trove_id)?;
+                    if let Some(owner) = owner_trove {
+                        if owner.name != rpm.name() {
+                            return Err(conary::Error::InitError(format!(
+                                "File conflict: {} is owned by package {}",
+                                file.path, owner.name
+                            )));
+                        }
+                    }
+                } else if old_trove.is_none() {
+                    // Only error on orphans for fresh installs, not upgrades
+                    return Err(conary::Error::InitError(format!(
+                        "File conflict: {} exists but is not tracked by any package",
+                        file.path
+                    )));
+                }
+            }
+
+            // Store content in CAS
+            let hash = deployer.cas().store(&file.content)?;
+
+            // Store file content metadata in database
+            tx.execute(
+                "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+                [&hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
+            )?;
+
+            // Store file metadata in database
+            let mut file_entry = conary::db::models::FileEntry::new(
+                file.path.clone(),
+                hash.clone(),
+                file.size,
+                file.mode,
+                trove_id,
+            );
+            file_entry.insert(tx)?;
+
+            // Track in file history
+            let action = if deployer.file_exists(&file.path) { "modify" } else { "add" };
+            tx.execute(
+                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                [&changeset_id.to_string(), &file.path, &hash, action],
+            )?;
+        }
+
+        // Store dependencies in database
+        for dep in rpm.dependencies() {
+            let dep_type_str = match dep.dep_type {
+                DependencyType::Runtime => "runtime",
+                DependencyType::Build => "build",
+                DependencyType::Optional => "optional",
+            };
+
+            let mut dep_entry = conary::db::models::DependencyEntry::new(
+                trove_id,
+                dep.name.clone(),
+                dep.version.clone(),
+                dep_type_str.to_string(),
+                None,
+            );
+            dep_entry.insert(tx)?;
+        }
+
+        // Mark changeset as applied
+        changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+
+        Ok(())
+    })?;
+
+    // Deploy files to filesystem (outside transaction for safety)
+    info!("Deploying files to filesystem...");
+    for file in &extracted_files {
+        let hash = conary::filesystem::CasStore::compute_hash(&file.content);
+        deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
+    }
+    info!("Successfully deployed {} files", extracted_files.len());
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Initialize tracing subscriber for logging
     tracing_subscriber::fmt()
@@ -272,19 +447,60 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Install {
-            package_path,
+            package,
             db_path,
             root,
+            version,
+            repo,
+            dry_run,
         }) => {
-            info!("Installing package: {}", package_path);
+            info!("Installing package: {}", package);
+
+            // Detect if this is a file path or package name
+            let package_path = if Path::new(&package).exists() {
+                // It's a file path - use directly
+                info!("Installing from local file: {}", package);
+                PathBuf::from(&package)
+            } else {
+                // It's a package name - search repositories and download
+                info!("Searching repositories for package: {}", package);
+
+                // Open database connection for repository search
+                let conn = conary::db::open(&db_path)?;
+
+                // Build selection options
+                let options = SelectionOptions {
+                    version: version.clone(),
+                    repository: repo.clone(),
+                    architecture: None, // Use system architecture
+                };
+
+                // Find best matching package
+                let pkg_with_repo = PackageSelector::find_best_package(&conn, &package, &options)?;
+
+                info!(
+                    "Found package {} {} in repository {} (priority {})",
+                    pkg_with_repo.package.name,
+                    pkg_with_repo.package.version,
+                    pkg_with_repo.repository.name,
+                    pkg_with_repo.repository.priority
+                );
+
+                // Download package to temp directory
+                let temp_dir = TempDir::new()?;
+                let download_path = repository::download_package(&pkg_with_repo.package, temp_dir.path())?;
+
+                info!("Downloaded package to: {}", download_path.display());
+                download_path
+            };
 
             // Auto-detect package format
-            let format = detect_package_format(&package_path)?;
+            let format = detect_package_format(package_path.to_str().unwrap())?;
             info!("Detected package format: {:?}", format);
 
             // Parse the package based on format
             let rpm = match format {
-                PackageFormatType::Rpm => RpmPackage::parse(&package_path)?,
+                PackageFormatType::Rpm => RpmPackage::parse(package_path.to_str().unwrap())?,
                 PackageFormatType::Deb => {
                     return Err(anyhow::anyhow!("DEB format not yet implemented"));
                 }
@@ -304,16 +520,133 @@ fn main() -> Result<()> {
             // Open database connection
             let mut conn = conary::db::open(&db_path)?;
 
-            // Pre-transaction validation: check if already installed
+            // Auto-resolve and install dependencies
+            let dep_names: Vec<String> = rpm.dependencies()
+                .iter()
+                .map(|d| d.name.clone())
+                .collect();
+
+            if !dep_names.is_empty() {
+                info!("Resolving {} dependencies...", dep_names.len());
+                println!("Checking dependencies for {}...", rpm.name());
+
+                match repository::resolve_dependencies(&conn, &dep_names) {
+                    Ok(to_download) => {
+                        if !to_download.is_empty() {
+                            if dry_run {
+                                println!("Would install {} missing dependencies:", to_download.len());
+                                for (dep_name, pkg) in &to_download {
+                                    println!("  {} ({})", dep_name, pkg.package.version);
+                                }
+                            } else {
+                                println!("Installing {} missing dependencies:", to_download.len());
+                                for (dep_name, pkg) in &to_download {
+                                    println!("  {} ({})", dep_name, pkg.package.version);
+                                }
+                            }
+
+                            // Skip download/install if dry-run
+                            if !dry_run {
+                                // Download all dependencies
+                                let temp_dir = TempDir::new()?;
+                                match repository::download_dependencies(&to_download, temp_dir.path()) {
+                                    Ok(downloaded) => {
+                                        // Install each dependency in order
+                                        for (dep_name, dep_path) in downloaded {
+                                            info!("Installing dependency: {}", dep_name);
+                                            println!("Installing dependency: {}", dep_name);
+
+                                            if let Err(e) = install_package_from_file(
+                                                &dep_path,
+                                                &mut conn,
+                                                &root,
+                                                None, // No upgrade for dependencies
+                                            ) {
+                                                return Err(anyhow::anyhow!(
+                                                    "Failed to install dependency {}: {}",
+                                                    dep_name,
+                                                    e
+                                                ));
+                                            }
+                                            println!("  ✓ Installed {}", dep_name);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        return Err(anyhow::anyhow!(
+                                            "Failed to download dependencies: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("All dependencies already satisfied");
+                        }
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Dependency resolution failed: {}", e));
+                    }
+                }
+            }
+
+            // If dry-run, show what would be installed and exit
+            if dry_run {
+                println!("\nWould install package: {} version {}", rpm.name(), rpm.version());
+                println!("  Architecture: {}", rpm.architecture().unwrap_or("none"));
+                println!("  Files: {}", rpm.files().len());
+                println!("  Dependencies: {}", rpm.dependencies().len());
+                println!("\nDry run complete. No changes made.");
+                return Ok(());
+            }
+
+            // Pre-transaction validation and upgrade detection
             let existing = conary::db::models::Trove::find_by_name(&conn, rpm.name())?;
+            let mut old_trove_to_upgrade: Option<conary::db::models::Trove> = None;
+
             for trove in &existing {
-                if trove.version == rpm.version() && trove.architecture == rpm.architecture().map(|s| s.to_string()) {
-                    return Err(anyhow::anyhow!(
-                        "Package {} version {} ({}) is already installed",
-                        rpm.name(),
-                        rpm.version(),
-                        rpm.architecture().unwrap_or("no-arch")
-                    ));
+                // Only compare packages with same architecture
+                if trove.architecture == rpm.architecture().map(|s| s.to_string()) {
+                    if trove.version == rpm.version() {
+                        // Same version already installed
+                        return Err(anyhow::anyhow!(
+                            "Package {} version {} ({}) is already installed",
+                            rpm.name(),
+                            rpm.version(),
+                            rpm.architecture().unwrap_or("no-arch")
+                        ));
+                    }
+
+                    // Compare versions
+                    match (RpmVersion::parse(&trove.version), RpmVersion::parse(rpm.version())) {
+                        (Ok(existing_ver), Ok(new_ver)) => {
+                            if new_ver > existing_ver {
+                                // This is an upgrade
+                                info!(
+                                    "Upgrading {} from version {} to {}",
+                                    rpm.name(),
+                                    trove.version,
+                                    rpm.version()
+                                );
+                                old_trove_to_upgrade = Some(trove.clone());
+                            } else {
+                                // Trying to install older version
+                                return Err(anyhow::anyhow!(
+                                    "Cannot downgrade package {} from version {} to {}",
+                                    rpm.name(),
+                                    trove.version,
+                                    rpm.version()
+                                ));
+                            }
+                        }
+                        _ => {
+                            // Version parsing failed - allow installation but warn
+                            warn!(
+                                "Could not compare versions {} and {}",
+                                trove.version,
+                                rpm.version()
+                            );
+                        }
+                    }
                 }
             }
 
@@ -333,12 +666,27 @@ fn main() -> Result<()> {
             // Perform installation within a changeset transaction
             let _changeset_id = conary::db::transaction(&mut conn, |tx| {
                 // Create changeset for this installation
-                let mut changeset = conary::db::models::Changeset::new(format!(
-                    "Install {}-{}",
-                    rpm.name(),
-                    rpm.version()
-                ));
+                let changeset_desc = if let Some(ref old_trove) = old_trove_to_upgrade {
+                    format!(
+                        "Upgrade {} from {} to {}",
+                        rpm.name(),
+                        old_trove.version,
+                        rpm.version()
+                    )
+                } else {
+                    format!("Install {}-{}", rpm.name(), rpm.version())
+                };
+                let mut changeset = conary::db::models::Changeset::new(changeset_desc);
                 let changeset_id = changeset.insert(tx)?;
+
+                // If upgrading, remove the old trove first
+                if let Some(old_trove) = old_trove_to_upgrade {
+                    if let Some(old_id) = old_trove.id {
+                        info!("Removing old version {} before upgrade", old_trove.version);
+                        // Delete old trove (CASCADE will handle files and dependencies)
+                        conary::db::models::Trove::delete(tx, old_id)?;
+                    }
+                }
 
                 // Convert to Trove and associate with changeset
                 let mut trove = rpm.to_trove();
@@ -1239,8 +1587,15 @@ fn main() -> Result<()> {
                             println!("  ✓ Downloaded {} bytes", repo_pkg.size);
                             full_downloads += 1;
 
-                            // TODO: Parse and install the downloaded package
-                            // For now, just clean up
+                            // Parse and install the downloaded package
+                            if let Err(e) = install_package_from_file(&pkg_path, &mut conn, &root, Some(&installed_trove)) {
+                                warn!("  Package installation failed: {}", e);
+                                let _ = std::fs::remove_file(pkg_path);
+                                continue;
+                            }
+
+                            println!("  ✓ Package installed successfully");
+                            // Clean up downloaded file
                             let _ = std::fs::remove_file(pkg_path);
                         }
                         Err(e) => {
