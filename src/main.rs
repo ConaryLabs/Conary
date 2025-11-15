@@ -462,6 +462,18 @@ fn main() -> Result<()> {
                 Err(e) => eprintln!("  Warning: Could not add arch-core: {}", e),
             }
 
+            // Arch Linux extra repository (priority 95)
+            match conary::repository::add_repository(
+                &conn,
+                "arch-extra".to_string(),
+                "https://geo.mirror.pkgbuild.com/extra/os/x86_64".to_string(),
+                true,
+                95,
+            ) {
+                Ok(_) => println!("  Added: arch-extra (Arch Linux)"),
+                Err(e) => eprintln!("  Warning: Could not add arch-extra: {}", e),
+            }
+
             // Fedora 43 Everything repository (priority 90)
             match conary::repository::add_repository(
                 &conn,
@@ -472,6 +484,18 @@ fn main() -> Result<()> {
             ) {
                 Ok(_) => println!("  Added: fedora-43 (Fedora 43)"),
                 Err(e) => eprintln!("  Warning: Could not add fedora-43: {}", e),
+            }
+
+            // Arch Linux multilib repository (priority 85)
+            match conary::repository::add_repository(
+                &conn,
+                "arch-multilib".to_string(),
+                "https://geo.mirror.pkgbuild.com/multilib/os/x86_64".to_string(),
+                true,
+                85,
+            ) {
+                Ok(_) => println!("  Added: arch-multilib (Arch Linux)"),
+                Err(e) => eprintln!("  Warning: Could not add arch-multilib: {}", e),
             }
 
             // Ubuntu 24.04 LTS main repository (priority 80)
@@ -1419,20 +1443,40 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            for mut repo in repos_to_sync {
-                if !force && !conary::repository::needs_sync(&repo) {
-                    println!("Repository '{}' is up to date, skipping", repo.name);
-                    continue;
-                }
+            // Filter repositories that need sync (quick sequential check)
+            let repos_needing_sync: Vec<_> = repos_to_sync
+                .into_iter()
+                .filter(|repo| force || conary::repository::needs_sync(repo))
+                .collect();
 
-                println!("Syncing repository: {} ...", repo.name);
-                match conary::repository::sync_repository(&conn, &mut repo) {
-                    Ok(count) => {
-                        println!("  ✓ Synchronized {} packages", count);
-                    }
-                    Err(e) => {
-                        println!("  ✗ Failed to sync: {}", e);
-                    }
+            if repos_needing_sync.is_empty() {
+                println!("All repositories are up to date");
+                return Ok(());
+            }
+
+            // Parallel sync using rayon - each thread gets own database connection
+            use rayon::prelude::*;
+            let results: Vec<(String, conary::Result<usize>)> = repos_needing_sync
+                .par_iter()
+                .map(|repo| {
+                    println!("Syncing repository: {} ...", repo.name);
+
+                    // Each thread needs its own connection for SQLite safety
+                    let sync_result = (|| -> conary::Result<usize> {
+                        let conn = conary::db::open(&db_path)?;
+                        let mut repo_mut = repo.clone();
+                        conary::repository::sync_repository(&conn, &mut repo_mut)
+                    })();
+
+                    (repo.name.clone(), sync_result)
+                })
+                .collect();
+
+            // Report all results after parallel sync completes
+            for (name, result) in results {
+                match result {
+                    Ok(count) => println!("  ✓ Synchronized {} packages from {}", count, name),
+                    Err(e) => println!("  ✗ Failed to sync {}: {}", name, e),
                 }
             }
 
