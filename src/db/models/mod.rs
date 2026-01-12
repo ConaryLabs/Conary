@@ -21,7 +21,7 @@ pub use file_entry::FileEntry;
 pub use flavor::Flavor;
 pub use provenance::Provenance;
 pub use repository::{Repository, RepositoryPackage};
-pub use trove::{Trove, TroveType};
+pub use trove::{InstallSource, Trove, TroveType};
 
 #[cfg(test)]
 mod tests {

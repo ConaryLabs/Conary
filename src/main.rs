@@ -75,6 +75,42 @@ enum Commands {
         root: String,
     },
 
+    /// Adopt all installed system packages into Conary tracking
+    AdoptSystem {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Copy files to CAS for full management (slower but enables rollback)
+        #[arg(long)]
+        full: bool,
+
+        /// Show what would be adopted without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Adopt specific system package(s) into Conary tracking
+    Adopt {
+        /// Package name(s) to adopt
+        packages: Vec<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Copy files to CAS for full management
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// Show adoption status
+    AdoptStatus {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
     /// Query installed packages
     Query {
         /// Optional pattern to filter packages
@@ -288,6 +324,18 @@ fn main() -> Result<()> {
 
         Some(Commands::Remove { package_name, db_path, root }) => {
             commands::cmd_remove(&package_name, &db_path, &root)
+        }
+
+        Some(Commands::AdoptSystem { db_path, full, dry_run }) => {
+            commands::cmd_adopt_system(&db_path, full, dry_run)
+        }
+
+        Some(Commands::Adopt { packages, db_path, full }) => {
+            commands::cmd_adopt(&packages, &db_path, full)
+        }
+
+        Some(Commands::AdoptStatus { db_path }) => {
+            commands::cmd_adopt_status(&db_path)
         }
 
         Some(Commands::Query { pattern, db_path }) => {

@@ -1,6 +1,7 @@
 // src/commands/mod.rs
 //! Command handlers for the Conary CLI
 
+mod adopt;
 mod install;
 mod query;
 mod repo;
@@ -8,6 +9,7 @@ mod system;
 mod update;
 
 // Re-export all command handlers
+pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system};
 pub use install::{cmd_install, cmd_remove};
 pub use query::{cmd_depends, cmd_history, cmd_query, cmd_rdepends, cmd_whatbreaks};
 pub use repo::{

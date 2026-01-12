@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -80,6 +80,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         3 => migrate_v3(conn),
         4 => migrate_v4(conn),
         5 => migrate_v5(conn),
+        6 => migrate_v6(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -361,6 +362,27 @@ fn migrate_v5(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 5 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 6: Add install source tracking for package adoption
+///
+/// Adds install_source column to troves table to track how packages were installed:
+/// - 'file': Installed from local package file
+/// - 'repository': Installed from Conary repository
+/// - 'adopted-track': Adopted from system, metadata only
+/// - 'adopted-full': Adopted from system with full CAS storage
+fn migrate_v6(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 6");
+
+    conn.execute_batch(
+        "
+        -- Add install source tracking to troves
+        ALTER TABLE troves ADD COLUMN install_source TEXT DEFAULT 'file';
+        ",
+    )?;
+
+    info!("Schema version 6 applied successfully");
     Ok(())
 }
 

@@ -37,6 +37,48 @@ impl FromStr for TroveType {
     }
 }
 
+/// Source of package installation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallSource {
+    /// Installed from local package file
+    File,
+    /// Installed from Conary repository
+    Repository,
+    /// Adopted from system, metadata only (files not in CAS)
+    AdoptedTrack,
+    /// Adopted from system with full CAS storage
+    AdoptedFull,
+}
+
+impl InstallSource {
+    pub fn as_str(&self) -> &str {
+        match self {
+            InstallSource::File => "file",
+            InstallSource::Repository => "repository",
+            InstallSource::AdoptedTrack => "adopted-track",
+            InstallSource::AdoptedFull => "adopted-full",
+        }
+    }
+
+    pub fn is_adopted(&self) -> bool {
+        matches!(self, InstallSource::AdoptedTrack | InstallSource::AdoptedFull)
+    }
+}
+
+impl FromStr for InstallSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "file" => Ok(InstallSource::File),
+            "repository" => Ok(InstallSource::Repository),
+            "adopted-track" => Ok(InstallSource::AdoptedTrack),
+            "adopted-full" => Ok(InstallSource::AdoptedFull),
+            _ => Err(format!("Invalid install source: {s}")),
+        }
+    }
+}
+
 /// A Trove represents a package, component, or collection
 #[derive(Debug, Clone)]
 pub struct Trove {
@@ -48,6 +90,7 @@ pub struct Trove {
     pub description: Option<String>,
     pub installed_at: Option<String>,
     pub installed_by_changeset_id: Option<i64>,
+    pub install_source: InstallSource,
 }
 
 impl Trove {
@@ -62,14 +105,35 @@ impl Trove {
             description: None,
             installed_at: None,
             installed_by_changeset_id: None,
+            install_source: InstallSource::File,
+        }
+    }
+
+    /// Create a new Trove with a specific install source
+    pub fn new_with_source(
+        name: String,
+        version: String,
+        trove_type: TroveType,
+        install_source: InstallSource,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            version,
+            trove_type,
+            architecture: None,
+            description: None,
+            installed_at: None,
+            installed_by_changeset_id: None,
+            install_source,
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 &self.name,
                 &self.version,
@@ -77,6 +141,7 @@ impl Trove {
                 &self.architecture,
                 &self.description,
                 &self.installed_by_changeset_id,
+                self.install_source.as_str(),
             ],
         )?;
 
@@ -88,7 +153,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -98,7 +163,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -110,7 +175,7 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves ORDER BY name, version")?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -136,6 +201,12 @@ impl Trove {
             )
         })?;
 
+        // Handle install_source with default for older databases
+        let source_str: Option<String> = row.get(8)?;
+        let install_source = source_str
+            .and_then(|s| s.parse::<InstallSource>().ok())
+            .unwrap_or(InstallSource::File);
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -145,6 +216,7 @@ impl Trove {
             description: row.get(5)?,
             installed_at: row.get(6)?,
             installed_by_changeset_id: row.get(7)?,
+            install_source,
         })
     }
 }

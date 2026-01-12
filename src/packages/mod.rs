@@ -8,6 +8,8 @@
 pub mod arch;
 pub mod deb;
 pub mod rpm;
+pub mod rpm_query;
 pub mod traits;
 
+pub use rpm_query::{InstalledFileInfo, InstalledRpmInfo};
 pub use traits::PackageFormat;

@@ -498,26 +498,7 @@ fn test_query_packages() {
     }
 
     // Query all packages
-    let all_troves: Vec<Trove> = {
-        let mut stmt = conn
-            .prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves ORDER BY name")
-            .unwrap();
-        stmt.query_map([], |row| {
-            Ok(Trove {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                version: row.get(2)?,
-                trove_type: row.get::<_, String>(3)?.parse().unwrap(),
-                architecture: row.get(4)?,
-                description: row.get(5)?,
-                installed_at: row.get(6)?,
-                installed_by_changeset_id: row.get(7)?,
-            })
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap()
-    };
+    let all_troves = Trove::list_all(&conn).unwrap();
     assert_eq!(all_troves.len(), 3);
 
     // Query specific package

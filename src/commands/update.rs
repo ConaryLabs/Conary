@@ -28,24 +28,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
     let installed_troves = if let Some(pkg_name) = package {
         conary::db::models::Trove::find_by_name(&conn, &pkg_name)?
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves ORDER BY name"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(conary::db::models::Trove {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                version: row.get(2)?,
-                trove_type: row.get::<_, String>(3)?
-                    .parse()
-                    .unwrap_or(conary::db::models::TroveType::Package),
-                architecture: row.get(4)?,
-                description: row.get(5)?,
-                installed_at: row.get(6)?,
-                installed_by_changeset_id: row.get(7)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
+        conary::db::models::Trove::list_all(&conn)?
     };
 
     if installed_troves.is_empty() {
