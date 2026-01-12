@@ -1,0 +1,291 @@
+// src/repository/sync.rs
+
+//! Repository synchronization
+//!
+//! Functions for synchronizing repository metadata from remote sources,
+//! including native format support for Arch, Debian, and Fedora repositories.
+
+use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
+use crate::error::{Error, Result};
+use rusqlite::Connection;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, warn};
+
+use super::client::RepositoryClient;
+use super::parsers;
+use super::parsers::RepositoryParser;
+
+/// Detected repository format
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryFormat {
+    Arch,
+    Debian,
+    Fedora,
+    Json,
+}
+
+/// Detect repository format based on repository name and URL
+pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
+    let name_lower = name.to_lowercase();
+    let url_lower = url.to_lowercase();
+
+    // Check for Arch Linux indicators
+    if name_lower.contains("arch")
+        || url_lower.contains("archlinux")
+        || url_lower.contains("pkgbuild")
+        || url_lower.contains(".db.tar")
+    {
+        return RepositoryFormat::Arch;
+    }
+
+    // Check for Fedora indicators
+    if name_lower.contains("fedora")
+        || url_lower.contains("fedora")
+        || url_lower.contains("/repodata/")
+    {
+        return RepositoryFormat::Fedora;
+    }
+
+    // Check for Debian/Ubuntu indicators
+    if name_lower.contains("debian")
+        || name_lower.contains("ubuntu")
+        || url_lower.contains("debian")
+        || url_lower.contains("ubuntu")
+        || url_lower.contains("/dists/")
+    {
+        return RepositoryFormat::Debian;
+    }
+
+    // Default to JSON format
+    RepositoryFormat::Json
+}
+
+/// Get current timestamp as ISO 8601 string
+pub fn current_timestamp() -> String {
+    use chrono::Utc;
+    Utc::now().to_rfc3339()
+}
+
+/// Parse ISO 8601 timestamp to Unix seconds
+pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
+    use chrono::DateTime;
+
+    let dt = DateTime::parse_from_rfc3339(timestamp)
+        .map_err(|e| Error::ParseError(format!("Invalid timestamp: {e}")))?;
+
+    Ok(dt.timestamp() as u64)
+}
+
+/// Synchronize repository using native metadata format parsers
+fn sync_repository_native(
+    conn: &Connection,
+    repo: &mut Repository,
+    format: RepositoryFormat,
+) -> Result<usize> {
+    info!("Syncing repository {} using native {:?} format", repo.name, format);
+
+    // Parse metadata using appropriate parser
+    let packages = match format {
+        RepositoryFormat::Arch => {
+            // Extract repository name from repo.name (e.g., "arch-core" -> "core")
+            let repo_name = if let Some(suffix) = repo.name.strip_prefix("arch-") {
+                suffix.to_string()
+            } else {
+                "core".to_string()
+            };
+
+            let parser = parsers::arch::ArchParser::new(repo_name);
+            parser.sync_metadata(&repo.url)?
+        }
+        RepositoryFormat::Debian => {
+            // For Ubuntu/Debian, we need distribution, component, and architecture
+            // Extract from repository name: "ubuntu-noble" -> noble
+            let distribution = if let Some(suffix) = repo.name.strip_prefix("ubuntu-") {
+                suffix.to_string()
+            } else if let Some(suffix) = repo.name.strip_prefix("debian-") {
+                suffix.to_string()
+            } else {
+                "noble".to_string()
+            };
+
+            let parser = parsers::debian::DebianParser::new(
+                distribution,
+                "main".to_string(),
+                "amd64".to_string(),
+            );
+            parser.sync_metadata(&repo.url)?
+        }
+        RepositoryFormat::Fedora => {
+            let parser = parsers::fedora::FedoraParser::new("x86_64".to_string());
+            parser.sync_metadata(&repo.url)?
+        }
+        RepositoryFormat::Json => {
+            return Err(Error::ParseError(
+                "JSON format should use sync_repository".to_string(),
+            ));
+        }
+    };
+
+    let repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
+    // Delete old package entries for this repository
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+
+    // Convert and insert package metadata
+    let mut count = 0;
+    for pkg_meta in packages {
+        // Convert parsers::Dependency to Vec<String>
+        let deps_json = if !pkg_meta.dependencies.is_empty() {
+            let dep_strings: Vec<String> = pkg_meta
+                .dependencies
+                .iter()
+                .map(|dep| {
+                    if let Some(constraint) = &dep.constraint {
+                        format!("{} {constraint}", dep.name)
+                    } else {
+                        dep.name.clone()
+                    }
+                })
+                .collect();
+            Some(serde_json::to_string(&dep_strings).unwrap_or_default())
+        } else {
+            None
+        };
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            pkg_meta.name,
+            pkg_meta.version,
+            pkg_meta.checksum,
+            pkg_meta.size as i64,
+            pkg_meta.download_url,
+        );
+
+        repo_pkg.architecture = pkg_meta.architecture;
+        repo_pkg.description = pkg_meta.description;
+        repo_pkg.dependencies = deps_json;
+
+        repo_pkg.insert(conn)?;
+        count += 1;
+    }
+
+    // Update last_sync timestamp
+    repo.last_sync = Some(current_timestamp());
+    repo.update(conn)?;
+
+    info!(
+        "Synchronized {} packages from repository {}",
+        count, repo.name
+    );
+    Ok(count)
+}
+
+/// Synchronize repository metadata with the database
+pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+    info!("Synchronizing repository: {}", repo.name);
+
+    // Detect repository format
+    let format = detect_repository_format(&repo.name, &repo.url);
+
+    // Try native format first if detected
+    if format != RepositoryFormat::Json {
+        match sync_repository_native(conn, repo, format) {
+            Ok(count) => return Ok(count),
+            Err(e) => {
+                warn!("Native format sync failed: {}, falling back to JSON", e);
+            }
+        }
+    }
+
+    // Fall back to JSON metadata format
+    let client = RepositoryClient::new()?;
+    let metadata = client.fetch_metadata(&repo.url)?;
+
+    let repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
+    // Delete old package entries for this repository
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+
+    // Insert new package metadata
+    let mut count = 0;
+    let mut delta_count = 0;
+
+    for pkg_meta in metadata.packages {
+        let deps_json = pkg_meta
+            .dependencies
+            .as_ref()
+            .map(|deps| serde_json::to_string(deps).unwrap_or_default());
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            pkg_meta.name.clone(),
+            pkg_meta.version.clone(),
+            pkg_meta.checksum.clone(),
+            pkg_meta.size,
+            pkg_meta.download_url,
+        );
+
+        repo_pkg.architecture = pkg_meta.architecture;
+        repo_pkg.description = pkg_meta.description;
+        repo_pkg.dependencies = deps_json;
+
+        repo_pkg.insert(conn)?;
+        count += 1;
+
+        // Store delta metadata if available
+        if let Some(deltas) = pkg_meta.delta_from {
+            for delta_info in deltas {
+                let mut delta = PackageDelta::new(
+                    pkg_meta.name.clone(),
+                    delta_info.from_version,
+                    pkg_meta.version.clone(),
+                    delta_info.from_hash,
+                    pkg_meta.checksum.clone(),
+                    delta_info.delta_url,
+                    delta_info.delta_size,
+                    delta_info.delta_checksum,
+                    pkg_meta.size,
+                );
+
+                delta.insert(conn)?;
+                delta_count += 1;
+            }
+        }
+    }
+
+    // Update last_sync timestamp
+    repo.last_sync = Some(current_timestamp());
+    repo.update(conn)?;
+
+    info!(
+        "Synchronized {} packages and {} deltas from repository {}",
+        count, delta_count, repo.name
+    );
+    Ok(count)
+}
+
+/// Check if repository metadata needs refresh
+pub fn needs_sync(repo: &Repository) -> bool {
+    match &repo.last_sync {
+        None => true, // Never synced
+        Some(last_sync) => {
+            // Parse timestamp and check if expired
+            match parse_timestamp(last_sync) {
+                Ok(last_sync_time) => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
+                    let age_seconds = now.saturating_sub(last_sync_time);
+                    age_seconds > repo.metadata_expire as u64
+                }
+                Err(_) => true, // If we can't parse timestamp, force sync
+            }
+        }
+    }
+}
