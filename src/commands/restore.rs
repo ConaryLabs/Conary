@@ -117,7 +117,7 @@ pub fn cmd_restore(
     for file in &files_to_restore {
         debug!("Restoring: {}", file.path);
 
-        match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
+        match deployer.deploy_auto(&file.path, &file.sha256_hash, file.permissions as u32) {
             Ok(()) => {
                 restored += 1;
                 debug!("Restored: {}", file.path);
@@ -206,7 +206,7 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
 
         // Restore missing files
         for file in &missing {
-            match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
+            match deployer.deploy_auto(&file.path, &file.sha256_hash, file.permissions as u32) {
                 Ok(()) => {
                     total_restored += 1;
                 }

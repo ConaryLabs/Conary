@@ -20,6 +20,8 @@ pub struct InstalledFileInfo {
     pub digest: Option<String>,
     pub user: Option<String>,
     pub group: Option<String>,
+    /// For symlinks, the target path
+    pub link_target: Option<String>,
 }
 
 /// Information about an installed pacman package
@@ -185,6 +187,13 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         // Try to get mtree digest
         let digest = get_file_digest(name, &path);
 
+        // Check if this is a symlink and get target
+        let link_target = if (mode & 0o170000) == 0o120000 {
+            std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
         files.push(InstalledFileInfo {
             path,
             size,
@@ -192,6 +201,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             digest,
             user: None,
             group: None,
+            link_target,
         });
     }
 

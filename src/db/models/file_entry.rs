@@ -62,6 +62,30 @@ impl FileEntry {
         Ok(id)
     }
 
+    /// Insert or replace this file in the database (handles shared paths)
+    ///
+    /// Multiple packages may claim the same path (directories, shared files).
+    /// This method updates the existing record if the path already exists.
+    pub fn insert_or_replace(&mut self, conn: &Connection) -> Result<i64> {
+        conn.execute(
+            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &self.path,
+                &self.sha256_hash,
+                &self.size,
+                &self.permissions,
+                &self.owner,
+                &self.group_name,
+                &self.trove_id,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        self.id = Some(id);
+        Ok(id)
+    }
+
     /// Find a file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(

@@ -132,6 +132,59 @@ impl FileDeployer {
         target_path.exists()
     }
 
+    /// Deploy a symlink to the filesystem
+    ///
+    /// Creates a symbolic link at the target path pointing to the given target.
+    pub fn deploy_symlink(&self, path: &str, target: &str) -> Result<()> {
+        let link_path = self.install_root.join(path.trim_start_matches('/'));
+
+        // Create parent directories
+        if let Some(parent) = link_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Remove existing file/symlink if present
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            if link_path.is_dir() {
+                // Don't remove directories
+                debug!("Skipping symlink deployment over directory: {}", path);
+                return Ok(());
+            }
+            fs::remove_file(&link_path)?;
+        }
+
+        // Create symlink
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, &link_path)?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Symlinks not supported on this platform",
+            )));
+        }
+
+        info!("Deployed symlink: {} -> {}", path, target);
+        Ok(())
+    }
+
+    /// Deploy a file or symlink from CAS based on stored content
+    ///
+    /// This method checks if the hash represents a symlink (prefixed content)
+    /// and deploys accordingly.
+    pub fn deploy_auto(&self, path: &str, hash: &str, permissions: u32) -> Result<()> {
+        // Check if this is a symlink
+        if let Ok(Some(target)) = self.cas.retrieve_symlink(hash) {
+            return self.deploy_symlink(path, &target);
+        }
+
+        // Otherwise deploy as regular file
+        self.deploy_file(path, hash, permissions)
+    }
+
     /// Remove a file from the filesystem
     pub fn remove_file(&self, path: &str) -> Result<()> {
         let target_path = self.install_root.join(path.trim_start_matches('/'));

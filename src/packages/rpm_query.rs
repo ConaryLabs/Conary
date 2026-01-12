@@ -27,6 +27,28 @@ pub struct InstalledFileInfo {
     pub digest: Option<String>,
     pub user: Option<String>,
     pub group: Option<String>,
+    /// For symlinks, the target path
+    pub link_target: Option<String>,
+}
+
+impl InstalledFileInfo {
+    /// Check if this file is a symlink (mode & S_IFMT == S_IFLNK)
+    pub fn is_symlink(&self) -> bool {
+        // S_IFLNK = 0o120000 = 0xA000
+        (self.mode & 0o170000) == 0o120000
+    }
+
+    /// Check if this file is a directory (mode & S_IFMT == S_IFDIR)
+    pub fn is_directory(&self) -> bool {
+        // S_IFDIR = 0o040000
+        (self.mode & 0o170000) == 0o040000
+    }
+
+    /// Check if this file is a regular file (mode & S_IFMT == S_IFREG)
+    pub fn is_regular_file(&self) -> bool {
+        // S_IFREG = 0o100000
+        (self.mode & 0o170000) == 0o100000
+    }
 }
 
 /// Information about an installed RPM package
@@ -204,6 +226,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         }
 
         // --dump format: path size mtime digest mode owner group isconfig isdoc rdev symlink
+        // Index:         0    1    2     3      4    5     6     7        8     9    10
         let path = parts[0].to_string();
         let size = parts[1].parse().unwrap_or(0);
         let mtime = parts[2].parse().ok();
@@ -218,6 +241,15 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         let user = Some(parts[5].to_string());
         let group = Some(parts[6].to_string());
 
+        // Parse symlink target (field 10, if present and not "X")
+        let link_target = parts.get(10).and_then(|s| {
+            if *s == "X" || s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
+
         files.push(InstalledFileInfo {
             path,
             size,
@@ -226,6 +258,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             digest,
             user,
             group,
+            link_target,
         });
     }
 

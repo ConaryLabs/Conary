@@ -128,6 +128,41 @@ impl CasStore {
         &self.objects_dir
     }
 
+    /// Store a symlink target in CAS
+    ///
+    /// Symlinks are stored as their target path (the content is the target string).
+    /// The hash is computed from the target path, prefixed with "symlink:" to
+    /// distinguish from regular file content.
+    pub fn store_symlink(&self, target: &str) -> Result<String> {
+        // Prefix to distinguish symlink content from file content
+        let content = format!("symlink:{}", target);
+        self.store(content.as_bytes())
+    }
+
+    /// Retrieve a symlink target from CAS
+    ///
+    /// Returns the symlink target path if the hash represents a symlink.
+    pub fn retrieve_symlink(&self, hash: &str) -> Result<Option<String>> {
+        let content = self.retrieve(hash)?;
+        let content_str = String::from_utf8_lossy(&content);
+
+        if let Some(target) = content_str.strip_prefix("symlink:") {
+            Ok(Some(target.to_string()))
+        } else {
+            Ok(None) // Not a symlink
+        }
+    }
+
+    /// Check if a hash represents a symlink
+    pub fn is_symlink_hash(&self, hash: &str) -> bool {
+        if let Ok(content) = self.retrieve(hash) {
+            let content_str = String::from_utf8_lossy(&content);
+            content_str.starts_with("symlink:")
+        } else {
+            false
+        }
+    }
+
     /// Hardlink an existing file into CAS (zero-copy adoption)
     ///
     /// Instead of reading the file and copying it to CAS, this creates a hardlink

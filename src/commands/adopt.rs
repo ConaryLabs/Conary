@@ -13,8 +13,8 @@ use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, Syst
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
-/// File info tuple: (path, size, mode, digest, user, group)
-type FileInfoTuple = (String, i64, i32, Option<String>, Option<String>, Option<String>);
+/// File info tuple: (path, size, mode, digest, user, group, link_target)
+type FileInfoTuple = (String, i64, i32, Option<String>, Option<String>, Option<String>, Option<String>);
 
 /// Adopt all installed system packages
 pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> {
@@ -157,48 +157,89 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
                     rpm_query::query_package_files(name)
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 SystemPackageManager::Dpkg => {
                     dpkg_query::query_package_files(name)
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 SystemPackageManager::Pacman => {
                     pacman_query::query_package_files(name)
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 _ => Vec::new(),
             };
 
-            for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
+            for (file_path, file_size, file_mode, file_digest, file_user, file_group, link_target) in &files {
                 // For track mode, we just record metadata
                 // For full mode, we hardlink the file into CAS (zero-copy!)
+                // Check if this is a symlink (mode & S_IFMT == S_IFLNK)
+                let is_symlink = (*file_mode & 0o170000) == 0o120000;
+                let is_directory = (*file_mode & 0o170000) == 0o040000;
+
                 let hash = if full {
-                    // Hardlink file into CAS (zero additional disk space)
                     if let Some(ref cas_store) = cas {
-                        // Skip non-regular files (directories, symlinks, devices, etc.)
-                        let path = std::path::Path::new(file_path);
-                        if !path.is_file() {
-                            debug!("Skipping non-regular file: {}", file_path);
+                        if is_symlink {
+                            // Store symlink target in CAS
+                            if let Some(target) = link_target {
+                                match cas_store.store_symlink(target) {
+                                    Ok(h) => h,
+                                    Err(e) => {
+                                        debug!("Failed to store symlink {} in CAS: {}", file_path, e);
+                                        file_digest.clone().unwrap_or_else(|| {
+                                            format!("adopted-{}", file_path.replace('/', "_"))
+                                        })
+                                    }
+                                }
+                            } else {
+                                // No target provided, try to read it from filesystem
+                                match std::fs::read_link(file_path) {
+                                    Ok(target) => {
+                                        let target_str = target.to_string_lossy().to_string();
+                                        match cas_store.store_symlink(&target_str) {
+                                            Ok(h) => h,
+                                            Err(e) => {
+                                                debug!("Failed to store symlink {} in CAS: {}", file_path, e);
+                                                format!("adopted-{}", file_path.replace('/', "_"))
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        debug!("Failed to read symlink {}: {}", file_path, e);
+                                        format!("adopted-{}", file_path.replace('/', "_"))
+                                    }
+                                }
+                            }
+                        } else if is_directory {
+                            // Directories don't have content in CAS
+                            debug!("Skipping directory: {}", file_path);
                             file_digest.clone().unwrap_or_else(|| {
                                 format!("adopted-{}", file_path.replace('/', "_"))
                             })
                         } else {
-                            // Use hardlink_from_existing - creates link instead of copy
-                            match cas_store.hardlink_from_existing(file_path) {
-                                Ok(h) => h,
-                                Err(e) => {
-                                    debug!("Failed to hardlink {} into CAS: {}", file_path, e);
-                                    file_digest.clone().unwrap_or_else(|| {
-                                        format!("untracked-{}", file_path.replace('/', "_"))
-                                    })
+                            // Regular file - use hardlink_from_existing
+                            let path = std::path::Path::new(file_path);
+                            if !path.is_file() {
+                                debug!("Skipping non-regular file: {}", file_path);
+                                file_digest.clone().unwrap_or_else(|| {
+                                    format!("adopted-{}", file_path.replace('/', "_"))
+                                })
+                            } else {
+                                match cas_store.hardlink_from_existing(file_path) {
+                                    Ok(h) => h,
+                                    Err(e) => {
+                                        debug!("Failed to hardlink {} into CAS: {}", file_path, e);
+                                        file_digest.clone().unwrap_or_else(|| {
+                                            format!("untracked-{}", file_path.replace('/', "_"))
+                                        })
+                                    }
                                 }
                             }
                         }
@@ -224,7 +265,8 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
 
-                if let Err(e) = file_entry.insert(tx) {
+                // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
+                if let Err(e) = file_entry.insert_or_replace(tx) {
                     // File might already exist from another package
                     debug!("Failed to insert file {}: {}", file_path, e);
                 }
@@ -402,41 +444,64 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 SystemPackageManager::Rpm => {
                     rpm_query::query_package_files(&pkg_name)?
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 SystemPackageManager::Dpkg => {
                     dpkg_query::query_package_files(&pkg_name)?
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 SystemPackageManager::Pacman => {
                     pacman_query::query_package_files(&pkg_name)?
                         .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
                         .collect()
                 }
                 _ => Vec::new(),
             };
             println!("  Files: {}", files.len());
 
-            for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
+            for (file_path, file_size, file_mode, file_digest, file_user, file_group, file_link_target) in &files {
+                // Check if this is a symlink (mode & S_IFMT == S_IFLNK)
+                let is_symlink = (*file_mode & 0o170000) == 0o120000;
+                // Check if this is a directory (mode & S_IFMT == S_IFDIR)
+                let is_directory = (*file_mode & 0o170000) == 0o040000;
+
                 let hash = if full {
                     if let Some(ref cas_store) = cas {
-                        // Skip non-regular files (directories, symlinks, devices, etc.)
-                        let path = std::path::Path::new(file_path);
-                        if !path.is_file() {
-                            file_digest.clone().unwrap_or_else(|| {
-                                format!("adopted-{}", file_path.replace('/', "_"))
-                            })
+                        if is_symlink {
+                            // Store symlink target in CAS
+                            if let Some(target) = file_link_target {
+                                cas_store.store_symlink(target).unwrap_or_else(|_| {
+                                    format!("symlink-{}", file_path.replace('/', "_"))
+                                })
+                            } else {
+                                // Try to read symlink target from filesystem
+                                std::fs::read_link(file_path)
+                                    .ok()
+                                    .and_then(|t| cas_store.store_symlink(&t.to_string_lossy()).ok())
+                                    .unwrap_or_else(|| format!("symlink-{}", file_path.replace('/', "_")))
+                            }
+                        } else if is_directory {
+                            // Skip directories - they don't have content
+                            format!("dir-{}", file_path.replace('/', "_"))
                         } else {
-                            // Use hardlink_from_existing - zero-copy adoption
-                            cas_store.hardlink_from_existing(file_path).unwrap_or_else(|_| {
+                            // Regular file - use hardlink adoption
+                            let path = std::path::Path::new(file_path);
+                            if path.is_file() {
+                                // Use hardlink_from_existing - zero-copy adoption
+                                cas_store.hardlink_from_existing(file_path).unwrap_or_else(|_| {
+                                    file_digest.clone().unwrap_or_else(|| {
+                                        format!("adopted-{}", file_path.replace('/', "_"))
+                                    })
+                                })
+                            } else {
                                 file_digest.clone().unwrap_or_else(|| {
                                     format!("adopted-{}", file_path.replace('/', "_"))
                                 })
-                            })
+                            }
                         }
                     } else {
                         file_digest.clone().unwrap_or_else(|| {
@@ -459,7 +524,8 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
 
-                if let Err(e) = file_entry.insert(tx) {
+                // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
+                if let Err(e) = file_entry.insert_or_replace(tx) {
                     debug!("Failed to insert file {}: {}", file_path, e);
                 }
             }
