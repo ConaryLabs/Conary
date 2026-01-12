@@ -406,9 +406,9 @@ pub fn cmd_install(
             let mut dep_entry = conary::db::models::DependencyEntry::new(
                 trove_id,
                 dep.name.clone(),
-                dep.version.clone(),
+                None, // depends_on_version is for resolved version, not constraint
                 dep_type_str.to_string(),
-                None,
+                dep.version.clone(), // Store the version constraint
             );
             dep_entry.insert(tx)?;
         }
