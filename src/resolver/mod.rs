@@ -6,14 +6,14 @@
 //! cycle detection, and conflict resolution for package dependencies.
 
 mod conflict;
+mod engine;
 mod graph;
 mod plan;
-mod resolver;
 
 pub use conflict::Conflict;
+pub use engine::Resolver;
 pub use graph::{DependencyEdge, DependencyGraph, GraphStats, PackageNode};
 pub use plan::{MissingDependency, ResolutionPlan};
-pub use resolver::Resolver;
 
 #[cfg(test)]
 mod tests {

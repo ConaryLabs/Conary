@@ -1,4 +1,4 @@
-// src/resolver/resolver.rs
+// src/resolver/engine.rs
 
 //! Dependency resolver implementation
 //!
