@@ -220,50 +220,117 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
     let mut files = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 7 {
-            continue;
+        if let Some(info) = parse_rpm_dump_line(line) {
+            files.push(info);
         }
-
-        // --dump format: path size mtime digest mode owner group isconfig isdoc rdev symlink
-        // Index:         0    1    2     3      4    5     6     7        8     9    10
-        let path = parts[0].to_string();
-        let size = parts[1].parse().unwrap_or(0);
-        let mtime = parts[2].parse().ok();
-        let digest = if parts[3] == "0000000000000000000000000000000000000000000000000000000000000000"
-            || parts[3] == "X"
-        {
-            None
-        } else {
-            Some(parts[3].to_string())
-        };
-        let mode = i32::from_str_radix(parts[4], 8).unwrap_or(0o644);
-        let user = Some(parts[5].to_string());
-        let group = Some(parts[6].to_string());
-
-        // Parse symlink target (field 10, if present and not "X")
-        let link_target = parts.get(10).and_then(|s| {
-            if *s == "X" || s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        });
-
-        files.push(InstalledFileInfo {
-            path,
-            size,
-            mode,
-            mtime,
-            digest,
-            user,
-            group,
-            link_target,
-        });
     }
 
     debug!("Found {} files for package {}", files.len(), name);
     Ok(files)
+}
+
+/// Parse a single line from `rpm --dump` output
+///
+/// Format: path size mtime digest mode owner group isconfig isdoc rdev symlink_target
+///
+/// The challenge is that `path` and `symlink_target` can contain spaces.
+/// We find the digest (64 hex chars) as an anchor point and parse around it.
+fn parse_rpm_dump_line(line: &str) -> Option<InstalledFileInfo> {
+    // Find the digest field - it's always 64 hex characters
+    // We scan for " " + 64 hex chars + " "
+    let (digest_start, digest_end) = find_digest_position(line)?;
+
+    // Everything before the digest pattern has: path + size + mtime
+    let before_digest = &line[..digest_start];
+
+    // Parse backwards from before_digest to find size and mtime
+    let before_parts: Vec<&str> = before_digest.rsplitn(3, ' ').collect();
+    if before_parts.len() < 3 {
+        return None;
+    }
+
+    // rsplitn reverses: [mtime, size, path_with_possible_spaces]
+    let mtime_str = before_parts[0];
+    let size_str = before_parts[1];
+    let path = before_parts[2].to_string();
+
+    let size: i64 = size_str.parse().ok()?;
+    let mtime: Option<i64> = mtime_str.parse().ok();
+
+    // Get the digest
+    let digest_str = &line[digest_start + 1..digest_end]; // +1 to skip leading space
+    let digest = if digest_str == "0000000000000000000000000000000000000000000000000000000000000000" {
+        None
+    } else {
+        Some(digest_str.to_string())
+    };
+
+    // Everything after the digest: mode owner group isconfig isdoc rdev symlink_target
+    let after_digest = &line[digest_end + 1..]; // +1 for the space after digest
+    let after_parts: Vec<&str> = after_digest.splitn(7, ' ').collect();
+
+    if after_parts.len() < 6 {
+        return None;
+    }
+
+    let mode = i32::from_str_radix(after_parts[0], 8).unwrap_or(0o644);
+    let user = Some(after_parts[1].to_string());
+    let group = Some(after_parts[2].to_string());
+    // isconfig = after_parts[3], isdoc = after_parts[4], rdev = after_parts[5]
+
+    // Symlink target is everything after rdev (field 6 onwards, joined back)
+    let link_target = if after_parts.len() > 6 {
+        let target = after_parts[6..].join(" ");
+        if target == "X" || target.is_empty() {
+            None
+        } else {
+            Some(target)
+        }
+    } else {
+        None
+    };
+
+    Some(InstalledFileInfo {
+        path,
+        size,
+        mode,
+        mtime,
+        digest,
+        user,
+        group,
+        link_target,
+    })
+}
+
+/// Find the position of the 64-character hex digest in an RPM dump line
+///
+/// Returns (start, end) positions where start is the space before the digest
+/// and end is the last character of the digest (before the trailing space).
+fn find_digest_position(line: &str) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+
+    // We need at least " " + 64 chars + " " = 66 characters
+    if len < 66 {
+        return None;
+    }
+
+    // Scan for a 64-character hex string surrounded by spaces
+    // Start from a reasonable position (after at least a path character)
+    for i in 1..len.saturating_sub(65) {
+        // Check if we have space + 64 hex chars + space
+        if bytes[i] == b' ' && i + 65 < len && bytes[i + 65] == b' ' {
+            // Verify all 64 characters are hex digits
+            let potential_digest = &line[i + 1..i + 65];
+            if potential_digest.len() == 64
+                && potential_digest.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Some((i, i + 65));
+            }
+        }
+    }
+
+    None
 }
 
 /// Query dependencies of an installed package (names only, for backwards compatibility)
