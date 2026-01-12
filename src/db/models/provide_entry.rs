@@ -121,6 +121,7 @@ impl ProvideEntry {
         conn: &Connection,
         capability: &str,
     ) -> Result<Option<(String, String)>> {
+        // First try exact match
         let result = conn
             .query_row(
                 "SELECT t.name, t.version
@@ -129,6 +130,44 @@ impl ProvideEntry {
                  WHERE p.capability = ?1
                  LIMIT 1",
                 [capability],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        if result.is_some() {
+            return Ok(result);
+        }
+
+        // Try prefix match for capabilities with version suffixes
+        // e.g., "perl(Text::CharWidth)" should match "perl(Text::CharWidth) = 0.04"
+        let prefix_pattern = format!("{} %", capability);
+        let result = conn
+            .query_row(
+                "SELECT t.name, t.version
+                 FROM provides p
+                 JOIN troves t ON p.trove_id = t.id
+                 WHERE p.capability LIKE ?1
+                 LIMIT 1",
+                [&prefix_pattern],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        if result.is_some() {
+            return Ok(result);
+        }
+
+        // Try case-insensitive prefix match for cross-distro compatibility
+        // e.g., perl(Text::Charwidth) should match perl(Text::CharWidth) = 0.04
+        let lower_cap = capability.to_lowercase();
+        let result = conn
+            .query_row(
+                "SELECT t.name, t.version
+                 FROM provides p
+                 JOIN troves t ON p.trove_id = t.id
+                 WHERE LOWER(p.capability) LIKE ?1 || ' %' OR LOWER(p.capability) = ?1
+                 LIMIT 1",
+                [&lower_cap],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;

@@ -789,6 +789,38 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
         }
     }
 
+    // Debian :any suffix (architecture-independent)
+    // perl:any -> perl
+    if let Some(base) = capability.strip_suffix(":any") {
+        variations.push(base.to_string());
+    }
+
+    // Debian perl library naming: libfoo-bar-perl -> perl-Foo-Bar, perl(Foo::Bar)
+    if capability.starts_with("lib") && capability.ends_with("-perl") {
+        // libtext-charwidth-perl -> text-charwidth -> Text::CharWidth
+        let middle = &capability[3..capability.len()-5]; // strip "lib" and "-perl"
+        // Convert to title case with :: separators
+        let module_name: String = middle
+            .split('-')
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("::");
+        variations.push(format!("perl({})", module_name));
+        variations.push(format!("perl-{}", middle.replace('-', "-").split('-').map(|p| {
+            let mut c = p.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        }).collect::<Vec<_>>().join("-")));
+    }
+
     // Package name might be used directly
     // Try stripping version suffixes: foo-1.0 -> foo
     if let Some(pos) = capability.rfind('-') {
