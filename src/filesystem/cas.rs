@@ -127,6 +127,137 @@ impl CasStore {
     pub fn objects_dir(&self) -> &Path {
         &self.objects_dir
     }
+
+    /// Hardlink an existing file into CAS (zero-copy adoption)
+    ///
+    /// Instead of reading the file and copying it to CAS, this creates a hardlink
+    /// from the CAS location to the existing file. Benefits:
+    /// - Zero additional disk space (same inode)
+    /// - Instant operation (no I/O for content)
+    /// - File survives if original is deleted (nlink > 1)
+    ///
+    /// Falls back to copying if hardlink fails (cross-device, etc).
+    ///
+    /// Returns the SHA-256 hash of the file content.
+    pub fn hardlink_from_existing<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
+        let existing_path = existing_path.as_ref();
+
+        // Read file to compute hash (we need the hash for the CAS path)
+        // Note: We still need to read for hashing, but we avoid the write
+        let content = fs::read(existing_path)?;
+        let hash = Self::compute_hash(&content);
+
+        // Get CAS storage path
+        let cas_path = self.hash_to_path(&hash);
+
+        // If already exists in CAS, we're done (deduplication)
+        if cas_path.exists() {
+            debug!(
+                "Content already in CAS (hardlink adoption): {} -> {}",
+                existing_path.display(),
+                hash
+            );
+            return Ok(hash);
+        }
+
+        // Create parent directory
+        if let Some(parent) = cas_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Try hardlink first (existing_path -> cas_path)
+        // Note: hardlink order is (original, link) so we link FROM existing TO cas
+        match fs::hard_link(existing_path, &cas_path) {
+            Ok(()) => {
+                debug!(
+                    "Hardlinked into CAS: {} -> {} (hash: {})",
+                    existing_path.display(),
+                    cas_path.display(),
+                    hash
+                );
+                Ok(hash)
+            }
+            Err(e) => {
+                // Hardlink failed (probably cross-device), fall back to copy
+                debug!(
+                    "Hardlink failed for {}, falling back to copy: {}",
+                    existing_path.display(),
+                    e
+                );
+                self.store(&content)
+            }
+        }
+    }
+
+    /// Hardlink an existing file into CAS using a pre-computed hash
+    ///
+    /// This is more efficient when you already have the hash (e.g., from RPM metadata)
+    /// because it can skip reading the file entirely if the hash already exists in CAS.
+    ///
+    /// If verify_hash is true, reads the file to verify the hash matches.
+    pub fn hardlink_from_existing_with_hash<P: AsRef<Path>>(
+        &self,
+        existing_path: P,
+        expected_hash: &str,
+        verify_hash: bool,
+    ) -> Result<String> {
+        let existing_path = existing_path.as_ref();
+        let cas_path = self.hash_to_path(expected_hash);
+
+        // If already exists in CAS, we're done
+        if cas_path.exists() {
+            debug!(
+                "Content already in CAS (skipped hardlink): {} (hash: {})",
+                existing_path.display(),
+                expected_hash
+            );
+            return Ok(expected_hash.to_string());
+        }
+
+        // Optionally verify hash
+        if verify_hash {
+            let content = fs::read(existing_path)?;
+            let actual_hash = Self::compute_hash(&content);
+            if actual_hash != expected_hash {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Hash mismatch for {}: expected {}, got {}",
+                        existing_path.display(),
+                        expected_hash,
+                        actual_hash
+                    ),
+                )));
+            }
+        }
+
+        // Create parent directory
+        if let Some(parent) = cas_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Try hardlink
+        match fs::hard_link(existing_path, &cas_path) {
+            Ok(()) => {
+                debug!(
+                    "Hardlinked into CAS (with known hash): {} -> {}",
+                    existing_path.display(),
+                    expected_hash
+                );
+                Ok(expected_hash.to_string())
+            }
+            Err(e) => {
+                // Fall back to copy
+                debug!(
+                    "Hardlink failed for {}, falling back to copy: {}",
+                    existing_path.display(),
+                    e
+                );
+                let content = fs::read(existing_path)?;
+                self.store(&content)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +323,135 @@ mod tests {
 
         let result = cas.retrieve("nonexistent_hash");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hardlink_from_existing() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+
+        // Create a file to "adopt"
+        let existing_file = temp_dir.path().join("existing_file.txt");
+        let content = b"Content to be hardlinked into CAS";
+        fs::write(&existing_file, content).unwrap();
+
+        // Hardlink into CAS
+        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+
+        // Verify content is in CAS
+        assert!(cas.exists(&hash));
+        let retrieved = cas.retrieve(&hash).unwrap();
+        assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_hardlink_shares_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+
+        // Create a file to "adopt"
+        let existing_file = temp_dir.path().join("shared_inode.txt");
+        let content = b"This file will share an inode with CAS";
+        fs::write(&existing_file, content).unwrap();
+
+        // Get original inode
+        let original_inode = fs::metadata(&existing_file).unwrap().ino();
+
+        // Hardlink into CAS
+        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+
+        // Get CAS file inode
+        let cas_path = cas.hash_to_path(&hash);
+        let cas_inode = fs::metadata(&cas_path).unwrap().ino();
+
+        // Should be the same inode (hardlink)
+        assert_eq!(
+            original_inode, cas_inode,
+            "Hardlinked file should share inode with original"
+        );
+
+        // nlink should be 2
+        let nlink = fs::metadata(&existing_file).unwrap().nlink();
+        assert_eq!(nlink, 2, "Hardlinked file should have nlink=2");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_hardlink_survives_original_deletion() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+
+        // Create a file to "adopt"
+        let existing_file = temp_dir.path().join("will_be_deleted.txt");
+        let content = b"This file will be deleted but CAS keeps it";
+        fs::write(&existing_file, content).unwrap();
+
+        // Hardlink into CAS
+        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+
+        // Delete the original file (simulating RPM removal)
+        fs::remove_file(&existing_file).unwrap();
+        assert!(!existing_file.exists());
+
+        // CAS should still have the content
+        assert!(cas.exists(&hash));
+        let retrieved = cas.retrieve(&hash).unwrap();
+        assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    fn test_hardlink_with_known_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+
+        // Create a file
+        let existing_file = temp_dir.path().join("known_hash.txt");
+        let content = b"Content with pre-computed hash";
+        fs::write(&existing_file, content).unwrap();
+
+        // Pre-compute hash
+        let expected_hash = CasStore::compute_hash(content);
+
+        // Hardlink with known hash (no verification)
+        let hash = cas
+            .hardlink_from_existing_with_hash(&existing_file, &expected_hash, false)
+            .unwrap();
+
+        assert_eq!(hash, expected_hash);
+        assert!(cas.exists(&hash));
+    }
+
+    #[test]
+    fn test_hardlink_deduplication() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+
+        // Create two files with same content
+        let file1 = temp_dir.path().join("file1.txt");
+        let file2 = temp_dir.path().join("file2.txt");
+        let content = b"Identical content in two files";
+        fs::write(&file1, content).unwrap();
+        fs::write(&file2, content).unwrap();
+
+        // Hardlink first file
+        let hash1 = cas.hardlink_from_existing(&file1).unwrap();
+
+        // Hardlink second file - should detect duplicate
+        let hash2 = cas.hardlink_from_existing(&file2).unwrap();
+
+        // Same hash
+        assert_eq!(hash1, hash2);
+
+        // Content retrievable
+        let retrieved = cas.retrieve(&hash1).unwrap();
+        assert_eq!(content, retrieved.as_slice());
     }
 }

@@ -179,27 +179,27 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
 
             for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
                 // For track mode, we just record metadata
-                // For full mode, we would read the file and store in CAS
+                // For full mode, we hardlink the file into CAS (zero-copy!)
                 let hash = if full {
-                    // Read file content and store in CAS
+                    // Hardlink file into CAS (zero additional disk space)
                     if let Some(ref cas_store) = cas {
-                        match std::fs::read(file_path) {
-                            Ok(content) => {
-                                match cas_store.store(&content) {
-                                    Ok(h) => h,
-                                    Err(e) => {
-                                        debug!("Failed to store {} in CAS: {}", file_path, e);
-                                        file_digest.clone().unwrap_or_else(|| {
-                                            format!("untracked-{}", file_path.replace('/', "_"))
-                                        })
-                                    }
+                        // Skip non-regular files (directories, symlinks, devices, etc.)
+                        let path = std::path::Path::new(file_path);
+                        if !path.is_file() {
+                            debug!("Skipping non-regular file: {}", file_path);
+                            file_digest.clone().unwrap_or_else(|| {
+                                format!("adopted-{}", file_path.replace('/', "_"))
+                            })
+                        } else {
+                            // Use hardlink_from_existing - creates link instead of copy
+                            match cas_store.hardlink_from_existing(file_path) {
+                                Ok(h) => h,
+                                Err(e) => {
+                                    debug!("Failed to hardlink {} into CAS: {}", file_path, e);
+                                    file_digest.clone().unwrap_or_else(|| {
+                                        format!("untracked-{}", file_path.replace('/', "_"))
+                                    })
                                 }
-                            }
-                            Err(e) => {
-                                debug!("Failed to read {}: {}", file_path, e);
-                                file_digest.clone().unwrap_or_else(|| {
-                                    format!("untracked-{}", file_path.replace('/', "_"))
-                                })
                             }
                         }
                     } else {
@@ -279,7 +279,14 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
     if error_count > 0 {
         println!("  Errors: {} packages", error_count);
     }
-    println!("  Mode: {}", if full { "full (files in CAS)" } else { "track (metadata only)" });
+    println!(
+        "  Mode: {}",
+        if full {
+            "full (hardlinked into CAS - zero additional disk space)"
+        } else {
+            "track (metadata only)"
+        }
+    );
 
     Ok(())
 }
@@ -417,15 +424,19 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
                 let hash = if full {
                     if let Some(ref cas_store) = cas {
-                        match std::fs::read(file_path) {
-                            Ok(content) => cas_store.store(&content).unwrap_or_else(|_| {
+                        // Skip non-regular files (directories, symlinks, devices, etc.)
+                        let path = std::path::Path::new(file_path);
+                        if !path.is_file() {
+                            file_digest.clone().unwrap_or_else(|| {
+                                format!("adopted-{}", file_path.replace('/', "_"))
+                            })
+                        } else {
+                            // Use hardlink_from_existing - zero-copy adoption
+                            cas_store.hardlink_from_existing(file_path).unwrap_or_else(|_| {
                                 file_digest.clone().unwrap_or_else(|| {
                                     format!("adopted-{}", file_path.replace('/', "_"))
                                 })
-                            }),
-                            Err(_) => file_digest.clone().unwrap_or_else(|| {
-                                format!("adopted-{}", file_path.replace('/', "_"))
-                            }),
+                            })
                         }
                     } else {
                         file_digest.clone().unwrap_or_else(|| {
