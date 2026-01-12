@@ -5,6 +5,7 @@ mod adopt;
 mod install;
 mod query;
 mod repo;
+mod restore;
 mod system;
 mod update;
 
@@ -16,6 +17,7 @@ pub use repo::{
     cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list, cmd_repo_remove,
     cmd_repo_sync, cmd_search,
 };
+pub use restore::{cmd_restore, cmd_restore_all};
 pub use system::{cmd_init, cmd_rollback, cmd_verify};
 pub use update::{cmd_delta_stats, cmd_update};
 

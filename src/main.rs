@@ -314,6 +314,28 @@ enum Commands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
+
+    /// Restore files from CAS to filesystem
+    Restore {
+        /// Package name to restore (or "all" to check all packages)
+        package: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Force restore even if files exist (overwrite)
+        #[arg(short, long)]
+        force: bool,
+
+        /// Show what would be restored without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // =============================================================================
@@ -420,6 +442,14 @@ fn main() -> Result<()> {
         }
 
         Some(Commands::DeltaStats { db_path }) => commands::cmd_delta_stats(&db_path),
+
+        Some(Commands::Restore { package, db_path, root, force, dry_run }) => {
+            if package == "all" {
+                commands::cmd_restore_all(&db_path, &root, dry_run)
+            } else {
+                commands::cmd_restore(&package, &db_path, &root, force, dry_run)
+            }
+        }
 
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
