@@ -107,7 +107,7 @@ impl CasStore {
     ///
     /// Path format: objects/{first2}/{remaining}
     /// Example: abc123... -> objects/ab/c123...
-    fn hash_to_path(&self, hash: &str) -> PathBuf {
+    pub fn hash_to_path(&self, hash: &str) -> PathBuf {
         if hash.len() < 2 {
             return self.objects_dir.join(hash);
         }

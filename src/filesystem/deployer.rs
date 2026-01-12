@@ -2,8 +2,13 @@
 
 //! File deployment manager
 //!
-//! Deploys files from CAS to the filesystem with atomic writes
-//! and permission management.
+//! Deploys files from CAS to the filesystem using hardlinks for efficiency.
+//! Falls back to copying when hardlinks aren't possible (cross-device, etc).
+//!
+//! Hardlink benefits:
+//! - Zero additional disk space for deployed files
+//! - Instant deployment (no I/O for content)
+//! - Automatic deduplication across all packages
 
 use crate::error::Result;
 use std::fs;
@@ -38,8 +43,10 @@ impl FileDeployer {
 
     /// Deploy a file from CAS to the filesystem
     ///
-    /// - Retrieves content from CAS by hash
-    /// - Writes to install_root + path
+    /// Uses hardlinks for efficiency (zero disk space, instant deployment).
+    /// Falls back to copying if hardlinks aren't possible (cross-device, etc).
+    ///
+    /// - Creates hardlink from CAS to install_root + path
     /// - Sets permissions (ownership requires root)
     pub fn deploy_file(
         &self,
@@ -47,8 +54,15 @@ impl FileDeployer {
         hash: &str,
         permissions: u32,
     ) -> Result<()> {
-        // Retrieve content from CAS
-        let content = self.cas.retrieve(hash)?;
+        // Get CAS path for this content
+        let cas_path = self.cas.hash_to_path(hash);
+
+        if !cas_path.exists() {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Content not found in CAS: {}", hash),
+            )));
+        }
 
         // Compute target path
         let target_path = self.install_root.join(path.trim_start_matches('/'));
@@ -58,24 +72,57 @@ impl FileDeployer {
             fs::create_dir_all(parent)?;
         }
 
-        // Write atomically
-        let temp_path = target_path.with_extension("conary-tmp");
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(&content)?;
-        file.sync_all()?;
+        // Remove existing file if present (hardlink requires target not to exist)
+        if target_path.exists() {
+            fs::remove_file(&target_path)?;
+        }
+
+        // Try hardlink first, fall back to copy
+        let method = if self.try_hardlink(&cas_path, &target_path) {
+            "hardlink"
+        } else {
+            // Hardlink failed, fall back to copy
+            debug!(
+                "Hardlink failed for {}, falling back to copy",
+                path
+            );
+            self.copy_from_cas(hash, &target_path)?;
+            "copy"
+        };
 
         // Set permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(permissions);
-            fs::set_permissions(&temp_path, perms)?;
+            fs::set_permissions(&target_path, perms)?;
         }
 
-        // Atomic rename
-        fs::rename(&temp_path, &target_path)?;
+        info!(
+            "Deployed file: {} (hash: {}, mode: {:o}, method: {})",
+            path, hash, permissions, method
+        );
+        Ok(())
+    }
 
-        info!("Deployed file: {} (hash: {}, mode: {:o})", path, hash, permissions);
+    /// Try to create a hardlink, returns true if successful
+    fn try_hardlink(&self, source: &Path, target: &Path) -> bool {
+        fs::hard_link(source, target).is_ok()
+    }
+
+    /// Copy file content from CAS to target (fallback when hardlink fails)
+    fn copy_from_cas(&self, hash: &str, target_path: &Path) -> Result<()> {
+        let content = self.cas.retrieve(hash)?;
+
+        // Write atomically
+        let temp_path = target_path.with_extension("conary-tmp");
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(&content)?;
+        file.sync_all()?;
+
+        // Atomic rename
+        fs::rename(&temp_path, target_path)?;
+
         Ok(())
     }
 
@@ -200,5 +247,82 @@ mod tests {
         // Remove
         deployer.remove_file("/remove_me.txt").unwrap();
         assert!(!deployer.file_exists("/remove_me.txt"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_file_deployer_uses_hardlinks() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Store content in CAS
+        let content = b"hardlink test content";
+        let hash = deployer.cas().store(content).unwrap();
+
+        // Deploy file
+        deployer
+            .deploy_file("/hardlink_test.txt", &hash, 0o644)
+            .unwrap();
+
+        // Get inodes for both files
+        let cas_path = deployer.cas().hash_to_path(&hash);
+        let target_path = install_root.join("hardlink_test.txt");
+
+        let cas_inode = fs::metadata(&cas_path).unwrap().ino();
+        let target_inode = fs::metadata(&target_path).unwrap().ino();
+
+        // Should be the same inode (hardlink)
+        assert_eq!(
+            cas_inode, target_inode,
+            "Deployed file should be hardlinked to CAS (same inode)"
+        );
+
+        // Verify nlink count is 2 (CAS + deployed)
+        let nlink = fs::metadata(&cas_path).unwrap().nlink();
+        assert_eq!(nlink, 2, "Hardlinked file should have nlink=2");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_file_deployer_hardlink_deduplication() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Store content once
+        let content = b"shared content across packages";
+        let hash = deployer.cas().store(content).unwrap();
+
+        // Deploy same content to multiple locations (simulating multiple packages)
+        deployer.deploy_file("/pkg1/shared.txt", &hash, 0o644).unwrap();
+        deployer.deploy_file("/pkg2/shared.txt", &hash, 0o644).unwrap();
+        deployer.deploy_file("/pkg3/shared.txt", &hash, 0o644).unwrap();
+
+        // All should share the same inode
+        let cas_path = deployer.cas().hash_to_path(&hash);
+        let cas_inode = fs::metadata(&cas_path).unwrap().ino();
+
+        for path in &["/pkg1/shared.txt", "/pkg2/shared.txt", "/pkg3/shared.txt"] {
+            let target_path = install_root.join(path.trim_start_matches('/'));
+            let target_inode = fs::metadata(&target_path).unwrap().ino();
+            assert_eq!(
+                cas_inode, target_inode,
+                "All deployed files should share the same inode: {}",
+                path
+            );
+        }
+
+        // nlink should be 4 (CAS + 3 deployed)
+        let nlink = fs::metadata(&cas_path).unwrap().nlink();
+        assert_eq!(nlink, 4, "Should have 4 hardlinks total");
     }
 }
