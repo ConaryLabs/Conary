@@ -35,9 +35,13 @@ impl RpmVersion {
             ("0", s)
         };
 
-        let epoch = epoch_str.parse::<u64>().map_err(|e| {
-            Error::InitError(format!("Invalid epoch in version '{}': {}", s, e))
-        })?;
+        let epoch = if epoch_str.is_empty() {
+            0 // Empty epoch (e.g., ":1.0.0") defaults to 0
+        } else {
+            epoch_str.parse::<u64>().map_err(|e| {
+                Error::InitError(format!("Invalid epoch in version '{}': {}", s, e))
+            })?
+        };
 
         let (version, release) = if let Some(dash_pos) = rest.find('-') {
             let (v, r) = rest.split_at(dash_pos);
@@ -354,6 +358,15 @@ mod tests {
         let c = VersionConstraint::parse("*").unwrap();
         let v = RpmVersion::parse("99.99.99").unwrap();
         assert!(c.satisfies(&v));
+    }
+
+    #[test]
+    fn test_rpm_version_parse_empty_epoch() {
+        // Some packages have versions like ":1.02.208-2.fc43" with empty epoch
+        let v = RpmVersion::parse(":1.02.208-2.fc43").unwrap();
+        assert_eq!(v.epoch, 0);
+        assert_eq!(v.version, "1.02.208");
+        assert_eq!(v.release, Some("2.fc43".to_string()));
     }
 
     #[test]

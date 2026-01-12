@@ -7,11 +7,12 @@ use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
 use conary::repository::{self, PackageSelector, SelectionOptions};
-use conary::version::RpmVersion;
+use conary::resolver::{DependencyEdge, Resolver};
+use conary::version::{RpmVersion, VersionConstraint};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Serializable trove metadata for rollback support
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,66 +97,148 @@ pub fn cmd_install(
 
     let mut conn = conary::db::open(db_path)?;
 
-    // Resolve dependencies
-    let dep_names: Vec<String> = rpm.dependencies().iter().map(|d| d.name.clone()).collect();
+    // Build dependency edges from the package
+    let package_version = RpmVersion::parse(rpm.version())?;
+    let dependency_edges: Vec<DependencyEdge> = rpm
+        .dependencies()
+        .iter()
+        .filter(|d| d.dep_type == DependencyType::Runtime)
+        .map(|d| {
+            let constraint = d
+                .version
+                .as_ref()
+                .and_then(|v| VersionConstraint::parse(v).ok())
+                .unwrap_or(VersionConstraint::Any);
+            DependencyEdge {
+                from: rpm.name().to_string(),
+                to: d.name.clone(),
+                constraint,
+                dep_type: "runtime".to_string(),
+            }
+        })
+        .collect();
 
-    if no_deps && !dep_names.is_empty() {
+    if no_deps && !dependency_edges.is_empty() {
         info!("Skipping dependency check (--no-deps specified)");
         println!(
             "Skipping {} dependencies (--no-deps specified)",
-            dep_names.len()
+            dependency_edges.len()
         );
-    } else if !dep_names.is_empty() {
+    } else if !dependency_edges.is_empty() {
         info!(
-            "Resolving {} dependencies transitively...",
-            dep_names.len()
+            "Resolving {} dependencies with constraint validation...",
+            dependency_edges.len()
         );
         println!("Checking dependencies for {}...", rpm.name());
 
-        match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
-            Ok(to_download) => {
-                if !to_download.is_empty() {
-                    if dry_run {
-                        println!("Would install {} missing dependencies:", to_download.len());
-                    } else {
-                        println!("Installing {} missing dependencies:", to_download.len());
-                    }
-                    for (dep_name, pkg) in &to_download {
-                        println!("  {} ({})", dep_name, pkg.package.version);
-                    }
+        // Build resolver from current system state
+        let mut resolver = Resolver::new(&conn)?;
 
-                    if !dry_run {
-                        let temp_dir = TempDir::new()?;
-                        match repository::download_dependencies(&to_download, temp_dir.path()) {
-                            Ok(downloaded) => {
-                                for (dep_name, dep_path) in downloaded {
-                                    info!("Installing dependency: {}", dep_name);
-                                    println!("Installing dependency: {}", dep_name);
-                                    if let Err(e) =
-                                        install_package_from_file(&dep_path, &mut conn, root, None)
-                                    {
-                                        return Err(anyhow::anyhow!(
-                                            "Failed to install dependency {}: {}",
-                                            dep_name,
-                                            e
-                                        ));
+        // Resolve with the new package
+        let plan = resolver.resolve_install(
+            rpm.name().to_string(),
+            package_version.clone(),
+            dependency_edges,
+        )?;
+
+        // Check for conflicts (fail on any conflict)
+        if !plan.conflicts.is_empty() {
+            eprintln!("\nDependency conflicts detected:");
+            for conflict in &plan.conflicts {
+                eprintln!("  {}", conflict);
+            }
+            return Err(anyhow::anyhow!(
+                "Cannot install {}: {} dependency conflict(s) detected",
+                rpm.name(),
+                plan.conflicts.len()
+            ));
+        }
+
+        // Handle missing dependencies
+        if !plan.missing.is_empty() {
+            info!("Found {} missing dependencies", plan.missing.len());
+
+            // Try to find missing deps in repositories
+            let missing_names: Vec<String> = plan.missing.iter().map(|m| m.name.clone()).collect();
+
+            match repository::resolve_dependencies_transitive(&conn, &missing_names, 10) {
+                Ok(to_download) => {
+                    if !to_download.is_empty() {
+                        if dry_run {
+                            println!("Would install {} missing dependencies:", to_download.len());
+                        } else {
+                            println!("Installing {} missing dependencies:", to_download.len());
+                        }
+                        for (dep_name, pkg) in &to_download {
+                            println!("  {} ({})", dep_name, pkg.package.version);
+                        }
+
+                        if !dry_run {
+                            let temp_dir = TempDir::new()?;
+                            match repository::download_dependencies(&to_download, temp_dir.path()) {
+                                Ok(downloaded) => {
+                                    for (dep_name, dep_path) in downloaded {
+                                        info!("Installing dependency: {}", dep_name);
+                                        println!("Installing dependency: {}", dep_name);
+                                        if let Err(e) =
+                                            install_package_from_file(&dep_path, &mut conn, root, None)
+                                        {
+                                            return Err(anyhow::anyhow!(
+                                                "Failed to install dependency {}: {}",
+                                                dep_name,
+                                                e
+                                            ));
+                                        }
+                                        println!("  [OK] Installed {}", dep_name);
                                     }
-                                    println!("  [OK] Installed {}", dep_name);
+                                }
+                                Err(e) => {
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to download dependencies: {}",
+                                        e
+                                    ))
                                 }
                             }
-                            Err(e) => {
-                                return Err(anyhow::anyhow!(
-                                    "Failed to download dependencies: {}",
-                                    e
-                                ))
-                            }
                         }
+                    } else {
+                        // Dependencies not found in repos - show what's missing
+                        println!("\nMissing dependencies (not found in repositories):");
+                        for missing in &plan.missing {
+                            println!(
+                                "  {} {} (required by: {})",
+                                missing.name,
+                                missing.constraint,
+                                missing.required_by.join(", ")
+                            );
+                        }
+                        return Err(anyhow::anyhow!(
+                            "Cannot install {}: {} unresolvable dependencies",
+                            rpm.name(),
+                            plan.missing.len()
+                        ));
                     }
-                } else {
-                    println!("All dependencies already satisfied");
+                }
+                Err(e) => {
+                    debug!("Repository lookup failed: {}", e);
+                    // Show what's missing
+                    println!("\nMissing dependencies:");
+                    for missing in &plan.missing {
+                        println!(
+                            "  {} {} (required by: {})",
+                            missing.name,
+                            missing.constraint,
+                            missing.required_by.join(", ")
+                        );
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Cannot install {}: {} unresolvable dependencies",
+                        rpm.name(),
+                        plan.missing.len()
+                    ));
                 }
             }
-            Err(e) => return Err(anyhow::anyhow!("Dependency resolution failed: {}", e)),
+        } else {
+            println!("All dependencies already satisfied");
         }
     }
 

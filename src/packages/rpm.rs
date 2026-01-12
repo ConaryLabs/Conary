@@ -63,8 +63,10 @@ impl RpmPackage {
                     continue;
                 }
 
+                // Convert DependencyFlags to constraint string with operator
                 let version = if !req.version.is_empty() {
-                    Some(req.version.to_string())
+                    let operator = flags_to_operator(req.flags);
+                    Some(format!("{}{}", operator, req.version))
                 } else {
                     None
                 };
@@ -79,6 +81,27 @@ impl RpmPackage {
         }
 
         deps
+    }
+}
+
+/// Convert RPM DependencyFlags to constraint operator string
+fn flags_to_operator(flags: rpm::DependencyFlags) -> &'static str {
+    use rpm::DependencyFlags;
+
+    // Check for combined flags first
+    if flags.contains(DependencyFlags::LESS) && flags.contains(DependencyFlags::EQUAL) {
+        "<= "
+    } else if flags.contains(DependencyFlags::GREATER) && flags.contains(DependencyFlags::EQUAL) {
+        ">= "
+    } else if flags.contains(DependencyFlags::LESS) {
+        "< "
+    } else if flags.contains(DependencyFlags::GREATER) {
+        "> "
+    } else if flags.contains(DependencyFlags::EQUAL) {
+        "= "
+    } else {
+        // No comparison flags (ANY) - return empty
+        ""
     }
 }
 

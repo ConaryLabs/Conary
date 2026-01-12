@@ -219,6 +219,26 @@ impl DependencyGraph {
         None
     }
 
+    /// Detect circular dependencies involving a specific package
+    ///
+    /// Only detects cycles that include the named package, ignoring
+    /// pre-existing cycles elsewhere in the graph (e.g., glibc <-> glibc-common).
+    pub fn detect_cycle_involving(&self, package_name: &str) -> Option<Vec<String>> {
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let mut cycle = Vec::new();
+
+        // Only start DFS from the specific package
+        if self.dfs_cycle_detect(package_name, &mut visited, &mut rec_stack, &mut cycle) {
+            // Only return if the cycle actually involves our package
+            if cycle.contains(&package_name.to_string()) {
+                return Some(cycle);
+            }
+        }
+
+        None
+    }
+
     /// DFS helper for cycle detection
     fn dfs_cycle_detect(
         &self,
