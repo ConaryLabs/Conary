@@ -32,7 +32,7 @@ impl FromStr for ChangesetStatus {
             "pending" => Ok(ChangesetStatus::Pending),
             "applied" => Ok(ChangesetStatus::Applied),
             "rolled_back" => Ok(ChangesetStatus::RolledBack),
-            _ => Err(format!("Invalid changeset status: {}", s)),
+            _ => Err(format!("Invalid changeset status: {s}")),
         }
     }
 }
@@ -113,17 +113,16 @@ impl Changeset {
             _ => "",
         };
 
-        if !timestamp_field.is_empty() {
+        if timestamp_field.is_empty() {
             conn.execute(
-                &format!(
-                    "UPDATE changesets SET status = ?1, {} = CURRENT_TIMESTAMP WHERE id = ?2",
-                    timestamp_field
-                ),
+                "UPDATE changesets SET status = ?1 WHERE id = ?2",
                 params![new_status.as_str(), id],
             )?;
         } else {
             conn.execute(
-                "UPDATE changesets SET status = ?1 WHERE id = ?2",
+                &format!(
+                    "UPDATE changesets SET status = ?1, {timestamp_field} = CURRENT_TIMESTAMP WHERE id = ?2"
+                ),
                 params![new_status.as_str(), id],
             )?;
         }

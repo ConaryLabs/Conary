@@ -258,7 +258,7 @@ impl RepositoryPackage {
 
     /// Search repository packages by pattern (name or description)
     pub fn search(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let search_pattern = format!("%{}%", pattern);
+        let search_pattern = format!("%{pattern}%");
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, name, version, architecture, description, checksum, size,
                     download_url, dependencies, metadata, synced_at
@@ -295,7 +295,7 @@ impl RepositoryPackage {
     pub fn parse_dependencies(&self) -> Result<Vec<String>> {
         if let Some(deps_json) = &self.dependencies {
             let deps: Vec<String> = serde_json::from_str(deps_json)
-                .map_err(|e| Error::ParseError(format!("Failed to parse dependencies: {}", e)))?;
+                .map_err(|e| Error::ParseError(format!("Failed to parse dependencies: {e}")))?;
 
             // Filter out rpmlib() and file path dependencies (same as resolve_dependencies)
             let filtered: Vec<String> = deps

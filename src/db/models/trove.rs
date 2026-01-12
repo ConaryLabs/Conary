@@ -32,7 +32,7 @@ impl FromStr for TroveType {
             "package" => Ok(TroveType::Package),
             "component" => Ok(TroveType::Component),
             "collection" => Ok(TroveType::Collection),
-            _ => Err(format!("Invalid trove type: {}", s)),
+            _ => Err(format!("Invalid trove type: {s}")),
         }
     }
 }

@@ -200,12 +200,6 @@ impl RepositoryClient {
     }
 }
 
-impl Default for RepositoryClient {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default repository client")
-    }
-}
-
 /// Detected repository format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RepositoryFormat {
