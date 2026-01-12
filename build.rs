@@ -68,6 +68,13 @@ fn build_cli() -> Command {
                         .short('d')
                         .long("db-path")
                         .default_value("/var/lib/conary/conary.db"),
+                )
+                .arg(
+                    Arg::new("root")
+                        .short('r')
+                        .long("root")
+                        .default_value("/")
+                        .help("Install root directory"),
                 ),
         )
         .subcommand(
@@ -297,20 +304,36 @@ fn build_cli() -> Command {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Create man directory
-    let out_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let man_dir = out_dir.join("man");
-    fs::create_dir_all(&man_dir).expect("Failed to create man directory");
+    // Create man directory - use CARGO_MANIFEST_DIR which is always set by cargo
+    let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {
+        Ok(dir) => PathBuf::from(dir),
+        Err(e) => {
+            println!("cargo:warning=CARGO_MANIFEST_DIR not set: {}", e);
+            return;
+        }
+    };
+    let man_dir = manifest_dir.join("man");
+
+    if let Err(e) = fs::create_dir_all(&man_dir) {
+        println!("cargo:warning=Failed to create man directory: {}", e);
+        return;
+    }
 
     // Generate main man page
     let cmd = build_cli();
     let man = Man::new(cmd);
     let mut buffer = Vec::new();
-    man.render(&mut buffer)
-        .expect("Failed to render man page");
+
+    if let Err(e) = man.render(&mut buffer) {
+        println!("cargo:warning=Failed to render man page: {}", e);
+        return;
+    }
 
     let man_path = man_dir.join("conary.1");
-    fs::write(&man_path, buffer).expect("Failed to write man page");
+    if let Err(e) = fs::write(&man_path, buffer) {
+        println!("cargo:warning=Failed to write man page: {}", e);
+        return;
+    }
 
     println!("cargo:warning=Man page generated at {}", man_path.display());
 }

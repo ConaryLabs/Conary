@@ -65,6 +65,10 @@ enum Commands {
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
     },
 
     /// Query installed packages
@@ -278,8 +282,8 @@ fn main() -> Result<()> {
             commands::cmd_install(&package, &db_path, &root, version, repo, dry_run)
         }
 
-        Some(Commands::Remove { package_name, db_path }) => {
-            commands::cmd_remove(&package_name, &db_path)
+        Some(Commands::Remove { package_name, db_path, root }) => {
+            commands::cmd_remove(&package_name, &db_path, &root)
         }
 
         Some(Commands::Query { pattern, db_path }) => {

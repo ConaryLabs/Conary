@@ -329,7 +329,7 @@ pub fn cmd_install(
 }
 
 /// Remove an installed package
-pub fn cmd_remove(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
     info!("Removing package: {}", package_name);
 
     let mut conn = conary::db::open(db_path)?;
@@ -380,18 +380,49 @@ pub fn cmd_remove(package_name: &str, db_path: &str) -> Result<()> {
         ));
     }
 
-    let file_count = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?.len();
+    // Get files BEFORE deleting the trove (cascade delete will remove file records)
+    let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+    let file_count = files.len();
+
+    // Set up file deployer for actual filesystem operations
+    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
+    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let install_root = PathBuf::from(root);
+    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
     conary::db::transaction(&mut conn, |tx| {
         let mut changeset =
             conary::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
-        changeset.insert(tx)?;
+        let changeset_id = changeset.insert(tx)?;
+
+        // Record file removals in history before deleting
+        for file in &files {
+            tx.execute(
+                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                [&changeset_id.to_string(), &file.path, &file.sha256_hash, "remove"],
+            )?;
+        }
+
         conary::db::models::Trove::delete(tx, trove_id)?;
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(())
     })?;
 
-    // TODO: Actually delete files from filesystem (Phase 6)
+    // Actually delete files from filesystem
+    let mut removed_count = 0;
+    let mut failed_count = 0;
+    for file in &files {
+        match deployer.remove_file(&file.path) {
+            Ok(()) => {
+                removed_count += 1;
+                info!("Removed file: {}", file.path);
+            }
+            Err(e) => {
+                warn!("Failed to remove file {}: {}", file.path, e);
+                failed_count += 1;
+            }
+        }
+    }
 
     println!(
         "Removed package: {} version {}",
@@ -401,7 +432,10 @@ pub fn cmd_remove(package_name: &str, db_path: &str) -> Result<()> {
         "  Architecture: {}",
         trove.architecture.as_deref().unwrap_or("none")
     );
-    println!("  Files removed: {}", file_count);
+    println!("  Files removed: {}/{}", removed_count, file_count);
+    if failed_count > 0 {
+        println!("  Files failed to remove: {}", failed_count);
+    }
 
     Ok(())
 }
