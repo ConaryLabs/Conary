@@ -81,6 +81,9 @@ pub fn open(db_path: &str) -> Result<Connection> {
         ",
     )?;
 
+    // Apply any pending migrations
+    schema::migrate(&conn)?;
+
     Ok(conn)
 }
 

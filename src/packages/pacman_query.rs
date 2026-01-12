@@ -335,6 +335,54 @@ fn parse_pacman_dependency(dep: &str) -> DependencyInfo {
     }
 }
 
+/// Query what a package provides (capabilities it offers)
+///
+/// Returns a list of capability strings from the Provides field,
+/// plus the package name itself as a provide.
+pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
+    debug!("Querying provides for pacman package: {}", name);
+
+    // Use pacman -Qi and extract the Provides line
+    let output = Command::new("pacman")
+        .args(["-Qi", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "pacman -Qi {} failed: {}",
+            name,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut provides = Vec::new();
+
+    // Add the package name itself as a provide
+    provides.push(name.to_string());
+
+    for line in stdout.lines() {
+        if line.starts_with("Provides") {
+            // Format: "Provides        : foo  bar  baz" or "Provides        : None"
+            if let Some(values) = line.split(':').nth(1) {
+                let values = values.trim();
+                if values != "None" {
+                    for provide in values.split_whitespace() {
+                        if !provide.is_empty() {
+                            provides.push(provide.to_string());
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    debug!("Package {} provides {} capabilities", name, provides.len());
+    Ok(provides)
+}
+
 /// Query all installed packages with their basic info
 /// Returns a map of package name -> InstalledPacmanInfo
 pub fn query_all_packages() -> Result<HashMap<String, InstalledPacmanInfo>> {

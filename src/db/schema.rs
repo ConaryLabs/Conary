@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -82,6 +82,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         5 => migrate_v5(conn),
         6 => migrate_v6(conn),
         7 => migrate_v7(conn),
+        8 => migrate_v8(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -402,6 +403,40 @@ fn migrate_v7(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 7 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 8: Add provides table for capability tracking
+///
+/// Creates a provides table to track what capabilities each package offers.
+/// This enables self-contained dependency resolution without querying the
+/// host package manager.
+///
+/// Capabilities include:
+/// - Package names (e.g., "perl-Text-CharWidth")
+/// - Virtual provides (e.g., "perl(Text::CharWidth)")
+/// - Library sonames (e.g., "libc.so.6")
+/// - File paths (e.g., "/usr/bin/perl")
+fn migrate_v8(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 8");
+
+    conn.execute_batch(
+        "
+        -- Capabilities/provides that packages offer
+        CREATE TABLE provides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            capability TEXT NOT NULL,
+            version TEXT,
+            UNIQUE(trove_id, capability)
+        );
+
+        -- Index for fast capability lookups during dependency resolution
+        CREATE INDEX idx_provides_capability ON provides(capability);
+        ",
+    )?;
+
+    info!("Schema version 8 applied successfully");
     Ok(())
 }
 

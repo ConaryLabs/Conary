@@ -3,6 +3,7 @@
 
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::Result;
+use conary::db::models::ProvideEntry;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
@@ -11,6 +12,7 @@ use conary::packages::PackageFormat;
 use conary::repository::{self, PackageSelector, SelectionOptions};
 use conary::resolver::{DependencyEdge, Resolver};
 use conary::version::{RpmVersion, VersionConstraint};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -204,9 +206,68 @@ pub fn cmd_install(
                             }
                         }
                     } else {
-                        // Dependencies not found in repos - show what's missing
-                        println!("\nMissing dependencies (not found in repositories):");
-                        for missing in &plan.missing {
+                        // Dependencies not found in Conary repos - check provides table
+                        let (satisfied, unsatisfied) =
+                            check_provides_dependencies(&conn, &plan.missing);
+
+                        if !satisfied.is_empty() {
+                            println!(
+                                "\nDependencies satisfied by tracked packages ({}):",
+                                satisfied.len()
+                            );
+                            for (name, provider, version) in &satisfied {
+                                if let Some(v) = version {
+                                    println!("  {} -> {} ({})", name, provider, v);
+                                } else {
+                                    println!("  {} -> {}", name, provider);
+                                }
+                            }
+                        }
+
+                        if !unsatisfied.is_empty() {
+                            println!("\nMissing dependencies:");
+                            for missing in &unsatisfied {
+                                println!(
+                                    "  {} {} (required by: {})",
+                                    missing.name,
+                                    missing.constraint,
+                                    missing.required_by.join(", ")
+                                );
+                            }
+                            println!("\nHint: Run 'conary adopt-system' to track all installed packages");
+                            return Err(anyhow::anyhow!(
+                                "Cannot install {}: {} unresolvable dependencies",
+                                pkg.name(),
+                                unsatisfied.len()
+                            ));
+                        }
+
+                        // All dependencies satisfied by tracked packages
+                        println!("All dependencies satisfied by tracked packages");
+                    }
+                }
+                Err(e) => {
+                    debug!("Repository lookup failed: {}", e);
+                    // Check provides table for dependencies
+                    let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &plan.missing);
+
+                    if !satisfied.is_empty() {
+                        println!(
+                            "\nDependencies satisfied by tracked packages ({}):",
+                            satisfied.len()
+                        );
+                        for (name, provider, version) in &satisfied {
+                            if let Some(v) = version {
+                                println!("  {} -> {} ({})", name, provider, v);
+                            } else {
+                                println!("  {} -> {}", name, provider);
+                            }
+                        }
+                    }
+
+                    if !unsatisfied.is_empty() {
+                        println!("\nMissing dependencies:");
+                        for missing in &unsatisfied {
                             println!(
                                 "  {} {} (required by: {})",
                                 missing.name,
@@ -214,30 +275,16 @@ pub fn cmd_install(
                                 missing.required_by.join(", ")
                             );
                         }
+                        println!("\nHint: Run 'conary adopt-system' to track all installed packages");
                         return Err(anyhow::anyhow!(
                             "Cannot install {}: {} unresolvable dependencies",
                             pkg.name(),
-                            plan.missing.len()
+                            unsatisfied.len()
                         ));
                     }
-                }
-                Err(e) => {
-                    debug!("Repository lookup failed: {}", e);
-                    // Show what's missing
-                    println!("\nMissing dependencies:");
-                    for missing in &plan.missing {
-                        println!(
-                            "  {} {} (required by: {})",
-                            missing.name,
-                            missing.constraint,
-                            missing.required_by.join(", ")
-                        );
-                    }
-                    return Err(anyhow::anyhow!(
-                        "Cannot install {}: {} unresolvable dependencies",
-                        pkg.name(),
-                        plan.missing.len()
-                    ));
+
+                    // All dependencies satisfied by tracked packages
+                    println!("All dependencies satisfied by tracked packages");
                 }
             }
         } else {
@@ -642,4 +689,114 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Check if missing dependencies are satisfied by packages in the provides table
+///
+/// This is a self-contained approach that doesn't query the host package manager.
+/// Instead, it checks if any tracked package provides the required capability.
+///
+/// Returns a tuple of:
+/// - satisfied: Vec of (dep_name, provider_name, version)
+/// - unsatisfied: Vec of MissingDependency (cloned)
+fn check_provides_dependencies(
+    conn: &Connection,
+    missing: &[conary::resolver::MissingDependency],
+) -> (
+    Vec<(String, String, Option<String>)>,
+    Vec<conary::resolver::MissingDependency>,
+) {
+    let mut satisfied = Vec::new();
+    let mut unsatisfied = Vec::new();
+
+    for dep in missing {
+        // Check if this capability is provided by any tracked package
+        match ProvideEntry::find_satisfying_provider(conn, &dep.name) {
+            Ok(Some((provider, version))) => {
+                satisfied.push((dep.name.clone(), provider, Some(version)));
+            }
+            Ok(None) => {
+                // Try some common variations for cross-distro compatibility
+                let variations = generate_capability_variations(&dep.name);
+                let mut found = false;
+
+                for variation in &variations {
+                    if let Ok(Some((provider, version))) = ProvideEntry::find_satisfying_provider(conn, variation) {
+                        satisfied.push((dep.name.clone(), provider, Some(version)));
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    unsatisfied.push(dep.clone());
+                }
+            }
+            Err(e) => {
+                debug!("Error checking provides for {}: {}", dep.name, e);
+                unsatisfied.push(dep.clone());
+            }
+        }
+    }
+
+    (satisfied, unsatisfied)
+}
+
+/// Generate common variations of a capability name for cross-distro matching
+///
+/// For example:
+/// - perl(Text::CharWidth) might also be: perl-Text-CharWidth
+/// - libc.so.6 might also be: glibc, libc6
+fn generate_capability_variations(capability: &str) -> Vec<String> {
+    let mut variations = Vec::new();
+
+    // Perl module variations: perl(Foo::Bar) <-> perl-Foo-Bar
+    if capability.starts_with("perl(") && capability.ends_with(')') {
+        let module = &capability[5..capability.len()-1];
+        // perl(Foo::Bar) -> perl-Foo-Bar
+        variations.push(format!("perl-{}", module.replace("::", "-")));
+        // Also try lowercase
+        variations.push(format!("perl-{}", module.replace("::", "-").to_lowercase()));
+    } else if capability.starts_with("perl-") {
+        // perl-Foo-Bar -> perl(Foo::Bar)
+        let module = &capability[5..].replace('-', "::");
+        variations.push(format!("perl({})", module));
+    }
+
+    // Python module variations
+    if capability.starts_with("python3-") {
+        let module = &capability[8..];
+        variations.push(format!("python3dist({})", module));
+        variations.push(format!("python({})", module));
+    } else if capability.starts_with("python3dist(") {
+        let module = &capability[12..capability.len()-1];
+        variations.push(format!("python3-{}", module));
+    }
+
+    // Library variations
+    if capability.ends_with(".so") || capability.contains(".so.") {
+        // libc.so.6 -> glibc, libc6
+        if capability.starts_with("libc.so") {
+            variations.push("glibc".to_string());
+            variations.push("libc6".to_string());
+        }
+        // Extract library name: libfoo.so.1 -> libfoo, foo
+        if let Some(base) = capability.split(".so").next() {
+            variations.push(base.to_string());
+            if let Some(name) = base.strip_prefix("lib") {
+                variations.push(name.to_string());
+            }
+        }
+    }
+
+    // Package name might be used directly
+    // Try stripping version suffixes: foo-1.0 -> foo
+    if let Some(pos) = capability.rfind('-') {
+        let potential_name = &capability[..pos];
+        if !potential_name.is_empty() && capability[pos+1..].chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            variations.push(potential_name.to_string());
+        }
+    }
+
+    variations
 }

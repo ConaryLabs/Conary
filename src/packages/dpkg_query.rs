@@ -322,6 +322,54 @@ fn parse_dpkg_dependency(dep: &str) -> DependencyInfo {
     }
 }
 
+/// Query what a package provides (capabilities it offers)
+///
+/// Returns a list of capability strings from the Provides field,
+/// plus the package name itself as a provide.
+pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
+    debug!("Querying provides for dpkg package: {}", name);
+
+    let output = Command::new("dpkg-query")
+        .args(["-W", "-f", "${Package}\n${Provides}\n", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "dpkg-query for provides {} failed: {}",
+            name,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut provides = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // First line is the package name itself
+        // Subsequent lines are from Provides field (comma-separated)
+        if line.contains(',') {
+            // Provides field: "foo, bar, baz"
+            for part in line.split(',') {
+                let provide = part.trim();
+                if !provide.is_empty() {
+                    provides.push(provide.to_string());
+                }
+            }
+        } else {
+            provides.push(line.to_string());
+        }
+    }
+
+    debug!("Package {} provides {} capabilities", name, provides.len());
+    Ok(provides)
+}
+
 /// Query all installed packages with their basic info
 /// Returns a map of package name -> InstalledDpkgInfo
 pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {

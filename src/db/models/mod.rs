@@ -11,6 +11,7 @@ mod dependency;
 mod file_entry;
 mod flavor;
 mod provenance;
+mod provide_entry;
 mod repository;
 mod trove;
 
@@ -20,6 +21,7 @@ pub use dependency::DependencyEntry;
 pub use file_entry::FileEntry;
 pub use flavor::Flavor;
 pub use provenance::Provenance;
+pub use provide_entry::ProvideEntry;
 pub use repository::{Repository, RepositoryPackage};
 pub use trove::{InstallSource, Trove, TroveType};
 

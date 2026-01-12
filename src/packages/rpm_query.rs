@@ -428,6 +428,40 @@ fn parse_rpm_dependency(dep: &str) -> DependencyInfo {
     }
 }
 
+/// Query what a package provides (capabilities it offers)
+///
+/// Returns a list of capability strings like:
+/// - "perl(Text::CharWidth)" (virtual provide)
+/// - "libc.so.6(GLIBC_2.17)(64bit)" (library)
+/// - "/usr/bin/perl" (file path)
+/// - "perl-Text-CharWidth = 0.04-58.fc43" (package name = version)
+pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
+    debug!("Querying provides for RPM package: {}", name);
+
+    let output = Command::new("rpm")
+        .args(["-q", "--provides", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "rpm -q --provides {} failed: {}",
+            name,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let provides: Vec<String> = stdout
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    debug!("Package {} provides {} capabilities", name, provides.len());
+    Ok(provides)
+}
+
 /// Query all installed packages with their basic info
 /// Returns a map of package name -> InstalledRpmInfo
 pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {

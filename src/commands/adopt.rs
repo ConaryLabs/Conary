@@ -7,7 +7,8 @@
 
 use anyhow::Result;
 use conary::db::models::{
-    Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, Trove, TroveType,
+    Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
+    TroveType,
 };
 use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
 use std::path::PathBuf;
@@ -303,6 +304,30 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
                 }
             }
 
+            // Query and insert provides (capabilities this package offers)
+            let provides: Vec<String> = match pkg_mgr {
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_provides(name).unwrap_or_default()
+                }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_provides(name).unwrap_or_default()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_provides(name).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+
+            for provide in provides {
+                if provide.is_empty() {
+                    continue;
+                }
+                let mut provide_entry = ProvideEntry::new(trove_id, provide, None);
+                if let Err(e) = provide_entry.insert_or_ignore(tx) {
+                    debug!("Failed to insert provide: {}", e);
+                }
+            }
+
             adopted_count += 1;
 
             // Progress update every 100 packages
@@ -552,6 +577,23 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                     dep.constraint, // Store the version constraint
                 );
                 let _ = dep_entry.insert(tx);
+            }
+
+            // Query and insert provides (capabilities this package offers)
+            let provides: Vec<String> = match pkg_mgr {
+                SystemPackageManager::Rpm => rpm_query::query_package_provides(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Dpkg => dpkg_query::query_package_provides(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Pacman => pacman_query::query_package_provides(&pkg_name).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            println!("  Provides: {}", provides.len());
+
+            for provide in provides {
+                if provide.is_empty() {
+                    continue;
+                }
+                let mut provide_entry = ProvideEntry::new(trove_id, provide, None);
+                let _ = provide_entry.insert_or_ignore(tx);
             }
 
             changeset.update_status(tx, ChangesetStatus::Applied)?;
