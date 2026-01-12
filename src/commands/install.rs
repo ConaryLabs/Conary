@@ -237,6 +237,9 @@ pub fn cmd_install(
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 
+        // Track if this is an upgrade (old trove was deleted above)
+        let is_upgrade = old_trove_to_upgrade.is_some();
+
         for file in &extracted_files {
             if deployer.file_exists(&file.path) {
                 if let Some(existing) =
@@ -252,7 +255,9 @@ pub fn cmd_install(
                             file.path, owner.name
                         )));
                     }
-                } else {
+                } else if !is_upgrade {
+                    // Only error on untracked files for fresh installs
+                    // For upgrades, the old files were deleted with the old trove
                     return Err(conary::Error::InitError(format!(
                         "File conflict: {} exists but is not tracked by any package",
                         file.path
