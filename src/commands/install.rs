@@ -4,6 +4,7 @@
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::Result;
 use conary::packages::arch::ArchPackage;
+use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
@@ -85,7 +86,7 @@ pub fn cmd_install(
     // Parse package using the appropriate format parser
     let pkg: Box<dyn PackageFormat> = match format {
         PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)?),
-        PackageFormatType::Deb => return Err(anyhow::anyhow!("DEB format not yet implemented")),
+        PackageFormatType::Deb => Box::new(DebPackage::parse(path_str)?),
         PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)?),
     };
 
