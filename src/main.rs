@@ -283,14 +283,16 @@ fn install_package_from_file(
     old_trove: Option<&conary::db::models::Trove>,
 ) -> Result<()> {
     // Auto-detect package format
-    let format = detect_package_format(package_path.to_str().unwrap())?;
+    let path_str = package_path.to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
+    let format = detect_package_format(path_str)?;
     info!("Detected package format: {:?}", format);
 
     // Parse the package based on format
     let package: Box<dyn PackageFormat> = match format {
-        PackageFormatType::Rpm => Box::new(RpmPackage::parse(package_path.to_str().unwrap())?),
-        PackageFormatType::Deb => Box::new(DebPackage::parse(package_path.to_str().unwrap())?),
-        PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path.to_str().unwrap())?),
+        PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)?),
+        PackageFormatType::Deb => Box::new(DebPackage::parse(path_str)?),
+        PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)?),
     };
 
     info!(
@@ -426,6 +428,429 @@ fn install_package_from_file(
     Ok(())
 }
 
+// =============================================================================
+// Command Handlers
+// =============================================================================
+
+/// Initialize the Conary database and add default repositories
+fn cmd_init(db_path: &str) -> Result<()> {
+    info!("Initializing Conary database at: {}", db_path);
+    conary::db::init(db_path)?;
+    println!("Database initialized successfully at: {}", db_path);
+
+    let conn = conary::db::open(db_path)?;
+    info!("Adding default repositories...");
+
+    // Default repositories with (name, url, priority)
+    let default_repos = [
+        ("arch-core", "https://geo.mirror.pkgbuild.com/core/os/x86_64", 100, "Arch Linux"),
+        ("arch-extra", "https://geo.mirror.pkgbuild.com/extra/os/x86_64", 95, "Arch Linux"),
+        ("fedora-43", "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os", 90, "Fedora 43"),
+        ("arch-multilib", "https://geo.mirror.pkgbuild.com/multilib/os/x86_64", 85, "Arch Linux"),
+        ("ubuntu-noble", "http://archive.ubuntu.com/ubuntu", 80, "Ubuntu 24.04 LTS"),
+    ];
+
+    for (name, url, priority, desc) in default_repos {
+        match conary::repository::add_repository(&conn, name.to_string(), url.to_string(), true, priority) {
+            Ok(_) => println!("  Added: {} ({})", name, desc),
+            Err(e) => eprintln!("  Warning: Could not add {}: {}", name, e),
+        }
+    }
+
+    println!("\nDefault repositories added. Use 'conary repo-sync' to download metadata.");
+    Ok(())
+}
+
+/// Remove an installed package
+fn cmd_remove(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Removing package: {}", package_name);
+
+    let mut conn = conary::db::open(db_path)?;
+    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+
+    if troves.is_empty() {
+        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+    }
+
+    if troves.len() > 1 {
+        println!("Multiple versions of '{}' found:", package_name);
+        for trove in &troves {
+            println!("  - version {}", trove.version);
+        }
+        return Err(anyhow::anyhow!("Please specify version (future enhancement)"));
+    }
+
+    let trove = &troves[0];
+    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+
+    // Check for reverse dependencies
+    let resolver = conary::resolver::Resolver::new(&conn)?;
+    let breaking = resolver.check_removal(package_name)?;
+
+    if !breaking.is_empty() {
+        println!("WARNING: Removing '{}' would break the following packages:", package_name);
+        for pkg in &breaking {
+            println!("  {}", pkg);
+        }
+        println!("\nRefusing to remove package with dependencies.");
+        println!("Use 'conary whatbreaks {}' for more information.", package_name);
+        return Err(anyhow::anyhow!(
+            "Cannot remove '{}': {} packages depend on it",
+            package_name,
+            breaking.len()
+        ));
+    }
+
+    let file_count = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?.len();
+
+    conary::db::transaction(&mut conn, |tx| {
+        let mut changeset = conary::db::models::Changeset::new(format!(
+            "Remove {}-{}",
+            trove.name, trove.version
+        ));
+        changeset.insert(tx)?;
+        conary::db::models::Trove::delete(tx, trove_id)?;
+        changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+        Ok(())
+    })?;
+
+    // TODO: Actually delete files from filesystem (Phase 6)
+
+    println!("Removed package: {} version {}", trove.name, trove.version);
+    println!("  Architecture: {}", trove.architecture.as_deref().unwrap_or("none"));
+    println!("  Files removed: {}", file_count);
+
+    Ok(())
+}
+
+/// Query installed packages
+fn cmd_query(pattern: Option<&str>, db_path: &str) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+
+    let troves = if let Some(pattern) = pattern {
+        conary::db::models::Trove::find_by_name(&conn, pattern)?
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id
+             FROM troves ORDER BY name, version"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(conary::db::models::Trove {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                version: row.get(2)?,
+                trove_type: row.get::<_, String>(3)?.parse().unwrap_or(conary::db::models::TroveType::Package),
+                architecture: row.get(4)?,
+                description: row.get(5)?,
+                installed_at: row.get(6)?,
+                installed_by_changeset_id: row.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    if troves.is_empty() {
+        println!("No packages found.");
+    } else {
+        println!("Installed packages:");
+        for trove in &troves {
+            print!("  {} {} ({:?})", trove.name, trove.version, trove.trove_type);
+            if let Some(arch) = &trove.architecture {
+                print!(" [{}]", arch);
+            }
+            println!();
+        }
+        println!("\nTotal: {} package(s)", troves.len());
+    }
+
+    Ok(())
+}
+
+/// Show changeset history
+fn cmd_history(db_path: &str) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+    let changesets = conary::db::models::Changeset::list_all(&conn)?;
+
+    if changesets.is_empty() {
+        println!("No changeset history.");
+    } else {
+        println!("Changeset history:");
+        for changeset in &changesets {
+            let timestamp = changeset
+                .applied_at
+                .as_ref()
+                .or(changeset.rolled_back_at.as_ref())
+                .or(changeset.created_at.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or("pending");
+
+            let id = changeset.id.map(|i| i.to_string()).unwrap_or_else(|| "?".to_string());
+            println!("  [{}] {} - {} ({:?})", id, timestamp, changeset.description, changeset.status);
+        }
+        println!("\nTotal: {} changeset(s)", changesets.len());
+    }
+
+    Ok(())
+}
+
+/// Rollback a changeset
+fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
+    info!("Rolling back changeset: {}", changeset_id);
+
+    let mut conn = conary::db::open(db_path)?;
+
+    let objects_dir = Path::new(db_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("objects");
+    let install_root = PathBuf::from(root);
+    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+
+    let changeset = conary::db::models::Changeset::find_by_id(&conn, changeset_id)?
+        .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
+
+    if changeset.status == conary::db::models::ChangesetStatus::RolledBack {
+        return Err(anyhow::anyhow!("Changeset {} is already rolled back", changeset_id));
+    }
+    if changeset.status == conary::db::models::ChangesetStatus::Pending {
+        return Err(anyhow::anyhow!("Cannot rollback pending changeset {}", changeset_id));
+    }
+
+    let files_to_rollback: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
+        let rows = stmt.query_map([changeset_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    conary::db::transaction(&mut conn, |tx| {
+        let troves = {
+            let mut stmt = tx.prepare(
+                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id
+                 FROM troves WHERE installed_by_changeset_id = ?1"
+            )?;
+            let rows = stmt.query_map([changeset_id], |row| {
+                Ok(conary::db::models::Trove {
+                    id: Some(row.get(0)?),
+                    name: row.get(1)?,
+                    version: row.get(2)?,
+                    trove_type: row.get::<_, String>(3)?.parse().unwrap_or(conary::db::models::TroveType::Package),
+                    architecture: row.get(4)?,
+                    description: row.get(5)?,
+                    installed_at: row.get(6)?,
+                    installed_by_changeset_id: row.get(7)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        if troves.is_empty() {
+            return Err(conary::Error::InitError(
+                "No troves found for this changeset. Cannot rollback Remove operations yet.".to_string()
+            ));
+        }
+
+        let mut rollback_changeset = conary::db::models::Changeset::new(format!(
+            "Rollback of changeset {} ({})", changeset_id, changeset.description
+        ));
+        let rollback_changeset_id = rollback_changeset.insert(tx)?;
+
+        for trove in &troves {
+            if let Some(trove_id) = trove.id {
+                conary::db::models::Trove::delete(tx, trove_id)?;
+                println!("Removed {} version {}", trove.name, trove.version);
+            }
+        }
+
+        rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+
+        tx.execute(
+            "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
+             reversed_by_changeset_id = ?1 WHERE id = ?2",
+            [rollback_changeset_id, changeset_id],
+        )?;
+
+        Ok(troves.len())
+    })?;
+
+    info!("Removing files from filesystem...");
+    for (path, action) in &files_to_rollback {
+        if action == "add" || action == "modify" {
+            deployer.remove_file(path)?;
+            info!("Removed file: {}", path);
+        }
+    }
+
+    println!("Rollback complete. Changeset {} has been reversed.", changeset_id);
+    println!("  Removed {} files from filesystem", files_to_rollback.len());
+
+    Ok(())
+}
+
+/// Show dependencies for a package
+fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Showing dependencies for package: {}", package_name);
+    let conn = conary::db::open(db_path)?;
+
+    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+    let trove = troves.first().ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
+    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+
+    let deps = conary::db::models::DependencyEntry::find_by_trove(&conn, trove_id)?;
+
+    if deps.is_empty() {
+        println!("Package '{}' has no dependencies", package_name);
+    } else {
+        println!("Dependencies for package '{}':", package_name);
+        for dep in deps {
+            print!("  {} ({})", dep.depends_on_name, dep.dependency_type);
+            if let Some(version) = dep.depends_on_version {
+                print!(" - version: {}", version);
+            }
+            if let Some(constraint) = dep.version_constraint {
+                print!(" - constraint: {}", constraint);
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+/// Show reverse dependencies (what depends on this package)
+fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Showing reverse dependencies for package: {}", package_name);
+    let conn = conary::db::open(db_path)?;
+
+    let dependents = conary::db::models::DependencyEntry::find_dependents(&conn, package_name)?;
+
+    if dependents.is_empty() {
+        println!("No packages depend on '{}' (or package not installed)", package_name);
+    } else {
+        println!("Packages that depend on '{}':", package_name);
+        for dep in dependents {
+            if let Ok(Some(trove)) = conary::db::models::Trove::find_by_id(&conn, dep.trove_id) {
+                print!("  {} ({})", trove.name, dep.dependency_type);
+                if let Some(constraint) = dep.version_constraint {
+                    print!(" - requires: {}", constraint);
+                }
+                println!();
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Show what packages would break if this package is removed
+fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Checking what would break if '{}' is removed...", package_name);
+    let conn = conary::db::open(db_path)?;
+
+    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+    troves.first().ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
+
+    let resolver = conary::resolver::Resolver::new(&conn)?;
+    let breaking = resolver.check_removal(package_name)?;
+
+    if breaking.is_empty() {
+        println!("Package '{}' can be safely removed (no dependencies)", package_name);
+    } else {
+        println!("Removing '{}' would break the following packages:", package_name);
+        for pkg in &breaking {
+            println!("  {}", pkg);
+        }
+        println!("\nTotal: {} packages would be affected", breaking.len());
+    }
+
+    Ok(())
+}
+
+/// Add a new repository
+fn cmd_repo_add(name: &str, url: &str, db_path: &str, priority: i32, disabled: bool) -> Result<()> {
+    info!("Adding repository: {} ({})", name, url);
+    let conn = conary::db::open(db_path)?;
+    let repo = conary::repository::add_repository(&conn, name.to_string(), url.to_string(), !disabled, priority)?;
+    println!("Added repository: {}", repo.name);
+    println!("  URL: {}", repo.url);
+    println!("  Enabled: {}", repo.enabled);
+    println!("  Priority: {}", repo.priority);
+    Ok(())
+}
+
+/// List repositories
+fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
+    info!("Listing repositories");
+    let conn = conary::db::open(db_path)?;
+    let repos = if all {
+        conary::db::models::Repository::list_all(&conn)?
+    } else {
+        conary::db::models::Repository::list_enabled(&conn)?
+    };
+
+    if repos.is_empty() {
+        println!("No repositories configured");
+    } else {
+        println!("Repositories:");
+        for repo in repos {
+            let enabled_mark = if repo.enabled { "[x]" } else { "[ ]" };
+            let sync_status = repo.last_sync.as_ref().map(|ts| format!("synced {}", ts)).unwrap_or_else(|| "never synced".to_string());
+            println!("  {} {} (priority: {}, {})", enabled_mark, repo.name, repo.priority, sync_status);
+            println!("      {}", repo.url);
+        }
+    }
+    Ok(())
+}
+
+/// Remove a repository
+fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
+    info!("Removing repository: {}", name);
+    let conn = conary::db::open(db_path)?;
+    conary::repository::remove_repository(&conn, name)?;
+    println!("Removed repository: {}", name);
+    Ok(())
+}
+
+/// Enable a repository
+fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
+    info!("Enabling repository: {}", name);
+    let conn = conary::db::open(db_path)?;
+    conary::repository::set_repository_enabled(&conn, name, true)?;
+    println!("Enabled repository: {}", name);
+    Ok(())
+}
+
+/// Disable a repository
+fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
+    info!("Disabling repository: {}", name);
+    let conn = conary::db::open(db_path)?;
+    conary::repository::set_repository_enabled(&conn, name, false)?;
+    println!("Disabled repository: {}", name);
+    Ok(())
+}
+
+/// Search for packages in repositories
+fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
+    info!("Searching for packages matching: {}", pattern);
+    let conn = conary::db::open(db_path)?;
+    let packages = conary::repository::search_packages(&conn, pattern)?;
+
+    if packages.is_empty() {
+        println!("No packages found matching '{}'", pattern);
+    } else {
+        println!("Found {} packages matching '{}':", packages.len(), pattern);
+        for pkg in packages {
+            let arch_str = pkg.architecture.as_deref().unwrap_or("noarch");
+            println!("  {} {} ({})", pkg.name, pkg.version, arch_str);
+            if let Some(desc) = &pkg.description {
+                println!("      {}", desc);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Initialize tracing subscriber for logging
     tracing_subscriber::fmt()
@@ -438,79 +863,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Init { db_path }) => {
-            info!("Initializing Conary database at: {}", db_path);
-            conary::db::init(&db_path)?;
-            println!("Database initialized successfully at: {}", db_path);
-
-            // Add default repositories for major distributions
-            let conn = conary::db::open(&db_path)?;
-
-            info!("Adding default repositories...");
-
-            // Arch Linux core repository (priority 100)
-            match conary::repository::add_repository(
-                &conn,
-                "arch-core".to_string(),
-                "https://geo.mirror.pkgbuild.com/core/os/x86_64".to_string(),
-                true,
-                100,
-            ) {
-                Ok(_) => println!("  Added: arch-core (Arch Linux)"),
-                Err(e) => eprintln!("  Warning: Could not add arch-core: {}", e),
-            }
-
-            // Arch Linux extra repository (priority 95)
-            match conary::repository::add_repository(
-                &conn,
-                "arch-extra".to_string(),
-                "https://geo.mirror.pkgbuild.com/extra/os/x86_64".to_string(),
-                true,
-                95,
-            ) {
-                Ok(_) => println!("  Added: arch-extra (Arch Linux)"),
-                Err(e) => eprintln!("  Warning: Could not add arch-extra: {}", e),
-            }
-
-            // Fedora 43 Everything repository (priority 90)
-            match conary::repository::add_repository(
-                &conn,
-                "fedora-43".to_string(),
-                "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os".to_string(),
-                true,
-                90,
-            ) {
-                Ok(_) => println!("  Added: fedora-43 (Fedora 43)"),
-                Err(e) => eprintln!("  Warning: Could not add fedora-43: {}", e),
-            }
-
-            // Arch Linux multilib repository (priority 85)
-            match conary::repository::add_repository(
-                &conn,
-                "arch-multilib".to_string(),
-                "https://geo.mirror.pkgbuild.com/multilib/os/x86_64".to_string(),
-                true,
-                85,
-            ) {
-                Ok(_) => println!("  Added: arch-multilib (Arch Linux)"),
-                Err(e) => eprintln!("  Warning: Could not add arch-multilib: {}", e),
-            }
-
-            // Ubuntu 24.04 LTS main repository (priority 80)
-            match conary::repository::add_repository(
-                &conn,
-                "ubuntu-noble".to_string(),
-                "http://archive.ubuntu.com/ubuntu".to_string(),
-                true,
-                80,
-            ) {
-                Ok(_) => println!("  Added: ubuntu-noble (Ubuntu 24.04 LTS)"),
-                Err(e) => eprintln!("  Warning: Could not add ubuntu-noble: {}", e),
-            }
-
-            println!("\nDefault repositories added. Use 'conary repo-sync' to download metadata.");
-            Ok(())
-        }
+        Some(Commands::Init { db_path }) => cmd_init(&db_path),
         Some(Commands::Install {
             package,
             db_path,
@@ -560,12 +913,14 @@ fn main() -> Result<()> {
             };
 
             // Auto-detect package format
-            let format = detect_package_format(package_path.to_str().unwrap())?;
+            let path_str = package_path.to_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
+            let format = detect_package_format(path_str)?;
             info!("Detected package format: {:?}", format);
 
             // Parse the package based on format
             let rpm = match format {
-                PackageFormatType::Rpm => RpmPackage::parse(package_path.to_str().unwrap())?,
+                PackageFormatType::Rpm => RpmPackage::parse(path_str)?,
                 PackageFormatType::Deb => {
                     return Err(anyhow::anyhow!("DEB format not yet implemented"));
                 }
@@ -858,275 +1213,11 @@ fn main() -> Result<()> {
 
             Ok(())
         }
-        Some(Commands::Remove {
-            package_name,
-            db_path,
-        }) => {
-            info!("Removing package: {}", package_name);
-
-            // Open database connection
-            let mut conn = conary::db::open(&db_path)?;
-
-            // Find the package to remove
-            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
-
-            if troves.is_empty() {
-                return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
-            }
-
-            if troves.len() > 1 {
-                println!("Multiple versions of '{}' found:", package_name);
-                for trove in &troves {
-                    println!("  - version {}", trove.version);
-                }
-                return Err(anyhow::anyhow!(
-                    "Please specify version (future enhancement)"
-                ));
-            }
-
-            let trove = &troves[0];
-            let trove_id = trove.id.unwrap();
-
-            // Check for reverse dependencies
-            let resolver = conary::resolver::Resolver::new(&conn)?;
-            let breaking = resolver.check_removal(&package_name)?;
-
-            if !breaking.is_empty() {
-                println!(
-                    "WARNING: Removing '{}' would break the following packages:",
-                    package_name
-                );
-                for pkg in &breaking {
-                    println!("  {}", pkg);
-                }
-                println!("\nRefusing to remove package with dependencies.");
-                println!("Use 'conary whatbreaks {}' for more information.", package_name);
-                return Err(anyhow::anyhow!(
-                    "Cannot remove '{}': {} packages depend on it",
-                    package_name,
-                    breaking.len()
-                ));
-            }
-
-            // Count files before removal for reporting
-            let file_count = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?.len();
-
-            // Perform removal within a changeset transaction
-            conary::db::transaction(&mut conn, |tx| {
-                // Create changeset for this removal
-                let mut changeset = conary::db::models::Changeset::new(format!(
-                    "Remove {}-{}",
-                    trove.name, trove.version
-                ));
-                changeset.insert(tx)?;
-
-                // Delete the trove (files will be cascade-deleted due to foreign key)
-                conary::db::models::Trove::delete(tx, trove_id)?;
-
-                // Mark changeset as applied
-                changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
-
-                Ok(())
-            })?;
-
-            // TODO: Actually delete files from filesystem (Phase 6)
-
-            println!("Removed package: {} version {}", trove.name, trove.version);
-            println!("  Architecture: {}", trove.architecture.as_deref().unwrap_or("none"));
-            println!("  Files removed: {}", file_count);
-
-            Ok(())
-        }
-        Some(Commands::Query { pattern, db_path }) => {
-            let conn = conary::db::open(&db_path)?;
-
-            // Get all troves or filter by pattern
-            let troves = if let Some(pattern) = pattern {
-                conary::db::models::Trove::find_by_name(&conn, &pattern)?
-            } else {
-                // Get all troves
-                let mut stmt = conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id FROM troves ORDER BY name, version")?;
-                let rows = stmt.query_map([], |row| {
-                    Ok(conary::db::models::Trove {
-                        id: Some(row.get(0)?),
-                        name: row.get(1)?,
-                        version: row.get(2)?,
-                        trove_type: row.get::<_, String>(3)?.parse().unwrap(),
-                        architecture: row.get(4)?,
-                        description: row.get(5)?,
-                        installed_at: row.get(6)?,
-                        installed_by_changeset_id: row.get(7)?,
-                    })
-                })?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-
-            if troves.is_empty() {
-                println!("No packages found.");
-            } else {
-                println!("Installed packages:");
-                for trove in &troves {
-                    print!("  {} {} ({:?})", trove.name, trove.version, trove.trove_type);
-                    if let Some(arch) = &trove.architecture {
-                        print!(" [{}]", arch);
-                    }
-                    println!();
-                }
-                println!("\nTotal: {} package(s)", troves.len());
-            }
-
-            Ok(())
-        }
-        Some(Commands::History { db_path }) => {
-            let conn = conary::db::open(&db_path)?;
-
-            let changesets = conary::db::models::Changeset::list_all(&conn)?;
-
-            if changesets.is_empty() {
-                println!("No changeset history.");
-            } else {
-                println!("Changeset history:");
-                for changeset in &changesets {
-                    let timestamp = changeset
-                        .applied_at
-                        .as_ref()
-                        .or(changeset.rolled_back_at.as_ref())
-                        .or(changeset.created_at.as_ref())
-                        .map(|s| s.as_str())
-                        .unwrap_or("pending");
-
-                    println!(
-                        "  [{}] {} - {} ({:?})",
-                        changeset.id.unwrap(),
-                        timestamp,
-                        changeset.description,
-                        changeset.status
-                    );
-                }
-                println!("\nTotal: {} changeset(s)", changesets.len());
-            }
-
-            Ok(())
-        }
-        Some(Commands::Rollback {
-            changeset_id,
-            db_path,
-            root,
-        }) => {
-            info!("Rolling back changeset: {}", changeset_id);
-
-            let mut conn = conary::db::open(&db_path)?;
-
-            // Initialize file deployer for filesystem operations
-            let objects_dir = std::path::Path::new(&db_path)
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("objects");
-            let install_root = std::path::PathBuf::from(&root);
-            let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
-
-            // Find the changeset to rollback
-            let changeset = conary::db::models::Changeset::find_by_id(&conn, changeset_id)?
-                .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
-
-            // Check if already rolled back
-            if changeset.status == conary::db::models::ChangesetStatus::RolledBack {
-                return Err(anyhow::anyhow!(
-                    "Changeset {} is already rolled back",
-                    changeset_id
-                ));
-            }
-
-            // Check if not yet applied
-            if changeset.status == conary::db::models::ChangesetStatus::Pending {
-                return Err(anyhow::anyhow!(
-                    "Cannot rollback pending changeset {}",
-                    changeset_id
-                ));
-            }
-
-            // Query file history for this changeset before the transaction
-            let files_to_rollback: Vec<(String, String)> = {
-                let mut stmt = conn.prepare(
-                    "SELECT path, action FROM file_history WHERE changeset_id = ?1"
-                )?;
-                let rows = stmt.query_map([changeset_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-
-            // Perform rollback in a transaction
-            conary::db::transaction(&mut conn, |tx| {
-                // Find all troves installed by this changeset
-                let troves = {
-                    let mut stmt = tx.prepare(
-                        "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id
-                         FROM troves WHERE installed_by_changeset_id = ?1",
-                    )?;
-                    let rows = stmt.query_map([changeset_id], |row| {
-                        Ok(conary::db::models::Trove {
-                            id: Some(row.get(0)?),
-                            name: row.get(1)?,
-                            version: row.get(2)?,
-                            trove_type: row.get::<_, String>(3)?.parse().unwrap(),
-                            architecture: row.get(4)?,
-                            description: row.get(5)?,
-                            installed_at: row.get(6)?,
-                            installed_by_changeset_id: row.get(7)?,
-                        })
-                    })?;
-                    rows.collect::<rusqlite::Result<Vec<_>>>()?
-                };
-
-                if troves.is_empty() {
-                    return Err(conary::Error::InitError(
-                        "No troves found for this changeset. Cannot rollback Remove operations yet.".to_string()
-                    ));
-                }
-
-                // Create a new changeset for the rollback operation
-                let mut rollback_changeset = conary::db::models::Changeset::new(format!(
-                    "Rollback of changeset {} ({})",
-                    changeset_id, changeset.description
-                ));
-                let rollback_changeset_id = rollback_changeset.insert(tx)?;
-
-                // Delete all troves that were installed by the original changeset
-                for trove in &troves {
-                    conary::db::models::Trove::delete(tx, trove.id.unwrap())?;
-                    println!("Removed {} version {}", trove.name, trove.version);
-                }
-
-                // Mark the rollback changeset as applied
-                rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
-
-                // Mark the original changeset as rolled back and link to rollback changeset
-                tx.execute(
-                    "UPDATE changesets
-                     SET status = 'rolled_back',
-                         rolled_back_at = CURRENT_TIMESTAMP,
-                         reversed_by_changeset_id = ?1
-                     WHERE id = ?2",
-                    [rollback_changeset_id, changeset_id],
-                )?;
-
-                Ok(troves.len())
-            })?;
-
-            // Remove files from filesystem (outside transaction)
-            info!("Removing files from filesystem...");
-            for (path, action) in &files_to_rollback {
-                if action == "add" || action == "modify" {
-                    deployer.remove_file(path)?;
-                    info!("Removed file: {}", path);
-                }
-            }
-
-            println!("Rollback complete. Changeset {} has been reversed.", changeset_id);
-            println!("  Removed {} files from filesystem", files_to_rollback.len());
-
-            Ok(())
+        Some(Commands::Remove { package_name, db_path }) => cmd_remove(&package_name, &db_path),
+        Some(Commands::Query { pattern, db_path }) => cmd_query(pattern.as_deref(), &db_path),
+        Some(Commands::History { db_path }) => cmd_history(&db_path),
+        Some(Commands::Rollback { changeset_id, db_path, root }) => {
+            cmd_rollback(changeset_id, &db_path, &root)
         }
         Some(Commands::Verify {
             package,
@@ -1155,9 +1246,11 @@ fn main() -> Result<()> {
 
                 let mut all_files = Vec::new();
                 for trove in &troves {
-                    let trove_files = conary::db::models::FileEntry::find_by_trove(&conn, trove.id.unwrap())?;
-                    for file in trove_files {
-                        all_files.push((file.path, file.sha256_hash, trove.name.clone()));
+                    if let Some(trove_id) = trove.id {
+                        let trove_files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+                        for file in trove_files {
+                            all_files.push((file.path, file.sha256_hash, trove.name.clone()));
+                        }
                     }
                 }
                 all_files
@@ -1218,205 +1311,21 @@ fn main() -> Result<()> {
 
             Ok(())
         }
-        Some(Commands::Depends {
-            package_name,
-            db_path,
-        }) => {
-            info!("Showing dependencies for package: {}", package_name);
-
-            let conn = conary::db::open(&db_path)?;
-
-            // Find the trove
-            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
-            let trove = troves
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
-
-            // Get dependencies
-            let deps = conary::db::models::DependencyEntry::find_by_trove(
-                &conn,
-                trove.id.unwrap(),
-            )?;
-
-            if deps.is_empty() {
-                println!("Package '{}' has no dependencies", package_name);
-            } else {
-                println!("Dependencies for package '{}':", package_name);
-                for dep in deps {
-                    print!("  {} ({})", dep.depends_on_name, dep.dependency_type);
-                    if let Some(version) = dep.depends_on_version {
-                        print!(" - version: {}", version);
-                    }
-                    if let Some(constraint) = dep.version_constraint {
-                        print!(" - constraint: {}", constraint);
-                    }
-                    println!();
-                }
-            }
-
-            Ok(())
-        }
-        Some(Commands::Rdepends {
-            package_name,
-            db_path,
-        }) => {
-            info!(
-                "Showing reverse dependencies for package: {}",
-                package_name
-            );
-
-            let conn = conary::db::open(&db_path)?;
-
-            // Find packages that depend on this one
-            let dependents =
-                conary::db::models::DependencyEntry::find_dependents(&conn, &package_name)?;
-
-            if dependents.is_empty() {
-                println!(
-                    "No packages depend on '{}' (or package not installed)",
-                    package_name
-                );
-            } else {
-                println!("Packages that depend on '{}':", package_name);
-                for dep in dependents {
-                    // Get the trove name for the dependent
-                    if let Ok(Some(trove)) =
-                        conary::db::models::Trove::find_by_id(&conn, dep.trove_id)
-                    {
-                        print!("  {} ({})", trove.name, dep.dependency_type);
-                        if let Some(constraint) = dep.version_constraint {
-                            print!(" - requires: {}", constraint);
-                        }
-                        println!();
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        Some(Commands::Whatbreaks {
-            package_name,
-            db_path,
-        }) => {
-            info!(
-                "Checking what would break if '{}' is removed...",
-                package_name
-            );
-
-            let conn = conary::db::open(&db_path)?;
-
-            // Check if package exists
-            let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
-            let _trove = troves
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
-
-            // Build dependency graph and find breaking packages
-            let resolver = conary::resolver::Resolver::new(&conn)?;
-            let breaking = resolver.check_removal(&package_name)?;
-
-            if breaking.is_empty() {
-                println!(
-                    "Package '{}' can be safely removed (no dependencies)",
-                    package_name
-                );
-            } else {
-                println!(
-                    "Removing '{}' would break the following packages:",
-                    package_name
-                );
-                for pkg in &breaking {
-                    println!("  {}", pkg);
-                }
-                println!("\nTotal: {} packages would be affected", breaking.len());
-            }
-
-            Ok(())
-        }
+        Some(Commands::Depends { package_name, db_path }) => cmd_depends(&package_name, &db_path),
+        Some(Commands::Rdepends { package_name, db_path }) => cmd_rdepends(&package_name, &db_path),
+        Some(Commands::Whatbreaks { package_name, db_path }) => cmd_whatbreaks(&package_name, &db_path),
         Some(Commands::Completions { shell }) => {
-            info!("Generating shell completions for {:?}", shell);
-
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "conary", &mut io::stdout());
-
             Ok(())
         }
-        Some(Commands::RepoAdd {
-            name,
-            url,
-            db_path,
-            priority,
-            disabled,
-        }) => {
-            info!("Adding repository: {} ({})", name, url);
-
-            let conn = conary::db::open(&db_path)?;
-            let repo = conary::repository::add_repository(&conn, name.clone(), url.clone(), !disabled, priority)?;
-
-            println!("Added repository: {}", repo.name);
-            println!("  URL: {}", repo.url);
-            println!("  Enabled: {}", repo.enabled);
-            println!("  Priority: {}", repo.priority);
-
-            Ok(())
+        Some(Commands::RepoAdd { name, url, db_path, priority, disabled }) => {
+            cmd_repo_add(&name, &url, &db_path, priority, disabled)
         }
-        Some(Commands::RepoList { db_path, all }) => {
-            info!("Listing repositories");
-
-            let conn = conary::db::open(&db_path)?;
-            let repos = if all {
-                conary::db::models::Repository::list_all(&conn)?
-            } else {
-                conary::db::models::Repository::list_enabled(&conn)?
-            };
-
-            if repos.is_empty() {
-                println!("No repositories configured");
-            } else {
-                println!("Repositories:");
-                for repo in repos {
-                    let enabled_mark = if repo.enabled { "✓" } else { "✗" };
-                    let sync_status = match &repo.last_sync {
-                        Some(ts) => format!("synced {}", ts),
-                        None => "never synced".to_string(),
-                    };
-                    println!("  {} {} (priority: {}, {})", enabled_mark, repo.name, repo.priority, sync_status);
-                    println!("      {}", repo.url);
-                }
-            }
-
-            Ok(())
-        }
-        Some(Commands::RepoRemove { name, db_path }) => {
-            info!("Removing repository: {}", name);
-
-            let conn = conary::db::open(&db_path)?;
-            conary::repository::remove_repository(&conn, &name)?;
-
-            println!("Removed repository: {}", name);
-
-            Ok(())
-        }
-        Some(Commands::RepoEnable { name, db_path }) => {
-            info!("Enabling repository: {}", name);
-
-            let conn = conary::db::open(&db_path)?;
-            conary::repository::set_repository_enabled(&conn, &name, true)?;
-
-            println!("Enabled repository: {}", name);
-
-            Ok(())
-        }
-        Some(Commands::RepoDisable { name, db_path }) => {
-            info!("Disabling repository: {}", name);
-
-            let conn = conary::db::open(&db_path)?;
-            conary::repository::set_repository_enabled(&conn, &name, false)?;
-
-            println!("Disabled repository: {}", name);
-
-            Ok(())
-        }
+        Some(Commands::RepoList { db_path, all }) => cmd_repo_list(&db_path, all),
+        Some(Commands::RepoRemove { name, db_path }) => cmd_repo_remove(&name, &db_path),
+        Some(Commands::RepoEnable { name, db_path }) => cmd_repo_enable(&name, &db_path),
+        Some(Commands::RepoDisable { name, db_path }) => cmd_repo_disable(&name, &db_path),
         Some(Commands::RepoSync {
             name,
             db_path,
@@ -1480,27 +1389,7 @@ fn main() -> Result<()> {
 
             Ok(())
         }
-        Some(Commands::Search { pattern, db_path }) => {
-            info!("Searching for packages matching: {}", pattern);
-
-            let conn = conary::db::open(&db_path)?;
-            let packages = conary::repository::search_packages(&conn, &pattern)?;
-
-            if packages.is_empty() {
-                println!("No packages found matching '{}'", pattern);
-            } else {
-                println!("Found {} packages matching '{}':", packages.len(), pattern);
-                for pkg in packages {
-                    let arch_str = pkg.architecture.as_deref().unwrap_or("noarch");
-                    println!("  {} {} ({})", pkg.name, pkg.version, arch_str);
-                    if let Some(desc) = &pkg.description {
-                        println!("      {}", desc);
-                    }
-                }
-            }
-
-            Ok(())
-        }
+        Some(Commands::Search { pattern, db_path }) => cmd_search(&pattern, &db_path),
         Some(Commands::Update {
             package,
             db_path,
@@ -1533,7 +1422,7 @@ fn main() -> Result<()> {
                         id: Some(row.get(0)?),
                         name: row.get(1)?,
                         version: row.get(2)?,
-                        trove_type: row.get::<_, String>(3)?.parse().unwrap(),
+                        trove_type: row.get::<_, String>(3)?.parse().unwrap_or(conary::db::models::TroveType::Package),
                         architecture: row.get(4)?,
                         description: row.get(5)?,
                         installed_at: row.get(6)?,
