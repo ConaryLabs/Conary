@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_verifier_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let verifier = GpgVerifier::new(temp_dir.path().to_path_buf()).unwrap();
+        let _verifier = GpgVerifier::new(temp_dir.path().to_path_buf()).unwrap();
         assert!(temp_dir.path().exists());
     }
 

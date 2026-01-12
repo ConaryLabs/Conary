@@ -18,3 +18,4 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+.mcp.json

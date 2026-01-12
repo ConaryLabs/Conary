@@ -1,101 +1,88 @@
 # CLAUDE.md
 
-## Project: Conary Package Manager
+This project uses **Mira** for persistent memory and code intelligence.
 
-Modern, Rust-based package manager supporting RPM, DEB, and Arch packages with atomic operations, rollback capabilities, and delta updates. Inspired by the original Conary package manager.
+## Session Start
+
+```
+session_start(project_path="/home/peter/Conary")
+```
+
+Then `recall("architecture")` and `recall("progress")` before making changes.
+
+## Code Navigation (Use These First)
+
+**Always prefer Mira tools over Grep/Glob for code exploration:**
+
+| Need | Tool | Why |
+|------|------|-----|
+| Search by meaning | `semantic_code_search` | Understands intent, not just keywords |
+| File structure | `get_symbols` | Functions, structs, traits in a file |
+| Check past decisions | `recall` | What we decided and why |
+| Find callers | `find_callers` | What calls a function |
+| Find callees | `find_callees` | What a function calls |
+
+**When to use Grep:** Only for literal string searches (error messages, specific constants).
+
+**When to use Glob:** Only for finding files by exact name pattern.
+
+## Build & Test
+
+```bash
+cargo build --release
+cargo test
+cargo clippy -- -D warnings
+```
 
 ## Core Principles
 
-### Database-First Architecture
-**CRITICAL**: This is a **database-backed system**. No configuration files. No state in text files. No INI, TOML, YAML, or JSON for runtime state or configuration.
+**Database-First**: All state lives in SQLite. No config files. No INI/TOML/YAML/JSON for runtime state.
 
-- All state lives in SQLite
-- All configuration lives in SQLite
-- Package metadata lives in SQLite
-- System state and history lives in SQLite
-
-Text files are only acceptable for:
-- Source code
-- Documentation (README.md, this file, PROGRESS.md)
-- Build configuration (Cargo.toml, Cargo.lock)
-
-If you're tempted to write a config file, you're doing it wrong. Put it in the database.
-
-### Code Standards
-
-**File Headers**
-Every Rust source file MUST start with its full path as a comment:
+**File Headers**: Every Rust source file starts with its path as a comment:
 ```rust
 // src/main.rs
-// or
-// src/db/schema.rs
 ```
 
-**Modern Rust (2025)**
-- Rust 1.91.1 stable, Edition 2024
-- Use modern patterns: async where appropriate, const generics, GATs when useful
-- Prefer `?` operator over `match` for error handling
-- Use `thiserror` for error types, `anyhow` only at application boundaries
-- Clippy-clean code (pedantic lints encouraged)
-- Format with `rustfmt` defaults
+**No Emojis**: Use text markers instead:
+- `[COMPLETE]` not checkmarks
+- `[IN PROGRESS]` not spinners
+- `[FAILED]` not X marks
 
-**Dependencies**
-Keep the dependency tree lean. This is system-level infrastructure.
-- `rusqlite` for database
-- Choose dependencies carefully - fewer is better
-- No unnecessary async if sync works fine
-- Justify any heavy dependencies
+**Rust Standards**:
+- Edition 2024, Rust 1.91.1
+- `thiserror` for error types
+- Clippy-clean (pedantic encouraged)
+- Tests in same file as code
 
-**Testing**
-- Unit tests in the same file as the code
-- Integration tests in `tests/`
-- Database tests use in-memory SQLite or temp files
-- Test coverage matters for a package manager
+## Architecture Quick Reference
 
-**No Emojis**
-- No emojis in source code
-- No emojis in documentation files (README.md, PROGRESS.md, CLAUDE.md, ROADMAP.md)
-- No emojis in commit messages (title or body)
-- Use plain text markers instead:
-  - Use `[COMPLETE]` or `(complete)` instead of ✅
-  - Use `[IN PROGRESS]` or `(in progress)` instead of 🔄
-  - Use `[FAILED]` or `(failed)` instead of ❌
-  - Use `NEW` or `(new)` instead of ⭐
+- **Trove**: Core unit (package, component, collection)
+- **Changeset**: Atomic transaction (install/remove/rollback)
+- **Flavor**: Build variations (arch, features)
+- **CAS**: Content-addressable storage for files
 
-### Architecture Concepts
+## Key Modules
 
-**Conary-Inspired Terminology**
-- **Trove**: The core unit - package, component, or collection
-- **Changeset**: Transactional state changes, not individual package operations
-- **Flavor**: Build-time variations (arch, features, toolchain)
-- **Component**: Auto-split packages (`:runtime`, `:devel`, `:doc`)
+| Module | Purpose |
+|--------|---------|
+| `src/db/` | SQLite schema, models, migrations |
+| `src/packages/` | RPM/DEB/Arch parsers |
+| `src/repository/` | Remote repos, metadata sync |
+| `src/resolver/` | Dependency graph, topological sort |
+| `src/filesystem/` | CAS, file deployment |
+| `src/delta/` | Binary delta updates |
+| `src/version/` | Version parsing, constraints |
 
-**Database Schema**
-Design for:
-- File-level tracking with hashes
-- Changeset history and rollback
-- Provenance tracking (source, branch, build chain)
-- Efficient queries for dependency resolution
-- Support for multiple package formats (RPM, DEB, Arch)
+## Database Schema
 
-### Progress Tracking
+Currently v5. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats.
 
-Keep `PROGRESS.md` updated with:
-- What was implemented
-- What's next
-- Design decisions and rationale
-- Known issues or TODOs
-- Session-by-session progress
+## Testing
 
-Update it frequently. It's the source of truth for "where are we?"
+```bash
+cargo test                    # All tests
+cargo test --lib             # Library tests only
+cargo test --test '*'        # Integration tests only
+```
 
-## Getting Started
-
-1. Check `PROGRESS.md` for current state
-2. Review existing schema/structure
-3. Write tests before implementation
-4. Update `PROGRESS.md` when done
-
-## Questions/Clarifications
-
-When in doubt, ask. This is foundational infrastructure - getting it right matters more than getting it fast.
+98 tests total (lib + bin + integration).
