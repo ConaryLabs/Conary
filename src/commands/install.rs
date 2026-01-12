@@ -537,13 +537,41 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
         )?;
 
         // Record file removals in history before deleting
-        // Only insert for files with valid SHA256 hashes (64 hex chars) - adopted files may have placeholders
         for file in &files {
-            if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                    [&changeset_id.to_string(), &file.path, &file.sha256_hash, "delete"],
+            // Check if hash is valid format (64 hex chars) and exists in file_contents
+            // Adopted files may have placeholder hashes or real hashes not in the content store
+            let use_hash = if file.sha256_hash.len() == 64
+                && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                // Check if this hash actually exists in file_contents (FK constraint)
+                let hash_exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM file_contents WHERE sha256_hash = ?1)",
+                    [&file.sha256_hash],
+                    |row| row.get(0),
                 )?;
+                if hash_exists {
+                    Some(file.sha256_hash.as_str())
+                } else {
+                    None // Hash not in content store (adopted file)
+                }
+            } else {
+                None // Placeholder hash
+            };
+
+            // Always record file removal, but only include hash if it exists in file_contents
+            match use_hash {
+                Some(hash) => {
+                    tx.execute(
+                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                        [&changeset_id.to_string(), &file.path, hash, "delete"],
+                    )?;
+                }
+                None => {
+                    tx.execute(
+                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, NULL, ?3)",
+                        [&changeset_id.to_string(), &file.path, "delete"],
+                    )?;
+                }
             }
         }
 
