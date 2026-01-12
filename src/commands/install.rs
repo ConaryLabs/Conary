@@ -20,6 +20,7 @@ pub fn cmd_install(
     version: Option<String>,
     repo: Option<String>,
     dry_run: bool,
+    no_deps: bool,
 ) -> Result<()> {
     info!("Installing package: {}", package);
 
@@ -77,7 +78,13 @@ pub fn cmd_install(
     // Resolve dependencies
     let dep_names: Vec<String> = rpm.dependencies().iter().map(|d| d.name.clone()).collect();
 
-    if !dep_names.is_empty() {
+    if no_deps && !dep_names.is_empty() {
+        info!("Skipping dependency check (--no-deps specified)");
+        println!(
+            "Skipping {} dependencies (--no-deps specified)",
+            dep_names.len()
+        );
+    } else if !dep_names.is_empty() {
         info!(
             "Resolving {} dependencies transitively...",
             dep_names.len()
@@ -399,7 +406,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
         for file in &files {
             tx.execute(
                 "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&changeset_id.to_string(), &file.path, &file.sha256_hash, "remove"],
+                [&changeset_id.to_string(), &file.path, &file.sha256_hash, "delete"],
             )?;
         }
 

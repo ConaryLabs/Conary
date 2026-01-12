@@ -55,6 +55,10 @@ enum Commands {
         /// Show what would be installed without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Skip dependency checking
+        #[arg(long)]
+        no_deps: bool,
     },
 
     /// Remove an installed package
@@ -278,8 +282,8 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
-        Some(Commands::Install { package, db_path, root, version, repo, dry_run }) => {
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run)
+        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps }) => {
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps)
         }
 
         Some(Commands::Remove { package_name, db_path, root }) => {
