@@ -699,6 +699,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
 /// Returns a tuple of:
 /// - satisfied: Vec of (dep_name, provider_name, version)
 /// - unsatisfied: Vec of MissingDependency (cloned)
+#[allow(clippy::type_complexity)]
 fn check_provides_dependencies(
     conn: &Connection,
     missing: &[conary::resolver::MissingDependency],
@@ -757,15 +758,14 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
         variations.push(format!("perl-{}", module.replace("::", "-")));
         // Also try lowercase
         variations.push(format!("perl-{}", module.replace("::", "-").to_lowercase()));
-    } else if capability.starts_with("perl-") {
+    } else if let Some(rest) = capability.strip_prefix("perl-") {
         // perl-Foo-Bar -> perl(Foo::Bar)
-        let module = &capability[5..].replace('-', "::");
+        let module = rest.replace('-', "::");
         variations.push(format!("perl({})", module));
     }
 
     // Python module variations
-    if capability.starts_with("python3-") {
-        let module = &capability[8..];
+    if let Some(module) = capability.strip_prefix("python3-") {
         variations.push(format!("python3dist({})", module));
         variations.push(format!("python({})", module));
     } else if capability.starts_with("python3dist(") {
@@ -812,7 +812,7 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
             .collect::<Vec<_>>()
             .join("::");
         variations.push(format!("perl({})", module_name));
-        variations.push(format!("perl-{}", middle.replace('-', "-").split('-').map(|p| {
+        variations.push(format!("perl-{}", middle.split('-').map(|p| {
             let mut c = p.chars();
             match c.next() {
                 Some(f) => f.to_uppercase().chain(c).collect(),
@@ -825,7 +825,7 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
     // Try stripping version suffixes: foo-1.0 -> foo
     if let Some(pos) = capability.rfind('-') {
         let potential_name = &capability[..pos];
-        if !potential_name.is_empty() && capability[pos+1..].chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        if !potential_name.is_empty() && capability[pos+1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
             variations.push(potential_name.to_string());
         }
     }

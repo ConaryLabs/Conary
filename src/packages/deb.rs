@@ -6,7 +6,10 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
-use crate::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat};
+use crate::packages::traits::{
+    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    ScriptletPhase,
+};
 use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::Read;
@@ -24,6 +27,7 @@ pub struct DebPackage {
     description: Option<String>,
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
+    scriptlets: Vec<Scriptlet>,
     // Additional Debian-specific metadata
     maintainer: Option<String>,
     section: Option<String>,
@@ -192,6 +196,76 @@ impl DebPackage {
         ))
     }
 
+    /// Extract maintainer scripts from control.tar.*
+    fn extract_maintainer_scripts(path: &str) -> Vec<Scriptlet> {
+        let mut scriptlets = Vec::new();
+
+        // Try different compression formats
+        for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
+            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
+                // Decompress based on extension
+                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
+                    Box::new(GzDecoder::new(&tar_data[..]))
+                } else if ext.ends_with(".xz") {
+                    Box::new(XzDecoder::new(&tar_data[..]))
+                } else if ext.ends_with(".zst") {
+                    if let Ok(decoder) = zstd::Decoder::new(&tar_data[..]) {
+                        Box::new(decoder)
+                    } else {
+                        continue;
+                    }
+                } else {
+                    Box::new(&tar_data[..])
+                };
+
+                let mut archive = Archive::new(reader);
+
+                // Look for maintainer scripts
+                if let Ok(entries) = archive.entries() {
+                    for entry in entries.flatten() {
+                        let entry_path = match entry.path() {
+                            Ok(p) => p.to_string_lossy().to_string(),
+                            Err(_) => continue,
+                        };
+
+                        // Map script name to phase
+                        let phase = match entry_path.trim_start_matches("./") {
+                            "preinst" => ScriptletPhase::PreInstall,
+                            "postinst" => ScriptletPhase::PostInstall,
+                            "prerm" => ScriptletPhase::PreRemove,
+                            "postrm" => ScriptletPhase::PostRemove,
+                            _ => continue,
+                        };
+
+                        // Read script content
+                        let mut entry = entry;
+                        let mut content = String::new();
+                        if entry.read_to_string(&mut content).is_ok() && !content.is_empty() {
+                            // Detect interpreter from shebang
+                            let interpreter = content
+                                .lines()
+                                .next()
+                                .and_then(|line| line.strip_prefix("#!"))
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_else(|| "/bin/sh".to_string());
+
+                            scriptlets.push(Scriptlet {
+                                phase,
+                                interpreter,
+                                content,
+                                flags: None,
+                            });
+                        }
+                    }
+                }
+
+                break;
+            }
+        }
+
+        scriptlets
+    }
+
     /// Extract file list from data.tar.*
     fn extract_file_list(path: &str) -> Result<Vec<PackageFile>> {
         // Try different compression formats
@@ -313,12 +387,16 @@ impl PackageFormat for DebPackage {
         dependencies.extend(Self::convert_dependencies(&control.suggests, DependencyType::Optional));
         dependencies.extend(Self::convert_dependencies(&control.build_depends, DependencyType::Build));
 
+        // Extract maintainer scripts
+        let scriptlets = Self::extract_maintainer_scripts(path);
+
         debug!(
-            "Parsed DEB package: {} version {} ({} files, {} dependencies)",
+            "Parsed DEB package: {} version {} ({} files, {} dependencies, {} scriptlets)",
             name,
             version,
             files.len(),
-            dependencies.len()
+            dependencies.len(),
+            scriptlets.len()
         );
 
         Ok(Self {
@@ -329,6 +407,7 @@ impl PackageFormat for DebPackage {
             description: control.description,
             files,
             dependencies,
+            scriptlets,
             maintainer: control.maintainer,
             section: control.section,
             priority: control.priority,
@@ -452,6 +531,10 @@ impl PackageFormat for DebPackage {
         trove.description = self.description().map(|s| s.to_string());
 
         trove
+    }
+
+    fn scriptlets(&self) -> Vec<Scriptlet> {
+        self.scriptlets.clone()
     }
 }
 

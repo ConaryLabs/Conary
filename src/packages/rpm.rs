@@ -4,7 +4,10 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
-use crate::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat};
+use crate::packages::traits::{
+    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    ScriptletPhase,
+};
 use rpm::Package;
 use std::fs::File;
 use std::io::BufReader;
@@ -20,6 +23,7 @@ pub struct RpmPackage {
     description: Option<String>,
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
+    scriptlets: Vec<Scriptlet>,
     // Provenance information
     source_rpm: Option<String>,
     build_host: Option<String>,
@@ -29,6 +33,124 @@ pub struct RpmPackage {
 }
 
 impl RpmPackage {
+    /// Extract scriptlets from RPM package using rpm command
+    fn extract_scriptlets(path: &std::path::Path) -> Vec<Scriptlet> {
+        use std::process::Command;
+
+        let output = match Command::new("rpm")
+            .args(["-qp", "--scripts"])
+            .arg(path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => {
+                debug!("Failed to run rpm --scripts: {}", e);
+                return Vec::new();
+            }
+        };
+
+        if !output.status.success() {
+            debug!(
+                "rpm --scripts failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Vec::new();
+        }
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        Self::parse_rpm_scripts(&output_str)
+    }
+
+    /// Parse the output of `rpm -qp --scripts`
+    fn parse_rpm_scripts(output: &str) -> Vec<Scriptlet> {
+        let mut scriptlets = Vec::new();
+        let mut current_phase: Option<ScriptletPhase> = None;
+        let mut current_interpreter = String::from("/bin/sh");
+        let mut current_content = String::new();
+
+        for line in output.lines() {
+            // Check for scriptlet header lines like:
+            // "preinstall scriptlet (using /bin/sh):"
+            // "postinstall program: /usr/bin/lua"
+            if let Some((phase, interpreter)) = Self::parse_scriptlet_header(line) {
+                // Save previous scriptlet if any
+                if let Some(prev_phase) = current_phase.take() {
+                    let content = current_content.trim().to_string();
+                    if !content.is_empty() {
+                        scriptlets.push(Scriptlet {
+                            phase: prev_phase,
+                            interpreter: current_interpreter.clone(),
+                            content,
+                            flags: None,
+                        });
+                    }
+                }
+                current_phase = Some(phase);
+                current_interpreter = interpreter;
+                current_content.clear();
+            } else if current_phase.is_some() {
+                // Accumulate script content
+                current_content.push_str(line);
+                current_content.push('\n');
+            }
+        }
+
+        // Don't forget the last scriptlet
+        if let Some(phase) = current_phase {
+            let content = current_content.trim().to_string();
+            if !content.is_empty() {
+                scriptlets.push(Scriptlet {
+                    phase,
+                    interpreter: current_interpreter,
+                    content,
+                    flags: None,
+                });
+            }
+        }
+
+        scriptlets
+    }
+
+    /// Parse a scriptlet header line and return (phase, interpreter)
+    fn parse_scriptlet_header(line: &str) -> Option<(ScriptletPhase, String)> {
+        let line_lower = line.to_lowercase();
+
+        // Determine the phase
+        let phase = if line_lower.starts_with("preinstall") || line_lower.starts_with("prein ") {
+            ScriptletPhase::PreInstall
+        } else if line_lower.starts_with("postinstall") || line_lower.starts_with("postin ") {
+            ScriptletPhase::PostInstall
+        } else if line_lower.starts_with("preuninstall") || line_lower.starts_with("preun ") {
+            ScriptletPhase::PreRemove
+        } else if line_lower.starts_with("postuninstall") || line_lower.starts_with("postun ") {
+            ScriptletPhase::PostRemove
+        } else if line_lower.starts_with("pretrans") {
+            ScriptletPhase::PreTransaction
+        } else if line_lower.starts_with("posttrans") {
+            ScriptletPhase::PostTransaction
+        } else if line_lower.contains("trigger") {
+            ScriptletPhase::Trigger
+        } else {
+            return None;
+        };
+
+        // Extract interpreter from "(using /path/to/interpreter):" or "program: /path"
+        let interpreter = if let Some(start) = line.find("(using ") {
+            let rest = &line[start + 7..];
+            if let Some(end) = rest.find(')') {
+                rest[..end].to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        } else if let Some(start) = line.find("program: ") {
+            line[start + 9..].trim_end_matches(':').trim().to_string()
+        } else {
+            "/bin/sh".to_string()
+        };
+
+        Some((phase, interpreter))
+    }
+
     /// Extract file list from RPM package with detailed metadata
     fn extract_files(pkg: &Package) -> Vec<PackageFile> {
         let mut files = Vec::new();
@@ -143,12 +265,16 @@ impl PackageFormat for RpmPackage {
         let files = Self::extract_files(&pkg);
         let dependencies = Self::extract_dependencies(&pkg);
 
+        // Extract scriptlets using rpm command
+        let scriptlets = Self::extract_scriptlets(std::path::Path::new(path));
+
         debug!(
-            "Parsed RPM: {} version {} ({} files, {} dependencies)",
+            "Parsed RPM: {} version {} ({} files, {} dependencies, {} scriptlets)",
             name,
             version,
             files.len(),
-            dependencies.len()
+            dependencies.len(),
+            scriptlets.len()
         );
 
         Ok(Self {
@@ -159,6 +285,7 @@ impl PackageFormat for RpmPackage {
             description,
             files,
             dependencies,
+            scriptlets,
             source_rpm,
             build_host,
             vendor,
@@ -274,6 +401,10 @@ impl PackageFormat for RpmPackage {
 
         trove
     }
+
+    fn scriptlets(&self) -> Vec<Scriptlet> {
+        self.scriptlets.clone()
+    }
 }
 
 impl RpmPackage {
@@ -332,6 +463,7 @@ mod tests {
             description: Some("Test package".to_string()),
             files: vec![],
             dependencies: vec![],
+            scriptlets: vec![],
             source_rpm: Some("test-package-1.0.0.src.rpm".to_string()),
             build_host: Some("buildhost.example.com".to_string()),
             vendor: Some("Test Vendor".to_string()),
@@ -357,6 +489,7 @@ mod tests {
             description: None,
             files: vec![],
             dependencies: vec![],
+            scriptlets: vec![],
             source_rpm: Some("test-1.0.src.rpm".to_string()),
             build_host: Some("builder".to_string()),
             vendor: Some("Vendor".to_string()),
@@ -388,5 +521,73 @@ mod tests {
         assert_eq!(runtime, DependencyType::Runtime);
         assert_eq!(build, DependencyType::Build);
         assert_eq!(optional, DependencyType::Optional);
+    }
+
+    #[test]
+    fn test_parse_scriptlet_header() {
+        // Test preinstall with shell
+        let result = RpmPackage::parse_scriptlet_header("preinstall scriptlet (using /bin/sh):");
+        assert!(result.is_some());
+        let (phase, interp) = result.unwrap();
+        assert_eq!(phase, ScriptletPhase::PreInstall);
+        assert_eq!(interp, "/bin/sh");
+
+        // Test postinstall with lua
+        let result = RpmPackage::parse_scriptlet_header("postinstall program: /usr/bin/lua");
+        assert!(result.is_some());
+        let (phase, interp) = result.unwrap();
+        assert_eq!(phase, ScriptletPhase::PostInstall);
+        assert_eq!(interp, "/usr/bin/lua");
+
+        // Test preuninstall
+        let result = RpmPackage::parse_scriptlet_header("preuninstall scriptlet (using /bin/bash):");
+        assert!(result.is_some());
+        let (phase, interp) = result.unwrap();
+        assert_eq!(phase, ScriptletPhase::PreRemove);
+        assert_eq!(interp, "/bin/bash");
+
+        // Test postuninstall
+        let result = RpmPackage::parse_scriptlet_header("postuninstall scriptlet (using /bin/sh):");
+        assert!(result.is_some());
+        let (phase, interp) = result.unwrap();
+        assert_eq!(phase, ScriptletPhase::PostRemove);
+        assert_eq!(interp, "/bin/sh");
+
+        // Test non-scriptlet line
+        let result = RpmPackage::parse_scriptlet_header("echo hello");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_rpm_scripts() {
+        let output = r#"preinstall scriptlet (using /bin/sh):
+echo "Installing package"
+mkdir -p /var/lib/myapp
+
+postinstall scriptlet (using /bin/sh):
+systemctl daemon-reload
+systemctl enable myapp
+
+preuninstall scriptlet (using /bin/sh):
+systemctl stop myapp
+systemctl disable myapp
+"#;
+
+        let scriptlets = RpmPackage::parse_rpm_scripts(output);
+        assert_eq!(scriptlets.len(), 3);
+
+        // Check preinstall
+        assert_eq!(scriptlets[0].phase, ScriptletPhase::PreInstall);
+        assert_eq!(scriptlets[0].interpreter, "/bin/sh");
+        assert!(scriptlets[0].content.contains("Installing package"));
+        assert!(scriptlets[0].content.contains("mkdir -p"));
+
+        // Check postinstall
+        assert_eq!(scriptlets[1].phase, ScriptletPhase::PostInstall);
+        assert!(scriptlets[1].content.contains("daemon-reload"));
+
+        // Check preuninstall
+        assert_eq!(scriptlets[2].phase, ScriptletPhase::PreRemove);
+        assert!(scriptlets[2].content.contains("stop myapp"));
     }
 }

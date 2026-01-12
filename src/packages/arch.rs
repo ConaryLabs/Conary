@@ -6,7 +6,10 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
-use crate::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat};
+use crate::packages::traits::{
+    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    ScriptletPhase,
+};
 use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::Read;
@@ -24,6 +27,7 @@ pub struct ArchPackage {
     description: Option<String>,
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
+    scriptlets: Vec<Scriptlet>,
     // Additional Arch-specific metadata
     url: Option<String>,
     licenses: Vec<String>,
@@ -160,6 +164,118 @@ impl ArchPackage {
         Ok(files)
     }
 
+    /// Parse .INSTALL file content to extract scriptlets
+    ///
+    /// Arch .INSTALL files contain shell functions like:
+    /// - pre_install()
+    /// - post_install()
+    /// - pre_upgrade()
+    /// - post_upgrade()
+    /// - pre_remove()
+    /// - post_remove()
+    fn parse_install_script(content: &str) -> Vec<Scriptlet> {
+        let mut scriptlets = Vec::new();
+
+        // Map function names to phases
+        let function_map = [
+            ("pre_install", ScriptletPhase::PreInstall),
+            ("post_install", ScriptletPhase::PostInstall),
+            ("pre_upgrade", ScriptletPhase::PreUpgrade),
+            ("post_upgrade", ScriptletPhase::PostUpgrade),
+            ("pre_remove", ScriptletPhase::PreRemove),
+            ("post_remove", ScriptletPhase::PostRemove),
+        ];
+
+        for (func_name, phase) in function_map {
+            if let Some(func_content) = Self::extract_function(content, func_name) {
+                scriptlets.push(Scriptlet {
+                    phase,
+                    interpreter: "/bin/sh".to_string(),
+                    content: func_content,
+                    flags: None,
+                });
+            }
+        }
+
+        scriptlets
+    }
+
+    /// Extract a shell function body from script content
+    fn extract_function(content: &str, func_name: &str) -> Option<String> {
+        // Look for function definition patterns:
+        // - "func_name() {"
+        // - "func_name ()"
+        // - "function func_name {"
+        let patterns = [
+            format!("{}()", func_name),
+            format!("{} ()", func_name),
+            format!("function {}", func_name),
+        ];
+
+        let mut start_idx = None;
+        for pattern in &patterns {
+            if let Some(idx) = content.find(pattern) {
+                start_idx = Some(idx);
+                break;
+            }
+        }
+
+        let start = start_idx?;
+
+        // Find the opening brace
+        let rest = &content[start..];
+        let open_brace = rest.find('{')?;
+        let func_start = start + open_brace + 1;
+
+        // Find matching closing brace by counting braces
+        let mut brace_count = 1;
+        let mut end_idx = func_start;
+
+        for (i, ch) in content[func_start..].char_indices() {
+            match ch {
+                '{' => brace_count += 1,
+                '}' => {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        end_idx = func_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if brace_count != 0 {
+            return None; // Unbalanced braces
+        }
+
+        let body = content[func_start..end_idx].trim();
+        if body.is_empty() {
+            None
+        } else {
+            Some(body.to_string())
+        }
+    }
+
+    /// Extract .INSTALL file from archive
+    fn extract_install_script(path: &str) -> Option<String> {
+        let mut archive = Self::open_archive(path).ok()?;
+
+        for entry in archive.entries().ok()?.flatten() {
+            let entry_path = entry.path().ok()?.to_string_lossy().to_string();
+
+            if entry_path == ".INSTALL" {
+                let mut entry = entry;
+                let mut content = String::new();
+                if entry.read_to_string(&mut content).is_ok() {
+                    return Some(content);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Parse dependencies from strings like "glibc>=2.34" or "package: description"
     fn parse_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
@@ -268,12 +384,18 @@ impl PackageFormat for ArchPackage {
         dependencies.extend(Self::parse_dependencies(&pkginfo.optional_deps, DependencyType::Optional));
         dependencies.extend(Self::parse_dependencies(&pkginfo.make_deps, DependencyType::Build));
 
+        // Extract scriptlets from .INSTALL file
+        let scriptlets = Self::extract_install_script(path)
+            .map(|content| Self::parse_install_script(&content))
+            .unwrap_or_default();
+
         debug!(
-            "Parsed Arch package: {} version {} ({} files, {} dependencies)",
+            "Parsed Arch package: {} version {} ({} files, {} dependencies, {} scriptlets)",
             name,
             version,
             files.len(),
-            dependencies.len()
+            dependencies.len(),
+            scriptlets.len()
         );
 
         Ok(Self {
@@ -284,6 +406,7 @@ impl PackageFormat for ArchPackage {
             description: pkginfo.description,
             files,
             dependencies,
+            scriptlets,
             url: pkginfo.url,
             licenses: pkginfo.licenses,
             groups: pkginfo.groups,
@@ -389,6 +512,10 @@ impl PackageFormat for ArchPackage {
         trove.description = self.description().map(|s| s.to_string());
 
         trove
+    }
+
+    fn scriptlets(&self) -> Vec<Scriptlet> {
+        self.scriptlets.clone()
     }
 }
 
@@ -509,5 +636,68 @@ makedepend = gcc
         assert_eq!(parsed[0].description, Some("for running scripts".to_string()));
         assert_eq!(parsed[1].name, "ruby");
         assert_eq!(parsed[1].description, None);
+    }
+
+    #[test]
+    fn test_extract_function() {
+        let content = r#"
+post_install() {
+    echo "Installing..."
+    systemctl daemon-reload
+}
+
+post_upgrade() {
+    post_install
+}
+"#;
+
+        // Test extracting post_install
+        let body = ArchPackage::extract_function(content, "post_install");
+        assert!(body.is_some());
+        let body = body.unwrap();
+        assert!(body.contains("Installing"));
+        assert!(body.contains("daemon-reload"));
+
+        // Test extracting post_upgrade
+        let body = ArchPackage::extract_function(content, "post_upgrade");
+        assert!(body.is_some());
+        assert!(body.unwrap().contains("post_install"));
+
+        // Test non-existent function
+        let body = ArchPackage::extract_function(content, "pre_install");
+        assert!(body.is_none());
+    }
+
+    #[test]
+    fn test_parse_install_script() {
+        let content = r#"
+pre_install() {
+    echo "Preparing installation"
+}
+
+post_install() {
+    systemctl daemon-reload
+    systemctl enable myservice
+}
+
+pre_remove() {
+    systemctl stop myservice
+    systemctl disable myservice
+}
+"#;
+
+        let scriptlets = ArchPackage::parse_install_script(content);
+        assert_eq!(scriptlets.len(), 3);
+
+        // Check phases
+        let phases: Vec<_> = scriptlets.iter().map(|s| s.phase).collect();
+        assert!(phases.contains(&ScriptletPhase::PreInstall));
+        assert!(phases.contains(&ScriptletPhase::PostInstall));
+        assert!(phases.contains(&ScriptletPhase::PreRemove));
+
+        // All should use /bin/sh interpreter
+        for s in &scriptlets {
+            assert_eq!(s.interpreter, "/bin/sh");
+        }
     }
 }

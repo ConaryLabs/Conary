@@ -68,7 +68,6 @@ impl Resolver {
     /// nothing in the system depends on it yet, so there's no way for a dependency
     /// path to lead back to it.
     fn resolve_single_install(&self, package_name: &str) -> Result<ResolutionPlan> {
-        let conflicts;
         let mut missing = Vec::new();
 
         // Find missing dependencies for the new package
@@ -93,7 +92,7 @@ impl Resolver {
 
         // Check version constraints for the new package's dependencies
         // (only for non-virtual dependencies)
-        conflicts = self.check_constraints_for_package(package_name);
+        let conflicts = self.check_constraints_for_package(package_name);
 
         // For single install, install order is just this package
         // (dependencies are assumed to already be installed)

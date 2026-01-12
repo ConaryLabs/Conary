@@ -12,6 +12,7 @@ mod update;
 // Re-export all command handlers
 pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
 pub use install::{cmd_install, cmd_remove};
+// cmd_scripts is defined in this module, no need to re-export from submodule
 pub use query::{cmd_depends, cmd_history, cmd_query, cmd_rdepends, cmd_whatbreaks};
 pub use repo::{
     cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list, cmd_repo_remove,
@@ -25,7 +26,7 @@ use anyhow::Result;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
-use conary::packages::traits::DependencyType;
+use conary::packages::traits::{DependencyType, ScriptletPhase};
 use conary::packages::PackageFormat;
 use std::fs::File;
 use std::io::Read;
@@ -215,6 +216,57 @@ pub fn install_package_from_file(
         deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
     }
     info!("Successfully deployed {} files", extracted_files.len());
+
+    Ok(())
+}
+
+/// Display scriptlets from a package file
+pub fn cmd_scripts(package_path: &str) -> Result<()> {
+    let format = detect_package_format(package_path)?;
+
+    let package: Box<dyn PackageFormat> = match format {
+        PackageFormatType::Rpm => Box::new(RpmPackage::parse(package_path)?),
+        PackageFormatType::Deb => Box::new(DebPackage::parse(package_path)?),
+        PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path)?),
+    };
+
+    let scriptlets = package.scriptlets();
+
+    if scriptlets.is_empty() {
+        println!("[INFO] {} v{} has no scriptlets", package.name(), package.version());
+        return Ok(());
+    }
+
+    println!("Package: {} v{}", package.name(), package.version());
+    println!("Scriptlets: {}", scriptlets.len());
+    println!();
+
+    for scriptlet in scriptlets {
+        let phase_name = match scriptlet.phase {
+            ScriptletPhase::PreInstall => "pre-install",
+            ScriptletPhase::PostInstall => "post-install",
+            ScriptletPhase::PreRemove => "pre-remove",
+            ScriptletPhase::PostRemove => "post-remove",
+            ScriptletPhase::PreUpgrade => "pre-upgrade",
+            ScriptletPhase::PostUpgrade => "post-upgrade",
+            ScriptletPhase::PreTransaction => "pre-transaction",
+            ScriptletPhase::PostTransaction => "post-transaction",
+            ScriptletPhase::Trigger => "trigger",
+        };
+
+        println!("=== {} ===", phase_name);
+        println!("Interpreter: {}", scriptlet.interpreter);
+        if let Some(flags) = &scriptlet.flags {
+            println!("Flags: {}", flags);
+        }
+        println!("---");
+        // Print script content
+        for line in scriptlet.content.lines() {
+            println!("{}", line);
+        }
+        println!("---");
+        println!();
+    }
 
     Ok(())
 }

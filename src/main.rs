@@ -336,6 +336,12 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Display scriptlets (install/remove hooks) from a package file
+    Scripts {
+        /// Path to package file (RPM, DEB, or Arch)
+        package_path: String,
+    },
 }
 
 // =============================================================================
@@ -449,6 +455,10 @@ fn main() -> Result<()> {
             } else {
                 commands::cmd_restore(&package, &db_path, &root, force, dry_run)
             }
+        }
+
+        Some(Commands::Scripts { package_path }) => {
+            commands::cmd_scripts(&package_path)
         }
 
         None => {
