@@ -163,7 +163,7 @@ impl ArchPackage {
     /// Parse dependencies from strings like "glibc>=2.34" or "package: description"
     fn parse_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
-            .filter_map(|dep| {
+            .map(|dep| {
                 // For optional dependencies, format is "package: description"
                 let (name, description) = if dep_type == DependencyType::Optional {
                     if let Some((pkg, desc)) = dep.split_once(':') {
@@ -176,19 +176,19 @@ impl ArchPackage {
                 };
 
                 // Parse version constraint (e.g., "glibc>=2.34")
-                let (pkg_name, version) = if let Some(pos) = name.find(|c| c == '>' || c == '<' || c == '=') {
+                let (pkg_name, version) = if let Some(pos) = name.find(['>', '<', '=']) {
                     let (n, v) = name.split_at(pos);
                     (n.trim(), Some(v.trim().to_string()))
                 } else {
                     (name, None)
                 };
 
-                Some(Dependency {
+                Dependency {
                     name: pkg_name.to_string(),
                     version,
                     dep_type,
                     description,
-                })
+                }
             })
             .collect()
     }

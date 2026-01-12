@@ -81,10 +81,10 @@ impl PackageSelector {
         let mut results = Vec::new();
         for pkg in packages {
             // Filter by version if specified
-            if let Some(ref version) = options.version {
-                if &pkg.version != version {
-                    continue;
-                }
+            if let Some(ref version) = options.version
+                && &pkg.version != version
+            {
+                continue;
             }
 
             // Filter by architecture
@@ -106,10 +106,10 @@ impl PackageSelector {
                 })?;
 
             // Filter by repository if specified
-            if let Some(ref repo_name) = options.repository {
-                if &repo.name != repo_name {
-                    continue;
-                }
+            if let Some(ref repo_name) = options.repository
+                && &repo.name != repo_name
+            {
+                continue;
             }
 
             // Only include enabled repositories

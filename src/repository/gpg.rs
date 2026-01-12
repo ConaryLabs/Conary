@@ -125,11 +125,11 @@ impl GpgVerifier {
             if let openpgp::Packet::Signature(sig) = packet {
                 // Try to verify with each valid key
                 for key in cert.keys().with_policy(&self.policy, None) {
-                    if key.for_signing() {
-                        if sig.verify_message(key.key(), &message_data).is_ok() {
-                            found_valid_signature = true;
-                            break;
-                        }
+                    if key.for_signing()
+                        && sig.verify_message(key.key(), &message_data).is_ok()
+                    {
+                        found_valid_signature = true;
+                        break;
                     }
                 }
                 if found_valid_signature {
@@ -173,16 +173,13 @@ impl GpgVerifier {
                 .map_err(|e| Error::IoError(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("asc") {
-                if let Some(repo_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Try to read the key and get its fingerprint
-                    if let Ok(key_data) = fs::read(&path) {
-                        if let Ok(cert) = openpgp::Cert::from_bytes(&key_data) {
-                            let fingerprint = cert.fingerprint().to_string();
-                            keys.push((repo_name.to_string(), fingerprint));
-                        }
-                    }
-                }
+            if path.extension().and_then(|s| s.to_str()) == Some("asc")
+                && let Some(repo_name) = path.file_stem().and_then(|s| s.to_str())
+                && let Ok(key_data) = fs::read(&path)
+                && let Ok(cert) = openpgp::Cert::from_bytes(&key_data)
+            {
+                let fingerprint = cert.fingerprint().to_string();
+                keys.push((repo_name.to_string(), fingerprint));
             }
         }
 

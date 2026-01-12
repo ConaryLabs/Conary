@@ -125,11 +125,11 @@ pub fn install_package_from_file(
         let mut changeset = conary::db::models::Changeset::new(changeset_desc);
         let changeset_id = changeset.insert(tx)?;
 
-        if let Some(old) = old_trove {
-            if let Some(old_id) = old.id {
-                info!("Removing old version {} before upgrade", old.version);
-                conary::db::models::Trove::delete(tx, old_id)?;
-            }
+        if let Some(old) = old_trove
+            && let Some(old_id) = old.id
+        {
+            info!("Removing old version {} before upgrade", old.version);
+            conary::db::models::Trove::delete(tx, old_id)?;
         }
 
         let mut trove = package.to_trove();
@@ -143,13 +143,13 @@ pub fn install_package_from_file(
                 {
                     let owner_trove =
                         conary::db::models::Trove::find_by_id(tx, existing.trove_id)?;
-                    if let Some(owner) = owner_trove {
-                        if owner.name != package.name() {
-                            return Err(conary::Error::InitError(format!(
-                                "File conflict: {} is owned by package {}",
-                                file.path, owner.name
-                            )));
-                        }
+                    if let Some(owner) = owner_trove
+                        && owner.name != package.name()
+                    {
+                        return Err(conary::Error::InitError(format!(
+                            "File conflict: {} is owned by package {}",
+                            file.path, owner.name
+                        )));
                     }
                 } else if old_trove.is_none() {
                     return Err(conary::Error::InitError(format!(

@@ -104,12 +104,12 @@ impl DebPackage {
         let dep = dep.split('|').next().unwrap_or(dep).trim();
 
         // Parse version constraint: package (>= 1.0) or package (<< 2.0)
-        if let Some(start) = dep.find('(') {
-            if let Some(end) = dep.find(')') {
-                let name = dep[..start].trim().to_string();
-                let constraint = dep[start + 1..end].trim().to_string();
-                return (name, Some(constraint));
-            }
+        if let Some(start) = dep.find('(')
+            && let Some(end) = dep.find(')')
+        {
+            let name = dep[..start].trim().to_string();
+            let constraint = dep[start + 1..end].trim().to_string();
+            return (name, Some(constraint));
         }
 
         (dep.to_string(), None)

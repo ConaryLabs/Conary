@@ -57,30 +57,26 @@ impl FedoraParser {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) if e.name().as_ref() == b"data" => {
                     // Check if this is the primary data type
-                    if let Some(attr) = e.attributes().find(|a| {
+                    if let Some(Ok(attr)) = e.attributes().find(|a| {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"type")
                             .unwrap_or(false)
-                    }) {
-                        if let Ok(attr) = attr {
-                            if attr.value.as_ref() == b"primary" {
-                                in_primary = true;
-                            }
-                        }
+                    })
+                        && attr.value.as_ref() == b"primary"
+                    {
+                        in_primary = true;
                     }
                 }
                 Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == b"location" && in_primary => {
                     // Extract href attribute
-                    if let Some(attr) = e.attributes().find(|a| {
+                    if let Some(Ok(attr)) = e.attributes().find(|a| {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"href")
                             .unwrap_or(false)
                     }) {
-                        if let Ok(attr) = attr {
-                            location = Some(
-                                String::from_utf8_lossy(attr.value.as_ref()).to_string(),
-                            );
-                        }
+                        location = Some(
+                            String::from_utf8_lossy(attr.value.as_ref()).to_string(),
+                        );
                     }
                 }
                 Ok(Event::End(e)) if e.name().as_ref() == b"data" => {
@@ -293,12 +289,11 @@ impl FedoraParser {
                 }
                 Ok(Event::End(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    if tag_name == "package" {
-                        if let Some(builder) = current_package.take() {
-                            if let Ok(pkg) = builder.build(base_url) {
-                                packages.push(pkg);
-                            }
-                        }
+                    if tag_name == "package"
+                        && let Some(builder) = current_package.take()
+                        && let Ok(pkg) = builder.build(base_url)
+                    {
+                        packages.push(pkg);
                     } else if tag_name == "format" {
                         in_format = false;
                     }

@@ -219,11 +219,11 @@ pub fn cmd_install(
         let mut changeset = conary::db::models::Changeset::new(changeset_desc);
         let changeset_id = changeset.insert(tx)?;
 
-        if let Some(old_trove) = old_trove_to_upgrade.as_ref() {
-            if let Some(old_id) = old_trove.id {
-                info!("Removing old version {} before upgrade", old_trove.version);
-                conary::db::models::Trove::delete(tx, old_id)?;
-            }
+        if let Some(old_trove) = old_trove_to_upgrade.as_ref()
+            && let Some(old_id) = old_trove.id
+        {
+            info!("Removing old version {} before upgrade", old_trove.version);
+            conary::db::models::Trove::delete(tx, old_id)?;
         }
 
         let mut trove = rpm.to_trove();
