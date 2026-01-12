@@ -144,7 +144,9 @@ impl PackageSelector {
         }
 
         if candidates.len() == 1 {
-            return Ok(candidates.into_iter().next().unwrap());
+            // Safe: we just verified len() == 1
+            return candidates.into_iter().next()
+                .ok_or_else(|| Error::NotFoundError("Unexpected empty candidates".to_string()));
         }
 
         // Sort by priority (descending) and version (descending)
@@ -167,7 +169,9 @@ impl PackageSelector {
             }
         });
 
-        let selected = sorted.into_iter().next().unwrap();
+        // Safe: we verified candidates is non-empty above
+        let selected = sorted.into_iter().next()
+            .ok_or_else(|| Error::NotFoundError("Unexpected empty sorted candidates".to_string()))?;
         info!(
             "Selected package {} {} from repository {} (priority {})",
             selected.package.name,

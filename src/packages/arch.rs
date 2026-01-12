@@ -319,7 +319,9 @@ impl PackageFormat for ArchPackage {
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
         debug!("Extracting file contents from Arch package: {:?}", self.package_path);
 
-        let mut archive = Self::open_archive(self.package_path.to_str().unwrap())?;
+        let path_str = self.package_path.to_str()
+            .ok_or_else(|| Error::InitError("Package path contains invalid UTF-8".to_string()))?;
+        let mut archive = Self::open_archive(path_str)?;
         let mut extracted_files = Vec::new();
 
         for entry in archive.entries()

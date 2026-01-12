@@ -296,8 +296,11 @@ fn sync_repository_native(
         }
     };
 
+    let repo_id = repo.id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
     // Delete old package entries for this repository
-    RepositoryPackage::delete_by_repository(conn, repo.id.unwrap())?;
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
 
     // Convert and insert package metadata
     let mut count = 0;
@@ -321,7 +324,7 @@ fn sync_repository_native(
         };
 
         let mut repo_pkg = RepositoryPackage::new(
-            repo.id.unwrap(),
+            repo_id,
             pkg_meta.name,
             pkg_meta.version,
             pkg_meta.checksum,
@@ -366,8 +369,11 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
     let client = RepositoryClient::new()?;
     let metadata = client.fetch_metadata(&repo.url)?;
 
+    let repo_id = repo.id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
     // Delete old package entries for this repository
-    RepositoryPackage::delete_by_repository(conn, repo.id.unwrap())?;
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
 
     // Insert new package metadata
     let mut count = 0;
@@ -379,7 +385,7 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
         });
 
         let mut repo_pkg = RepositoryPackage::new(
-            repo.id.unwrap(),
+            repo_id,
             pkg_meta.name.clone(),
             pkg_meta.version.clone(),
             pkg_meta.checksum.clone(),
@@ -436,7 +442,7 @@ pub fn needs_sync(repo: &Repository) -> bool {
                 Ok(last_sync_time) => {
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .unwrap_or_default()
                         .as_secs();
 
                     let age_seconds = now.saturating_sub(last_sync_time);
@@ -599,7 +605,9 @@ pub fn remove_repository(conn: &Connection, name: &str) -> Result<()> {
     let repo = Repository::find_by_name(conn, name)?
         .ok_or_else(|| Error::NotFoundError(format!("Repository '{}' not found", name)))?;
 
-    Repository::delete(conn, repo.id.unwrap())?;
+    let repo_id = repo.id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+    Repository::delete(conn, repo_id)?;
     info!("Removed repository: {}", name);
     Ok(())
 }

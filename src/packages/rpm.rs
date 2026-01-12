@@ -200,7 +200,9 @@ impl PackageFormat for RpmPackage {
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write;
-                child.stdin.as_mut().unwrap().write_all(&rpm2cpio_output.stdout)?;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(&rpm2cpio_output.stdout)?;
+                }
                 child.wait()
             })
             .map_err(|e| Error::InitError(format!("Failed to run cpio: {}. Is cpio installed?", e)))?;

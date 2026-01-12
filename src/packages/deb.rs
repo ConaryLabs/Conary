@@ -366,7 +366,11 @@ impl PackageFormat for DebPackage {
 
         // Try different compression formats
         for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
-            if let Ok(tar_data) = Self::extract_ar_file(self.package_path.to_str().unwrap(), ext) {
+            let path_str = match self.package_path.to_str() {
+                Some(s) => s,
+                None => return Err(Error::InitError("Package path contains invalid UTF-8".to_string())),
+            };
+            if let Ok(tar_data) = Self::extract_ar_file(path_str, ext) {
                 // Decompress based on extension
                 let reader: Box<dyn Read> = if ext.ends_with(".gz") {
                     Box::new(GzDecoder::new(&tar_data[..]))
