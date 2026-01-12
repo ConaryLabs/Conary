@@ -3,6 +3,7 @@
 
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::Result;
+use conary::packages::arch::ArchPackage;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
@@ -81,25 +82,26 @@ pub fn cmd_install(
     let format = detect_package_format(path_str)?;
     info!("Detected package format: {:?}", format);
 
-    let rpm = match format {
-        PackageFormatType::Rpm => RpmPackage::parse(path_str)?,
+    // Parse package using the appropriate format parser
+    let pkg: Box<dyn PackageFormat> = match format {
+        PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)?),
         PackageFormatType::Deb => return Err(anyhow::anyhow!("DEB format not yet implemented")),
-        PackageFormatType::Arch => return Err(anyhow::anyhow!("Arch format not yet implemented")),
+        PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)?),
     };
 
     info!(
         "Parsed package: {} version {} ({} files, {} dependencies)",
-        rpm.name(),
-        rpm.version(),
-        rpm.files().len(),
-        rpm.dependencies().len()
+        pkg.name(),
+        pkg.version(),
+        pkg.files().len(),
+        pkg.dependencies().len()
     );
 
     let mut conn = conary::db::open(db_path)?;
 
     // Build dependency edges from the package
-    let package_version = RpmVersion::parse(rpm.version())?;
-    let dependency_edges: Vec<DependencyEdge> = rpm
+    let package_version = RpmVersion::parse(pkg.version())?;
+    let dependency_edges: Vec<DependencyEdge> = pkg
         .dependencies()
         .iter()
         .filter(|d| d.dep_type == DependencyType::Runtime)
@@ -110,7 +112,7 @@ pub fn cmd_install(
                 .and_then(|v| VersionConstraint::parse(v).ok())
                 .unwrap_or(VersionConstraint::Any);
             DependencyEdge {
-                from: rpm.name().to_string(),
+                from: pkg.name().to_string(),
                 to: d.name.clone(),
                 constraint,
                 dep_type: "runtime".to_string(),
@@ -129,14 +131,14 @@ pub fn cmd_install(
             "Resolving {} dependencies with constraint validation...",
             dependency_edges.len()
         );
-        println!("Checking dependencies for {}...", rpm.name());
+        println!("Checking dependencies for {}...", pkg.name());
 
         // Build resolver from current system state
         let mut resolver = Resolver::new(&conn)?;
 
         // Resolve with the new package
         let plan = resolver.resolve_install(
-            rpm.name().to_string(),
+            pkg.name().to_string(),
             package_version.clone(),
             dependency_edges,
         )?;
@@ -149,7 +151,7 @@ pub fn cmd_install(
             }
             return Err(anyhow::anyhow!(
                 "Cannot install {}: {} dependency conflict(s) detected",
-                rpm.name(),
+                pkg.name(),
                 plan.conflicts.len()
             ));
         }
@@ -213,7 +215,7 @@ pub fn cmd_install(
                         }
                         return Err(anyhow::anyhow!(
                             "Cannot install {}: {} unresolvable dependencies",
-                            rpm.name(),
+                            pkg.name(),
                             plan.missing.len()
                         ));
                     }
@@ -232,7 +234,7 @@ pub fn cmd_install(
                     }
                     return Err(anyhow::anyhow!(
                         "Cannot install {}: {} unresolvable dependencies",
-                        rpm.name(),
+                        pkg.name(),
                         plan.missing.len()
                     ));
                 }
@@ -245,60 +247,60 @@ pub fn cmd_install(
     if dry_run {
         println!(
             "\nWould install package: {} version {}",
-            rpm.name(),
-            rpm.version()
+            pkg.name(),
+            pkg.version()
         );
         println!(
             "  Architecture: {}",
-            rpm.architecture().unwrap_or("none")
+            pkg.architecture().unwrap_or("none")
         );
-        println!("  Files: {}", rpm.files().len());
-        println!("  Dependencies: {}", rpm.dependencies().len());
+        println!("  Files: {}", pkg.files().len());
+        println!("  Dependencies: {}", pkg.dependencies().len());
         println!("\nDry run complete. No changes made.");
         return Ok(());
     }
 
     // Pre-transaction validation
-    let existing = conary::db::models::Trove::find_by_name(&conn, rpm.name())?;
+    let existing = conary::db::models::Trove::find_by_name(&conn, pkg.name())?;
     let mut old_trove_to_upgrade: Option<conary::db::models::Trove> = None;
 
     for trove in &existing {
-        if trove.architecture == rpm.architecture().map(|s: &str| s.to_string()) {
-            if trove.version == rpm.version() {
+        if trove.architecture == pkg.architecture().map(|s: &str| s.to_string()) {
+            if trove.version == pkg.version() {
                 return Err(anyhow::anyhow!(
                     "Package {} version {} ({}) is already installed",
-                    rpm.name(),
-                    rpm.version(),
-                    rpm.architecture().unwrap_or("no-arch")
+                    pkg.name(),
+                    pkg.version(),
+                    pkg.architecture().unwrap_or("no-arch")
                 ));
             }
 
             match (
                 RpmVersion::parse(&trove.version),
-                RpmVersion::parse(rpm.version()),
+                RpmVersion::parse(pkg.version()),
             ) {
                 (Ok(existing_ver), Ok(new_ver)) => {
                     if new_ver > existing_ver {
                         info!(
                             "Upgrading {} from version {} to {}",
-                            rpm.name(),
+                            pkg.name(),
                             trove.version,
-                            rpm.version()
+                            pkg.version()
                         );
                         old_trove_to_upgrade = Some(trove.clone());
                     } else {
                         return Err(anyhow::anyhow!(
                             "Cannot downgrade package {} from version {} to {}",
-                            rpm.name(),
+                            pkg.name(),
                             trove.version,
-                            rpm.version()
+                            pkg.version()
                         ));
                     }
                 }
                 _ => warn!(
                     "Could not compare versions {} and {}",
                     trove.version,
-                    rpm.version()
+                    pkg.version()
                 ),
             }
         }
@@ -306,7 +308,7 @@ pub fn cmd_install(
 
     // Extract and install
     info!("Extracting file contents from package...");
-    let extracted_files = rpm.extract_file_contents()?;
+    let extracted_files = pkg.extract_file_contents()?;
     info!("Extracted {} files", extracted_files.len());
 
     let objects_dir = Path::new(db_path)
@@ -320,12 +322,12 @@ pub fn cmd_install(
         let changeset_desc = if let Some(ref old_trove) = old_trove_to_upgrade {
             format!(
                 "Upgrade {} from {} to {}",
-                rpm.name(),
+                pkg.name(),
                 old_trove.version,
-                rpm.version()
+                pkg.version()
             )
         } else {
-            format!("Install {}-{}", rpm.name(), rpm.version())
+            format!("Install {}-{}", pkg.name(), pkg.version())
         };
         let mut changeset = conary::db::models::Changeset::new(changeset_desc);
         let changeset_id = changeset.insert(tx)?;
@@ -337,7 +339,7 @@ pub fn cmd_install(
             conary::db::models::Trove::delete(tx, old_id)?;
         }
 
-        let mut trove = rpm.to_trove();
+        let mut trove = pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 
@@ -352,7 +354,7 @@ pub fn cmd_install(
                     let owner_trove =
                         conary::db::models::Trove::find_by_id(tx, existing.trove_id)?;
                     if let Some(owner) = owner_trove
-                        && owner.name != rpm.name()
+                        && owner.name != pkg.name()
                     {
                         return Err(conary::Error::InitError(format!(
                             "File conflict: {} is owned by package {}",
@@ -395,7 +397,7 @@ pub fn cmd_install(
             )?;
         }
 
-        for dep in rpm.dependencies() {
+        for dep in pkg.dependencies() {
             let dep_type_str = match dep.dep_type {
                 DependencyType::Runtime => "runtime",
                 DependencyType::Build => "build",
@@ -424,22 +426,15 @@ pub fn cmd_install(
 
     println!(
         "Installed package: {} version {}",
-        rpm.name(),
-        rpm.version()
+        pkg.name(),
+        pkg.version()
     );
     println!(
         "  Architecture: {}",
-        rpm.architecture().unwrap_or("none")
+        pkg.architecture().unwrap_or("none")
     );
-    println!("  Files: {}", rpm.files().len());
-    println!("  Dependencies: {}", rpm.dependencies().len());
-
-    if let Some(source_rpm) = rpm.source_rpm() {
-        println!("  Source RPM: {}", source_rpm);
-    }
-    if let Some(vendor) = rpm.vendor() {
-        println!("  Vendor: {}", vendor);
-    }
+    println!("  Files: {}", pkg.files().len());
+    println!("  Dependencies: {}", pkg.dependencies().len());
 
     Ok(())
 }
