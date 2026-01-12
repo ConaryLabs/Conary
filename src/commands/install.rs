@@ -498,7 +498,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
 
     // Get files BEFORE deleting the trove (cascade delete will remove file records)
     let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
-    let file_count = files.len();
+    let _file_count = files.len(); // Used for snapshot, not display
 
     // Create snapshot of trove for rollback support
     let snapshot = TroveSnapshot {
@@ -580,10 +580,17 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
         Ok(())
     })?;
 
-    // Actually delete files from filesystem
+    // Separate files and directories
+    // Directories typically have mode starting with 040xxx (directory bit)
+    // or path ending with /
+    let (directories, regular_files): (Vec<_>, Vec<_>) = files.iter().partition(|f| {
+        f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000
+    });
+
+    // Remove regular files first
     let mut removed_count = 0;
     let mut failed_count = 0;
-    for file in &files {
+    for file in &regular_files {
         match deployer.remove_file(&file.path) {
             Ok(()) => {
                 removed_count += 1;
@@ -596,6 +603,28 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
         }
     }
 
+    // Sort directories by path length (deepest first) to remove children before parents
+    let mut sorted_dirs: Vec<_> = directories.iter().collect();
+    sorted_dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+
+    // Remove directories (only if empty)
+    let mut dirs_removed = 0;
+    for dir in sorted_dirs {
+        let dir_path = dir.path.trim_end_matches('/');
+        match deployer.remove_directory(dir_path) {
+            Ok(true) => {
+                dirs_removed += 1;
+                info!("Removed directory: {}", dir_path);
+            }
+            Ok(false) => {
+                debug!("Directory not empty or already removed: {}", dir_path);
+            }
+            Err(e) => {
+                warn!("Failed to remove directory {}: {}", dir_path, e);
+            }
+        }
+    }
+
     println!(
         "Removed package: {} version {}",
         trove.name, trove.version
@@ -604,7 +633,14 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
         "  Architecture: {}",
         trove.architecture.as_deref().unwrap_or("none")
     );
-    println!("  Files removed: {}/{}", removed_count, file_count);
+    println!(
+        "  Files removed: {}/{}",
+        removed_count,
+        regular_files.len()
+    );
+    if dirs_removed > 0 {
+        println!("  Directories removed: {}", dirs_removed);
+    }
     if failed_count > 0 {
         println!("  Files failed to remove: {}", failed_count);
     }

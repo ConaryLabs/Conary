@@ -137,6 +137,11 @@ impl FileDeployer {
         let target_path = self.install_root.join(path.trim_start_matches('/'));
 
         if target_path.exists() {
+            if target_path.is_dir() {
+                // Skip directories - they should be removed with remove_directory
+                debug!("Skipping directory in remove_file: {}", path);
+                return Ok(());
+            }
             fs::remove_file(&target_path)?;
             info!("Removed file: {}", path);
         } else {
@@ -144,6 +149,37 @@ impl FileDeployer {
         }
 
         Ok(())
+    }
+
+    /// Remove an empty directory from the filesystem
+    ///
+    /// Only removes the directory if it's empty. Returns Ok(true) if removed,
+    /// Ok(false) if not empty or doesn't exist.
+    pub fn remove_directory(&self, path: &str) -> Result<bool> {
+        let target_path = self.install_root.join(path.trim_start_matches('/'));
+
+        if !target_path.exists() {
+            debug!("Directory already removed: {}", path);
+            return Ok(false);
+        }
+
+        if !target_path.is_dir() {
+            debug!("Path is not a directory: {}", path);
+            return Ok(false);
+        }
+
+        // Try to remove - will fail if not empty
+        match fs::remove_dir(&target_path) {
+            Ok(()) => {
+                info!("Removed directory: {}", path);
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                debug!("Directory not empty, skipping: {}", path);
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Verify a file's hash matches expected
