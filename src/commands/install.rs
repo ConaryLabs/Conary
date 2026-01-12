@@ -8,9 +8,30 @@ use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
 use conary::repository::{self, PackageSelector, SelectionOptions};
 use conary::version::RpmVersion;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{info, warn};
+
+/// Serializable trove metadata for rollback support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TroveSnapshot {
+    name: String,
+    version: String,
+    architecture: Option<String>,
+    description: Option<String>,
+    install_source: String,
+    files: Vec<FileSnapshot>,
+}
+
+/// Serializable file metadata for rollback support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileSnapshot {
+    path: String,
+    sha256_hash: String,
+    size: i64,
+    permissions: i32,
+}
 
 /// Install a package
 pub fn cmd_install(
@@ -396,6 +417,25 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
     let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
     let file_count = files.len();
 
+    // Create snapshot of trove for rollback support
+    let snapshot = TroveSnapshot {
+        name: trove.name.clone(),
+        version: trove.version.clone(),
+        architecture: trove.architecture.clone(),
+        description: trove.description.clone(),
+        install_source: trove.install_source.as_str().to_string(),
+        files: files
+            .iter()
+            .map(|f| FileSnapshot {
+                path: f.path.clone(),
+                sha256_hash: f.sha256_hash.clone(),
+                size: f.size,
+                permissions: f.permissions,
+            })
+            .collect(),
+    };
+    let snapshot_json = serde_json::to_string(&snapshot)?;
+
     // Set up file deployer for actual filesystem operations
     let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
     let objects_dir = PathBuf::from(&db_dir).join("objects");
@@ -407,12 +447,21 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
             conary::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
         let changeset_id = changeset.insert(tx)?;
 
+        // Store snapshot metadata for rollback
+        tx.execute(
+            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+            [&snapshot_json, &changeset_id.to_string()],
+        )?;
+
         // Record file removals in history before deleting
+        // Only insert for files with valid SHA256 hashes (64 hex chars) - adopted files may have placeholders
         for file in &files {
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&changeset_id.to_string(), &file.path, &file.sha256_hash, "delete"],
-            )?;
+            if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                    [&changeset_id.to_string(), &file.path, &file.sha256_hash, "delete"],
+                )?;
+            }
         }
 
         conary::db::models::Trove::delete(tx, trove_id)?;

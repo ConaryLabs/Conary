@@ -2,8 +2,29 @@
 //! System management commands (init, verify, rollback)
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::info;
+
+/// Serializable trove metadata for rollback support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TroveSnapshot {
+    name: String,
+    version: String,
+    architecture: Option<String>,
+    description: Option<String>,
+    install_source: String,
+    files: Vec<FileSnapshot>,
+}
+
+/// Serializable file metadata for rollback support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileSnapshot {
+    path: String,
+    sha256_hash: String,
+    size: i64,
+    permissions: i32,
+}
 
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {
@@ -93,6 +114,19 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         ));
     }
 
+    // Check if this is a removal changeset (has metadata with trove snapshot)
+    let metadata: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+
+    if let Some(ref json) = metadata {
+        // This is a removal - restore the package
+        return rollback_removal(changeset_id, json, &mut conn, &deployer, &changeset);
+    }
+
+    // Otherwise, this is an install - remove the installed packages
     let files_to_rollback: Vec<(String, String)> = {
         let mut stmt =
             conn.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
@@ -132,8 +166,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
         if troves.is_empty() {
             return Err(conary::Error::InitError(
-                "No troves found for this changeset. Cannot rollback Remove operations yet."
-                    .to_string(),
+                "No troves found for this changeset.".to_string(),
             ));
         }
 
@@ -174,6 +207,111 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         changeset_id
     );
     println!("  Removed {} files from filesystem", files_to_rollback.len());
+
+    Ok(())
+}
+
+/// Rollback a removal by restoring the package from snapshot
+fn rollback_removal(
+    changeset_id: i64,
+    snapshot_json: &str,
+    conn: &mut rusqlite::Connection,
+    deployer: &conary::filesystem::FileDeployer,
+    changeset: &conary::db::models::Changeset,
+) -> Result<()> {
+    info!("Rolling back removal changeset: {}", changeset_id);
+
+    let snapshot: TroveSnapshot = serde_json::from_str(snapshot_json)?;
+    println!(
+        "Restoring package: {} version {}",
+        snapshot.name, snapshot.version
+    );
+
+    let file_count = snapshot.files.len();
+
+    conary::db::transaction(conn, |tx| {
+        // Create rollback changeset
+        let mut rollback_changeset = conary::db::models::Changeset::new(format!(
+            "Rollback of changeset {} ({})",
+            changeset_id, changeset.description
+        ));
+        let rollback_changeset_id = rollback_changeset.insert(tx)?;
+
+        // Restore the trove
+        let install_source: conary::db::models::InstallSource = snapshot
+            .install_source
+            .parse()
+            .unwrap_or(conary::db::models::InstallSource::File);
+
+        let mut trove = conary::db::models::Trove::new_with_source(
+            snapshot.name.clone(),
+            snapshot.version.clone(),
+            conary::db::models::TroveType::Package,
+            install_source,
+        );
+        trove.architecture = snapshot.architecture.clone();
+        trove.description = snapshot.description.clone();
+        trove.installed_by_changeset_id = Some(rollback_changeset_id);
+
+        let trove_id = trove.insert(tx)?;
+
+        // Restore file entries
+        for file in &snapshot.files {
+            let mut file_entry = conary::db::models::FileEntry::new(
+                file.path.clone(),
+                file.sha256_hash.clone(),
+                file.size,
+                file.permissions,
+                trove_id,
+            );
+            file_entry.insert(tx)?;
+
+            // Record in file history only for valid SHA256 hashes
+            if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                    [&rollback_changeset_id.to_string(), &file.path, &file.sha256_hash, "add"],
+                )?;
+            }
+        }
+
+        rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+
+        // Mark original changeset as rolled back
+        tx.execute(
+            "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
+             reversed_by_changeset_id = ?1 WHERE id = ?2",
+            [rollback_changeset_id, changeset_id],
+        )?;
+
+        Ok(())
+    })?;
+
+    // Deploy files from CAS to filesystem
+    info!("Restoring files to filesystem...");
+    let mut restored_count = 0;
+    for file in &snapshot.files {
+        match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
+            Ok(()) => {
+                restored_count += 1;
+                info!("Restored file: {}", file.path);
+            }
+            Err(e) => {
+                // Log but continue - file might already exist or CAS might not have it
+                info!("Could not restore file {}: {}", file.path, e);
+            }
+        }
+    }
+
+    println!(
+        "Rollback complete. Changeset {} has been reversed.",
+        changeset_id
+    );
+    println!(
+        "  Restored {} version {}",
+        snapshot.name, snapshot.version
+    );
+    println!("  Files restored: {}/{}", restored_count, file_count);
 
     Ok(())
 }

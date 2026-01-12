@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -81,6 +81,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         4 => migrate_v4(conn),
         5 => migrate_v5(conn),
         6 => migrate_v6(conn),
+        7 => migrate_v7(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -383,6 +384,24 @@ fn migrate_v6(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 6 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 7: Add metadata storage for rollback of removals
+///
+/// Adds metadata column to changesets table to store trove information
+/// before deletion, enabling rollback of remove operations.
+fn migrate_v7(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 7");
+
+    conn.execute_batch(
+        "
+        -- Add metadata column to store trove info for removal rollback
+        ALTER TABLE changesets ADD COLUMN metadata TEXT;
+        ",
+    )?;
+
+    info!("Schema version 7 applied successfully");
     Ok(())
 }
 
