@@ -6,6 +6,7 @@
 //! using the `dpkg-query` command-line tool.
 
 use crate::error::{Error, Result};
+use crate::packages::rpm_query::DependencyInfo;
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
@@ -213,7 +214,7 @@ fn get_file_digest(package: &str, path: &str) -> Option<String> {
     None
 }
 
-/// Query dependencies of an installed package
+/// Query dependencies of an installed package (names only)
 pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
     debug!("Querying dependencies for package: {}", name);
 
@@ -245,6 +246,70 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
 
     debug!("Found {} dependencies for package {}", deps.len(), name);
     Ok(deps)
+}
+
+/// Query dependencies of an installed package with full version constraints
+pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
+    debug!("Querying dependencies with constraints for package: {}", name);
+
+    let output = Command::new("dpkg-query")
+        .args(["-W", "-f", "${Depends}\n", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::NotFoundError(format!(
+            "Package '{}' not found in dpkg database",
+            name
+        )));
+    }
+
+    let deps_str = String::from_utf8_lossy(&output.stdout);
+    let deps: Vec<DependencyInfo> = deps_str
+        .split(',')
+        .flat_map(|dep| dep.split('|')) // Handle alternatives (a | b)
+        .filter_map(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            Some(parse_dpkg_dependency(s))
+        })
+        .collect();
+
+    debug!(
+        "Found {} dependencies with constraints for package {}",
+        deps.len(),
+        name
+    );
+    Ok(deps)
+}
+
+/// Parse a dpkg dependency string like "package (>= 1.0)" into DependencyInfo
+fn parse_dpkg_dependency(dep: &str) -> DependencyInfo {
+    // Dpkg dependency format: "package [(op version)]"
+    // Examples: "libc6 (>= 2.17)", "bash", "perl (>> 5.10)"
+    if let Some(paren_start) = dep.find('(') {
+        let name = dep[..paren_start].trim().to_string();
+        let constraint = dep[paren_start..]
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim()
+            .to_string();
+        DependencyInfo {
+            name,
+            constraint: if constraint.is_empty() {
+                None
+            } else {
+                Some(constraint)
+            },
+        }
+    } else {
+        DependencyInfo {
+            name: dep.trim().to_string(),
+            constraint: None,
+        }
+    }
 }
 
 /// Query all installed packages with their basic info

@@ -13,7 +13,7 @@ pub mod rpm;
 pub mod rpm_query;
 pub mod traits;
 
-pub use rpm_query::{InstalledFileInfo, InstalledRpmInfo};
+pub use rpm_query::{DependencyInfo, InstalledFileInfo, InstalledRpmInfo};
 pub use traits::PackageFormat;
 
 /// Detect the system package manager

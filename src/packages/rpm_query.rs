@@ -10,6 +10,13 @@ use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
 
+/// Dependency with version constraint
+#[derive(Debug, Clone)]
+pub struct DependencyInfo {
+    pub name: String,
+    pub constraint: Option<String>, // e.g., ">= 1.0", "< 2.0"
+}
+
 /// Information about a file in an installed RPM package
 #[derive(Debug, Clone)]
 pub struct InstalledFileInfo {
@@ -226,7 +233,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
     Ok(files)
 }
 
-/// Query dependencies of an installed package
+/// Query dependencies of an installed package (names only, for backwards compatibility)
 pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
     debug!("Querying dependencies for package: {}", name);
 
@@ -249,10 +256,76 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
             // Skip rpmlib deps and file paths
             !s.is_empty() && !s.starts_with("rpmlib(") && !s.starts_with('/')
         })
+        .map(|s| {
+            // Extract just the name, stripping any version constraint
+            s.split_whitespace().next().unwrap_or(&s).to_string()
+        })
         .collect();
 
     debug!("Found {} dependencies for package {}", deps.len(), name);
     Ok(deps)
+}
+
+/// Query dependencies of an installed package with full version constraints
+pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
+    debug!("Querying dependencies with constraints for package: {}", name);
+
+    let output = Command::new("rpm")
+        .args(["-qR", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::NotFoundError(format!(
+            "Package '{}' not found in RPM database",
+            name
+        )));
+    }
+
+    let deps: Vec<DependencyInfo> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| {
+            // Skip rpmlib deps and file paths
+            !s.is_empty() && !s.starts_with("rpmlib(") && !s.starts_with('/')
+        })
+        .map(parse_rpm_dependency)
+        .collect();
+
+    debug!(
+        "Found {} dependencies with constraints for package {}",
+        deps.len(),
+        name
+    );
+    Ok(deps)
+}
+
+/// Parse an RPM dependency string like "filesystem >= 3.6-1" into DependencyInfo
+fn parse_rpm_dependency(dep: &str) -> DependencyInfo {
+    // RPM dependency format: "name [op version]"
+    // Examples: "filesystem >= 3.6-1", "perl(Cwd)", "bash"
+    let parts: Vec<&str> = dep.splitn(2, ['>', '<', '=']).collect();
+
+    if parts.len() == 1 {
+        // No constraint, just a name
+        DependencyInfo {
+            name: dep.trim().to_string(),
+            constraint: None,
+        }
+    } else {
+        let name = parts[0].trim().to_string();
+        // Find where the operator starts
+        let name_len = name.len();
+        let constraint = dep[name_len..].trim().to_string();
+        DependencyInfo {
+            name,
+            constraint: if constraint.is_empty() {
+                None
+            } else {
+                Some(constraint)
+            },
+        }
+    }
 }
 
 /// Query all installed packages with their basic info
@@ -402,5 +475,33 @@ mod tests {
 
         assert_eq!(info.full_version(), "1.0.0-1.fc43");
         assert_eq!(info.version_only(), "1.0.0");
+    }
+
+    #[test]
+    fn test_parse_rpm_dependency_with_constraint() {
+        let dep = parse_rpm_dependency("filesystem >= 3.6-1");
+        assert_eq!(dep.name, "filesystem");
+        assert_eq!(dep.constraint, Some(">= 3.6-1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rpm_dependency_without_constraint() {
+        let dep = parse_rpm_dependency("perl(Cwd)");
+        assert_eq!(dep.name, "perl(Cwd)");
+        assert_eq!(dep.constraint, None);
+    }
+
+    #[test]
+    fn test_parse_rpm_dependency_less_than() {
+        let dep = parse_rpm_dependency("bash < 5.0");
+        assert_eq!(dep.name, "bash");
+        assert_eq!(dep.constraint, Some("< 5.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rpm_dependency_exact() {
+        let dep = parse_rpm_dependency("glibc = 2.38");
+        assert_eq!(dep.name, "glibc");
+        assert_eq!(dep.constraint, Some("= 2.38".to_string()));
     }
 }

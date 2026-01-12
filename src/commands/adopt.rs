@@ -9,7 +9,7 @@ use anyhow::Result;
 use conary::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, Trove, TroveType,
 };
-use conary::packages::{dpkg_query, pacman_query, rpm_query, SystemPackageManager};
+use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
@@ -230,40 +230,31 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
                 }
             }
 
-            // Query and insert dependencies based on package manager
-            let deps: Vec<String> = match pkg_mgr {
+            // Query and insert dependencies with version constraints
+            let deps: Vec<DependencyInfo> = match pkg_mgr {
                 SystemPackageManager::Rpm => {
-                    rpm_query::query_package_dependencies(name).unwrap_or_default()
+                    rpm_query::query_package_dependencies_full(name).unwrap_or_default()
                 }
                 SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_dependencies(name).unwrap_or_default()
+                    dpkg_query::query_package_dependencies_full(name).unwrap_or_default()
                 }
                 SystemPackageManager::Pacman => {
-                    pacman_query::query_package_dependencies(name).unwrap_or_default()
+                    pacman_query::query_package_dependencies_full(name).unwrap_or_default()
                 }
                 _ => Vec::new(),
             };
 
             for dep in deps {
-                // Parse dependency (format: "name >= version" or just "name")
-                let (dep_name, dep_version) = if let Some(pos) = dep.find(['>', '<', '=']) {
-                    let name_part = dep[..pos].trim();
-                    let version_part = dep[pos..].trim_start_matches(['>', '<', '=', ' ']);
-                    (name_part.to_string(), Some(version_part.to_string()))
-                } else {
-                    (dep.trim().to_string(), None)
-                };
-
-                if dep_name.is_empty() {
+                if dep.name.is_empty() {
                     continue;
                 }
 
                 let mut dep_entry = DependencyEntry::new(
                     trove_id,
-                    dep_name,
-                    dep_version,
+                    dep.name,
+                    None, // depends_on_version is for resolved version, not constraint
                     "runtime".to_string(),
-                    None,
+                    dep.constraint, // Store the version constraint
                 );
                 if let Err(e) = dep_entry.insert(tx) {
                     debug!("Failed to insert dependency: {}", e);
@@ -462,34 +453,26 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 }
             }
 
-            // Query and insert dependencies based on package manager
-            let deps: Vec<String> = match pkg_mgr {
-                SystemPackageManager::Rpm => rpm_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Pacman => pacman_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
+            // Query and insert dependencies with version constraints
+            let deps: Vec<DependencyInfo> = match pkg_mgr {
+                SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
                 _ => Vec::new(),
             };
             println!("  Dependencies: {}", deps.len());
 
             for dep in deps {
-                let (dep_name, dep_version) = if let Some(pos) = dep.find(['>', '<', '=']) {
-                    let name_part = dep[..pos].trim();
-                    let version_part = dep[pos..].trim_start_matches(['>', '<', '=', ' ']);
-                    (name_part.to_string(), Some(version_part.to_string()))
-                } else {
-                    (dep.trim().to_string(), None)
-                };
-
-                if dep_name.is_empty() {
+                if dep.name.is_empty() {
                     continue;
                 }
 
                 let mut dep_entry = DependencyEntry::new(
                     trove_id,
-                    dep_name,
-                    dep_version,
+                    dep.name,
+                    None, // depends_on_version is for resolved version, not constraint
                     "runtime".to_string(),
-                    None,
+                    dep.constraint, // Store the version constraint
                 );
                 let _ = dep_entry.insert(tx);
             }

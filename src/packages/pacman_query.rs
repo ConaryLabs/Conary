@@ -6,6 +6,7 @@
 //! using the `pacman` command-line tool for Arch Linux systems.
 
 use crate::error::{Error, Result};
+use crate::packages::rpm_query::DependencyInfo;
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
@@ -217,7 +218,7 @@ fn get_file_digest(package: &str, path: &str) -> Option<String> {
     None
 }
 
-/// Query dependencies of an installed package
+/// Query dependencies of an installed package (names only)
 pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
     debug!("Querying dependencies for package: {}", name);
 
@@ -258,6 +259,70 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
 
     debug!("Found {} dependencies for package {}", deps.len(), name);
     Ok(deps)
+}
+
+/// Query dependencies of an installed package with full version constraints
+pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
+    debug!("Querying dependencies with constraints for package: {}", name);
+
+    let output = Command::new("pacman")
+        .args(["-Qi", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::NotFoundError(format!(
+            "Package '{}' not found in pacman database",
+            name
+        )));
+    }
+
+    let info_str = String::from_utf8_lossy(&output.stdout);
+    let mut deps = Vec::new();
+
+    for line in info_str.lines() {
+        if let Some((key, value)) = line.split_once(':')
+            && key.trim() == "Depends On"
+        {
+            // Parse dependencies (space-separated, may include version constraints)
+            deps = value
+                .split_whitespace()
+                .filter(|s| *s != "None")
+                .map(parse_pacman_dependency)
+                .collect();
+            break;
+        }
+    }
+
+    debug!(
+        "Found {} dependencies with constraints for package {}",
+        deps.len(),
+        name
+    );
+    Ok(deps)
+}
+
+/// Parse a pacman dependency string like "package>=1.0" into DependencyInfo
+fn parse_pacman_dependency(dep: &str) -> DependencyInfo {
+    // Pacman dependency format: "package[op version]" (no spaces)
+    // Examples: "glibc>=2.17", "bash", "perl>5.10"
+    if let Some(pos) = dep.find(['>', '<', '=']) {
+        let name = dep[..pos].to_string();
+        let constraint = dep[pos..].to_string();
+        DependencyInfo {
+            name,
+            constraint: if constraint.is_empty() {
+                None
+            } else {
+                Some(constraint)
+            },
+        }
+    } else {
+        DependencyInfo {
+            name: dep.to_string(),
+            constraint: None,
+        }
+    }
 }
 
 /// Query all installed packages with their basic info
