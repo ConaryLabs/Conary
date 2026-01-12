@@ -317,10 +317,15 @@ fn rollback_removal(
 }
 
 /// Verify installed files
-pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str) -> Result<()> {
+pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: bool) -> Result<()> {
     info!("Verifying installed files...");
 
     let conn = conary::db::open(db_path)?;
+
+    // If --rpm flag, verify adopted packages against RPM database
+    if use_rpm {
+        return verify_against_rpm(&conn, package);
+    }
 
     let objects_dir = Path::new(db_path)
         .parent()
@@ -394,6 +399,106 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str) -> Result<
 
     if modified_count > 0 || missing_count > 0 {
         return Err(anyhow::anyhow!("Verification failed"));
+    }
+
+    Ok(())
+}
+
+/// Verify adopted packages against RPM database using `rpm -V`
+fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> Result<()> {
+    use std::process::Command;
+
+    // Check if RPM is available
+    if !conary::packages::rpm_query::is_rpm_available() {
+        return Err(anyhow::anyhow!("RPM is not available on this system"));
+    }
+
+    // Get adopted packages to verify
+    let packages: Vec<String> = if let Some(pkg_name) = package {
+        let troves = conary::db::models::Trove::find_by_name(conn, &pkg_name)?;
+        if troves.is_empty() {
+            return Err(anyhow::anyhow!("Package '{}' is not tracked", pkg_name));
+        }
+        // Check if it's adopted
+        let adopted: Vec<_> = troves
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.install_source,
+                    conary::db::models::InstallSource::AdoptedTrack
+                        | conary::db::models::InstallSource::AdoptedFull
+                )
+            })
+            .collect();
+        if adopted.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Package '{}' is not an adopted package. Use --rpm only for adopted packages.",
+                pkg_name
+            ));
+        }
+        vec![pkg_name]
+    } else {
+        // Get all adopted packages
+        let mut stmt = conn.prepare(
+            "SELECT name FROM troves WHERE install_source LIKE 'adopted%' ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    if packages.is_empty() {
+        println!("No adopted packages to verify");
+        return Ok(());
+    }
+
+    println!("Verifying {} adopted packages against RPM database...\n", packages.len());
+
+    let mut verified_count = 0;
+    let mut failed_count = 0;
+    let mut total_issues = 0;
+
+    for pkg_name in &packages {
+        // Run rpm -V <package>
+        let output = Command::new("rpm")
+            .args(["-V", pkg_name])
+            .output();
+
+        match output {
+            Ok(result) => {
+                if result.status.success() && result.stdout.is_empty() {
+                    // No output means all files verified OK
+                    verified_count += 1;
+                    info!("OK: {}", pkg_name);
+                } else {
+                    // There were verification failures
+                    failed_count += 1;
+                    let issues = String::from_utf8_lossy(&result.stdout);
+                    let issue_count = issues.lines().count();
+                    total_issues += issue_count;
+                    println!("FAILED: {} ({} issues)", pkg_name, issue_count);
+                    for line in issues.lines().take(5) {
+                        println!("  {}", line);
+                    }
+                    if issue_count > 5 {
+                        println!("  ... and {} more", issue_count - 5);
+                    }
+                }
+            }
+            Err(e) => {
+                failed_count += 1;
+                println!("ERROR: {} - {}", pkg_name, e);
+            }
+        }
+    }
+
+    println!("\nRPM Verification summary:");
+    println!("  OK: {} packages", verified_count);
+    println!("  Failed: {} packages", failed_count);
+    println!("  Total issues: {}", total_issues);
+    println!("  Total packages: {}", packages.len());
+
+    if failed_count > 0 {
+        return Err(anyhow::anyhow!("RPM verification failed"));
     }
 
     Ok(())

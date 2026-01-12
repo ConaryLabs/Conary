@@ -44,10 +44,10 @@ impl InstalledRpmInfo {
     /// Get the full version string (epoch:version-release)
     pub fn full_version(&self) -> String {
         let mut v = String::new();
-        if let Some(epoch) = self.epoch {
-            if epoch > 0 {
-                v.push_str(&format!("{}:", epoch));
-            }
+        if let Some(epoch) = self.epoch
+            && epoch > 0
+        {
+            v.push_str(&format!("{epoch}:"));
         }
         v.push_str(&self.version);
         if !self.release.is_empty() {
@@ -60,10 +60,10 @@ impl InstalledRpmInfo {
     /// Get version without release (epoch:version)
     pub fn version_only(&self) -> String {
         let mut v = String::new();
-        if let Some(epoch) = self.epoch {
-            if epoch > 0 {
-                v.push_str(&format!("{}:", epoch));
-            }
+        if let Some(epoch) = self.epoch
+            && epoch > 0
+        {
+            v.push_str(&format!("{epoch}:"));
         }
         v.push_str(&self.version);
         v
@@ -327,6 +327,27 @@ pub fn is_rpm_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Query which package(s) own a file
+pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
+    let output = Command::new("rpm")
+        .args(["-qf", "--queryformat", "%{NAME}\n", path])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
+
+    if !output.status.success() {
+        // File not owned by any package
+        return Ok(Vec::new());
+    }
+
+    let owners: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !s.contains("not owned"))
+        .collect();
+
+    Ok(owners)
 }
 
 #[cfg(test)]

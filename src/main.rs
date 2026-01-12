@@ -111,6 +111,17 @@ enum Commands {
         db_path: String,
     },
 
+    /// Check for file conflicts and ownership issues
+    Conflicts {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show detailed output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     /// Query installed packages
     Query {
         /// Optional pattern to filter packages
@@ -154,6 +165,10 @@ enum Commands {
         /// Installation root directory
         #[arg(short, long, default_value = "/")]
         root: String,
+
+        /// Verify adopted packages against RPM database instead of CAS
+        #[arg(long)]
+        rpm: bool,
     },
 
     /// Show dependencies for a package
@@ -338,6 +353,10 @@ fn main() -> Result<()> {
             commands::cmd_adopt_status(&db_path)
         }
 
+        Some(Commands::Conflicts { db_path, verbose }) => {
+            commands::cmd_conflicts(&db_path, verbose)
+        }
+
         Some(Commands::Query { pattern, db_path }) => {
             commands::cmd_query(pattern.as_deref(), &db_path)
         }
@@ -348,8 +367,8 @@ fn main() -> Result<()> {
             commands::cmd_rollback(changeset_id, &db_path, &root)
         }
 
-        Some(Commands::Verify { package, db_path, root }) => {
-            commands::cmd_verify(package, &db_path, &root)
+        Some(Commands::Verify { package, db_path, root, rpm }) => {
+            commands::cmd_verify(package, &db_path, &root, rpm)
         }
 
         Some(Commands::Depends { package_name, db_path }) => {

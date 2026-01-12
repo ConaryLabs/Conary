@@ -3,26 +3,32 @@
 //! Commands for adopting existing system packages into Conary tracking
 //!
 //! This module provides the ability to import packages already installed
-//! by the system package manager (RPM) into Conary's tracking database.
+//! by the system package manager (RPM, dpkg, pacman) into Conary's tracking database.
 
 use anyhow::Result;
 use conary::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, Trove, TroveType,
 };
-use conary::packages::rpm_query;
+use conary::packages::{dpkg_query, pacman_query, rpm_query, SystemPackageManager};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
+
+/// File info tuple: (path, size, mode, digest, user, group)
+type FileInfoTuple = (String, i64, i32, Option<String>, Option<String>, Option<String>);
 
 /// Adopt all installed system packages
 pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> {
     info!("Adopting all system packages (full={})", full);
 
-    // Check if RPM is available
-    if !rpm_query::is_rpm_available() {
+    // Detect system package manager
+    let pkg_mgr = SystemPackageManager::detect();
+    if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "RPM is not available on this system. Adopt only works on RPM-based systems."
+            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
         ));
     }
+
+    println!("Detected package manager: {:?}", pkg_mgr);
 
     let mut conn = conary::db::open(db_path)?;
 
@@ -32,8 +38,28 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
         .map(|t| t.name)
         .collect();
 
-    // Get all installed packages
-    let installed = rpm_query::query_all_packages()?;
+    // Get all installed packages based on package manager
+    let installed: Vec<(String, String, String, Option<String>)> = match pkg_mgr {
+        SystemPackageManager::Rpm => {
+            rpm_query::query_all_packages()?
+                .into_iter()
+                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone().or(info.summary.clone())))
+                .collect()
+        }
+        SystemPackageManager::Dpkg => {
+            dpkg_query::query_all_packages()?
+                .into_iter()
+                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone()))
+                .collect()
+        }
+        SystemPackageManager::Pacman => {
+            pacman_query::query_all_packages()?
+                .into_iter()
+                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone()))
+                .collect()
+        }
+        _ => return Err(anyhow::anyhow!("Unsupported package manager")),
+    };
     let total = installed.len();
 
     if dry_run {
@@ -41,13 +67,13 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
         let mut to_adopt = 0;
         let mut already_tracked = 0;
 
-        for (name, info) in &installed {
+        for (name, version, _arch, _desc) in &installed {
             if tracked_packages.contains(name) {
                 already_tracked += 1;
             } else {
                 to_adopt += 1;
                 if to_adopt <= 20 {
-                    println!("  {} {}", name, info.full_version());
+                    println!("  {} {}", name, version);
                 }
             }
         }
@@ -96,24 +122,24 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
     conary::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
-        for (name, info) in &installed {
+        for (name, version, arch, description) in &installed {
             // Skip already-tracked packages
             if tracked_packages.contains(name) {
                 skipped_count += 1;
                 continue;
             }
 
-            debug!("Adopting package: {} {}", name, info.full_version());
+            debug!("Adopting package: {} {}", name, version);
 
             // Create trove
             let mut trove = Trove::new_with_source(
                 name.clone(),
-                info.version_only(),
+                version.clone(),
                 TroveType::Package,
                 install_source.clone(),
             );
-            trove.architecture = Some(info.arch.clone());
-            trove.description = info.description.clone().or(info.summary.clone());
+            trove.architecture = Some(arch.clone());
+            trove.description = description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
 
             let trove_id = match trove.insert(tx) {
@@ -125,83 +151,104 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
                 }
             };
 
-            // Query and insert files
-            let files = match rpm_query::query_package_files(name) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("Failed to query files for {}: {}", name, e);
-                    Vec::new()
+            // Query and insert files based on package manager
+            let files: Vec<FileInfoTuple> = match pkg_mgr {
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_files(name)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
                 }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_files(name)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_files(name)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
+                }
+                _ => Vec::new(),
             };
 
-            for file_info in &files {
+            for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
                 // For track mode, we just record metadata
                 // For full mode, we would read the file and store in CAS
                 let hash = if full {
                     // Read file content and store in CAS
                     if let Some(ref cas_store) = cas {
-                        match std::fs::read(&file_info.path) {
+                        match std::fs::read(file_path) {
                             Ok(content) => {
                                 match cas_store.store(&content) {
                                     Ok(h) => h,
                                     Err(e) => {
-                                        debug!("Failed to store {} in CAS: {}", file_info.path, e);
-                                        // Use digest from RPM if available
-                                        file_info.digest.clone().unwrap_or_else(|| {
-                                            format!("untracked-{}", file_info.path.replace('/', "_"))
+                                        debug!("Failed to store {} in CAS: {}", file_path, e);
+                                        file_digest.clone().unwrap_or_else(|| {
+                                            format!("untracked-{}", file_path.replace('/', "_"))
                                         })
                                     }
                                 }
                             }
                             Err(e) => {
-                                debug!("Failed to read {}: {}", file_info.path, e);
-                                file_info.digest.clone().unwrap_or_else(|| {
-                                    format!("untracked-{}", file_info.path.replace('/', "_"))
+                                debug!("Failed to read {}: {}", file_path, e);
+                                file_digest.clone().unwrap_or_else(|| {
+                                    format!("untracked-{}", file_path.replace('/', "_"))
                                 })
                             }
                         }
                     } else {
-                        file_info.digest.clone().unwrap_or_else(|| {
-                            format!("adopted-{}", file_info.path.replace('/', "_"))
+                        file_digest.clone().unwrap_or_else(|| {
+                            format!("adopted-{}", file_path.replace('/', "_"))
                         })
                     }
                 } else {
-                    // Track mode: use RPM's digest or generate a placeholder
-                    file_info.digest.clone().unwrap_or_else(|| {
-                        format!("adopted-{}", file_info.path.replace('/', "_"))
+                    // Track mode: use digest or generate a placeholder
+                    file_digest.clone().unwrap_or_else(|| {
+                        format!("adopted-{}", file_path.replace('/', "_"))
                     })
                 };
 
                 let mut file_entry = FileEntry::new(
-                    file_info.path.clone(),
+                    file_path.clone(),
                     hash,
-                    file_info.size,
-                    file_info.mode,
+                    *file_size,
+                    *file_mode,
                     trove_id,
                 );
-                file_entry.owner = file_info.user.clone();
-                file_entry.group_name = file_info.group.clone();
+                file_entry.owner = file_user.clone();
+                file_entry.group_name = file_group.clone();
 
                 if let Err(e) = file_entry.insert(tx) {
                     // File might already exist from another package
-                    debug!("Failed to insert file {}: {}", file_info.path, e);
+                    debug!("Failed to insert file {}: {}", file_path, e);
                 }
             }
 
-            // Query and insert dependencies
-            let deps = match rpm_query::query_package_dependencies(name) {
-                Ok(d) => d,
-                Err(e) => {
-                    debug!("Failed to query deps for {}: {}", name, e);
-                    Vec::new()
+            // Query and insert dependencies based on package manager
+            let deps: Vec<String> = match pkg_mgr {
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_dependencies(name).unwrap_or_default()
                 }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_dependencies(name).unwrap_or_default()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_dependencies(name).unwrap_or_default()
+                }
+                _ => Vec::new(),
             };
 
             for dep in deps {
                 // Parse dependency (format: "name >= version" or just "name")
-                let (dep_name, dep_version) = if let Some(pos) = dep.find(|c| c == '>' || c == '<' || c == '=') {
+                let (dep_name, dep_version) = if let Some(pos) = dep.find(['>', '<', '=']) {
                     let name_part = dep[..pos].trim();
-                    let version_part = dep[pos..].trim_start_matches(|c| c == '>' || c == '<' || c == '=' || c == ' ');
+                    let version_part = dep[pos..].trim_start_matches(['>', '<', '=', ' ']);
                     (name_part.to_string(), Some(version_part.to_string()))
                 } else {
                     (dep.trim().to_string(), None)
@@ -254,10 +301,11 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         return Err(anyhow::anyhow!("No packages specified"));
     }
 
-    // Check if RPM is available
-    if !rpm_query::is_rpm_available() {
+    // Detect system package manager
+    let pkg_mgr = SystemPackageManager::detect();
+    if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "RPM is not available on this system. Adopt only works on RPM-based systems."
+            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
         ));
     }
 
@@ -290,22 +338,48 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             continue;
         }
 
-        // Query package info
-        let info = match rpm_query::query_package(package_name) {
-            Ok(i) => i,
-            Err(e) => {
-                println!("Package '{}' not found in RPM database: {}", package_name, e);
+        // Query package info based on package manager
+        let (pkg_name, pkg_version, pkg_arch, pkg_desc): (String, String, String, Option<String>) = match pkg_mgr {
+            SystemPackageManager::Rpm => {
+                match rpm_query::query_package(package_name) {
+                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone().or(info.summary.clone())),
+                    Err(e) => {
+                        println!("Package '{}' not found in RPM database: {}", package_name, e);
+                        continue;
+                    }
+                }
+            }
+            SystemPackageManager::Dpkg => {
+                match dpkg_query::query_package(package_name) {
+                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone()),
+                    Err(e) => {
+                        println!("Package '{}' not found in dpkg database: {}", package_name, e);
+                        continue;
+                    }
+                }
+            }
+            SystemPackageManager::Pacman => {
+                match pacman_query::query_package(package_name) {
+                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone()),
+                    Err(e) => {
+                        println!("Package '{}' not found in pacman database: {}", package_name, e);
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                println!("Unsupported package manager");
                 continue;
             }
         };
 
-        println!("Adopting: {} {}", info.name, info.full_version());
+        println!("Adopting: {} {}", pkg_name, pkg_version);
 
         // Create changeset for this package
         let mut changeset = Changeset::new(format!(
             "Adopt {} {} ({})",
-            info.name,
-            info.full_version(),
+            pkg_name,
+            pkg_version,
             if full { "full" } else { "track" }
         ));
 
@@ -314,68 +388,93 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
 
             // Create trove
             let mut trove = Trove::new_with_source(
-                info.name.clone(),
-                info.version_only(),
+                pkg_name.clone(),
+                pkg_version.clone(),
                 TroveType::Package,
                 install_source.clone(),
             );
-            trove.architecture = Some(info.arch.clone());
-            trove.description = info.description.clone().or(info.summary.clone());
+            trove.architecture = Some(pkg_arch.clone());
+            trove.description = pkg_desc.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
 
             let trove_id = trove.insert(tx)?;
 
-            // Query and insert files
-            let files = rpm_query::query_package_files(&info.name)?;
+            // Query and insert files based on package manager
+            let files: Vec<FileInfoTuple> = match pkg_mgr {
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_files(&pkg_name)?
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
+                }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_files(&pkg_name)?
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_files(&pkg_name)?
+                        .into_iter()
+                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group))
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             println!("  Files: {}", files.len());
 
-            for file_info in &files {
+            for (file_path, file_size, file_mode, file_digest, file_user, file_group) in &files {
                 let hash = if full {
                     if let Some(ref cas_store) = cas {
-                        match std::fs::read(&file_info.path) {
+                        match std::fs::read(file_path) {
                             Ok(content) => cas_store.store(&content).unwrap_or_else(|_| {
-                                file_info.digest.clone().unwrap_or_else(|| {
-                                    format!("adopted-{}", file_info.path.replace('/', "_"))
+                                file_digest.clone().unwrap_or_else(|| {
+                                    format!("adopted-{}", file_path.replace('/', "_"))
                                 })
                             }),
-                            Err(_) => file_info.digest.clone().unwrap_or_else(|| {
-                                format!("adopted-{}", file_info.path.replace('/', "_"))
+                            Err(_) => file_digest.clone().unwrap_or_else(|| {
+                                format!("adopted-{}", file_path.replace('/', "_"))
                             }),
                         }
                     } else {
-                        file_info.digest.clone().unwrap_or_else(|| {
-                            format!("adopted-{}", file_info.path.replace('/', "_"))
+                        file_digest.clone().unwrap_or_else(|| {
+                            format!("adopted-{}", file_path.replace('/', "_"))
                         })
                     }
                 } else {
-                    file_info.digest.clone().unwrap_or_else(|| {
-                        format!("adopted-{}", file_info.path.replace('/', "_"))
+                    file_digest.clone().unwrap_or_else(|| {
+                        format!("adopted-{}", file_path.replace('/', "_"))
                     })
                 };
 
                 let mut file_entry = FileEntry::new(
-                    file_info.path.clone(),
+                    file_path.clone(),
                     hash,
-                    file_info.size,
-                    file_info.mode,
+                    *file_size,
+                    *file_mode,
                     trove_id,
                 );
-                file_entry.owner = file_info.user.clone();
-                file_entry.group_name = file_info.group.clone();
+                file_entry.owner = file_user.clone();
+                file_entry.group_name = file_group.clone();
 
                 if let Err(e) = file_entry.insert(tx) {
-                    debug!("Failed to insert file {}: {}", file_info.path, e);
+                    debug!("Failed to insert file {}: {}", file_path, e);
                 }
             }
 
-            // Query and insert dependencies
-            let deps = rpm_query::query_package_dependencies(&info.name).unwrap_or_default();
+            // Query and insert dependencies based on package manager
+            let deps: Vec<String> = match pkg_mgr {
+                SystemPackageManager::Rpm => rpm_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Pacman => pacman_query::query_package_dependencies(&pkg_name).unwrap_or_default(),
+                _ => Vec::new(),
+            };
             println!("  Dependencies: {}", deps.len());
 
             for dep in deps {
-                let (dep_name, dep_version) = if let Some(pos) = dep.find(|c| c == '>' || c == '<' || c == '=') {
+                let (dep_name, dep_version) = if let Some(pos) = dep.find(['>', '<', '=']) {
                     let name_part = dep[..pos].trim();
-                    let version_part = dep[pos..].trim_start_matches(|c| c == '>' || c == '<' || c == '=' || c == ' ');
+                    let version_part = dep[pos..].trim_start_matches(['>', '<', '=', ' ']);
                     (name_part.to_string(), Some(version_part.to_string()))
                 } else {
                     (dep.trim().to_string(), None)
@@ -399,7 +498,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             Ok(())
         })?;
 
-        println!("  [OK] Adopted {}", info.name);
+        println!("  [OK] Adopted {}", pkg_name);
     }
 
     Ok(())
@@ -411,7 +510,6 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
 
     let troves = Trove::list_all(&conn)?;
 
-    let file_count;
     let mut adopted_track = 0;
     let mut adopted_full = 0;
     let mut installed_file = 0;
@@ -427,12 +525,23 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     }
 
     // Get total files tracked
-    let file_count_result: i64 = conn.query_row(
+    let file_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files",
         [],
         |row| row.get(0),
     ).unwrap_or(0);
-    file_count = file_count_result as usize;
+
+    // Get CAS storage stats
+    let objects_dir = PathBuf::from(db_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("objects");
+
+    let (cas_files, cas_bytes) = if objects_dir.exists() {
+        count_dir_usage(&objects_dir)
+    } else {
+        (0, 0)
+    };
 
     // Get system package count for comparison
     let system_count = if rpm_query::is_rpm_available() {
@@ -441,16 +550,21 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
         0
     };
 
-    println!("Conary Adoption Status:");
-    println!("------------------------");
+    println!("Conary Adoption Status");
+    println!("======================");
+    println!();
     println!("Tracked packages: {}", troves.len());
     println!("  Adopted (track mode): {}", adopted_track);
-    println!("  Adopted (full mode): {}", adopted_full);
-    println!("  Installed from file: {}", installed_file);
-    println!("  Installed from repo: {}", installed_repo);
-    println!("");
+    println!("  Adopted (full mode):  {}", adopted_full);
+    println!("  Installed from file:  {}", installed_file);
+    println!("  Installed from repo:  {}", installed_repo);
+    println!();
     println!("Tracked files: {}", file_count);
-    println!("");
+    println!();
+    println!("CAS Storage:");
+    println!("  Objects: {}", cas_files);
+    println!("  Size:    {}", format_bytes(cas_bytes));
+    println!();
     if system_count > 0 {
         println!("System RPM packages: {}", system_count);
         let coverage = (troves.len() as f64 / system_count as f64 * 100.0).min(100.0);
@@ -458,4 +572,271 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Count files and total bytes in a directory recursively
+fn count_dir_usage(dir: &std::path::Path) -> (u64, u64) {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let (f, b) = count_dir_usage(&path);
+                files += f;
+                bytes += b;
+            } else if path.is_file() {
+                files += 1;
+                if let Ok(meta) = path.metadata() {
+                    bytes += meta.len();
+                }
+            }
+        }
+    }
+
+    (files, bytes)
+}
+
+/// Format bytes as human-readable string
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}
+
+/// Check for conflicts between tracked packages and files
+pub fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+
+    println!("Checking for conflicts...\n");
+
+    let mut issues_found = 0;
+
+    // 1. Check for files with mismatched hashes between adopted and Conary-installed
+    //    (e.g., adopted package A has file X, Conary package B also has file X)
+    issues_found += check_overlapping_files(&conn, verbose)?;
+
+    // 2. Check for adopted packages that would conflict if updated via Conary
+    issues_found += check_adoption_conflicts(&conn, verbose)?;
+
+    // 3. Check for stale file entries (tracked but missing on disk)
+    issues_found += check_stale_files(&conn, verbose)?;
+
+    println!();
+    if issues_found == 0 {
+        println!("No conflicts found.");
+    } else {
+        println!("Total issues found: {}", issues_found);
+    }
+
+    Ok(())
+}
+
+/// Check for files that might be owned by multiple packages in RPM but only tracked once in Conary
+fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result<usize> {
+    // Find files where the tracked owner is adopted but RPM reports different ownership
+    let mut count = 0;
+
+    // Get all tracked files with their package info
+    let files: Vec<(String, String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT f.path, f.sha256_hash, t.name, t.install_source
+             FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             ORDER BY f.path"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    // For adopted packages, verify the file still matches what RPM says
+    if rpm_query::is_rpm_available() {
+        let mut rpm_owners: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        // Build a cache of file -> rpm owners for faster lookups
+        // We'll check a sample of files to avoid being too slow
+        let sample_size = if verbose { files.len() } else { files.len().min(1000) };
+
+        for (path, _hash, pkg_name, source) in files.iter().take(sample_size) {
+            if source.starts_with("adopted") {
+                // Check who RPM thinks owns this file
+                if let Ok(owners) = rpm_query::query_file_owner(path) {
+                    if owners.len() > 1 {
+                        count += 1;
+                        if verbose || count <= 10 {
+                            println!("File owned by multiple RPM packages:");
+                            println!("  Path: {}", path);
+                            println!("  Tracked by: {} ({})", pkg_name, source);
+                            println!("  RPM owners: {}", owners.join(", "));
+                            println!();
+                        }
+                        rpm_owners.insert(path.clone(), owners);
+                    } else if !owners.is_empty() && owners[0] != *pkg_name {
+                        count += 1;
+                        if verbose || count <= 10 {
+                            println!("File ownership mismatch:");
+                            println!("  Path: {}", path);
+                            println!("  Tracked by: {} ({})", pkg_name, source);
+                            println!("  RPM owner: {}", owners[0]);
+                            println!();
+                        }
+                    }
+                }
+            }
+        }
+
+        if count > 10 && !verbose {
+            println!("... and {} more ownership issues (use --verbose to see all)\n", count - 10);
+        }
+    }
+
+    if count > 0 {
+        println!("Overlapping file ownership: {} issues", count);
+    }
+
+    Ok(count)
+}
+
+/// Check for adopted packages that share files with Conary-installed packages
+fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Result<usize> {
+    let mut count = 0;
+
+    // Find packages installed via Conary (not adopted)
+    let _conary_packages: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, name FROM troves WHERE install_source IN ('file', 'repository')"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    // Get all files owned by Conary-installed packages
+    let conary_file_paths: std::collections::HashSet<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT f.path FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             WHERE t.install_source IN ('file', 'repository')"
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?
+    };
+
+    if conary_file_paths.is_empty() {
+        return Ok(0);
+    }
+
+    // Check if any adopted package files overlap with Conary-installed files
+    let adopted_files: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT f.path, t.name, t.version FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             WHERE t.install_source LIKE 'adopted%'"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut conflicts_by_pkg: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for (path, pkg_name, _version) in &adopted_files {
+        if conary_file_paths.contains(path) {
+            conflicts_by_pkg
+                .entry(pkg_name.clone())
+                .or_default()
+                .push(path.clone());
+            count += 1;
+        }
+    }
+
+    if !conflicts_by_pkg.is_empty() {
+        println!("Adopted packages with file conflicts against Conary-installed packages:");
+        for (pkg, paths) in &conflicts_by_pkg {
+            println!("  {} ({} conflicting files)", pkg, paths.len());
+            if verbose {
+                for path in paths.iter().take(5) {
+                    println!("    - {}", path);
+                }
+                if paths.len() > 5 {
+                    println!("    - ... and {} more", paths.len() - 5);
+                }
+            }
+        }
+        println!();
+    }
+
+    Ok(count)
+}
+
+/// Check for stale file entries (tracked in DB but missing on disk)
+fn check_stale_files(conn: &rusqlite::Connection, verbose: bool) -> Result<usize> {
+    let mut count = 0;
+
+    // Get all tracked files
+    let files: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT f.path, t.name FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             ORDER BY t.name, f.path"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut missing_by_pkg: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for (path, pkg_name) in &files {
+        if !std::path::Path::new(path).exists() {
+            missing_by_pkg
+                .entry(pkg_name.clone())
+                .or_default()
+                .push(path.clone());
+            count += 1;
+        }
+    }
+
+    if !missing_by_pkg.is_empty() {
+        println!("Packages with missing files:");
+        for (pkg, paths) in &missing_by_pkg {
+            println!("  {} ({} missing files)", pkg, paths.len());
+            if verbose {
+                for path in paths.iter().take(5) {
+                    println!("    - {}", path);
+                }
+                if paths.len() > 5 {
+                    println!("    - ... and {} more", paths.len() - 5);
+                }
+            }
+        }
+        println!();
+    }
+
+    Ok(count)
 }
