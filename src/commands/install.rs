@@ -398,19 +398,9 @@ pub fn cmd_install(
             ScriptletPhase::PreInstall
         };
 
-        // Try the preferred phase, fall back to PreInstall for Arch if PreUpgrade not defined
-        let pre_scriptlet = scriptlets
-            .iter()
-            .find(|s| s.phase == pre_phase)
-            .or_else(|| {
-                if pre_phase == ScriptletPhase::PreUpgrade {
-                    scriptlets.iter().find(|s| s.phase == ScriptletPhase::PreInstall)
-                } else {
-                    None
-                }
-            });
-
-        if let Some(pre) = pre_scriptlet {
+        // For Arch: if pre_upgrade is missing, do nothing (it's intentional)
+        // For RPM/DEB: pre_install handles both cases via $1 argument
+        if let Some(pre) = scriptlets.iter().find(|s| s.phase == pre_phase) {
             info!("Running {} scriptlet...", pre.phase);
             executor.execute(pre, &execution_mode)?;
         }
@@ -565,19 +555,9 @@ pub fn cmd_install(
             ScriptletPhase::PostInstall
         };
 
-        // Try the preferred phase, fall back to PostInstall for Arch if PostUpgrade not defined
-        let post_scriptlet = scriptlets
-            .iter()
-            .find(|s| s.phase == post_phase)
-            .or_else(|| {
-                if post_phase == ScriptletPhase::PostUpgrade {
-                    scriptlets.iter().find(|s| s.phase == ScriptletPhase::PostInstall)
-                } else {
-                    None
-                }
-            });
-
-        if let Some(post) = post_scriptlet {
+        // For Arch: if post_upgrade is missing, do nothing (it's intentional)
+        // For RPM/DEB: post_install handles both cases via $1 argument
+        if let Some(post) = scriptlets.iter().find(|s| s.phase == post_phase) {
             info!("Running {} scriptlet...", post.phase);
             if let Err(e) = executor.execute(post, &execution_mode) {
                 // Post-install failure is serious but files are already deployed
