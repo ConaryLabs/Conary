@@ -4,12 +4,19 @@
 //!
 //! This module provides dependency graph construction, topological sorting,
 //! cycle detection, and conflict resolution for package dependencies.
+//!
+//! It also provides component-level resolution for independent component
+//! installation and removal safety checking.
 
+mod component_resolver;
 mod conflict;
 mod engine;
 mod graph;
 mod plan;
 
+pub use component_resolver::{
+    ComponentResolutionPlan, ComponentResolver, ComponentSpec, MissingComponent,
+};
 pub use conflict::Conflict;
 pub use engine::Resolver;
 pub use graph::{DependencyEdge, DependencyGraph, GraphStats, PackageNode};
