@@ -259,6 +259,7 @@ pub fn download_dependencies(
                 if pkg_with_repo.repository.gpg_check {
                     Some(DownloadOptions {
                         gpg_check: true,
+                        gpg_strict: pkg_with_repo.repository.gpg_strict,
                         keyring_dir: keyring.to_path_buf(),
                         repository_name: pkg_with_repo.repository.name.clone(),
                     })

@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -84,6 +84,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         7 => migrate_v7(conn),
         8 => migrate_v8(conn),
         9 => migrate_v9(conn),
+        10 => migrate_v10(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -474,6 +475,24 @@ fn migrate_v9(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 9 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 10: Add strict GPG signature mode
+///
+/// Adds gpg_strict column to repositories table. When enabled,
+/// packages MUST have valid GPG signatures - missing signatures
+/// are treated as failures rather than warnings.
+fn migrate_v10(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 10");
+
+    // Add gpg_strict column - default false for backwards compatibility
+    conn.execute(
+        "ALTER TABLE repositories ADD COLUMN gpg_strict INTEGER NOT NULL DEFAULT 0",
+        [],
+    )?;
+
+    info!("Schema version 10 applied successfully");
     Ok(())
 }
 

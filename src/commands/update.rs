@@ -214,6 +214,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                 let gpg_options = if repo.gpg_check {
                     Some(DownloadOptions {
                         gpg_check: true,
+                        gpg_strict: repo.gpg_strict,
                         keyring_dir: keyring_dir.clone(),
                         repository_name: repo.name.clone(),
                     })

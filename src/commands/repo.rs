@@ -18,6 +18,7 @@ fn get_keyring_dir(db_path: &str) -> PathBuf {
 }
 
 /// Add a new repository
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_repo_add(
     name: &str,
     url: &str,
@@ -26,6 +27,7 @@ pub fn cmd_repo_add(
     disabled: bool,
     gpg_key: Option<String>,
     no_gpg_check: bool,
+    gpg_strict: bool,
 ) -> Result<()> {
     info!("Adding repository: {} ({})", name, url);
     let conn = conary::db::open(db_path)?;
@@ -35,6 +37,7 @@ pub fn cmd_repo_add(
     repo.enabled = !disabled;
     repo.priority = priority;
     repo.gpg_check = !no_gpg_check;
+    repo.gpg_strict = gpg_strict;
     repo.gpg_key_url = gpg_key.clone();
 
     repo.insert(&conn)?;
@@ -44,6 +47,9 @@ pub fn cmd_repo_add(
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
     println!("  GPG Check: {}", repo.gpg_check);
+    if repo.gpg_strict {
+        println!("  GPG Strict: true (missing signatures will fail)");
+    }
 
     // If GPG key was provided, import it
     if let Some(key_source) = gpg_key {

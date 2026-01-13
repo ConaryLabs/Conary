@@ -243,6 +243,10 @@ enum Commands {
         /// Disable GPG signature checking for this repository
         #[arg(long)]
         no_gpg_check: bool,
+
+        /// Require all packages to have valid GPG signatures (strict mode)
+        #[arg(long)]
+        gpg_strict: bool,
     },
 
     /// List configured repositories
@@ -463,8 +467,8 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Some(Commands::RepoAdd { name, url, db_path, priority, disabled, gpg_key, no_gpg_check }) => {
-            commands::cmd_repo_add(&name, &url, &db_path, priority, disabled, gpg_key, no_gpg_check)
+        Some(Commands::RepoAdd { name, url, db_path, priority, disabled, gpg_key, no_gpg_check, gpg_strict }) => {
+            commands::cmd_repo_add(&name, &url, &db_path, priority, disabled, gpg_key, no_gpg_check, gpg_strict)
         }
 
         Some(Commands::RepoList { db_path, all }) => commands::cmd_repo_list(&db_path, all),

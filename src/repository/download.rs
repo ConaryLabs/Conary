@@ -22,6 +22,8 @@ use super::metadata::DeltaInfo;
 pub struct DownloadOptions {
     /// Whether to verify GPG signatures
     pub gpg_check: bool,
+    /// When true, packages MUST have valid GPG signatures - missing signatures are errors
+    pub gpg_strict: bool,
     /// Directory where GPG keys are stored
     pub keyring_dir: PathBuf,
     /// Name of the repository (for key lookup)
@@ -60,8 +62,12 @@ pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result
 ///
 /// # Failure Modes
 /// - Invalid signature: Always fails (security boundary)
-/// - Missing signature: Warns and continues (many packages aren't signed)
+/// - Missing signature: Fails in strict mode, warns otherwise
 /// - Missing key: Fails with actionable error message
+///
+/// # Strict Mode
+/// When `gpg_strict` is true, missing signatures are treated as errors.
+/// This ensures all packages from the repository have valid signatures.
 pub fn download_package_verified(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
@@ -79,7 +85,15 @@ pub fn download_package_verified(
                 info!("GPG signature verified for {}", repo_pkg.name);
             }
             Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
-                // Signature not found - warn but continue
+                // Signature not found - strict mode fails, otherwise warn
+                if opts.gpg_strict {
+                    return Err(Error::GpgVerificationFailed(format!(
+                        "GPG signature required but not found for '{}' (strict mode enabled).\n\
+                         The repository '{}' requires all packages to have valid GPG signatures.\n\
+                         Either provide a signed package or disable strict mode.",
+                        repo_pkg.name, opts.repository_name
+                    )));
+                }
                 warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
             }
             Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
@@ -304,6 +318,7 @@ pub fn download_package_with_progress(
 /// Download a package with progress and optional GPG verification
 ///
 /// Combines progress display with GPG signature verification.
+/// See [`download_package_verified`] for details on strict mode behavior.
 pub fn download_package_verified_with_progress(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
@@ -322,6 +337,15 @@ pub fn download_package_verified_with_progress(
                 info!("GPG signature verified for {}", repo_pkg.name);
             }
             Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
+                // Signature not found - strict mode fails, otherwise warn
+                if opts.gpg_strict {
+                    return Err(Error::GpgVerificationFailed(format!(
+                        "GPG signature required but not found for '{}' (strict mode enabled).\n\
+                         The repository '{}' requires all packages to have valid GPG signatures.\n\
+                         Either provide a signed package or disable strict mode.",
+                        repo_pkg.name, opts.repository_name
+                    )));
+                }
                 warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
             }
             Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {

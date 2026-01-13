@@ -14,6 +14,8 @@ pub struct Repository {
     pub enabled: bool,
     pub priority: i32,
     pub gpg_check: bool,
+    /// When true, packages MUST have valid GPG signatures - missing signatures are errors
+    pub gpg_strict: bool,
     pub gpg_key_url: Option<String>,
     pub metadata_expire: i32,
     pub last_sync: Option<String>,
@@ -30,6 +32,7 @@ impl Repository {
             enabled: true,
             priority: 0,
             gpg_check: true,
+            gpg_strict: false,
             gpg_key_url: None,
             metadata_expire: 3600, // Default: 1 hour
             last_sync: None,
@@ -40,14 +43,15 @@ impl Repository {
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, gpg_check, gpg_key_url, metadata_expire)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO repositories (name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &self.name,
                 &self.url,
                 self.enabled as i32,
                 &self.priority,
                 self.gpg_check as i32,
+                self.gpg_strict as i32,
                 &self.gpg_key_url,
                 &self.metadata_expire,
             ],
@@ -61,7 +65,7 @@ impl Repository {
     /// Find a repository by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE id = ?1",
         )?;
 
@@ -73,7 +77,7 @@ impl Repository {
     /// Find a repository by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE name = ?1",
         )?;
 
@@ -85,7 +89,7 @@ impl Repository {
     /// List all repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories ORDER BY priority DESC, name",
         )?;
 
@@ -99,7 +103,7 @@ impl Repository {
     /// List enabled repositories
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE enabled = 1 ORDER BY priority DESC, name",
         )?;
 
@@ -118,13 +122,14 @@ impl Repository {
 
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, enabled = ?3, priority = ?4,
-             gpg_check = ?5, gpg_key_url = ?6, metadata_expire = ?7, last_sync = ?8 WHERE id = ?9",
+             gpg_check = ?5, gpg_strict = ?6, gpg_key_url = ?7, metadata_expire = ?8, last_sync = ?9 WHERE id = ?10",
             params![
                 &self.name,
                 &self.url,
                 self.enabled as i32,
                 &self.priority,
                 self.gpg_check as i32,
+                self.gpg_strict as i32,
                 &self.gpg_key_url,
                 &self.metadata_expire,
                 &self.last_sync,
@@ -150,10 +155,11 @@ impl Repository {
             enabled: row.get::<_, i32>(3)? != 0,
             priority: row.get(4)?,
             gpg_check: row.get::<_, i32>(5)? != 0,
-            gpg_key_url: row.get(6)?,
-            metadata_expire: row.get(7)?,
-            last_sync: row.get(8)?,
-            created_at: row.get(9)?,
+            gpg_strict: row.get::<_, i32>(6)? != 0,
+            gpg_key_url: row.get(7)?,
+            metadata_expire: row.get(8)?,
+            last_sync: row.get(9)?,
+            created_at: row.get(10)?,
         })
     }
 }

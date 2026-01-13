@@ -107,6 +107,7 @@ fn resolve_package_path(
         let keyring_dir = get_keyring_dir(db_path);
         Some(DownloadOptions {
             gpg_check: true,
+            gpg_strict: pkg_with_repo.repository.gpg_strict,
             keyring_dir,
             repository_name: pkg_with_repo.repository.name.clone(),
         })
