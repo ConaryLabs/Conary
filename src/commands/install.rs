@@ -6,6 +6,7 @@ use super::{detect_package_format, install_package_from_file, PackageFormatType}
 use anyhow::{Context, Result};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
 use conary::db::models::{Component, ProvideEntry, ScriptletEntry};
+use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
@@ -704,6 +705,18 @@ pub fn cmd_install(
         installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
     );
 
+    // Detect language-specific provides from installed files
+    // Do this before the transaction so we can display the count in the summary
+    let installed_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let language_provides = LanguageDepDetector::detect_all_provides(&installed_paths);
+    if !language_provides.is_empty() {
+        info!(
+            "Detected {} language-specific provides: {:?}",
+            language_provides.len(),
+            language_provides.iter().take(5).map(|d| d.to_dep_string()).collect::<Vec<_>>()
+        );
+    }
+
     // Determine package format for scriptlet execution
     let scriptlet_format = match format {
         PackageFormatType::Rpm => ScriptletPackageFormat::Rpm,
@@ -911,6 +924,26 @@ pub fn cmd_install(
             entry.insert(tx)?;
         }
 
+        // Store language-specific provides (python, perl, ruby, etc.)
+        // These were detected earlier and enable dependency resolution against language ecosystem packages
+        for lang_dep in &language_provides {
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                lang_dep.to_dep_string(),
+                lang_dep.version_constraint.clone(),
+            );
+            // Use insert_or_ignore to avoid duplicates
+            provide.insert_or_ignore(tx)?;
+        }
+
+        // Also store the package name itself as a provide (for package-level deps)
+        let mut pkg_provide = ProvideEntry::new(
+            trove_id,
+            pkg.name().to_string(),
+            Some(pkg.version().to_string()),
+        );
+        pkg_provide.insert_or_ignore(tx)?;
+
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(changeset_id)
     });
@@ -1010,6 +1043,9 @@ pub fn cmd_install(
         skipped_info
     );
     println!("  Dependencies: {}", pkg.dependencies().len());
+    if !language_provides.is_empty() {
+        println!("  Provides: {} (language-specific capabilities)", language_provides.len());
+    }
 
     Ok(())
 }

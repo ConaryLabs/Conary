@@ -25,7 +25,8 @@ pub use update::{cmd_delta_stats, cmd_update};
 
 use anyhow::Result;
 use conary::components::{ComponentClassifier, ComponentType};
-use conary::db::models::Component;
+use conary::db::models::{Component, ProvideEntry};
+use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
@@ -245,6 +246,28 @@ pub fn install_package_from_file(
             );
             dep_entry.insert(tx)?;
         }
+
+        // Detect and store language-specific provides (python, perl, ruby, etc.)
+        let language_provides = LanguageDepDetector::detect_all_provides(&file_paths);
+        if !language_provides.is_empty() {
+            info!("Detected {} language-specific provides", language_provides.len());
+        }
+        for lang_dep in &language_provides {
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                lang_dep.to_dep_string(),
+                lang_dep.version_constraint.clone(),
+            );
+            provide.insert_or_ignore(tx)?;
+        }
+
+        // Also store the package name itself as a provide
+        let mut pkg_provide = ProvideEntry::new(
+            trove_id,
+            package.name().to_string(),
+            Some(package.version().to_string()),
+        );
+        pkg_provide.insert_or_ignore(tx)?;
 
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(())

@@ -918,3 +918,207 @@ fn test_component_selective_install_database() {
     println!("  - Components in DB: {:?}", components.iter().map(|c| &c.name).collect::<Vec<_>>());
     println!("  - Files in DB: {:?}", file_paths);
 }
+
+/// Test language-specific dependency detection
+#[test]
+fn test_language_deps_detection() {
+    use conary::dependencies::{DependencyClass, LanguageDepDetector};
+
+    // Simulate a Python package with multiple modules
+    let package_files = vec![
+        "/usr/lib/python3.11/site-packages/requests/__init__.py".to_string(),
+        "/usr/lib/python3.11/site-packages/requests/api.py".to_string(),
+        "/usr/lib/python3.11/site-packages/urllib3.py".to_string(),
+        "/usr/lib64/python3.11/site-packages/numpy.cpython-311-x86_64-linux-gnu.so".to_string(),
+        "/usr/share/perl5/vendor_perl/DBI.pm".to_string(),
+        "/usr/share/perl5/vendor_perl/DBD/SQLite.pm".to_string(),
+        "/usr/lib64/libssl.so.3".to_string(),
+        "/usr/bin/python3".to_string(),
+    ];
+
+    let provides = LanguageDepDetector::detect_all_provides(&package_files);
+
+    // Should detect Python modules
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Python && p.name == "requests"),
+        "Should detect python(requests) provide"
+    );
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Python && p.name == "urllib3"),
+        "Should detect python(urllib3) provide"
+    );
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Python && p.name == "numpy"),
+        "Should detect python(numpy) provide from .so"
+    );
+
+    // Should detect Perl modules
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Perl && p.name == "DBI"),
+        "Should detect perl(DBI) provide"
+    );
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Perl && p.name == "DBD::SQLite"),
+        "Should detect perl(DBD::SQLite) provide"
+    );
+
+    // Should detect sonames
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::Soname && p.name == "libssl.so.3"),
+        "Should detect soname(libssl.so.3) provide"
+    );
+
+    // Should detect file provides
+    assert!(
+        provides.iter().any(|p| p.class == DependencyClass::File && p.name == "/usr/bin/python3"),
+        "Should detect file(/usr/bin/python3) provide"
+    );
+
+    println!("Language deps detection test passed:");
+    println!("  - Detected {} provides from {} files", provides.len(), package_files.len());
+    for p in &provides {
+        println!("    - {}", p.to_dep_string());
+    }
+}
+
+/// Test LanguageDep parsing and formatting
+#[test]
+fn test_language_dep_parsing() {
+    use conary::dependencies::{DependencyClass, LanguageDep};
+
+    // Test parsing with version constraint
+    let dep = LanguageDep::parse("python(requests>=2.0)").unwrap();
+    assert_eq!(dep.class, DependencyClass::Python);
+    assert_eq!(dep.name, "requests");
+    assert_eq!(dep.version_constraint, Some(">=2.0".to_string()));
+
+    // Test roundtrip
+    let roundtrip = LanguageDep::parse(&dep.to_dep_string()).unwrap();
+    assert_eq!(roundtrip.class, dep.class);
+    assert_eq!(roundtrip.name, dep.name);
+    assert_eq!(roundtrip.version_constraint, dep.version_constraint);
+
+    // Test Perl module with double colons
+    let perl_dep = LanguageDep::parse("perl(DBD::SQLite>=1.0)").unwrap();
+    assert_eq!(perl_dep.class, DependencyClass::Perl);
+    assert_eq!(perl_dep.name, "DBD::SQLite");
+    assert_eq!(perl_dep.version_constraint, Some(">=1.0".to_string()));
+
+    // Test soname
+    let soname_dep = LanguageDep::parse("soname(libssl.so.3)").unwrap();
+    assert_eq!(soname_dep.class, DependencyClass::Soname);
+    assert_eq!(soname_dep.name, "libssl.so.3");
+
+    // Test file dependency
+    let file_dep = LanguageDep::parse("file(/usr/bin/python3)").unwrap();
+    assert_eq!(file_dep.class, DependencyClass::File);
+    assert_eq!(file_dep.name, "/usr/bin/python3");
+
+    println!("Language dep parsing test passed");
+}
+
+/// Test language deps stored in database during install
+#[test]
+fn test_language_deps_in_database() {
+    use conary::db;
+    use conary::db::models::{Changeset, ChangesetStatus, FileEntry, ProvideEntry, Trove, TroveType};
+    use conary::dependencies::LanguageDepDetector;
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let db_path = temp_file.path().to_str().unwrap().to_string();
+    drop(temp_file);
+
+    db::init(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
+
+    // Simulate installing a Python package
+    let package_files = vec![
+        "/usr/lib/python3.11/site-packages/mymodule/__init__.py".to_string(),
+        "/usr/lib/python3.11/site-packages/mymodule/core.py".to_string(),
+        "/usr/lib64/libmymodule.so.1".to_string(),
+    ];
+
+    // Detect language provides
+    let language_provides = LanguageDepDetector::detect_all_provides(&package_files);
+    assert!(!language_provides.is_empty(), "Should detect at least one provide");
+
+    // Store package and provides in DB
+    db::transaction(&mut conn, |tx| {
+        let mut changeset = Changeset::new("Install python-mymodule-1.0.0".to_string());
+        let changeset_id = changeset.insert(tx)?;
+
+        let mut trove = Trove::new(
+            "python-mymodule".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        trove.installed_by_changeset_id = Some(changeset_id);
+        let trove_id = trove.insert(tx)?;
+
+        // Insert files
+        for (i, path) in package_files.iter().enumerate() {
+            let hash = format!("{:064x}", i);
+            let mut entry = FileEntry::new(
+                path.clone(),
+                hash,
+                100,
+                0o644,
+                trove_id,
+            );
+            entry.insert(tx)?;
+        }
+
+        // Insert language provides
+        for lang_dep in &language_provides {
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                lang_dep.to_dep_string(),
+                lang_dep.version_constraint.clone(),
+            );
+            provide.insert_or_ignore(tx)?;
+        }
+
+        // Also store package name as provide
+        let mut pkg_provide = ProvideEntry::new(
+            trove_id,
+            "python-mymodule".to_string(),
+            Some("1.0.0".to_string()),
+        );
+        pkg_provide.insert_or_ignore(tx)?;
+
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok(())
+    }).unwrap();
+
+    // Verify: check that provides are stored
+    let troves = Trove::find_by_name(&conn, "python-mymodule").unwrap();
+    assert_eq!(troves.len(), 1);
+    let trove_id = troves[0].id.unwrap();
+
+    let provides = ProvideEntry::find_by_trove(&conn, trove_id).unwrap();
+
+    // Should have package name + language provides
+    assert!(provides.len() >= 2, "Should have at least package + module provide");
+
+    // Check for python(mymodule) provide
+    assert!(
+        provides.iter().any(|p| p.capability.contains("python(mymodule)")),
+        "Should have python(mymodule) provide"
+    );
+
+    // Check for package name provide
+    assert!(
+        provides.iter().any(|p| p.capability == "python-mymodule"),
+        "Should have package name provide"
+    );
+
+    // Verify capability lookup works
+    let satisfied = ProvideEntry::is_capability_satisfied(&conn, "python-mymodule").unwrap();
+    assert!(satisfied, "Package should satisfy its own name");
+
+    println!("Language deps database test passed:");
+    println!("  - Stored {} provides for python-mymodule", provides.len());
+    for p in &provides {
+        println!("    - {} (version: {:?})", p.capability, p.version);
+    }
+}
