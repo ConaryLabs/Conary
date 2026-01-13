@@ -222,7 +222,8 @@ pub fn cmd_install(
 
                         if !dry_run {
                             let temp_dir = TempDir::new()?;
-                            match repository::download_dependencies(&to_download, temp_dir.path()) {
+                            let keyring_dir = get_keyring_dir(db_path);
+                            match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
                                 Ok(downloaded) => {
                                     for (dep_name, dep_path) in downloaded {
                                         info!("Installing dependency: {}", dep_name);

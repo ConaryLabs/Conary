@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use super::download::download_package;
+use super::download::{download_package_verified, DownloadOptions};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
 /// Resolve dependencies and return list of packages to download
@@ -213,17 +213,53 @@ pub fn resolve_dependencies_transitive(
 /// Downloads are performed concurrently using rayon's parallel iterators.
 /// This significantly speeds up the download of multiple dependencies.
 ///
-/// Returns: Vec<(dependency_name, downloaded_path)>
+/// # Arguments
+/// * `dependencies` - List of (name, package info) tuples to download
+/// * `dest_dir` - Directory to download packages to
+/// * `keyring_dir` - Optional keyring directory for GPG verification
+///
+/// # Returns
+/// Vec<(dependency_name, downloaded_path)> on success
 pub fn download_dependencies(
     dependencies: &[(String, PackageWithRepo)],
     dest_dir: &Path,
+    keyring_dir: Option<&Path>,
 ) -> Result<Vec<(String, PathBuf)>> {
+    if dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    info!(
+        "Downloading {} dependencies in parallel...",
+        dependencies.len()
+    );
+
     // Use parallel iterator for concurrent downloads
     let results: Result<Vec<_>> = dependencies
         .par_iter()
         .map(|(dep_name, pkg_with_repo)| {
             info!("Downloading dependency: {}", dep_name);
-            let path = download_package(&pkg_with_repo.package, dest_dir)?;
+
+            // Build GPG options if keyring_dir provided and repo has gpg_check enabled
+            let gpg_options = if let Some(keyring) = keyring_dir {
+                if pkg_with_repo.repository.gpg_check {
+                    Some(DownloadOptions {
+                        gpg_check: true,
+                        keyring_dir: keyring.to_path_buf(),
+                        repository_name: pkg_with_repo.repository.name.clone(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let path = download_package_verified(
+                &pkg_with_repo.package,
+                dest_dir,
+                gpg_options.as_ref(),
+            )?;
             Ok((dep_name.clone(), path))
         })
         .collect();
