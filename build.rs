@@ -6,6 +6,25 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+/// Common argument: database path
+fn db_path_arg() -> Arg {
+    Arg::new("db_path")
+        .short('d')
+        .long("db-path")
+        .value_name("PATH")
+        .default_value("/var/lib/conary/conary.db")
+        .help("Database path")
+}
+
+/// Common argument: install root directory
+fn root_arg() -> Arg {
+    Arg::new("root")
+        .short('r')
+        .long("root")
+        .default_value("/")
+        .help("Install root directory")
+}
+
 fn build_cli() -> Command {
     Command::new("conary")
         .version(env!("CARGO_PKG_VERSION"))
@@ -15,43 +34,16 @@ fn build_cli() -> Command {
         .subcommand(
             Command::new("init")
                 .about("Initialize the Conary database")
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .value_name("PATH")
-                        .default_value("/var/lib/conary/conary.db")
-                        .help("Database path"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("install")
                 .about("Install a package from file or repository")
                 .arg(Arg::new("package").required(true).help("Package file path or package name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db")
-                        .help("Database path"),
-                )
-                .arg(
-                    Arg::new("root")
-                        .short('r')
-                        .long("root")
-                        .default_value("/")
-                        .help("Install root directory"),
-                )
-                .arg(
-                    Arg::new("version")
-                        .long("version")
-                        .help("Specific version to install"),
-                )
-                .arg(
-                    Arg::new("repo")
-                        .long("repo")
-                        .help("Specific repository to use"),
-                )
+                .arg(db_path_arg())
+                .arg(root_arg())
+                .arg(Arg::new("version").long("version").help("Specific version to install"))
+                .arg(Arg::new("repo").long("repo").help("Specific repository to use"))
                 .arg(
                     Arg::new("dry_run")
                         .long("dry-run")
@@ -63,109 +55,51 @@ fn build_cli() -> Command {
             Command::new("remove")
                 .about("Remove an installed package")
                 .arg(Arg::new("package_name").required(true).help("Package name to remove"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
-                .arg(
-                    Arg::new("root")
-                        .short('r')
-                        .long("root")
-                        .default_value("/")
-                        .help("Install root directory"),
-                ),
+                .arg(db_path_arg())
+                .arg(root_arg()),
         )
         .subcommand(
             Command::new("query")
                 .about("Query installed packages")
                 .arg(Arg::new("pattern").help("Package name pattern (optional)"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("history")
                 .about("Show changeset history")
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("rollback")
                 .about("Rollback a changeset")
                 .arg(Arg::new("changeset_id").required(true).help("Changeset ID to rollback"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
-                .arg(
-                    Arg::new("root")
-                        .short('r')
-                        .long("root")
-                        .default_value("/")
-                        .help("Install root directory"),
-                ),
+                .arg(db_path_arg())
+                .arg(root_arg()),
         )
         .subcommand(
             Command::new("verify")
                 .about("Verify installed files match their stored hashes")
                 .arg(Arg::new("package").help("Package name to verify (optional)"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
-                .arg(
-                    Arg::new("root")
-                        .short('r')
-                        .long("root")
-                        .default_value("/")
-                        .help("Install root directory"),
-                ),
+                .arg(db_path_arg())
+                .arg(root_arg()),
         )
         .subcommand(
             Command::new("depends")
                 .about("Show dependencies of a package")
                 .arg(Arg::new("package_name").required(true).help("Package name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("rdepends")
                 .about("Show reverse dependencies (what depends on this package)")
                 .arg(Arg::new("package_name").required(true).help("Package name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("whatbreaks")
                 .about("Show what packages would break if this package is removed")
                 .arg(Arg::new("package_name").required(true).help("Package name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("completions")
@@ -182,12 +116,7 @@ fn build_cli() -> Command {
                 .about("Add a new repository")
                 .arg(Arg::new("name").required(true).help("Repository name"))
                 .arg(Arg::new("url").required(true).help("Repository URL"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
+                .arg(db_path_arg())
                 .arg(
                     Arg::new("priority")
                         .short('p')
@@ -205,12 +134,7 @@ fn build_cli() -> Command {
         .subcommand(
             Command::new("repo-list")
                 .about("List repositories")
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
+                .arg(db_path_arg())
                 .arg(
                     Arg::new("all")
                         .short('a')
@@ -223,45 +147,25 @@ fn build_cli() -> Command {
             Command::new("repo-remove")
                 .about("Remove a repository")
                 .arg(Arg::new("name").required(true).help("Repository name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("repo-enable")
                 .about("Enable a repository")
                 .arg(Arg::new("name").required(true).help("Repository name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("repo-disable")
                 .about("Disable a repository")
                 .arg(Arg::new("name").required(true).help("Repository name"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("repo-sync")
                 .about("Synchronize repository metadata")
                 .arg(Arg::new("name").help("Repository name (syncs all if omitted)"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
+                .arg(db_path_arg())
                 .arg(
                     Arg::new("force")
                         .short('f')
@@ -274,30 +178,14 @@ fn build_cli() -> Command {
             Command::new("search")
                 .about("Search for packages in repositories")
                 .arg(Arg::new("pattern").required(true).help("Search pattern"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                ),
+                .arg(db_path_arg()),
         )
         .subcommand(
             Command::new("update")
                 .about("Update installed packages from repositories")
                 .arg(Arg::new("package").help("Package name (updates all if omitted)"))
-                .arg(
-                    Arg::new("db_path")
-                        .short('d')
-                        .long("db-path")
-                        .default_value("/var/lib/conary/conary.db"),
-                )
-                .arg(
-                    Arg::new("root")
-                        .short('r')
-                        .long("root")
-                        .default_value("/")
-                        .help("Install root directory"),
-                ),
+                .arg(db_path_arg())
+                .arg(root_arg()),
         )
 }
 

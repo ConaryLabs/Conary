@@ -144,16 +144,35 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
             )?;
             let rows = stmt.query_map([changeset_id], |row| {
                 let source_str: Option<String> = row.get(8)?;
-                let install_source = source_str
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(conary::db::models::InstallSource::File);
+                let install_source = match source_str {
+                    Some(s) => s.parse().map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            8,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Invalid install_source '{}': {}", s, e),
+                            )),
+                        )
+                    })?,
+                    None => conary::db::models::InstallSource::File,
+                };
+                let trove_type_str: String = row.get(3)?;
+                let trove_type = trove_type_str.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Invalid trove_type '{}': {}", trove_type_str, e),
+                        )),
+                    )
+                })?;
                 Ok(conary::db::models::Trove {
                     id: Some(row.get(0)?),
                     name: row.get(1)?,
                     version: row.get(2)?,
-                    trove_type: row.get::<_, String>(3)?
-                        .parse()
-                        .unwrap_or(conary::db::models::TroveType::Package),
+                    trove_type,
                     architecture: row.get(4)?,
                     description: row.get(5)?,
                     installed_at: row.get(6)?,
@@ -241,7 +260,9 @@ fn rollback_removal(
         let install_source: conary::db::models::InstallSource = snapshot
             .install_source
             .parse()
-            .unwrap_or(conary::db::models::InstallSource::File);
+            .map_err(|e| conary::Error::InitError(format!(
+                "Invalid install_source in snapshot '{}': {}", snapshot.install_source, e
+            )))?;
 
         let mut trove = conary::db::models::Trove::new_with_source(
             snapshot.name.clone(),

@@ -2,7 +2,7 @@
 //! Package installation and removal commands
 
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary::db::models::{ProvideEntry, ScriptletEntry};
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
@@ -58,7 +58,8 @@ pub fn cmd_install(
         PathBuf::from(package)
     } else {
         info!("Searching repositories for package: {}", package);
-        let conn = conary::db::open(db_path)?;
+        let conn = conary::db::open(db_path)
+            .context("Failed to open package database")?;
 
         let options = SelectionOptions {
             version: version.clone(),
@@ -66,7 +67,8 @@ pub fn cmd_install(
             architecture: None,
         };
 
-        let pkg_with_repo = PackageSelector::find_best_package(&conn, package, &options)?;
+        let pkg_with_repo = PackageSelector::find_best_package(&conn, package, &options)
+            .with_context(|| format!("Failed to find package '{}' in repositories", package))?;
         info!(
             "Found package {} {} in repository {} (priority {})",
             pkg_with_repo.package.name,
@@ -75,9 +77,10 @@ pub fn cmd_install(
             pkg_with_repo.repository.priority
         );
 
-        let temp_dir = TempDir::new()?;
-        let download_path =
-            repository::download_package(&pkg_with_repo.package, temp_dir.path())?;
+        let temp_dir = TempDir::new()
+            .context("Failed to create temporary directory for download")?;
+        let download_path = repository::download_package(&pkg_with_repo.package, temp_dir.path())
+            .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
         info!("Downloaded package to: {}", download_path.display());
         download_path
     };
@@ -85,14 +88,18 @@ pub fn cmd_install(
     let path_str = package_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
-    let format = detect_package_format(path_str)?;
+    let format = detect_package_format(path_str)
+        .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);
 
     // Parse package using the appropriate format parser
     let pkg: Box<dyn PackageFormat> = match format {
-        PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)?),
-        PackageFormatType::Deb => Box::new(DebPackage::parse(path_str)?),
-        PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)?),
+        PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)
+            .with_context(|| format!("Failed to parse RPM package '{}'", path_str))?),
+        PackageFormatType::Deb => Box::new(DebPackage::parse(path_str)
+            .with_context(|| format!("Failed to parse DEB package '{}'", path_str))?),
+        PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)
+            .with_context(|| format!("Failed to parse Arch package '{}'", path_str))?),
     };
 
     info!(
@@ -103,10 +110,12 @@ pub fn cmd_install(
         pkg.dependencies().len()
     );
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary::db::open(db_path)
+        .context("Failed to open package database")?;
 
     // Build dependency edges from the package
-    let package_version = RpmVersion::parse(pkg.version())?;
+    let package_version = RpmVersion::parse(pkg.version())
+        .with_context(|| format!("Failed to parse version '{}' for package '{}'", pkg.version(), pkg.name()))?;
     let dependency_edges: Vec<DependencyEdge> = pkg
         .dependencies()
         .iter()
@@ -140,14 +149,15 @@ pub fn cmd_install(
         println!("Checking dependencies for {}...", pkg.name());
 
         // Build resolver from current system state
-        let mut resolver = Resolver::new(&conn)?;
+        let mut resolver = Resolver::new(&conn)
+            .context("Failed to initialize dependency resolver")?;
 
         // Resolve with the new package
         let plan = resolver.resolve_install(
             pkg.name().to_string(),
             package_version.clone(),
             dependency_edges,
-        )?;
+        ).with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))?;
 
         // Check for conflicts (fail on any conflict)
         if !plan.conflicts.is_empty() {
@@ -359,7 +369,8 @@ pub fn cmd_install(
 
     // Extract and install
     info!("Extracting file contents from package...");
-    let extracted_files = pkg.extract_file_contents()?;
+    let extracted_files = pkg.extract_file_contents()
+        .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
     info!("Extracted {} files", extracted_files.len());
 
     // Determine package format for scriptlet execution
@@ -647,8 +658,10 @@ pub fn cmd_install(
 pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: bool) -> Result<()> {
     info!("Removing package: {}", package_name);
 
-    let mut conn = conary::db::open(db_path)?;
-    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+    let mut conn = conary::db::open(db_path)
+        .context("Failed to open package database")?;
+    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)
+        .with_context(|| format!("Failed to query package '{}'", package_name))?;
 
     if troves.is_empty() {
         return Err(anyhow::anyhow!(

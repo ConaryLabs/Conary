@@ -571,12 +571,14 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
 
                 let mut dep_entry = DependencyEntry::new(
                     trove_id,
-                    dep.name,
+                    dep.name.clone(),
                     None, // depends_on_version is for resolved version, not constraint
                     "runtime".to_string(),
                     dep.constraint, // Store the version constraint
                 );
-                let _ = dep_entry.insert(tx);
+                if let Err(e) = dep_entry.insert(tx) {
+                    debug!("Failed to insert dependency {}: {}", dep.name, e);
+                }
             }
 
             // Query and insert provides (capabilities this package offers)
@@ -592,8 +594,10 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 if provide.is_empty() {
                     continue;
                 }
-                let mut provide_entry = ProvideEntry::new(trove_id, provide, None);
-                let _ = provide_entry.insert_or_ignore(tx);
+                let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
+                if let Err(e) = provide_entry.insert_or_ignore(tx) {
+                    debug!("Failed to insert provide {}: {}", provide, e);
+                }
             }
 
             changeset.update_status(tx, ChangesetStatus::Applied)?;
