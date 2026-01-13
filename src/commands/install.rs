@@ -52,6 +52,256 @@ struct FileSnapshot {
     permissions: i32,
 }
 
+/// Result of resolving a package path
+struct ResolvedPackage {
+    path: PathBuf,
+    /// Temp directory that must stay alive until installation completes
+    _temp_dir: Option<TempDir>,
+}
+
+/// Resolve package to a local path, downloading from repository if needed
+fn resolve_package_path(
+    package: &str,
+    db_path: &str,
+    version: Option<&str>,
+    repo: Option<&str>,
+    progress: &InstallProgress,
+) -> Result<ResolvedPackage> {
+    if Path::new(package).exists() {
+        info!("Installing from local file: {}", package);
+        progress.set_status(&format!("Loading local file: {}", package));
+        return Ok(ResolvedPackage {
+            path: PathBuf::from(package),
+            _temp_dir: None,
+        });
+    }
+
+    info!("Searching repositories for package: {}", package);
+    progress.set_status("Searching repositories...");
+
+    let conn = conary::db::open(db_path)
+        .context("Failed to open package database")?;
+
+    let options = SelectionOptions {
+        version: version.map(String::from),
+        repository: repo.map(String::from),
+        architecture: None,
+    };
+
+    let pkg_with_repo = PackageSelector::find_best_package(&conn, package, &options)
+        .with_context(|| format!("Failed to find package '{}' in repositories", package))?;
+
+    info!(
+        "Found package {} {} in repository {} (priority {})",
+        pkg_with_repo.package.name,
+        pkg_with_repo.package.version,
+        pkg_with_repo.repository.name,
+        pkg_with_repo.repository.priority
+    );
+
+    let temp_dir = TempDir::new()
+        .context("Failed to create temporary directory for download")?;
+
+    // Set up GPG verification options if enabled for this repository
+    let gpg_options = if pkg_with_repo.repository.gpg_check {
+        let keyring_dir = get_keyring_dir(db_path);
+        Some(DownloadOptions {
+            gpg_check: true,
+            keyring_dir,
+            repository_name: pkg_with_repo.repository.name.clone(),
+        })
+    } else {
+        None
+    };
+
+    progress.set_phase(&pkg_with_repo.package.name, InstallPhase::Downloading);
+    let download_path = repository::download_package_verified(
+        &pkg_with_repo.package,
+        temp_dir.path(),
+        gpg_options.as_ref(),
+    )
+    .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
+
+    info!("Downloaded package to: {}", download_path.display());
+
+    Ok(ResolvedPackage {
+        path: download_path,
+        _temp_dir: Some(temp_dir),
+    })
+}
+
+/// Parse a package file and return the appropriate parser
+fn parse_package(path: &Path, format: PackageFormatType) -> Result<Box<dyn PackageFormat>> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
+
+    let pkg: Box<dyn PackageFormat> = match format {
+        PackageFormatType::Rpm => Box::new(
+            RpmPackage::parse(path_str)
+                .with_context(|| format!("Failed to parse RPM package '{}'", path_str))?,
+        ),
+        PackageFormatType::Deb => Box::new(
+            DebPackage::parse(path_str)
+                .with_context(|| format!("Failed to parse DEB package '{}'", path_str))?,
+        ),
+        PackageFormatType::Arch => Box::new(
+            ArchPackage::parse(path_str)
+                .with_context(|| format!("Failed to parse Arch package '{}'", path_str))?,
+        ),
+    };
+
+    info!(
+        "Parsed package: {} version {} ({} files, {} dependencies)",
+        pkg.name(),
+        pkg.version(),
+        pkg.files().len(),
+        pkg.dependencies().len()
+    );
+
+    Ok(pkg)
+}
+
+/// Result of checking for existing package installation
+enum UpgradeCheck {
+    /// Fresh install - no existing package
+    FreshInstall,
+    /// Upgrade from an older version
+    Upgrade(conary::db::models::Trove),
+}
+
+/// Check if package is already installed and determine upgrade status
+fn check_upgrade_status(
+    conn: &Connection,
+    pkg: &dyn PackageFormat,
+) -> Result<UpgradeCheck> {
+    let existing = conary::db::models::Trove::find_by_name(conn, pkg.name())?;
+
+    for trove in &existing {
+        if trove.architecture == pkg.architecture().map(|s: &str| s.to_string()) {
+            if trove.version == pkg.version() {
+                return Err(anyhow::anyhow!(
+                    "Package {} version {} ({}) is already installed",
+                    pkg.name(),
+                    pkg.version(),
+                    pkg.architecture().unwrap_or("no-arch")
+                ));
+            }
+
+            match (
+                RpmVersion::parse(&trove.version),
+                RpmVersion::parse(pkg.version()),
+            ) {
+                (Ok(existing_ver), Ok(new_ver)) => {
+                    if new_ver > existing_ver {
+                        info!(
+                            "Upgrading {} from version {} to {}",
+                            pkg.name(),
+                            trove.version,
+                            pkg.version()
+                        );
+                        return Ok(UpgradeCheck::Upgrade(trove.clone()));
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Cannot downgrade package {} from version {} to {}",
+                            pkg.name(),
+                            trove.version,
+                            pkg.version()
+                        ));
+                    }
+                }
+                _ => warn!(
+                    "Could not compare versions {} and {}",
+                    trove.version,
+                    pkg.version()
+                ),
+            }
+        }
+    }
+
+    Ok(UpgradeCheck::FreshInstall)
+}
+
+/// Deploy files to filesystem with rollback capability
+///
+/// Returns the list of (path, hash, size, mode) for all deployed files
+fn deploy_files(
+    deployer: &conary::filesystem::FileDeployer,
+    extracted_files: &[conary::packages::traits::ExtractedFile],
+    is_upgrade: bool,
+    conn: &Connection,
+    pkg_name: &str,
+) -> Result<Vec<(String, String, i64, i32)>> {
+    // Phase 1: Check file conflicts BEFORE any changes
+    for file in extracted_files {
+        if deployer.file_exists(&file.path) {
+            if let Some(existing) =
+                conary::db::models::FileEntry::find_by_path(conn, &file.path)?
+            {
+                let owner_trove =
+                    conary::db::models::Trove::find_by_id(conn, existing.trove_id)?;
+                if let Some(owner) = owner_trove
+                    && owner.name != pkg_name
+                {
+                    return Err(anyhow::anyhow!(
+                        "File conflict: {} is owned by package {}",
+                        file.path, owner.name
+                    ));
+                }
+            } else if !is_upgrade {
+                return Err(anyhow::anyhow!(
+                    "File conflict: {} exists but is not tracked by any package",
+                    file.path
+                ));
+            }
+        }
+    }
+
+    // Phase 2: Store content in CAS and pre-compute hashes
+    let mut file_hashes: Vec<(String, String, i64, i32)> = Vec::with_capacity(extracted_files.len());
+    for file in extracted_files {
+        let hash = deployer.cas().store(&file.content)?;
+        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
+    }
+
+    // Phase 3: Deploy files, tracking what we've deployed for rollback
+    let mut deployed_files: Vec<String> = Vec::with_capacity(extracted_files.len());
+    let deploy_result: Result<()> = (|| {
+        for (path, hash, _size, mode) in &file_hashes {
+            deployer.deploy_file(path, hash, *mode as u32)?;
+            deployed_files.push(path.clone());
+        }
+        Ok(())
+    })();
+
+    // If deployment failed, rollback deployed files
+    if let Err(e) = deploy_result {
+        warn!(
+            "File deployment failed, rolling back {} deployed files",
+            deployed_files.len()
+        );
+        for path in &deployed_files {
+            if let Err(remove_err) = deployer.remove_file(path) {
+                warn!("Failed to rollback file {}: {}", path, remove_err);
+            }
+        }
+        return Err(anyhow::anyhow!("File deployment failed: {}", e));
+    }
+
+    info!("Successfully deployed {} files", deployed_files.len());
+    Ok(file_hashes)
+}
+
+/// Rollback deployed files on failure
+fn rollback_deployed_files(deployer: &conary::filesystem::FileDeployer, files: &[(String, String, i64, i32)]) {
+    warn!("Rolling back {} deployed files", files.len());
+    for (path, _, _, _) in files {
+        if let Err(e) = deployer.remove_file(path) {
+            warn!("Failed to rollback file {}: {}", path, e);
+        }
+    }
+}
+
 /// Install a package
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
@@ -70,66 +320,17 @@ pub fn cmd_install(
     let progress = InstallProgress::single("Installing");
     progress.set_phase(package, InstallPhase::Downloading);
 
-    // Keep temp_dir alive until end of function so downloaded files aren't deleted
-    let _temp_dir: Option<TempDir>;
+    // Resolve package path (download if needed)
+    let resolved = resolve_package_path(
+        package,
+        db_path,
+        version.as_deref(),
+        repo.as_deref(),
+        &progress,
+    )?;
 
-    let package_path = if Path::new(package).exists() {
-        info!("Installing from local file: {}", package);
-        progress.set_status(&format!("Loading local file: {}", package));
-        _temp_dir = None;
-        PathBuf::from(package)
-    } else {
-        info!("Searching repositories for package: {}", package);
-        progress.set_status("Searching repositories...");
-        let conn = conary::db::open(db_path)
-            .context("Failed to open package database")?;
-
-        let options = SelectionOptions {
-            version: version.clone(),
-            repository: repo.clone(),
-            architecture: None,
-        };
-
-        let pkg_with_repo = PackageSelector::find_best_package(&conn, package, &options)
-            .with_context(|| format!("Failed to find package '{}' in repositories", package))?;
-        info!(
-            "Found package {} {} in repository {} (priority {})",
-            pkg_with_repo.package.name,
-            pkg_with_repo.package.version,
-            pkg_with_repo.repository.name,
-            pkg_with_repo.repository.priority
-        );
-
-        let temp_dir = TempDir::new()
-            .context("Failed to create temporary directory for download")?;
-
-        // Set up GPG verification options if enabled for this repository
-        let gpg_options = if pkg_with_repo.repository.gpg_check {
-            let keyring_dir = get_keyring_dir(db_path);
-            Some(DownloadOptions {
-                gpg_check: true,
-                keyring_dir,
-                repository_name: pkg_with_repo.repository.name.clone(),
-            })
-        } else {
-            None
-        };
-
-        progress.set_phase(&pkg_with_repo.package.name, InstallPhase::Downloading);
-        let download_path = repository::download_package_verified(
-            &pkg_with_repo.package,
-            temp_dir.path(),
-            gpg_options.as_ref(),
-        )
-        .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
-        info!("Downloaded package to: {}", download_path.display());
-
-        // Move temp_dir to outer scope to keep it alive
-        _temp_dir = Some(temp_dir);
-        download_path
-    };
-
-    let path_str = package_path
+    // Detect format and parse
+    let path_str = resolved.path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
     let format = detect_package_format(path_str)
@@ -137,24 +338,7 @@ pub fn cmd_install(
     info!("Detected package format: {:?}", format);
 
     progress.set_phase(package, InstallPhase::Parsing);
-
-    // Parse package using the appropriate format parser
-    let pkg: Box<dyn PackageFormat> = match format {
-        PackageFormatType::Rpm => Box::new(RpmPackage::parse(path_str)
-            .with_context(|| format!("Failed to parse RPM package '{}'", path_str))?),
-        PackageFormatType::Deb => Box::new(DebPackage::parse(path_str)
-            .with_context(|| format!("Failed to parse DEB package '{}'", path_str))?),
-        PackageFormatType::Arch => Box::new(ArchPackage::parse(path_str)
-            .with_context(|| format!("Failed to parse Arch package '{}'", path_str))?),
-    };
-
-    info!(
-        "Parsed package: {} version {} ({} files, {} dependencies)",
-        pkg.name(),
-        pkg.version(),
-        pkg.files().len(),
-        pkg.dependencies().len()
-    );
+    let pkg = parse_package(&resolved.path, format)?;
 
     let mut conn = conary::db::open(db_path)
         .context("Failed to open package database")?;
@@ -371,51 +555,11 @@ pub fn cmd_install(
         return Ok(());
     }
 
-    // Pre-transaction validation
-    let existing = conary::db::models::Trove::find_by_name(&conn, pkg.name())?;
-    let mut old_trove_to_upgrade: Option<conary::db::models::Trove> = None;
-
-    for trove in &existing {
-        if trove.architecture == pkg.architecture().map(|s: &str| s.to_string()) {
-            if trove.version == pkg.version() {
-                return Err(anyhow::anyhow!(
-                    "Package {} version {} ({}) is already installed",
-                    pkg.name(),
-                    pkg.version(),
-                    pkg.architecture().unwrap_or("no-arch")
-                ));
-            }
-
-            match (
-                RpmVersion::parse(&trove.version),
-                RpmVersion::parse(pkg.version()),
-            ) {
-                (Ok(existing_ver), Ok(new_ver)) => {
-                    if new_ver > existing_ver {
-                        info!(
-                            "Upgrading {} from version {} to {}",
-                            pkg.name(),
-                            trove.version,
-                            pkg.version()
-                        );
-                        old_trove_to_upgrade = Some(trove.clone());
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "Cannot downgrade package {} from version {} to {}",
-                            pkg.name(),
-                            trove.version,
-                            pkg.version()
-                        ));
-                    }
-                }
-                _ => warn!(
-                    "Could not compare versions {} and {}",
-                    trove.version,
-                    pkg.version()
-                ),
-            }
-        }
-    }
+    // Pre-transaction validation - check if already installed or needs upgrade
+    let old_trove_to_upgrade = match check_upgrade_status(&conn, pkg.as_ref())? {
+        UpgradeCheck::FreshInstall => None,
+        UpgradeCheck::Upgrade(trove) => Some(trove),
+    };
 
     // Extract and install
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
@@ -502,6 +646,7 @@ pub fn cmd_install(
         }
     }
 
+    // Set up file deployer
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -512,66 +657,9 @@ pub fn cmd_install(
     // Track if this is an upgrade
     let is_upgrade = old_trove_to_upgrade.is_some();
 
-    // Phase 1: Check file conflicts BEFORE any changes
-    // This validates against the current DB state
-    for file in &extracted_files {
-        if deployer.file_exists(&file.path) {
-            if let Some(existing) =
-                conary::db::models::FileEntry::find_by_path(&conn, &file.path)?
-            {
-                let owner_trove =
-                    conary::db::models::Trove::find_by_id(&conn, existing.trove_id)?;
-                if let Some(owner) = owner_trove
-                    && owner.name != pkg.name()
-                {
-                    return Err(anyhow::anyhow!(
-                        "File conflict: {} is owned by package {}",
-                        file.path, owner.name
-                    ));
-                }
-            } else if !is_upgrade {
-                // Only error on untracked files for fresh installs
-                return Err(anyhow::anyhow!(
-                    "File conflict: {} exists but is not tracked by any package",
-                    file.path
-                ));
-            }
-        }
-    }
-
-    // Phase 2: Store content in CAS and deploy files to filesystem
-    // This happens BEFORE the DB transaction so we can rollback on failure
+    // Deploy files with conflict checking and rollback capability
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    info!("Deploying files to filesystem...");
-
-    // Pre-compute hashes and store in CAS
-    let mut file_hashes: Vec<(String, String, i64, i32)> = Vec::with_capacity(extracted_files.len());
-    for file in &extracted_files {
-        let hash = deployer.cas().store(&file.content)?;
-        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
-    }
-
-    // Deploy files, tracking what we've deployed for rollback
-    let mut deployed_files: Vec<String> = Vec::with_capacity(extracted_files.len());
-    let deploy_result: Result<()> = (|| {
-        for (path, hash, _size, mode) in &file_hashes {
-            deployer.deploy_file(path, hash, *mode as u32)?;
-            deployed_files.push(path.clone());
-        }
-        Ok(())
-    })();
-
-    // If deployment failed, rollback deployed files
-    if let Err(e) = deploy_result {
-        warn!("File deployment failed, rolling back {} deployed files", deployed_files.len());
-        for path in &deployed_files {
-            if let Err(remove_err) = deployer.remove_file(path) {
-                warn!("Failed to rollback file {}: {}", path, remove_err);
-            }
-        }
-        return Err(anyhow::anyhow!("File deployment failed: {}", e));
-    }
-    info!("Successfully deployed {} files", deployed_files.len());
+    let file_hashes = deploy_files(&deployer, &extracted_files, is_upgrade, &conn, pkg.name())?;
 
     // Phase 3: DB transaction - only runs after files are successfully deployed
     let db_result = conary::db::transaction(&mut conn, |tx| {
@@ -662,12 +750,7 @@ pub fn cmd_install(
 
     // If DB transaction failed, rollback deployed files
     if let Err(e) = db_result {
-        warn!("Database transaction failed, rolling back {} deployed files", deployed_files.len());
-        for path in &deployed_files {
-            if let Err(remove_err) = deployer.remove_file(path) {
-                warn!("Failed to rollback file {}: {}", path, remove_err);
-            }
-        }
+        rollback_deployed_files(&deployer, &file_hashes);
         return Err(anyhow::anyhow!("Database transaction failed: {}", e));
     }
 
