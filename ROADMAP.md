@@ -131,9 +131,47 @@ This document tracks the implementation status of Conary features, both complete
 - [ ] **Dependency Tree** - Show full dependency tree visualization
 - [ ] **Circular Detection** - Better handling of circular dependencies
 
+### Selection Reasons (Inspired by Aeryn OS)
+
+- [ ] **Reason Text Field** - Add human-readable reason to install tracking
+- [ ] **Dependency Chain** - Track "Required by X" for dependency installs
+- [ ] **Collection Attribution** - Track "Installed via collection Y"
+- [ ] **Query by Reason** - Filter packages by installation reason
+
 ---
 
 ## Medium-Term
+
+### Trigger System (Inspired by Aeryn OS)
+
+A general-purpose handler system for post-installation actions, more flexible than scriptlets.
+
+- [ ] **Trigger Definition** - Path patterns mapped to handler scripts
+- [ ] **Handler Registry** - Register handlers for file types (ldconfig, mime, icons, etc.)
+- [ ] **DAG Ordering** - Triggers declare before/after dependencies
+- [ ] **Topological Execution** - Run triggers in dependency order
+- [ ] **Built-in Triggers** - ldconfig, update-mime-database, gtk-update-icon-cache, systemd-reload
+
+### System State Snapshots (Inspired by Aeryn OS)
+
+Full system state tracking for cleaner rollback semantics.
+
+- [ ] **State Table** - Store complete package sets as numbered states
+- [ ] **State Metadata** - ID, timestamp, summary, description for each state
+- [ ] **State Diff** - Compare two states to see what changed
+- [ ] **State Restore** - Rollback to any previous state by ID
+- [ ] **State Pruning** - Garbage collect old states to save space
+- [ ] **Active State Tracking** - Track current system state ID
+
+### Typed Dependencies (Inspired by Aeryn OS)
+
+Formalize dependency kinds with explicit type prefixes.
+
+- [ ] **Dependency Kinds** - PackageName, SharedLibrary, PkgConfig, Interpreter, CMake, Python, Binary
+- [ ] **Kind Format** - `kind(target)` syntax e.g., `pkgconfig(zlib)`, `python(flask)`
+- [ ] **Kind Matching** - Resolve dependencies by matching kinds
+- [ ] **Provider Kinds** - Packages declare what kinds they provide
+- [ ] **Migration** - Convert existing string deps to typed format
 
 ### Labels System
 
@@ -167,6 +205,45 @@ Inspired by original Conary's label concept for tracking package provenance.
 ---
 
 ## Long-Term / Future Consideration
+
+### Container-Isolated Scriptlets (Inspired by Aeryn OS)
+
+Run package scripts in lightweight Linux containers for safety.
+
+- [ ] **Namespace Isolation** - Mount, PID, IPC, UTS namespaces for scriptlets
+- [ ] **Pivot Root** - Isolate scriptlet filesystem from host
+- [ ] **Bind Mounts** - Controlled access to required host paths
+- [ ] **Rootless Containers** - Support unprivileged container execution
+- [ ] **Resource Limits** - CPU, memory, time limits for scriptlets
+- [ ] **Dangerous Script Detection** - Flag scripts that need sandboxing
+
+### Atomic Filesystem Updates (Inspired by Aeryn OS)
+
+Use atomic operations to swap entire filesystem trees.
+
+- [ ] **Staging Directory** - Build complete filesystem tree before deployment
+- [ ] **renameat2 RENAME_EXCHANGE** - Atomic directory swap on Linux
+- [ ] **Content-Addressable /usr** - Deduplicated, immutable /usr trees
+- [ ] **Instant Rollback** - Swap back to previous tree atomically
+- [ ] **Fallback Strategy** - Graceful degradation on non-Linux systems
+
+### VFS Tree with Reparenting (Inspired by Aeryn OS)
+
+Virtual filesystem tree for efficient file operations.
+
+- [ ] **Arena Allocator** - Efficient node storage for large trees
+- [ ] **O(1) Path Lookup** - HashMap for instant path-to-node resolution
+- [ ] **Subtree Reparenting** - Efficiently move entire subtrees
+- [ ] **Component Merging** - Merge component trees for installation
+
+### Fast Hashing Option (Inspired by Aeryn OS)
+
+Optional xxhash for non-cryptographic use cases.
+
+- [ ] **xxhash Support** - Add xxh128 as alternative to SHA-256
+- [ ] **Hash Selection** - Configure hash algorithm per use case
+- [ ] **Dedup with xxhash** - Faster deduplication checks
+- [ ] **Verify with SHA-256** - Keep SHA-256 for security verification
 
 ### Package Building
 
@@ -214,6 +291,13 @@ These features from original Conary are not planned for implementation:
 
 ---
 
+## Inspiration Sources
+
+- **Original Conary** (rPath) - Troves, changesets, flavors, components, labels, groups
+- **Aeryn OS / Serpent OS** - Atomic updates, triggers, state snapshots, typed deps, container isolation
+
+---
+
 ## Version History
 
 | Version | Major Features |
@@ -230,9 +314,11 @@ These features from original Conary are not planned for implementation:
 ## Contributing
 
 Contributions welcome. Priority areas:
-1. Enhanced flavor support
-2. Package pinning
-3. Parallel downloads
-4. Label system implementation
+1. Trigger system implementation
+2. System state snapshots
+3. Typed dependencies
+4. Enhanced flavor support
+5. Package pinning
+6. Parallel downloads
 
 See README.md for development setup and CLAUDE.md for coding conventions.
