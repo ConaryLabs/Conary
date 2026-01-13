@@ -5,7 +5,10 @@
 //! This module handles executing package scriptlets with cross-distro support
 //! for RPM, DEB, and Arch packages. Key features:
 //!
-//! - Distro-specific argument handling (integers for RPM/DEB, versions for Arch)
+//! - Distro-specific argument handling:
+//!   - RPM: Integer count ($1=1 install, $1=2 upgrade, $1=0 remove)
+//!   - DEB: Action words per Debian Policy ($1=install/configure/remove/upgrade)
+//!   - Arch: Version strings ($1=new_version, $2=old_version for upgrades)
 //! - Arch .INSTALL function wrapper generation
 //! - Timeout protection (60 seconds)
 //! - stdin nullification to prevent hangs
@@ -162,8 +165,8 @@ impl ScriptletExecutor {
             )));
         }
 
-        // Prepare arguments based on distro and mode
-        let args = self.get_args(mode);
+        // Prepare arguments based on distro, mode, and phase
+        let args = self.get_args(mode, phase);
 
         // Create temp directory for script
         let temp_dir = TempDir::new()?;
@@ -233,10 +236,15 @@ impl ScriptletExecutor {
     }
 
     /// Get arguments based on distro and execution mode
-    fn get_args(&self, mode: &ExecutionMode) -> Vec<String> {
+    ///
+    /// Each distro has different argument semantics:
+    /// - RPM: Integer count of packages remaining after operation
+    /// - DEB: Action word + optional version string (per Debian Policy)
+    /// - Arch: Version string(s)
+    fn get_args(&self, mode: &ExecutionMode, phase: &str) -> Vec<String> {
         match self.package_format {
-            PackageFormat::Rpm | PackageFormat::Deb => {
-                // RPM/DEB use integer arguments:
+            PackageFormat::Rpm => {
+                // RPM uses integer arguments (count of packages remaining):
                 // Install: $1 = 1
                 // Upgrade: $1 = 2 (for install scripts), $1 = 1 (for remove scripts)
                 // Remove: $1 = 0
@@ -244,6 +252,35 @@ impl ScriptletExecutor {
                     ExecutionMode::Install => vec!["1".to_string()],
                     ExecutionMode::Remove => vec!["0".to_string()],
                     ExecutionMode::Upgrade { .. } => vec!["2".to_string()],
+                }
+            }
+            PackageFormat::Deb => {
+                // DEB uses action words + version strings (per Debian Policy):
+                // preinst: install | upgrade <old-version>
+                // postinst: configure <most-recently-configured-version>
+                // prerm: remove | upgrade <new-version>
+                // postrm: remove | upgrade <new-version>
+                match mode {
+                    ExecutionMode::Install => {
+                        match phase {
+                            "pre-install" => vec!["install".to_string()],
+                            "post-install" => vec!["configure".to_string()],
+                            _ => vec!["install".to_string()],
+                        }
+                    }
+                    ExecutionMode::Remove => {
+                        vec!["remove".to_string()]
+                    }
+                    ExecutionMode::Upgrade { old_version } => {
+                        match phase {
+                            "pre-install" => vec!["upgrade".to_string(), old_version.clone()],
+                            "post-install" => vec!["configure".to_string(), old_version.clone()],
+                            "pre-remove" | "post-remove" => {
+                                vec!["upgrade".to_string(), self.package_version.clone()]
+                            }
+                            _ => vec!["upgrade".to_string(), old_version.clone()],
+                        }
+                    }
                 }
             }
             PackageFormat::Arch => {
@@ -350,13 +387,52 @@ mod tests {
             PackageFormat::Rpm,
         );
 
-        assert_eq!(executor.get_args(&ExecutionMode::Install), vec!["1"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Remove), vec!["0"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Install, "pre-install"), vec!["1"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["0"]);
         assert_eq!(
             executor.get_args(&ExecutionMode::Upgrade {
                 old_version: "0.9.0".to_string()
-            }),
+            }, "pre-install"),
             vec!["2"]
+        );
+    }
+
+    #[test]
+    fn test_deb_args() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Deb,
+        );
+
+        // Fresh install
+        assert_eq!(executor.get_args(&ExecutionMode::Install, "pre-install"), vec!["install"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Install, "post-install"), vec!["configure"]);
+
+        // Remove
+        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["remove"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Remove, "post-remove"), vec!["remove"]);
+
+        // Upgrade
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Upgrade {
+                old_version: "0.9.0".to_string()
+            }, "pre-install"),
+            vec!["upgrade", "0.9.0"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Upgrade {
+                old_version: "0.9.0".to_string()
+            }, "post-install"),
+            vec!["configure", "0.9.0"]
+        );
+        // For remove scripts during upgrade, $2 is the NEW version
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Upgrade {
+                old_version: "0.9.0".to_string()
+            }, "pre-remove"),
+            vec!["upgrade", "1.0.0"]
         );
     }
 
@@ -369,12 +445,12 @@ mod tests {
             PackageFormat::Arch,
         );
 
-        assert_eq!(executor.get_args(&ExecutionMode::Install), vec!["1.0.0"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Remove), vec!["1.0.0"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Install, "post-install"), vec!["1.0.0"]);
+        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["1.0.0"]);
         assert_eq!(
             executor.get_args(&ExecutionMode::Upgrade {
                 old_version: "0.9.0".to_string()
-            }),
+            }, "post-upgrade"),
             vec!["1.0.0", "0.9.0"]
         );
     }
