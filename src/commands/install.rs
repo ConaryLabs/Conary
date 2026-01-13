@@ -509,7 +509,72 @@ pub fn cmd_install(
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
-    let _changeset_id = conary::db::transaction(&mut conn, |tx| {
+    // Track if this is an upgrade
+    let is_upgrade = old_trove_to_upgrade.is_some();
+
+    // Phase 1: Check file conflicts BEFORE any changes
+    // This validates against the current DB state
+    for file in &extracted_files {
+        if deployer.file_exists(&file.path) {
+            if let Some(existing) =
+                conary::db::models::FileEntry::find_by_path(&conn, &file.path)?
+            {
+                let owner_trove =
+                    conary::db::models::Trove::find_by_id(&conn, existing.trove_id)?;
+                if let Some(owner) = owner_trove
+                    && owner.name != pkg.name()
+                {
+                    return Err(anyhow::anyhow!(
+                        "File conflict: {} is owned by package {}",
+                        file.path, owner.name
+                    ));
+                }
+            } else if !is_upgrade {
+                // Only error on untracked files for fresh installs
+                return Err(anyhow::anyhow!(
+                    "File conflict: {} exists but is not tracked by any package",
+                    file.path
+                ));
+            }
+        }
+    }
+
+    // Phase 2: Store content in CAS and deploy files to filesystem
+    // This happens BEFORE the DB transaction so we can rollback on failure
+    progress.set_phase(pkg.name(), InstallPhase::Deploying);
+    info!("Deploying files to filesystem...");
+
+    // Pre-compute hashes and store in CAS
+    let mut file_hashes: Vec<(String, String, i64, i32)> = Vec::with_capacity(extracted_files.len());
+    for file in &extracted_files {
+        let hash = deployer.cas().store(&file.content)?;
+        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
+    }
+
+    // Deploy files, tracking what we've deployed for rollback
+    let mut deployed_files: Vec<String> = Vec::with_capacity(extracted_files.len());
+    let deploy_result: Result<()> = (|| {
+        for (path, hash, _size, mode) in &file_hashes {
+            deployer.deploy_file(path, hash, *mode as u32)?;
+            deployed_files.push(path.clone());
+        }
+        Ok(())
+    })();
+
+    // If deployment failed, rollback deployed files
+    if let Err(e) = deploy_result {
+        warn!("File deployment failed, rolling back {} deployed files", deployed_files.len());
+        for path in &deployed_files {
+            if let Err(remove_err) = deployer.remove_file(path) {
+                warn!("Failed to rollback file {}: {}", path, remove_err);
+            }
+        }
+        return Err(anyhow::anyhow!("File deployment failed: {}", e));
+    }
+    info!("Successfully deployed {} files", deployed_files.len());
+
+    // Phase 3: DB transaction - only runs after files are successfully deployed
+    let db_result = conary::db::transaction(&mut conn, |tx| {
         let changeset_desc = if let Some(ref old_trove) = old_trove_to_upgrade {
             format!(
                 "Upgrade {} from {} to {}",
@@ -534,57 +599,26 @@ pub fn cmd_install(
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 
-        // Track if this is an upgrade (old trove was deleted above)
-        let is_upgrade = old_trove_to_upgrade.is_some();
-
-        for file in &extracted_files {
-            if deployer.file_exists(&file.path) {
-                if let Some(existing) =
-                    conary::db::models::FileEntry::find_by_path(tx, &file.path)?
-                {
-                    let owner_trove =
-                        conary::db::models::Trove::find_by_id(tx, existing.trove_id)?;
-                    if let Some(owner) = owner_trove
-                        && owner.name != pkg.name()
-                    {
-                        return Err(conary::Error::InitError(format!(
-                            "File conflict: {} is owned by package {}",
-                            file.path, owner.name
-                        )));
-                    }
-                } else if !is_upgrade {
-                    // Only error on untracked files for fresh installs
-                    // For upgrades, the old files were deleted with the old trove
-                    return Err(conary::Error::InitError(format!(
-                        "File conflict: {} exists but is not tracked by any package",
-                        file.path
-                    )));
-                }
-            }
-
-            let hash = deployer.cas().store(&file.content)?;
+        for (path, hash, size, mode) in &file_hashes {
             tx.execute(
                 "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
-                [&hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
+                [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &size.to_string()],
             )?;
 
             let mut file_entry = conary::db::models::FileEntry::new(
-                file.path.clone(),
+                path.clone(),
                 hash.clone(),
-                file.size,
-                file.mode,
+                *size,
+                *mode,
                 trove_id,
             );
             file_entry.insert(tx)?;
 
-            let action = if deployer.file_exists(&file.path) {
-                "modify"
-            } else {
-                "add"
-            };
+            // Record in history (we know files exist since we just deployed them)
+            let action = if is_upgrade { "modify" } else { "add" };
             tx.execute(
                 "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&changeset_id.to_string(), &file.path, &hash, action],
+                [&changeset_id.to_string(), path, hash, action],
             )?;
         }
 
@@ -624,15 +658,18 @@ pub fn cmd_install(
 
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(changeset_id)
-    })?;
+    });
 
-    progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    info!("Deploying files to filesystem...");
-    for file in &extracted_files {
-        let hash = conary::filesystem::CasStore::compute_hash(&file.content);
-        deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
+    // If DB transaction failed, rollback deployed files
+    if let Err(e) = db_result {
+        warn!("Database transaction failed, rolling back {} deployed files", deployed_files.len());
+        for path in &deployed_files {
+            if let Err(remove_err) = deployer.remove_file(path) {
+                warn!("Failed to rollback file {}: {}", path, remove_err);
+            }
+        }
+        return Err(anyhow::anyhow!("Database transaction failed: {}", e));
     }
-    info!("Successfully deployed {} files", extracted_files.len());
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
     // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
