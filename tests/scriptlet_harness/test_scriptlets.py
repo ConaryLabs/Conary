@@ -331,20 +331,31 @@ post_remove() {{
 class ConaryTester:
     """Test runner for Conary scriptlet verification."""
 
-    def __init__(self, conary_bin: Path, work_dir: Path):
+    def __init__(self, conary_bin: Path, work_dir: Path, real_root: bool = False):
         self.conary_bin = conary_bin
         self.work_dir = work_dir
+        self.real_root = real_root
         self.db_path = work_dir / "conary.db"
-        self.root_dir = work_dir / "root"
         self.log_dir = work_dir / "logs"
 
-        self.root_dir.mkdir(parents=True, exist_ok=True)
+        if real_root:
+            # Install to real root - scriptlets will actually execute
+            self.root_dir = Path("/")
+            log_warn("REAL ROOT MODE: Installing to / - scriptlets will execute!")
+        else:
+            # Install to temp dir - scriptlets will be skipped
+            self.root_dir = work_dir / "root"
+            self.root_dir.mkdir(parents=True, exist_ok=True)
+
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize generators
         self.rpm_gen = RpmGenerator(work_dir / "rpm", self.log_dir)
         self.deb_gen = DebGenerator(work_dir / "deb", self.log_dir)
         self.arch_gen = ArchGenerator(work_dir / "arch", self.log_dir)
+
+        # Track installed packages for cleanup
+        self.installed_packages: list[str] = []
 
     def init_db(self):
         """Initialize a fresh Conary database."""
@@ -386,7 +397,7 @@ class ConaryTester:
                 ))
         return logs
 
-    def install(self, package_path: Path, no_scripts: bool = False) -> bool:
+    def install(self, package_path: Path, no_scripts: bool = False, pkg_name: str = None) -> bool:
         """Install a package."""
         cmd = [
             str(self.conary_bin), "install",
@@ -401,6 +412,12 @@ class ConaryTester:
         if result.returncode != 0:
             log_error(f"Install failed: {result.stderr}")
             return False
+
+        # Track for cleanup in real-root mode
+        if self.real_root and pkg_name:
+            if pkg_name not in self.installed_packages:
+                self.installed_packages.append(pkg_name)
+
         return True
 
     def remove(self, package_name: str, no_scripts: bool = False) -> bool:
@@ -420,6 +437,18 @@ class ConaryTester:
             return False
         return True
 
+    def cleanup_installed(self):
+        """Remove all installed packages (for real-root mode cleanup)."""
+        if not self.real_root:
+            return
+
+        for pkg_name in list(self.installed_packages):
+            try:
+                self.remove(pkg_name, no_scripts=True)
+                self.installed_packages.remove(pkg_name)
+            except Exception as e:
+                log_warn(f"Cleanup failed for {pkg_name}: {e}")
+
     def run_test(self, name: str, test_fn) -> bool:
         """Run a single test with setup/teardown."""
         print(f"\n{Colors.BOLD}=== {name} ==={Colors.RESET}")
@@ -438,6 +467,9 @@ class ConaryTester:
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            # Always cleanup in real-root mode
+            self.cleanup_installed()
 
 
 class ScriptletTests:
@@ -448,12 +480,13 @@ class ScriptletTests:
 
     def test_rpm_install(self) -> bool:
         """Test RPM fresh install scriptlets."""
-        pkg = self.tester.rpm_gen.generate("testpkg-rpm", "1.0.0")
+        pkg_name = "conary-test-rpm"
+        pkg = self.tester.rpm_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - RPM generation not available")
             return True  # Skip, not fail
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -481,20 +514,21 @@ class ScriptletTests:
 
     def test_rpm_upgrade(self) -> bool:
         """Test RPM upgrade scriptlets."""
-        pkg_v1 = self.tester.rpm_gen.generate("testpkg-rpm-upg", "1.0.0")
-        pkg_v2 = self.tester.rpm_gen.generate("testpkg-rpm-upg", "2.0.0")
+        pkg_name = "conary-test-rpm-upg"
+        pkg_v1 = self.tester.rpm_gen.generate(pkg_name, "1.0.0")
+        pkg_v2 = self.tester.rpm_gen.generate(pkg_name, "2.0.0")
         if not pkg_v1 or not pkg_v2:
             log_warn("Skipping - RPM generation not available")
             return True
 
         # Install v1
-        if not self.tester.install(pkg_v1):
+        if not self.tester.install(pkg_v1, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
         # Upgrade to v2
-        if not self.tester.install(pkg_v2):
+        if not self.tester.install(pkg_v2, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -534,17 +568,18 @@ class ScriptletTests:
 
     def test_rpm_remove(self) -> bool:
         """Test RPM remove scriptlets."""
-        pkg = self.tester.rpm_gen.generate("testpkg-rpm-rm", "1.0.0")
+        pkg_name = "conary-test-rpm-rm"
+        pkg = self.tester.rpm_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - RPM generation not available")
             return True
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
-        if not self.tester.remove("testpkg-rpm-rm"):
+        if not self.tester.remove("conary-test-rpm-rm"):
             return False
 
         logs = self.tester.read_logs()
@@ -564,12 +599,13 @@ class ScriptletTests:
 
     def test_deb_install(self) -> bool:
         """Test DEB fresh install scriptlets."""
-        pkg = self.tester.deb_gen.generate("testpkg-deb", "1.0.0")
+        pkg_name = "conary-test-deb"
+        pkg = self.tester.deb_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - DEB generation not available")
             return True
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -596,18 +632,19 @@ class ScriptletTests:
 
     def test_deb_upgrade(self) -> bool:
         """Test DEB upgrade scriptlets."""
-        pkg_v1 = self.tester.deb_gen.generate("testpkg-deb-upg", "1.0.0")
-        pkg_v2 = self.tester.deb_gen.generate("testpkg-deb-upg", "2.0.0")
+        pkg_name = "conary-test-deb-upg"
+        pkg_v1 = self.tester.deb_gen.generate(pkg_name, "1.0.0")
+        pkg_v2 = self.tester.deb_gen.generate(pkg_name, "2.0.0")
         if not pkg_v1 or not pkg_v2:
             log_warn("Skipping - DEB generation not available")
             return True
 
-        if not self.tester.install(pkg_v1):
+        if not self.tester.install(pkg_v1, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
-        if not self.tester.install(pkg_v2):
+        if not self.tester.install(pkg_v2, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -647,17 +684,18 @@ class ScriptletTests:
 
     def test_deb_remove(self) -> bool:
         """Test DEB remove scriptlets."""
-        pkg = self.tester.deb_gen.generate("testpkg-deb-rm", "1.0.0")
+        pkg_name = "conary-test-deb-rm"
+        pkg = self.tester.deb_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - DEB generation not available")
             return True
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
-        if not self.tester.remove("testpkg-deb-rm"):
+        if not self.tester.remove("conary-test-deb-rm"):
             return False
 
         logs = self.tester.read_logs()
@@ -677,12 +715,13 @@ class ScriptletTests:
 
     def test_arch_install(self) -> bool:
         """Test Arch fresh install scriptlets."""
-        pkg = self.tester.arch_gen.generate("testpkg-arch", "1.0.0")
+        pkg_name = "conary-test-arch"
+        pkg = self.tester.arch_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - Arch generation not available")
             return True
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -697,8 +736,10 @@ class ScriptletTests:
             log_error("post_install did not run")
             return False
 
-        if post.args != ["1.0.0"]:
-            log_error(f"post_install got args {post.args}, expected ['1.0.0']")
+        # Arch versions include pkgrel: 1.0.0-1
+        expected_version = "1.0.0-1"
+        if post.args != [expected_version]:
+            log_error(f"post_install got args {post.args}, expected ['{expected_version}']")
             return False
 
         log_info(f"Arch install: post_install('{post.args[0]}')")
@@ -706,18 +747,19 @@ class ScriptletTests:
 
     def test_arch_upgrade(self) -> bool:
         """Test Arch upgrade scriptlets - OLD scripts should NOT run."""
-        pkg_v1 = self.tester.arch_gen.generate("testpkg-arch-upg", "1.0.0")
-        pkg_v2 = self.tester.arch_gen.generate("testpkg-arch-upg", "2.0.0")
+        pkg_name = "conary-test-arch-upg"
+        pkg_v1 = self.tester.arch_gen.generate(pkg_name, "1.0.0")
+        pkg_v2 = self.tester.arch_gen.generate(pkg_name, "2.0.0")
         if not pkg_v1 or not pkg_v2:
             log_warn("Skipping - Arch generation not available")
             return True
 
-        if not self.tester.install(pkg_v1):
+        if not self.tester.install(pkg_v1, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
-        if not self.tester.install(pkg_v2):
+        if not self.tester.install(pkg_v2, pkg_name=pkg_name):
             return False
 
         logs = self.tester.read_logs()
@@ -733,15 +775,19 @@ class ScriptletTests:
 
         errors = []
 
+        # Arch versions include pkgrel: 2.0.0-1, 1.0.0-1
+        expected_new = "2.0.0-1"
+        expected_old = "1.0.0-1"
+
         # Check pre_upgrade ran with correct args (might be missing if not defined)
-        if new_pre and new_pre[0].args != ["2.0.0", "1.0.0"]:
-            errors.append(f"NEW pre_upgrade: expected ['2.0.0', '1.0.0'], got {new_pre[0].args}")
+        if new_pre and new_pre[0].args != [expected_new, expected_old]:
+            errors.append(f"NEW pre_upgrade: expected ['{expected_new}', '{expected_old}'], got {new_pre[0].args}")
 
         # post_upgrade must run
         if not new_post:
             errors.append("NEW post_upgrade did not run")
-        elif new_post[0].args != ["2.0.0", "1.0.0"]:
-            errors.append(f"NEW post_upgrade: expected ['2.0.0', '1.0.0'], got {new_post[0].args}")
+        elif new_post[0].args != [expected_new, expected_old]:
+            errors.append(f"NEW post_upgrade: expected ['{expected_new}', '{expected_old}'], got {new_post[0].args}")
 
         # CRITICAL: OLD package remove scripts must NOT run
         if old_remove:
@@ -757,17 +803,18 @@ class ScriptletTests:
 
     def test_arch_remove(self) -> bool:
         """Test Arch remove scriptlets."""
-        pkg = self.tester.arch_gen.generate("testpkg-arch-rm", "1.0.0")
+        pkg_name = "conary-test-arch-rm"
+        pkg = self.tester.arch_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - Arch generation not available")
             return True
 
-        if not self.tester.install(pkg):
+        if not self.tester.install(pkg, pkg_name=pkg_name):
             return False
 
         self.tester.clear_logs()
 
-        if not self.tester.remove("testpkg-arch-rm"):
+        if not self.tester.remove("conary-test-arch-rm"):
             return False
 
         logs = self.tester.read_logs()
@@ -775,13 +822,14 @@ class ScriptletTests:
         pre = next((l for l in logs if l.phase == "pre-remove"), None)
         post = next((l for l in logs if l.phase == "post-remove"), None)
 
-        # For remove, args should be [old_version]
+        # For remove, args should be [old_version] (with pkgrel)
         if not post:
             log_error("post_remove did not run")
             return False
 
-        if post.args != ["1.0.0"]:
-            log_error(f"post_remove got args {post.args}, expected ['1.0.0']")
+        expected_version = "1.0.0-1"
+        if post.args != [expected_version]:
+            log_error(f"post_remove got args {post.args}, expected ['{expected_version}']")
             return False
 
         log_info(f"Arch remove: post_remove('{post.args[0]}')")
@@ -789,7 +837,8 @@ class ScriptletTests:
 
     def test_no_scripts_flag(self) -> bool:
         """Test that --no-scripts skips all scriptlets."""
-        pkg = self.tester.rpm_gen.generate("testpkg-noscripts", "1.0.0")
+        pkg_name = "conary-test-noscripts"
+        pkg = self.tester.rpm_gen.generate(pkg_name, "1.0.0")
         if not pkg:
             log_warn("Skipping - RPM generation not available")
             return True
@@ -837,6 +886,8 @@ def main():
                         help="Keep generated packages and logs after tests")
     parser.add_argument("--conary", type=str, help="Path to conary binary")
     parser.add_argument("--test", type=str, help="Run specific test (e.g., 'rpm_install')")
+    parser.add_argument("--real-root", action="store_true",
+                        help="Install to real root (/) - DANGEROUS, requires sudo, actually runs scriptlets")
     args = parser.parse_args()
 
     # Find conary binary
@@ -858,8 +909,12 @@ def main():
     log_info(f"Work directory: {work_dir}")
 
     try:
-        tester = ConaryTester(conary_bin, work_dir)
+        tester = ConaryTester(conary_bin, work_dir, real_root=args.real_root)
         tests = ScriptletTests(tester)
+
+        if not args.real_root:
+            log_warn("Running without --real-root: scriptlets will be SKIPPED (non-root install path)")
+            log_warn("Use --real-root to actually execute scriptlets (requires sudo)")
 
         # Define all tests
         all_tests = [
