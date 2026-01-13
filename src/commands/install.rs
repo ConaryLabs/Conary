@@ -1,6 +1,7 @@
 // src/commands/install.rs
 //! Package installation and removal commands
 
+use super::progress::{InstallPhase, InstallProgress, RemovePhase, RemoveProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
 use conary::db::models::{ProvideEntry, ScriptletEntry};
@@ -65,11 +66,17 @@ pub fn cmd_install(
 ) -> Result<()> {
     info!("Installing package: {}", package);
 
+    // Create progress tracker for single package installation
+    let progress = InstallProgress::single("Installing");
+    progress.set_phase(package, InstallPhase::Downloading);
+
     let package_path = if Path::new(package).exists() {
         info!("Installing from local file: {}", package);
+        progress.set_status(&format!("Loading local file: {}", package));
         PathBuf::from(package)
     } else {
         info!("Searching repositories for package: {}", package);
+        progress.set_status("Searching repositories...");
         let conn = conary::db::open(db_path)
             .context("Failed to open package database")?;
 
@@ -104,6 +111,7 @@ pub fn cmd_install(
             None
         };
 
+        progress.set_phase(&pkg_with_repo.package.name, InstallPhase::Downloading);
         let download_path = repository::download_package_verified(
             &pkg_with_repo.package,
             temp_dir.path(),
@@ -120,6 +128,8 @@ pub fn cmd_install(
     let format = detect_package_format(path_str)
         .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);
+
+    progress.set_phase(package, InstallPhase::Parsing);
 
     // Parse package using the appropriate format parser
     let pkg: Box<dyn PackageFormat> = match format {
@@ -171,6 +181,7 @@ pub fn cmd_install(
             dependency_edges.len()
         );
     } else if !dependency_edges.is_empty() {
+        progress.set_phase(pkg.name(), InstallPhase::ResolvingDeps);
         info!(
             "Resolving {} dependencies with constraint validation...",
             dependency_edges.len()
@@ -221,11 +232,13 @@ pub fn cmd_install(
                         }
 
                         if !dry_run {
+                            progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
                             let temp_dir = TempDir::new()?;
                             let keyring_dir = get_keyring_dir(db_path);
                             match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
                                 Ok(downloaded) => {
                                     for (dep_name, dep_path) in downloaded {
+                                        progress.set_status(&format!("Installing dependency: {}", dep_name));
                                         info!("Installing dependency: {}", dep_name);
                                         println!("Installing dependency: {}", dep_name);
                                         if let Err(e) =
@@ -398,6 +411,7 @@ pub fn cmd_install(
     }
 
     // Extract and install
+    progress.set_phase(pkg.name(), InstallPhase::Extracting);
     info!("Extracting file contents from package...");
     let extracted_files = pkg.extract_file_contents()
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
@@ -422,6 +436,7 @@ pub fn cmd_install(
     // Execute pre-install scriptlet (before any changes)
     let scriptlets = pkg.scriptlets();
     if !no_scripts && !scriptlets.is_empty() {
+        progress.set_phase(pkg.name(), InstallPhase::PreScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
             pkg.name(),
@@ -604,6 +619,7 @@ pub fn cmd_install(
         Ok(changeset_id)
     })?;
 
+    progress.set_phase(pkg.name(), InstallPhase::Deploying);
     info!("Deploying files to filesystem...");
     for file in &extracted_files {
         let hash = conary::filesystem::CasStore::compute_hash(&file.content);
@@ -640,6 +656,7 @@ pub fn cmd_install(
 
     // Execute post-install scriptlet (after files are deployed)
     if !no_scripts && !scriptlets.is_empty() {
+        progress.set_phase(pkg.name(), InstallPhase::PostScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
             pkg.name(),
@@ -669,6 +686,8 @@ pub fn cmd_install(
         }
     }
 
+    progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
+
     println!(
         "Installed package: {} version {}",
         pkg.name(),
@@ -687,6 +706,9 @@ pub fn cmd_install(
 /// Remove an installed package
 pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: bool) -> Result<()> {
     info!("Removing package: {}", package_name);
+
+    // Create progress tracker for removal
+    let progress = RemoveProgress::new(package_name);
 
     let mut conn = conary::db::open(db_path)
         .context("Failed to open package database")?;
@@ -753,6 +775,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
 
     // Execute pre-remove scriptlet (before any changes)
     if !no_scripts && !stored_scriptlets.is_empty() {
+        progress.set_phase(RemovePhase::PreScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
             &trove.name,
@@ -791,6 +814,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
+    progress.set_phase(RemovePhase::UpdatingDb);
     conary::db::transaction(&mut conn, |tx| {
         let mut changeset =
             conary::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
@@ -854,6 +878,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     });
 
     // Remove regular files first
+    progress.set_phase(RemovePhase::RemovingFiles);
     let mut removed_count = 0;
     let mut failed_count = 0;
     for file in &regular_files {
@@ -874,6 +899,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     sorted_dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
 
     // Remove directories (only if empty)
+    progress.set_phase(RemovePhase::RemovingDirs);
     let mut dirs_removed = 0;
     for dir in sorted_dirs {
         let dir_path = dir.path.trim_end_matches('/');
@@ -893,6 +919,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if !no_scripts && !stored_scriptlets.is_empty() {
+        progress.set_phase(RemovePhase::PostScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
             &trove.name,
@@ -909,6 +936,8 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
             }
         }
     }
+
+    progress.finish(&format!("Removed {} {}", trove.name, trove.version));
 
     println!(
         "Removed package: {} version {}",
