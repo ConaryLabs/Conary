@@ -86,6 +86,7 @@ pub fn install_package_from_file(
     package_path: &Path,
     conn: &mut rusqlite::Connection,
     root: &str,
+    db_path: &str,
     old_trove: Option<&conary::db::models::Trove>,
 ) -> Result<()> {
     let path_str = package_path
@@ -112,8 +113,10 @@ pub fn install_package_from_file(
     let extracted_files = package.extract_file_contents()?;
     info!("Extracted {} files", extracted_files.len());
 
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
-    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let objects_dir = Path::new(db_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("objects");
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 

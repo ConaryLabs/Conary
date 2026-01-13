@@ -252,7 +252,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                     progress.set_phase(&trove.name, UpdatePhase::Installing);
 
                     if let Err(e) =
-                        install_package_from_file(&pkg_path, &mut conn, root, Some(&trove))
+                        install_package_from_file(&pkg_path, &mut conn, root, db_path, Some(&trove))
                     {
                         progress.fail_package(&trove.name, &e.to_string());
                         warn!("  Package installation failed: {}", e);

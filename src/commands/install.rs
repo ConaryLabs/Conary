@@ -249,7 +249,7 @@ pub fn cmd_install(
                                         info!("Installing dependency: {}", dep_name);
                                         println!("Installing dependency: {}", dep_name);
                                         if let Err(e) =
-                                            install_package_from_file(&dep_path, &mut conn, root, None)
+                                            install_package_from_file(&dep_path, &mut conn, root, db_path, None)
                                         {
                                             return Err(anyhow::anyhow!(
                                                 "Failed to install dependency {}: {}",
