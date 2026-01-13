@@ -54,6 +54,9 @@ zstd = "0.13"
 # Parallel processing for concurrent downloads
 rayon = "1.8"
 
+# Progress bars for downloads
+indicatif = "0.17"
+
 # GPG signature verification (pure Rust OpenPGP implementation)
 # Note: Using RustCrypto backend with experimental and variable-time flags
 # This is acceptable for a package manager use case

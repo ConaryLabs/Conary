@@ -3,9 +3,11 @@
 
 use super::install_package_from_file;
 use anyhow::Result;
-use conary::db::models::{DeltaStats, PackageDelta, RepositoryPackage, Repository, Trove};
+use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
 use conary::delta::DeltaApplier;
-use conary::repository::{self, DownloadOptions};
+use conary::repository::{
+    self, download_package_verified_with_progress, DownloadOptions, DownloadProgress,
+};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -190,16 +192,28 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
         }
     }
 
-    // Phase 3: Download full packages in parallel
+    // Phase 3: Download full packages in parallel with progress bars
     if !full_updates.is_empty() {
         println!(
             "\nDownloading {} full package(s) in parallel...",
             full_updates.len()
         );
 
+        // Create multi-progress manager for parallel progress bars
+        let progress = DownloadProgress::new();
+
+        // Pre-create progress bars for all downloads
+        let progress_bars: Vec<_> = full_updates
+            .iter()
+            .map(|(trove, repo_pkg, _)| {
+                progress.add_download(&trove.name, repo_pkg.size as u64)
+            })
+            .collect();
+
         let download_results: Vec<_> = full_updates
             .par_iter()
-            .map(|(trove, repo_pkg, repo)| {
+            .zip(progress_bars.par_iter())
+            .map(|((trove, repo_pkg, repo), pb)| {
                 info!("Downloading {}", trove.name);
 
                 // Build GPG options if enabled
@@ -213,20 +227,27 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                     None
                 };
 
-                match repository::download_package_verified(
+                match download_package_verified_with_progress(
                     repo_pkg,
                     &temp_dir,
                     gpg_options.as_ref(),
+                    Some(pb),
                 ) {
-                    Ok(pkg_path) => DownloadResult::Full {
-                        trove: trove.clone(),
-                        repo_pkg: Box::new(repo_pkg.clone()),
-                        pkg_path,
-                    },
-                    Err(e) => DownloadResult::Failed {
-                        name: trove.name.clone(),
-                        error: e.to_string(),
-                    },
+                    Ok(pkg_path) => {
+                        DownloadProgress::finish_download(pb, &trove.name);
+                        DownloadResult::Full {
+                            trove: trove.clone(),
+                            repo_pkg: Box::new(repo_pkg.clone()),
+                            pkg_path,
+                        }
+                    }
+                    Err(e) => {
+                        DownloadProgress::fail_download(pb, &trove.name, &e.to_string());
+                        DownloadResult::Failed {
+                            name: trove.name.clone(),
+                            error: e.to_string(),
+                        }
+                    }
                 }
             })
             .collect();

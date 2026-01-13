@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use super::download::{download_package_verified, DownloadOptions};
+use super::download::{
+    download_package_verified_with_progress, DownloadOptions, DownloadProgress,
+};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
 /// Resolve dependencies and return list of packages to download
@@ -234,10 +236,22 @@ pub fn download_dependencies(
         dependencies.len()
     );
 
-    // Use parallel iterator for concurrent downloads
+    // Create multi-progress manager for parallel progress bars
+    let progress = DownloadProgress::new();
+
+    // Pre-create progress bars for all downloads
+    let progress_bars: Vec<_> = dependencies
+        .iter()
+        .map(|(dep_name, pkg_with_repo)| {
+            progress.add_download(dep_name, pkg_with_repo.package.size as u64)
+        })
+        .collect();
+
+    // Use parallel iterator for concurrent downloads with progress
     let results: Result<Vec<_>> = dependencies
         .par_iter()
-        .map(|(dep_name, pkg_with_repo)| {
+        .zip(progress_bars.par_iter())
+        .map(|((dep_name, pkg_with_repo), pb)| {
             info!("Downloading dependency: {}", dep_name);
 
             // Build GPG options if keyring_dir provided and repo has gpg_check enabled
@@ -255,12 +269,21 @@ pub fn download_dependencies(
                 None
             };
 
-            let path = download_package_verified(
+            match download_package_verified_with_progress(
                 &pkg_with_repo.package,
                 dest_dir,
                 gpg_options.as_ref(),
-            )?;
-            Ok((dep_name.clone(), path))
+                Some(pb),
+            ) {
+                Ok(path) => {
+                    DownloadProgress::finish_download(pb, dep_name);
+                    Ok((dep_name.clone(), path))
+                }
+                Err(e) => {
+                    DownloadProgress::fail_download(pb, dep_name, &e.to_string());
+                    Err(e)
+                }
+            }
         })
         .collect();
 

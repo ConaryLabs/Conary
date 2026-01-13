@@ -7,6 +7,7 @@
 
 use crate::db::models::RepositoryPackage;
 use crate::error::{Error, Result};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -247,4 +248,149 @@ pub fn verify_checksum(path: &Path, expected: &str) -> Result<()> {
 
     debug!("Checksum verified: {}", expected);
     Ok(())
+}
+
+// =============================================================================
+// Progress-aware download functions
+// =============================================================================
+
+/// Create a styled progress bar for package downloads
+fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
+    let pb = ProgressBar::new(size);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
+            .expect("Invalid progress bar template")
+            .progress_chars("#>-"),
+    );
+    pb.set_message(name.to_string());
+    pb
+}
+
+/// Download a package with progress bar display
+///
+/// Shows download progress including bytes downloaded, speed, and package name.
+pub fn download_package_with_progress(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    progress_bar: Option<&ProgressBar>,
+) -> Result<PathBuf> {
+    let client = RepositoryClient::new()?;
+
+    // Construct destination path
+    let default_filename = format!("{}-{}.rpm", repo_pkg.name, repo_pkg.version);
+    let filename = repo_pkg
+        .download_url
+        .split('/')
+        .next_back()
+        .unwrap_or(&default_filename);
+
+    let dest_path = dest_dir.join(filename);
+
+    // Download the file with progress
+    client.download_file_with_progress(
+        &repo_pkg.download_url,
+        &dest_path,
+        &repo_pkg.name,
+        progress_bar,
+    )?;
+
+    // Verify checksum
+    verify_checksum(&dest_path, &repo_pkg.checksum)?;
+
+    Ok(dest_path)
+}
+
+/// Download a package with progress and optional GPG verification
+///
+/// Combines progress display with GPG signature verification.
+pub fn download_package_verified_with_progress(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    options: Option<&DownloadOptions>,
+    progress_bar: Option<&ProgressBar>,
+) -> Result<PathBuf> {
+    // Download with progress
+    let dest_path = download_package_with_progress(repo_pkg, dest_dir, progress_bar)?;
+
+    // If GPG options provided and gpg_check enabled, verify signature
+    if let Some(opts) = options
+        && opts.gpg_check
+    {
+        match verify_package_signature(&dest_path, &repo_pkg.download_url, opts) {
+            Ok(()) => {
+                info!("GPG signature verified for {}", repo_pkg.name);
+            }
+            Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
+                warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
+            }
+            Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
+                return Err(Error::GpgVerificationFailed(format!(
+                    "GPG verification failed for '{}': {}.\n\
+                     To fix this, run:\n  \
+                     conary key-import {} <key-url-or-file>\n\
+                     Or disable GPG checking for this repository.",
+                    repo_pkg.name, msg, opts.repository_name
+                )));
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+
+    Ok(dest_path)
+}
+
+/// Multi-progress manager for parallel downloads
+///
+/// Provides a wrapper around indicatif's MultiProgress for managing
+/// multiple concurrent download progress bars.
+pub struct DownloadProgress {
+    multi: MultiProgress,
+}
+
+impl DownloadProgress {
+    /// Create a new multi-progress manager
+    pub fn new() -> Self {
+        Self {
+            multi: MultiProgress::new(),
+        }
+    }
+
+    /// Create a progress bar for a package download
+    ///
+    /// The progress bar is automatically added to the multi-progress display.
+    pub fn add_download(&self, name: &str, size: u64) -> ProgressBar {
+        let pb = create_progress_bar(size, name);
+        self.multi.add(pb)
+    }
+
+    /// Create a spinner for downloads with unknown size
+    pub fn add_spinner(&self, name: &str) -> ProgressBar {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {bytes} ({bytes_per_sec}) {msg}")
+                .expect("Invalid spinner template"),
+        );
+        pb.set_message(name.to_string());
+        self.multi.add(pb)
+    }
+
+    /// Mark a download as complete with success message
+    pub fn finish_download(pb: &ProgressBar, name: &str) {
+        pb.finish_with_message(format!("{} [done]", name));
+    }
+
+    /// Mark a download as failed
+    pub fn fail_download(pb: &ProgressBar, name: &str, error: &str) {
+        pb.abandon_with_message(format!("{} [FAILED: {}]", name, error));
+    }
+}
+
+impl Default for DownloadProgress {
+    fn default() -> Self {
+        Self::new()
+    }
 }

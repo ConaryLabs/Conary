@@ -25,7 +25,9 @@ pub mod selector;
 pub use client::RepositoryClient;
 pub use dependencies::{download_dependencies, resolve_dependencies, resolve_dependencies_transitive};
 pub use download::{
-    download_delta, download_package, download_package_verified, verify_checksum, DownloadOptions,
+    download_delta, download_package, download_package_verified,
+    download_package_verified_with_progress, download_package_with_progress, verify_checksum,
+    DownloadOptions, DownloadProgress,
 };
 pub use gpg::GpgVerifier;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
