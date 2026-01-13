@@ -235,6 +235,14 @@ enum Commands {
         /// Add repository in disabled state
         #[arg(long)]
         disabled: bool,
+
+        /// URL or path to GPG public key for signature verification
+        #[arg(long)]
+        gpg_key: Option<String>,
+
+        /// Disable GPG signature checking for this repository
+        #[arg(long)]
+        no_gpg_check: bool,
     },
 
     /// List configured repositories
@@ -290,6 +298,36 @@ enum Commands {
         /// Force sync even if recently synced
         #[arg(short, long)]
         force: bool,
+    },
+
+    /// Import a GPG key for a repository
+    KeyImport {
+        /// Repository name to associate the key with
+        repository: String,
+
+        /// Path to GPG public key file, or URL to fetch from
+        key: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// List imported GPG keys
+    KeyList {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Remove a GPG key for a repository
+    KeyRemove {
+        /// Repository name whose key to remove
+        repository: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
     },
 
     /// Search for packages in repositories
@@ -425,8 +463,8 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Some(Commands::RepoAdd { name, url, db_path, priority, disabled }) => {
-            commands::cmd_repo_add(&name, &url, &db_path, priority, disabled)
+        Some(Commands::RepoAdd { name, url, db_path, priority, disabled, gpg_key, no_gpg_check }) => {
+            commands::cmd_repo_add(&name, &url, &db_path, priority, disabled, gpg_key, no_gpg_check)
         }
 
         Some(Commands::RepoList { db_path, all }) => commands::cmd_repo_list(&db_path, all),
@@ -445,6 +483,16 @@ fn main() -> Result<()> {
 
         Some(Commands::RepoSync { name, db_path, force }) => {
             commands::cmd_repo_sync(name, &db_path, force)
+        }
+
+        Some(Commands::KeyImport { repository, key, db_path }) => {
+            commands::cmd_key_import(&repository, &key, &db_path)
+        }
+
+        Some(Commands::KeyList { db_path }) => commands::cmd_key_list(&db_path),
+
+        Some(Commands::KeyRemove { repository, db_path }) => {
+            commands::cmd_key_remove(&repository, &db_path)
         }
 
         Some(Commands::Search { pattern, db_path }) => {

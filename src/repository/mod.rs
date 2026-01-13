@@ -24,13 +24,18 @@ pub mod selector;
 // Re-export main types and functions
 pub use client::RepositoryClient;
 pub use dependencies::{download_dependencies, resolve_dependencies, resolve_dependencies_transitive};
-pub use download::{download_delta, download_package, verify_checksum};
+pub use download::{
+    download_delta, download_package, download_package_verified, verify_checksum, DownloadOptions,
+};
 pub use gpg::GpgVerifier;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
-pub use sync::{current_timestamp, needs_sync, parse_timestamp, sync_repository, RepositoryFormat};
+pub use sync::{
+    current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
+    RepositoryFormat,
+};
 
 #[cfg(test)]
 mod tests {

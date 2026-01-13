@@ -8,10 +8,12 @@
 use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use rusqlite::Connection;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::client::RepositoryClient;
+use super::gpg::GpgVerifier;
 use super::parsers;
 use super::parsers::RepositoryParser;
 
@@ -288,4 +290,67 @@ pub fn needs_sync(repo: &Repository) -> bool {
             }
         }
     }
+}
+
+/// Attempt to fetch and import GPG key if configured for the repository
+///
+/// This function should be called before sync when gpg_check is enabled.
+/// It will:
+/// 1. Check if gpg_key_url is configured
+/// 2. Check if key already exists (skip if so)
+/// 3. Download and import the key
+///
+/// # Arguments
+/// * `repo` - Repository with gpg_key_url to fetch from
+/// * `keyring_dir` - Directory to store GPG keys
+///
+/// # Returns
+/// * `Ok(Some(fingerprint))` - Key was fetched and imported
+/// * `Ok(None)` - No key URL configured, or key already exists
+/// * `Err(_)` - Failed to fetch or import key
+pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Option<String>> {
+    // Skip if no key URL configured
+    let key_url = match &repo.gpg_key_url {
+        Some(url) => url,
+        None => {
+            debug!("No gpg_key_url configured for repository '{}'", repo.name);
+            return Ok(None);
+        }
+    };
+
+    // Create verifier
+    let verifier = GpgVerifier::new(keyring_dir.to_path_buf())?;
+
+    // Skip if key already exists
+    if verifier.has_key(&repo.name) {
+        debug!(
+            "GPG key already exists for repository '{}', skipping fetch",
+            repo.name
+        );
+        return Ok(None);
+    }
+
+    info!(
+        "Fetching GPG key for repository '{}' from {}",
+        repo.name, key_url
+    );
+
+    // Download the key
+    let client = RepositoryClient::new()?;
+    let key_data = client.download_to_bytes(key_url).map_err(|e| {
+        Error::DownloadError(format!(
+            "Failed to fetch GPG key for '{}': {}",
+            repo.name, e
+        ))
+    })?;
+
+    // Import the key
+    let fingerprint = verifier.import_key(&key_data, &repo.name)?;
+
+    info!(
+        "Imported GPG key for repository '{}' (fingerprint: {})",
+        repo.name, fingerprint
+    );
+
+    Ok(Some(fingerprint))
 }

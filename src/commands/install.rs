@@ -9,7 +9,7 @@ use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::{DependencyType, ScriptletPhase};
 use conary::packages::PackageFormat;
-use conary::repository::{self, PackageSelector, SelectionOptions};
+use conary::repository::{self, DownloadOptions, PackageSelector, SelectionOptions};
 use conary::resolver::{DependencyEdge, Resolver};
 use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor};
 use conary::version::{RpmVersion, VersionConstraint};
@@ -18,6 +18,18 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
+
+/// Get the keyring directory based on db_path
+fn get_keyring_dir(db_path: &str) -> PathBuf {
+    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| {
+        Path::new(db_path)
+            .parent()
+            .unwrap_or(Path::new("/var/lib/conary"))
+            .to_string_lossy()
+            .to_string()
+    });
+    PathBuf::from(db_dir).join("keys")
+}
 
 /// Serializable trove metadata for rollback support
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,8 +91,25 @@ pub fn cmd_install(
 
         let temp_dir = TempDir::new()
             .context("Failed to create temporary directory for download")?;
-        let download_path = repository::download_package(&pkg_with_repo.package, temp_dir.path())
-            .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
+
+        // Set up GPG verification options if enabled for this repository
+        let gpg_options = if pkg_with_repo.repository.gpg_check {
+            let keyring_dir = get_keyring_dir(db_path);
+            Some(DownloadOptions {
+                gpg_check: true,
+                keyring_dir,
+                repository_name: pkg_with_repo.repository.name.clone(),
+            })
+        } else {
+            None
+        };
+
+        let download_path = repository::download_package_verified(
+            &pkg_with_repo.package,
+            temp_dir.path(),
+            gpg_options.as_ref(),
+        )
+        .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
         info!("Downloaded package to: {}", download_path.display());
         download_path
     };

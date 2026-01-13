@@ -92,6 +92,32 @@ impl RepositoryClient {
         }
     }
 
+    /// Download a URL to bytes (for signature files, keys, etc.)
+    ///
+    /// Returns the response body as bytes, or an error if the download fails.
+    /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
+    pub fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .map_err(|e| Error::DownloadError(format!("Failed to fetch {}: {}", url, e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::DownloadError(format!(
+                "HTTP {} from {}",
+                response.status(),
+                url
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
+
+        Ok(bytes.to_vec())
+    }
+
     /// Download a file to the specified path with retry support
     pub fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
         info!("Downloading {} to {}", url, dest_path.display());
