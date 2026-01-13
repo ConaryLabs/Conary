@@ -70,9 +70,13 @@ pub fn cmd_install(
     let progress = InstallProgress::single("Installing");
     progress.set_phase(package, InstallPhase::Downloading);
 
+    // Keep temp_dir alive until end of function so downloaded files aren't deleted
+    let _temp_dir: Option<TempDir>;
+
     let package_path = if Path::new(package).exists() {
         info!("Installing from local file: {}", package);
         progress.set_status(&format!("Loading local file: {}", package));
+        _temp_dir = None;
         PathBuf::from(package)
     } else {
         info!("Searching repositories for package: {}", package);
@@ -119,6 +123,9 @@ pub fn cmd_install(
         )
         .with_context(|| format!("Failed to download package '{}'", pkg_with_repo.package.name))?;
         info!("Downloaded package to: {}", download_path.display());
+
+        // Move temp_dir to outer scope to keep it alive
+        _temp_dir = Some(temp_dir);
         download_path
     };
 
