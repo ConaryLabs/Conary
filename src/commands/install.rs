@@ -4,7 +4,7 @@
 use super::progress::{InstallPhase, InstallProgress, RemovePhase, RemoveProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
-use conary::components::{should_run_scriptlets, ComponentClassifier, ComponentType};
+use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
 use conary::db::models::{Component, ProvideEntry, ScriptletEntry};
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
@@ -305,6 +305,37 @@ fn rollback_deployed_files(deployer: &conary::filesystem::FileDeployer, files: &
     }
 }
 
+/// Represents which components to install
+#[derive(Debug, Clone)]
+enum ComponentSelection {
+    /// Install only default components (runtime, lib, config)
+    Defaults,
+    /// Install all components
+    All,
+    /// Install specific component(s)
+    Specific(Vec<ComponentType>),
+}
+
+impl ComponentSelection {
+    /// Check if a component type should be installed
+    fn should_install(&self, comp_type: ComponentType) -> bool {
+        match self {
+            Self::All => true,
+            Self::Defaults => comp_type.is_default(),
+            Self::Specific(types) => types.contains(&comp_type),
+        }
+    }
+
+    /// Get a display string for the selection
+    fn display(&self) -> String {
+        match self {
+            Self::All => "all".to_string(),
+            Self::Defaults => "defaults (runtime, lib, config)".to_string(),
+            Self::Specific(types) => types.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", "),
+        }
+    }
+}
+
 /// Install a package
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
@@ -317,15 +348,33 @@ pub fn cmd_install(
     no_deps: bool,
     no_scripts: bool,
 ) -> Result<()> {
-    info!("Installing package: {}", package);
+    // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
+    let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
+        let selection = if comp == "all" {
+            ComponentSelection::All
+        } else if let Some(comp_type) = ComponentType::parse(&comp) {
+            ComponentSelection::Specific(vec![comp_type])
+        } else {
+            return Err(anyhow::anyhow!(
+                "Unknown component '{}'. Valid components: runtime, lib, devel, doc, config, all",
+                comp
+            ));
+        };
+        (pkg, selection)
+    } else {
+        // No component spec - install defaults only
+        (package.to_string(), ComponentSelection::Defaults)
+    };
+
+    info!("Installing package: {} (components: {})", package_name, component_selection.display());
 
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
-    progress.set_phase(package, InstallPhase::Downloading);
+    progress.set_phase(&package_name, InstallPhase::Downloading);
 
     // Resolve package path (download if needed)
     let resolved = resolve_package_path(
-        package,
+        &package_name,
         db_path,
         version.as_deref(),
         repo.as_deref(),
@@ -543,6 +592,25 @@ pub fn cmd_install(
     }
 
     if dry_run {
+        // For dry run, classify files to show component info
+        let dry_run_paths: Vec<String> = pkg.files().iter().map(|f| f.path.clone()).collect();
+        let dry_run_classified = ComponentClassifier::classify_all(&dry_run_paths);
+        let dry_run_available: Vec<_> = dry_run_classified.keys().collect();
+        let dry_run_selected: Vec<_> = dry_run_available
+            .iter()
+            .filter(|c| component_selection.should_install(***c))
+            .collect();
+        let dry_run_skipped: Vec<_> = dry_run_available
+            .iter()
+            .filter(|c| !component_selection.should_install(***c))
+            .collect();
+
+        let selected_file_count: usize = dry_run_classified
+            .iter()
+            .filter(|(c, _)| component_selection.should_install(**c))
+            .map(|(_, files)| files.len())
+            .sum();
+
         println!(
             "\nWould install package: {} version {}",
             pkg.name(),
@@ -552,7 +620,18 @@ pub fn cmd_install(
             "  Architecture: {}",
             pkg.architecture().unwrap_or("none")
         );
-        println!("  Files: {}", pkg.files().len());
+        println!(
+            "  Components to install: {} ({} files)",
+            dry_run_selected.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+            selected_file_count
+        );
+        if !dry_run_skipped.is_empty() {
+            println!(
+                "  Components skipped: {} (use {}:all to include)",
+                dry_run_skipped.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+                pkg.name()
+            );
+        }
         println!("  Dependencies: {}", pkg.dependencies().len());
         println!("\nDry run complete. No changes made.");
         return Ok(());
@@ -573,11 +652,54 @@ pub fn cmd_install(
 
     // Classify files into components
     let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
-    let classified = ComponentClassifier::classify_all(&file_paths);
-    let installed_component_types: Vec<ComponentType> = classified.keys().copied().collect();
+    let all_classified = ComponentClassifier::classify_all(&file_paths);
+
+    // Show what components are available in the package
+    let available_components: Vec<ComponentType> = all_classified.keys().copied().collect();
     info!(
-        "Classified {} files into {} component types: {:?}",
-        file_paths.len(),
+        "Package contains {} component types: {:?}",
+        available_components.len(),
+        available_components.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+    );
+
+    // Filter to only selected components
+    let classified: HashMap<ComponentType, Vec<String>> = all_classified
+        .into_iter()
+        .filter(|(comp_type, _)| component_selection.should_install(*comp_type))
+        .collect();
+
+    // Build set of paths for selected components
+    let selected_paths: std::collections::HashSet<&str> = classified
+        .values()
+        .flatten()
+        .map(|s| s.as_str())
+        .collect();
+
+    // Filter extracted files to only include selected components
+    let extracted_files: Vec<_> = extracted_files
+        .into_iter()
+        .filter(|f| selected_paths.contains(f.path.as_str()))
+        .collect();
+
+    let installed_component_types: Vec<ComponentType> = classified.keys().copied().collect();
+
+    // Show what we're actually installing
+    let skipped_components: Vec<_> = available_components
+        .iter()
+        .filter(|c| !component_selection.should_install(**c))
+        .map(|c| c.as_str())
+        .collect();
+
+    if !skipped_components.is_empty() {
+        info!(
+            "Skipping non-default components: {:?} (use package:all to install everything)",
+            skipped_components
+        );
+    }
+
+    info!(
+        "Installing {} files from {} component(s): {:?}",
+        extracted_files.len(),
         classified.len(),
         installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
     );
@@ -861,6 +983,13 @@ pub fn cmd_install(
 
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
+    // Show what components were available vs installed
+    let skipped_info = if !skipped_components.is_empty() {
+        format!(" (skipped: {})", skipped_components.join(", "))
+    } else {
+        String::new()
+    };
+
     println!(
         "Installed package: {} version {}",
         pkg.name(),
@@ -870,14 +999,15 @@ pub fn cmd_install(
         "  Architecture: {}",
         pkg.architecture().unwrap_or("none")
     );
-    println!("  Files: {}", pkg.files().len());
+    println!("  Files installed: {}", extracted_files.len());
     println!(
-        "  Components: {}",
+        "  Components: {}{}",
         installed_component_types
             .iter()
             .map(|c| format!(":{}", c.as_str()))
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        skipped_info
     );
     println!("  Dependencies: {}", pkg.dependencies().len());
 
