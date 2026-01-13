@@ -14,7 +14,7 @@ mod update;
 pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
 pub use install::{cmd_install, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_history, cmd_query, cmd_rdepends, cmd_whatbreaks};
+pub use query::{cmd_depends, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_rdepends, cmd_whatbreaks};
 pub use repo::{
     cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
@@ -24,11 +24,14 @@ pub use system::{cmd_init, cmd_rollback, cmd_verify};
 pub use update::{cmd_delta_stats, cmd_update};
 
 use anyhow::Result;
+use conary::components::{ComponentClassifier, ComponentType};
+use conary::db::models::Component;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::{DependencyType, ScriptletPhase};
 use conary::packages::PackageFormat;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -120,6 +123,15 @@ pub fn install_package_from_file(
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
+    // Classify files into components
+    let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let classified = ComponentClassifier::classify_all(&file_paths);
+    info!(
+        "Classified {} files into {} component types",
+        file_paths.len(),
+        classified.len()
+    );
+
     conary::db::transaction(conn, |tx| {
         let changeset_desc = if let Some(old) = old_trove {
             format!(
@@ -144,6 +156,26 @@ pub fn install_package_from_file(
         let mut trove = package.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
+
+        // Create components and build path-to-component-id mapping
+        let mut component_ids: HashMap<ComponentType, i64> = HashMap::new();
+        for comp_type in classified.keys() {
+            let mut component = Component::from_type(trove_id, *comp_type);
+            component.description = Some(format!("{} files", comp_type.as_str()));
+            let comp_id = component.insert(tx)?;
+            component_ids.insert(*comp_type, comp_id);
+            info!("Created component :{} (id={})", comp_type.as_str(), comp_id);
+        }
+
+        // Build path-to-component-id lookup for efficient file insertion
+        let mut path_to_component: HashMap<&str, i64> = HashMap::new();
+        for (comp_type, files) in &classified {
+            if let Some(&comp_id) = component_ids.get(comp_type) {
+                for path in files {
+                    path_to_component.insert(path.as_str(), comp_id);
+                }
+            }
+        }
 
         for file in &extracted_files {
             if deployer.file_exists(&file.path) {
@@ -174,6 +206,9 @@ pub fn install_package_from_file(
                 [&hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
             )?;
 
+            // Look up the component ID for this file
+            let component_id = path_to_component.get(file.path.as_str()).copied();
+
             let mut file_entry = conary::db::models::FileEntry::new(
                 file.path.clone(),
                 hash.clone(),
@@ -181,6 +216,7 @@ pub fn install_package_from_file(
                 file.mode,
                 trove_id,
             );
+            file_entry.component_id = component_id;
             file_entry.insert(tx)?;
 
             let action = if deployer.file_exists(&file.path) {

@@ -13,6 +13,7 @@
 //! - Flavors: Build-time variations tracked in metadata
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
+pub mod components;
 pub mod db;
 pub mod delta;
 mod error;
@@ -23,4 +24,5 @@ pub mod resolver;
 pub mod scriptlet;
 pub mod version;
 
+pub use components::{ComponentClassifier, ComponentType};
 pub use error::{Error, Result};

@@ -17,6 +17,8 @@ pub struct FileEntry {
     pub group_name: Option<String>,
     pub trove_id: i64,
     pub installed_at: Option<String>,
+    /// Component ID this file belongs to (None for legacy pre-component installs)
+    pub component_id: Option<i64>,
 }
 
 impl FileEntry {
@@ -38,14 +40,38 @@ impl FileEntry {
             group_name: None,
             trove_id,
             installed_at: None,
+            component_id: None,
+        }
+    }
+
+    /// Create a new FileEntry with a component ID
+    pub fn new_with_component(
+        path: String,
+        sha256_hash: String,
+        size: i64,
+        permissions: i32,
+        trove_id: i64,
+        component_id: i64,
+    ) -> Self {
+        Self {
+            id: None,
+            path,
+            sha256_hash,
+            size,
+            permissions,
+            owner: None,
+            group_name: None,
+            trove_id,
+            installed_at: None,
+            component_id: Some(component_id),
         }
     }
 
     /// Insert this file into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &self.path,
                 &self.sha256_hash,
@@ -54,6 +80,7 @@ impl FileEntry {
                 &self.owner,
                 &self.group_name,
                 &self.trove_id,
+                &self.component_id,
             ],
         )?;
 
@@ -68,8 +95,8 @@ impl FileEntry {
     /// This method updates the existing record if the path already exists.
     pub fn insert_or_replace(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &self.path,
                 &self.sha256_hash,
@@ -78,6 +105,7 @@ impl FileEntry {
                 &self.owner,
                 &self.group_name,
                 &self.trove_id,
+                &self.component_id,
             ],
         )?;
 
@@ -89,7 +117,7 @@ impl FileEntry {
     /// Find a file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at, component_id
              FROM files WHERE path = ?1",
         )?;
 
@@ -101,12 +129,26 @@ impl FileEntry {
     /// Find all files belonging to a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at, component_id
              FROM files WHERE trove_id = ?1",
         )?;
 
         let files = stmt
             .query_map([trove_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
+    /// Find all files belonging to a specific component
+    pub fn find_by_component(conn: &Connection, component_id: i64) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at, component_id
+             FROM files WHERE component_id = ?1",
+        )?;
+
+        let files = stmt
+            .query_map([component_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(files)
@@ -130,6 +172,7 @@ impl FileEntry {
             group_name: row.get(6)?,
             trove_id: row.get(7)?,
             installed_at: row.get(8)?,
+            component_id: row.get(9)?,
         })
     }
 }

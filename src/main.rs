@@ -209,6 +209,26 @@ enum Commands {
         db_path: String,
     },
 
+    /// List components of an installed package
+    ListComponents {
+        /// Package name
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Query files in a specific component (e.g., nginx:lib)
+    QueryComponent {
+        /// Component spec in format "package:component" (e.g., nginx:lib)
+        component_spec: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -459,6 +479,14 @@ fn main() -> Result<()> {
 
         Some(Commands::Whatbreaks { package_name, db_path }) => {
             commands::cmd_whatbreaks(&package_name, &db_path)
+        }
+
+        Some(Commands::ListComponents { package_name, db_path }) => {
+            commands::cmd_list_components(&package_name, &db_path)
+        }
+
+        Some(Commands::QueryComponent { component_spec, db_path }) => {
+            commands::cmd_query_component(&component_spec, &db_path)
         }
 
         Some(Commands::Completions { shell }) => {

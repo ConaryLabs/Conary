@@ -6,6 +6,8 @@
 //! and provides methods for creating, reading, updating, and deleting records.
 
 mod changeset;
+mod component;
+mod component_dependency;
 mod delta;
 mod dependency;
 mod file_entry;
@@ -17,6 +19,8 @@ mod scriptlet_entry;
 mod trove;
 
 pub use changeset::{Changeset, ChangesetStatus};
+pub use component::Component;
+pub use component_dependency::{ComponentDependency, ComponentDepType, ComponentProvide};
 pub use delta::{DeltaStats, PackageDelta};
 pub use dependency::DependencyEntry;
 pub use file_entry::FileEntry;

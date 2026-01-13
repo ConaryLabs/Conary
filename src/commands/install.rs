@@ -4,7 +4,8 @@
 use super::progress::{InstallPhase, InstallProgress, RemovePhase, RemoveProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
-use conary::db::models::{ProvideEntry, ScriptletEntry};
+use conary::components::{should_run_scriptlets, ComponentClassifier, ComponentType};
+use conary::db::models::{Component, ProvideEntry, ScriptletEntry};
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
@@ -16,6 +17,7 @@ use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, 
 use conary::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
@@ -569,6 +571,17 @@ pub fn cmd_install(
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
     info!("Extracted {} files", extracted_files.len());
 
+    // Classify files into components
+    let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let classified = ComponentClassifier::classify_all(&file_paths);
+    let installed_component_types: Vec<ComponentType> = classified.keys().copied().collect();
+    info!(
+        "Classified {} files into {} component types: {:?}",
+        file_paths.len(),
+        classified.len(),
+        installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+    );
+
     // Determine package format for scriptlet execution
     let scriptlet_format = match format {
         PackageFormatType::Rpm => ScriptletPackageFormat::Rpm,
@@ -586,8 +599,10 @@ pub fn cmd_install(
     };
 
     // Execute pre-install scriptlet (before any changes)
+    // Scriptlets only run when :runtime or :lib is being installed
     let scriptlets = pkg.scriptlets();
-    if !no_scripts && !scriptlets.is_empty() {
+    let run_scriptlets = should_run_scriptlets(&installed_component_types);
+    if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PreScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
@@ -612,6 +627,11 @@ pub fn cmd_install(
             info!("Running {} scriptlet...", pre.phase);
             executor.execute(pre, &execution_mode)?;
         }
+    } else if !no_scripts && !scriptlets.is_empty() && !run_scriptlets {
+        info!(
+            "Skipping scriptlets: no :runtime or :lib component being installed (components: {:?})",
+            installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+        );
     }
 
     // Query old package's scriptlets BEFORE we delete it from DB
@@ -688,11 +708,34 @@ pub fn cmd_install(
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 
+        // Create components and build path-to-component-id mapping
+        let mut component_ids: HashMap<ComponentType, i64> = HashMap::new();
+        for comp_type in classified.keys() {
+            let mut component = Component::from_type(trove_id, *comp_type);
+            component.description = Some(format!("{} files", comp_type.as_str()));
+            let comp_id = component.insert(tx)?;
+            component_ids.insert(*comp_type, comp_id);
+            info!("Created component :{} (id={})", comp_type.as_str(), comp_id);
+        }
+
+        // Build path-to-component-id lookup for efficient file insertion
+        let mut path_to_component: HashMap<&str, i64> = HashMap::new();
+        for (comp_type, files) in &classified {
+            if let Some(&comp_id) = component_ids.get(comp_type) {
+                for path in files {
+                    path_to_component.insert(path.as_str(), comp_id);
+                }
+            }
+        }
+
         for (path, hash, size, mode) in &file_hashes {
             tx.execute(
                 "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
                 [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &size.to_string()],
             )?;
+
+            // Look up the component ID for this file
+            let component_id = path_to_component.get(path.as_str()).copied();
 
             let mut file_entry = conary::db::models::FileEntry::new(
                 path.clone(),
@@ -701,6 +744,7 @@ pub fn cmd_install(
                 *mode,
                 trove_id,
             );
+            file_entry.component_id = component_id;
             file_entry.insert(tx)?;
 
             // Record in history (we know files exist since we just deployed them)
@@ -783,7 +827,8 @@ pub fn cmd_install(
     }
 
     // Execute post-install scriptlet (after files are deployed)
-    if !no_scripts && !scriptlets.is_empty() {
+    // Scriptlets only run when :runtime or :lib is being installed
+    if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PostScript);
         let executor = ScriptletExecutor::new(
             Path::new(root),
@@ -826,6 +871,14 @@ pub fn cmd_install(
         pkg.architecture().unwrap_or("none")
     );
     println!("  Files: {}", pkg.files().len());
+    println!(
+        "  Components: {}",
+        installed_component_types
+            .iter()
+            .map(|c| format!(":{}", c.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     println!("  Dependencies: {}", pkg.dependencies().len());
 
     Ok(())

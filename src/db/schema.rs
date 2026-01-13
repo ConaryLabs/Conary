@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -85,6 +85,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         8 => migrate_v8(conn),
         9 => migrate_v9(conn),
         10 => migrate_v10(conn),
+        11 => migrate_v11(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -496,6 +497,82 @@ fn migrate_v10(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Schema Version 11: Add component model support
+///
+/// Adds tables for first-class component support:
+/// - components: Independently installable units within packages
+/// - component_dependencies: Dependencies between components
+/// - component_provides: Capabilities provided by components
+///
+/// Also adds component_id column to files table to link files to components.
+///
+/// Components are split from packages at install time based on file paths:
+/// - :runtime - Executables, assets, helpers (default bucket)
+/// - :lib - Shared libraries (.so files in lib directories)
+/// - :devel - Headers, static libs, pkg-config
+/// - :doc - Documentation, man pages
+/// - :config - Configuration files (/etc/*)
+fn migrate_v11(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 11");
+
+    conn.execute_batch(
+        "
+        -- Components: Independently installable units within packages
+        -- A package like 'openssl' may have components :runtime, :lib, :devel, :doc, :config
+        CREATE TABLE components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            description TEXT,
+            installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_installed INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(parent_trove_id, name)
+        );
+
+        CREATE INDEX idx_components_parent ON components(parent_trove_id);
+        CREATE INDEX idx_components_name ON components(name);
+        CREATE INDEX idx_components_installed ON components(is_installed);
+
+        -- Add component_id to files table
+        -- NULL component_id indicates legacy (pre-component) installation
+        ALTER TABLE files ADD COLUMN component_id INTEGER REFERENCES components(id) ON DELETE SET NULL;
+
+        CREATE INDEX idx_files_component ON files(component_id);
+
+        -- Component dependencies: Dependencies between components
+        -- Can reference components in same package (depends_on_package = NULL) or other packages
+        CREATE TABLE component_dependencies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+            depends_on_component TEXT NOT NULL,
+            depends_on_package TEXT,
+            dependency_type TEXT NOT NULL CHECK(dependency_type IN ('runtime', 'build', 'optional')),
+            version_constraint TEXT,
+            UNIQUE(component_id, depends_on_component, depends_on_package)
+        );
+
+        CREATE INDEX idx_component_deps_component ON component_dependencies(component_id);
+        CREATE INDEX idx_component_deps_target ON component_dependencies(depends_on_package, depends_on_component);
+
+        -- Component provides: Capabilities provided by components
+        -- Similar to package-level provides but at component granularity
+        CREATE TABLE component_provides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+            capability TEXT NOT NULL,
+            version TEXT,
+            UNIQUE(component_id, capability)
+        );
+
+        CREATE INDEX idx_component_provides_component ON component_provides(component_id);
+        CREATE INDEX idx_component_provides_capability ON component_provides(capability);
+        ",
+    )?;
+
+    info!("Schema version 11 applied successfully");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +677,151 @@ mod tests {
             ],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_v11_creates_component_tables() {
+        let (_temp, conn) = create_test_db();
+        migrate(&conn).unwrap();
+
+        // Verify component tables exist
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"components".to_string()));
+        assert!(tables.contains(&"component_dependencies".to_string()));
+        assert!(tables.contains(&"component_provides".to_string()));
+    }
+
+    #[test]
+    fn test_v11_component_file_relationship() {
+        let (_temp, conn) = create_test_db();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        migrate(&conn).unwrap();
+
+        // Create a trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
+            ["nginx", "1.24.0", "package", "x86_64"],
+        )
+        .unwrap();
+
+        let trove_id: i64 = conn
+            .query_row("SELECT id FROM troves WHERE name = 'nginx'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Create a component for the trove
+        conn.execute(
+            "INSERT INTO components (parent_trove_id, name, description) VALUES (?1, ?2, ?3)",
+            rusqlite::params![trove_id, "runtime", "Executable files"],
+        )
+        .unwrap();
+
+        let component_id: i64 = conn
+            .query_row(
+                "SELECT id FROM components WHERE parent_trove_id = ?1 AND name = 'runtime'",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Create a file linked to the component
+        conn.execute(
+            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id, component_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params!["/usr/sbin/nginx", "abc123", 1024, 755, trove_id, component_id],
+        )
+        .unwrap();
+
+        // Verify the file is linked to the component
+        let file_component_id: i64 = conn
+            .query_row(
+                "SELECT component_id FROM files WHERE path = '/usr/sbin/nginx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(file_component_id, component_id);
+    }
+
+    #[test]
+    fn test_v11_component_unique_constraint() {
+        let (_temp, conn) = create_test_db();
+        migrate(&conn).unwrap();
+
+        // Create a trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
+            ["openssl", "3.0.0", "package", "x86_64"],
+        )
+        .unwrap();
+
+        let trove_id: i64 = conn
+            .query_row("SELECT id FROM troves WHERE name = 'openssl'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Create a component
+        conn.execute(
+            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
+            rusqlite::params![trove_id, "lib"],
+        )
+        .unwrap();
+
+        // Try to create duplicate component - should fail
+        let result = conn.execute(
+            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
+            rusqlite::params![trove_id, "lib"],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_v11_component_cascade_delete() {
+        let (_temp, conn) = create_test_db();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        migrate(&conn).unwrap();
+
+        // Create a trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
+            ["curl", "8.0.0", "package", "x86_64"],
+        )
+        .unwrap();
+
+        let trove_id: i64 = conn
+            .query_row("SELECT id FROM troves WHERE name = 'curl'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Create components
+        conn.execute(
+            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
+            rusqlite::params![trove_id, "runtime"],
+        )
+        .unwrap();
+
+        // Delete the trove - components should cascade delete
+        conn.execute("DELETE FROM troves WHERE id = ?1", [trove_id])
+            .unwrap();
+
+        // Verify component was deleted
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM components WHERE parent_trove_id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
