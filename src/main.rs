@@ -59,6 +59,10 @@ enum Commands {
         /// Skip dependency checking
         #[arg(long)]
         no_deps: bool,
+
+        /// Skip running package scriptlets (install/remove hooks)
+        #[arg(long)]
+        no_scripts: bool,
     },
 
     /// Remove an installed package
@@ -73,6 +77,10 @@ enum Commands {
         /// Installation root directory
         #[arg(short, long, default_value = "/")]
         root: String,
+
+        /// Skip running package scriptlets (install/remove hooks)
+        #[arg(long)]
+        no_scripts: bool,
     },
 
     /// Adopt all installed system packages into Conary tracking
@@ -361,12 +369,12 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
-        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps }) => {
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps)
+        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts }) => {
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts)
         }
 
-        Some(Commands::Remove { package_name, db_path, root }) => {
-            commands::cmd_remove(&package_name, &db_path, &root)
+        Some(Commands::Remove { package_name, db_path, root, no_scripts }) => {
+            commands::cmd_remove(&package_name, &db_path, &root, no_scripts)
         }
 
         Some(Commands::AdoptSystem { db_path, full, dry_run }) => {

@@ -20,6 +20,7 @@ pub mod filesystem;
 pub mod packages;
 pub mod repository;
 pub mod resolver;
+pub mod scriptlet;
 pub mod version;
 
 pub use error::{Error, Result};

@@ -52,6 +52,10 @@ pub enum Error {
     /// GPG signature verification failed
     #[error("GPG verification failed: {0}")]
     GpgVerificationFailed(String),
+
+    /// Scriptlet execution error
+    #[error("Scriptlet error: {0}")]
+    ScriptletError(String),
 }
 
 /// Result type alias using Conary's Error type

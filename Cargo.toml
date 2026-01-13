@@ -66,6 +66,7 @@ xz2 = "0.1"                     # XZ compression (for Arch)
 rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
 quick-xml = "0.31"              # XML parser for Fedora/RPM repodata
 ar = "0.9"                      # AR archive parsing for DEB packages
+wait-timeout = "0.2"            # Subprocess timeout for scriptlet execution
 
 [dev-dependencies]
 

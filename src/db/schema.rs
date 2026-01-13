@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -83,6 +83,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         6 => migrate_v6(conn),
         7 => migrate_v7(conn),
         8 => migrate_v8(conn),
+        9 => migrate_v9(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -437,6 +438,42 @@ fn migrate_v8(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 8 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 9: Add scriptlets table for package install/remove hooks
+///
+/// Creates a scriptlets table to store package scriptlets (install/remove hooks).
+/// This enables execution of scriptlets during installation and removal,
+/// and storage for later removal operations.
+///
+/// Scriptlet phases include:
+/// - pre-install, post-install
+/// - pre-remove, post-remove
+/// - pre-upgrade, post-upgrade (Arch-specific)
+fn migrate_v9(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 9");
+
+    conn.execute_batch(
+        "
+        -- Scriptlets: Package install/remove hooks
+        CREATE TABLE scriptlets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            phase TEXT NOT NULL,
+            interpreter TEXT NOT NULL,
+            content TEXT NOT NULL,
+            flags TEXT,
+            package_format TEXT NOT NULL DEFAULT 'rpm',
+            UNIQUE(trove_id, phase)
+        );
+
+        -- Index for fast lookup of scriptlets by trove
+        CREATE INDEX idx_scriptlets_trove ON scriptlets(trove_id);
+        ",
+    )?;
+
+    info!("Schema version 9 applied successfully");
     Ok(())
 }
 

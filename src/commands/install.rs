@@ -3,14 +3,15 @@
 
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::Result;
-use conary::db::models::ProvideEntry;
+use conary::db::models::{ProvideEntry, ScriptletEntry};
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
-use conary::packages::traits::DependencyType;
+use conary::packages::traits::{DependencyType, ScriptletPhase};
 use conary::packages::PackageFormat;
 use conary::repository::{self, PackageSelector, SelectionOptions};
 use conary::resolver::{DependencyEdge, Resolver};
+use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor};
 use conary::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,7 @@ struct FileSnapshot {
 }
 
 /// Install a package
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
     db_path: &str,
@@ -47,6 +49,7 @@ pub fn cmd_install(
     repo: Option<String>,
     dry_run: bool,
     no_deps: bool,
+    no_scripts: bool,
 ) -> Result<()> {
     info!("Installing package: {}", package);
 
@@ -359,6 +362,38 @@ pub fn cmd_install(
     let extracted_files = pkg.extract_file_contents()?;
     info!("Extracted {} files", extracted_files.len());
 
+    // Determine package format for scriptlet execution
+    let scriptlet_format = match format {
+        PackageFormatType::Rpm => ScriptletPackageFormat::Rpm,
+        PackageFormatType::Deb => ScriptletPackageFormat::Deb,
+        PackageFormatType::Arch => ScriptletPackageFormat::Arch,
+    };
+
+    // Determine execution mode
+    let execution_mode = if let Some(old_trove) = &old_trove_to_upgrade {
+        ExecutionMode::Upgrade {
+            old_version: old_trove.version.clone(),
+        }
+    } else {
+        ExecutionMode::Install
+    };
+
+    // Execute pre-install scriptlet (before any changes)
+    let scriptlets = pkg.scriptlets();
+    if !no_scripts && !scriptlets.is_empty() {
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            pkg.name(),
+            pkg.version(),
+            scriptlet_format,
+        );
+
+        if let Some(pre) = scriptlets.iter().find(|s| s.phase == ScriptletPhase::PreInstall) {
+            info!("Running pre-install scriptlet...");
+            executor.execute(pre, &execution_mode)?;
+        }
+    }
+
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -461,6 +496,24 @@ pub fn cmd_install(
             dep_entry.insert(tx)?;
         }
 
+        // Store scriptlets for later removal (always, even if --no-scripts)
+        let format_str = match format {
+            PackageFormatType::Rpm => "rpm",
+            PackageFormatType::Deb => "deb",
+            PackageFormatType::Arch => "arch",
+        };
+        for scriptlet in &scriptlets {
+            let mut entry = ScriptletEntry::with_flags(
+                trove_id,
+                scriptlet.phase.to_string(),
+                scriptlet.interpreter.clone(),
+                scriptlet.content.clone(),
+                scriptlet.flags.clone(),
+                format_str,
+            );
+            entry.insert(tx)?;
+        }
+
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -471,6 +524,26 @@ pub fn cmd_install(
         deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
     }
     info!("Successfully deployed {} files", extracted_files.len());
+
+    // Execute post-install scriptlet (after files are deployed)
+    if !no_scripts && !scriptlets.is_empty() {
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            pkg.name(),
+            pkg.version(),
+            scriptlet_format,
+        );
+
+        if let Some(post) = scriptlets.iter().find(|s| s.phase == ScriptletPhase::PostInstall) {
+            info!("Running post-install scriptlet...");
+            if let Err(e) = executor.execute(post, &execution_mode) {
+                // Post-install failure is serious but files are already deployed
+                // Log warning but don't fail the install
+                warn!("Post-install scriptlet failed: {}. Package files are installed.", e);
+                eprintln!("WARNING: Post-install scriptlet failed: {}", e);
+            }
+        }
+    }
 
     println!(
         "Installed package: {} version {}",
@@ -488,7 +561,7 @@ pub fn cmd_install(
 }
 
 /// Remove an installed package
-pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
+pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: bool) -> Result<()> {
     info!("Removing package: {}", package_name);
 
     let mut conn = conary::db::open(db_path)?;
@@ -542,6 +615,30 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
     // Get files BEFORE deleting the trove (cascade delete will remove file records)
     let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
     let _file_count = files.len(); // Used for snapshot, not display
+
+    // Get stored scriptlets BEFORE deleting the trove
+    let stored_scriptlets = ScriptletEntry::find_by_trove(&conn, trove_id)?;
+
+    // Determine package format from stored scriptlets (default to RPM if no scriptlets)
+    let scriptlet_format = stored_scriptlets
+        .first()
+        .and_then(|s| ScriptletPackageFormat::parse(&s.package_format))
+        .unwrap_or(ScriptletPackageFormat::Rpm);
+
+    // Execute pre-remove scriptlet (before any changes)
+    if !no_scripts && !stored_scriptlets.is_empty() {
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            &trove.name,
+            &trove.version,
+            scriptlet_format,
+        );
+
+        if let Some(pre) = stored_scriptlets.iter().find(|s| s.phase == "pre-remove") {
+            info!("Running pre-remove scriptlet...");
+            executor.execute_entry(pre, &ExecutionMode::Remove)?;
+        }
+    }
 
     // Create snapshot of trove for rollback support
     let snapshot = TroveSnapshot {
@@ -664,6 +761,25 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str) -> Result<()> {
             }
             Err(e) => {
                 warn!("Failed to remove directory {}: {}", dir_path, e);
+            }
+        }
+    }
+
+    // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
+    if !no_scripts && !stored_scriptlets.is_empty() {
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            &trove.name,
+            &trove.version,
+            scriptlet_format,
+        );
+
+        if let Some(post) = stored_scriptlets.iter().find(|s| s.phase == "post-remove") {
+            info!("Running post-remove scriptlet...");
+            if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
+                // Post-remove failure is not critical - files are already removed
+                warn!("Post-remove scriptlet failed: {}. Package files already removed.", e);
+                eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
             }
         }
     }

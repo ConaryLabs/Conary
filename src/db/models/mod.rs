@@ -13,6 +13,7 @@ mod flavor;
 mod provenance;
 mod provide_entry;
 mod repository;
+mod scriptlet_entry;
 mod trove;
 
 pub use changeset::{Changeset, ChangesetStatus};
@@ -23,6 +24,7 @@ pub use flavor::Flavor;
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use repository::{Repository, RepositoryPackage};
+pub use scriptlet_entry::ScriptletEntry;
 pub use trove::{InstallSource, Trove, TroveType};
 
 #[cfg(test)]
