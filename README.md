@@ -12,6 +12,12 @@ Every operation is a **changeset** - a transactional move from one system state 
 ### Troves All The Way Down
 The core unit is a **trove** - whether it's a single library, a component (`:runtime`, `:devel`, `:doc`), or an entire collection of packages. Hierarchical and composable. Install just what you need. Query at any level. It's the same concept whether you're asking about one binary or your entire desktop environment.
 
+### Components: Fine-Grained Installation
+Every package is automatically split into **components** - `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, and more. Install only what you need: `nginx:runtime` without the docs, or `openssl:devel` for building without the runtime. Components have their own dependencies, and scriptlets only run when appropriate components are installed.
+
+### Collections: Package Groups
+Group related packages into **collections** - meta-packages that let you install entire software stacks with one command. Create a `web-stack` collection containing nginx, postgresql, and redis. Install it all at once, manage membership dynamically.
+
 ### Flavors For Modern Builds
 Build-time variations matter more than ever. Cross-compilation, musl vs glibc, feature flags, different architectures - these are encoded as **flavors**. One package definition, multiple builds, clean metadata. `nginx[ssl,http3]` vs `nginx[!ssl]` - you get what you specify, tracked properly.
 
@@ -19,10 +25,13 @@ Build-time variations matter more than ever. Cross-compilation, musl vs glibc, f
 Every file is tracked in the database with its hash, ownership, and permissions. You can query exactly what owns what, detect conflicts, and verify integrity at any time. Updates use **binary deltas** for large files - why download 500MB when only 5MB changed? Bandwidth-constrained users rejoice. The infrastructure supports it naturally because changesets already track exactly what changed at the file level.
 
 ### Format Agnostic
-RPM, DEB, Arch packages - they're all just compressed files with metadata. Stop letting package format dictate your entire OS choice. Conary speaks all of them.
+RPM, DEB, Arch packages - Conary speaks all of them. Stop letting package format dictate your entire OS choice.
 
 ### Time Travel Built In
 Every system state is tracked in SQLite. Rollback isn't an afterthought - it's core functionality. Bad update? Go back. Want to test something? Branch your system state. Every changeset is logged, every state is queryable.
+
+### System Adoption
+Already have packages installed by your distro's package manager? **Adopt** them into Conary's database without reinstalling. Conary scans your system, detects installed packages, and tracks them alongside Conary-managed ones. Unified management without disruption.
 
 ### Provenance Tracking
 Know where your software comes from. Every trove tracks its source, branch, and build chain. Supply chain security isn't optional in 2025.
@@ -43,24 +52,53 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - **SQLite** via **rusqlite** - synchronous, battle-tested, perfect for changeset operations
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2025
+- **Database schema v13** with automatic migrations
 
 ## Status
 
-**Foundation Complete** - Six phases implemented and tested. The core architecture is solid and working.
+**Core Architecture Complete** - All major features implemented and tested. Component model, collections, system adoption, multi-format support, and dependency resolution all working.
 
-### What's Working Now
+### Commands Available
 
-**Commands Available:**
+**Package Management:**
 - `conary init` - Initialize database and storage
-- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run)
+- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts)
 - `conary remove <package>` - Remove installed packages (checks dependencies)
-- `conary query [pattern]` - List installed packages
+- `conary update [package]` - Update packages with delta-first logic
+- `conary autoremove` - Remove orphaned dependencies no longer needed
 - `conary verify [package]` - Verify file integrity with SHA-256
-- `conary history` - Show all changeset operations
-- `conary rollback <id>` - Rollback any changeset, including filesystem changes
+- `conary restore <package>` - Restore modified/deleted files from CAS
+- `conary restore-all` - Restore all modified files across all packages
+
+**Query & Information:**
+- `conary query [pattern]` - List installed packages
 - `conary depends <package>` - Show package dependencies
 - `conary rdepends <package>` - Show reverse dependencies (what depends on this)
 - `conary whatbreaks <package>` - Show what would break if package removed
+- `conary whatprovides <capability>` - Find what package provides a capability
+- `conary history` - Show all changeset operations
+- `conary scripts <package.rpm>` - Display scriptlets from a package file
+
+**Component Commands:**
+- `conary list-components <package>` - Show components of an installed package
+- `conary query-component <pkg:comp>` - Query files in a specific component
+
+**Collection Commands:**
+- `conary collection-create <name>` - Create a new package collection
+- `conary collection-list` - List all collections
+- `conary collection-show <name>` - Show collection details and members
+- `conary collection-add <name> --members <pkg1,pkg2>` - Add packages to collection
+- `conary collection-remove <name> --members <pkg1,pkg2>` - Remove packages from collection
+- `conary collection-delete <name>` - Delete a collection
+- `conary collection-install <name>` - Install all packages in a collection
+
+**System Adoption:**
+- `conary adopt <package>` - Adopt a single system package into Conary
+- `conary adopt-system` - Scan and adopt all system packages
+- `conary adopt-status` - Show adoption status summary
+- `conary conflicts` - Show file conflicts between packages
+
+**Repository Management:**
 - `conary repo-add <name> <url>` - Add a new package repository
 - `conary repo-list` - List configured repositories
 - `conary repo-remove <name>` - Remove a repository
@@ -68,29 +106,82 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - `conary repo-disable <name>` - Disable a repository
 - `conary repo-sync [name]` - Synchronize repository metadata
 - `conary search <pattern>` - Search for packages in repositories
-- `conary update [package]` - Update packages with delta-first logic
+
+**GPG Key Management:**
+- `conary key-import <path>` - Import a GPG public key
+- `conary key-list` - List imported GPG keys
+- `conary key-remove <fingerprint>` - Remove a GPG key
+
+**System Operations:**
+- `conary rollback <id>` - Rollback any changeset, including filesystem changes
 - `conary delta-stats` - Show delta update statistics and bandwidth savings
 - `conary completions <shell>` - Generate shell completion scripts
 
-**Core Features Implemented:**
-- **Content-Addressable Storage**: Git-style file storage with automatic deduplication
-- **Atomic Operations**: All operations wrapped in transactions - they work completely or not at all
-- **Full Rollback**: Database changes AND filesystem changes reversed atomically
-- **Conflict Detection**: Smart detection of file conflicts, errors on untracked files
-- **File Integrity**: SHA-256 verification of all installed files
-- **Schema Migrations**: Database evolves cleanly (currently v5)
-- **Changeset Model**: Every operation tracked as a changeset for complete auditability
-- **Dependency Resolution**: Graph-based solver with topological sort and cycle detection
-- **Version Constraints**: Full RPM version support with semver comparison
-- **Delta Updates**: Binary delta compression using zstd dictionary compression (90%+ space savings)
-- **Bandwidth Tracking**: Statistics on delta effectiveness and bytes saved across all updates
-- **Repository-Based Installation**: Install packages by name from remote repositories
-- **Automatic Dependency Resolution**: Missing dependencies automatically downloaded and installed
-- **Smart Version Selection**: Latest version from highest-priority repository, with --version override
-- **Auto-Upgrade**: Install command automatically upgrades to newer versions
-- **Dry Run Mode**: Preview installations without making changes (--dry-run flag)
+### Core Features
 
-**Shell Completions:**
+**Multi-Format Support:**
+- **RPM packages** - Full support including scriptlets, dependencies, and rich metadata
+- **DEB packages** - Debian/Ubuntu package format support
+- **Arch packages** - pkg.tar.zst and pkg.tar.xz format support
+- Automatic format detection via magic bytes or file extension
+
+**Component Model:**
+- Automatic file classification into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`, `:test`
+- Component-level installation - install only what you need
+- Smart scriptlet gating - scripts only run when `:runtime` or `:lib` components are installed
+- Arch-aware library detection (supports multiarch paths)
+
+**Language Dependency Detection:**
+- Automatic detection of Python, Perl, Ruby, and Java modules
+- Soname tracking for shared libraries
+- Proper provides/requires relationships for language ecosystems
+
+**Collections:**
+- Create meta-packages grouping related software
+- Optional members support
+- Install entire collections with one command
+- Track collection membership dynamically
+
+**Dependency Management:**
+- Graph-based solver with topological sort and cycle detection
+- Full RPM version support with semver comparison
+- Track installation reason (explicit vs dependency)
+- Autoremove orphaned dependencies safely
+- whatprovides query for capability lookup
+
+**Content-Addressable Storage:**
+- Git-style file storage with automatic deduplication
+- Restore modified files from the object store
+- SHA-256 verification of all installed files
+
+**Atomic Operations:**
+- All operations wrapped in database transactions
+- Full rollback support - database AND filesystem changes reversed atomically
+- Conflict detection for files owned by other packages
+
+**Delta Updates:**
+- Binary delta compression using zstd dictionary compression
+- 90%+ space savings on updates
+- Automatic fallback from delta to full download
+- Bandwidth tracking and statistics
+
+**Repository System:**
+- HTTP downloads with automatic retry and exponential backoff
+- JSON-based repository index format
+- Metadata caching with configurable expiry
+- Priority-based repository selection
+
+**GPG Signature Verification:**
+- Import and manage trusted GPG keys
+- Verify package signatures before installation
+- Strict mode available for signature enforcement
+
+**System Adoption:**
+- Scan and adopt packages from RPM/APT databases
+- Unified management of distro and Conary packages
+- Conflict detection and resolution
+
+### Shell Completions
 
 Generate completions for your shell:
 
@@ -108,7 +199,7 @@ conary completions fish > ~/.config/fish/completions/conary.fish
 conary completions powershell > conary.ps1
 ```
 
-**Man Pages:**
+### Man Pages
 
 Man pages are automatically generated during build and located in `man/conary.1`. View with:
 
@@ -124,9 +215,7 @@ sudo mandb
 man conary
 ```
 
-**Repository Management:**
-
-Conary supports remote package repositories for discovering and installing packages:
+### Repository Usage
 
 ```bash
 # Add a repository
@@ -154,19 +243,37 @@ conary install nginx --repo=myrepo
 conary install nginx --dry-run
 ```
 
-**Testing:**
-- 93 tests passing (76 lib + 7 bin + 10 integration)
-- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, and core operations
-- Integration tests for full install/remove/rollback workflows
+### Collection Usage
 
-**Core Features Implemented (continued):**
-- **Repository Management**: Add remote repositories, sync metadata, search packages
-- **HTTP Downloads**: Automatic retry with exponential backoff for reliable downloads
-- **JSON Metadata**: Simple JSON-based repository index format
-- **Metadata Caching**: Configurable expiry time to minimize bandwidth usage
-- **Delta-First Updates**: Automatic fallback from delta to full download if delta unavailable or fails
-- **zstd Compression**: Dictionary-based compression using old file as dictionary for excellent ratios
+```bash
+# Create a collection
+conary collection-create web-stack --description "Web server stack" --members nginx,postgresql,redis
+
+# List collections
+conary collection-list
+
+# Show collection details
+conary collection-show web-stack
+
+# Add more packages
+conary collection-add web-stack --members memcached,nodejs
+
+# Install all packages in a collection
+conary collection-install web-stack
+
+# Remove packages from collection
+conary collection-remove web-stack --members memcached
+
+# Delete collection (doesn't uninstall packages)
+conary collection-delete web-stack
+```
+
+### Testing
+
+- **289 tests passing** (264 lib + 3 bin + 22 integration)
+- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, and core operations
+- Integration tests for full install/remove/rollback workflows
 
 ### What's Next
 
-Additional package formats (DEB, Arch), package signing and GPG verification, parallel downloads for dependencies, transitive dependency resolution. See ROADMAP.md for details.
+Parallel downloads for dependencies, improved transitive dependency resolution, web UI for system state visualization, and package building tools. See ROADMAP.md for details.
