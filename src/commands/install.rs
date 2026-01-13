@@ -388,8 +388,30 @@ pub fn cmd_install(
             scriptlet_format,
         );
 
-        if let Some(pre) = scriptlets.iter().find(|s| s.phase == ScriptletPhase::PreInstall) {
-            info!("Running pre-install scriptlet...");
+        // For Arch packages during upgrade, use PreUpgrade; for RPM/DEB always use PreInstall
+        // (RPM/DEB distinguish via $1 argument, Arch uses different functions)
+        let pre_phase = if scriptlet_format == ScriptletPackageFormat::Arch
+            && matches!(execution_mode, ExecutionMode::Upgrade { .. })
+        {
+            ScriptletPhase::PreUpgrade
+        } else {
+            ScriptletPhase::PreInstall
+        };
+
+        // Try the preferred phase, fall back to PreInstall for Arch if PreUpgrade not defined
+        let pre_scriptlet = scriptlets
+            .iter()
+            .find(|s| s.phase == pre_phase)
+            .or_else(|| {
+                if pre_phase == ScriptletPhase::PreUpgrade {
+                    scriptlets.iter().find(|s| s.phase == ScriptletPhase::PreInstall)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(pre) = pre_scriptlet {
+            info!("Running {} scriptlet...", pre.phase);
             executor.execute(pre, &execution_mode)?;
         }
     }
@@ -534,13 +556,34 @@ pub fn cmd_install(
             scriptlet_format,
         );
 
-        if let Some(post) = scriptlets.iter().find(|s| s.phase == ScriptletPhase::PostInstall) {
-            info!("Running post-install scriptlet...");
+        // For Arch packages during upgrade, use PostUpgrade; for RPM/DEB always use PostInstall
+        let post_phase = if scriptlet_format == ScriptletPackageFormat::Arch
+            && matches!(execution_mode, ExecutionMode::Upgrade { .. })
+        {
+            ScriptletPhase::PostUpgrade
+        } else {
+            ScriptletPhase::PostInstall
+        };
+
+        // Try the preferred phase, fall back to PostInstall for Arch if PostUpgrade not defined
+        let post_scriptlet = scriptlets
+            .iter()
+            .find(|s| s.phase == post_phase)
+            .or_else(|| {
+                if post_phase == ScriptletPhase::PostUpgrade {
+                    scriptlets.iter().find(|s| s.phase == ScriptletPhase::PostInstall)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(post) = post_scriptlet {
+            info!("Running {} scriptlet...", post.phase);
             if let Err(e) = executor.execute(post, &execution_mode) {
                 // Post-install failure is serious but files are already deployed
                 // Log warning but don't fail the install
-                warn!("Post-install scriptlet failed: {}. Package files are installed.", e);
-                eprintln!("WARNING: Post-install scriptlet failed: {}", e);
+                warn!("{} scriptlet failed: {}. Package files are installed.", post.phase, e);
+                eprintln!("WARNING: {} scriptlet failed: {}", post.phase, e);
             }
         }
     }
