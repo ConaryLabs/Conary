@@ -406,6 +406,39 @@ pub fn cmd_install(
         }
     }
 
+    // Query old package's scriptlets BEFORE we delete it from DB
+    // We need these for running pre-remove and post-remove during upgrade
+    let old_package_scriptlets: Vec<ScriptletEntry> = if let Some(ref old_trove) = old_trove_to_upgrade
+        && let Some(old_id) = old_trove.id
+    {
+        ScriptletEntry::find_by_trove(&conn, old_id)?
+    } else {
+        Vec::new()
+    };
+
+    // For RPM/DEB upgrades: run old package's pre-remove scriptlet
+    // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
+    if !no_scripts
+        && !old_package_scriptlets.is_empty()
+        && scriptlet_format != ScriptletPackageFormat::Arch
+        && let Some(ref old_trove) = old_trove_to_upgrade
+    {
+        let old_executor = ScriptletExecutor::new(
+            Path::new(root),
+            &old_trove.name,
+            &old_trove.version,
+            scriptlet_format,
+        );
+        let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
+            new_version: pkg.version().to_string(),
+        };
+
+        if let Some(pre_remove) = old_package_scriptlets.iter().find(|s| s.phase == "pre-remove") {
+            info!("Running old package pre-remove scriptlet (upgrade)...");
+            old_executor.execute_entry(pre_remove, &upgrade_removal_mode)?;
+        }
+    }
+
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -536,6 +569,33 @@ pub fn cmd_install(
         deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
     }
     info!("Successfully deployed {} files", extracted_files.len());
+
+    // For RPM/DEB upgrades: run old package's post-remove scriptlet
+    // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
+    if !no_scripts
+        && !old_package_scriptlets.is_empty()
+        && scriptlet_format != ScriptletPackageFormat::Arch
+        && let Some(ref old_trove) = old_trove_to_upgrade
+    {
+        let old_executor = ScriptletExecutor::new(
+            Path::new(root),
+            &old_trove.name,
+            &old_trove.version,
+            scriptlet_format,
+        );
+        let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
+            new_version: pkg.version().to_string(),
+        };
+
+        if let Some(post_remove) = old_package_scriptlets.iter().find(|s| s.phase == "post-remove") {
+            info!("Running old package post-remove scriptlet (upgrade)...");
+            // Post-remove failure during upgrade is not fatal - files are already replaced
+            if let Err(e) = old_executor.execute_entry(post_remove, &upgrade_removal_mode) {
+                warn!("Old package post-remove scriptlet failed: {}. Continuing anyway.", e);
+                eprintln!("WARNING: Old package post-remove scriptlet failed: {}", e);
+            }
+        }
+    }
 
     // Execute post-install scriptlet (after files are deployed)
     if !no_scripts && !scriptlets.is_empty() {

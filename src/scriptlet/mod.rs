@@ -66,8 +66,13 @@ pub enum ExecutionMode {
     Install,
     /// Package removal
     Remove,
-    /// Upgrade from old version
+    /// Upgrade from old version (for NEW package scriptlets)
     Upgrade { old_version: String },
+    /// Upgrade removal (for OLD package scriptlets during upgrade)
+    /// RPM: $1=1 (not 0, signaling "another version remains")
+    /// DEB: "upgrade <new_version>" (not "remove")
+    /// Arch: Should NOT be used - Arch skips old package scripts during upgrade
+    UpgradeRemoval { new_version: String },
 }
 
 /// Scriptlet executor with cross-distro support
@@ -246,12 +251,14 @@ impl ScriptletExecutor {
             PackageFormat::Rpm => {
                 // RPM uses integer arguments (count of packages remaining):
                 // Install: $1 = 1
-                // Upgrade: $1 = 2 (for install scripts), $1 = 1 (for remove scripts)
+                // Upgrade (new pkg): $1 = 2
+                // Upgrade (old pkg removal): $1 = 1 (NOT 0! another version remains)
                 // Remove: $1 = 0
                 match mode {
                     ExecutionMode::Install => vec!["1".to_string()],
                     ExecutionMode::Remove => vec!["0".to_string()],
                     ExecutionMode::Upgrade { .. } => vec!["2".to_string()],
+                    ExecutionMode::UpgradeRemoval { .. } => vec!["1".to_string()],
                 }
             }
             PackageFormat::Deb => {
@@ -272,14 +279,17 @@ impl ScriptletExecutor {
                         vec!["remove".to_string()]
                     }
                     ExecutionMode::Upgrade { old_version } => {
+                        // For NEW package scripts during upgrade
                         match phase {
                             "pre-install" => vec!["upgrade".to_string(), old_version.clone()],
                             "post-install" => vec!["configure".to_string(), old_version.clone()],
-                            "pre-remove" | "post-remove" => {
-                                vec!["upgrade".to_string(), self.package_version.clone()]
-                            }
                             _ => vec!["upgrade".to_string(), old_version.clone()],
                         }
+                    }
+                    ExecutionMode::UpgradeRemoval { new_version } => {
+                        // For OLD package scripts during upgrade
+                        // prerm/postrm get "upgrade <new_version>"
+                        vec!["upgrade".to_string(), new_version.clone()]
                     }
                 }
             }
@@ -288,11 +298,18 @@ impl ScriptletExecutor {
                 // Install: $1 = new_version
                 // Remove: $1 = old_version
                 // Upgrade: $1 = new_version, $2 = old_version
+                // UpgradeRemoval: Should NOT be called for Arch!
                 match mode {
                     ExecutionMode::Install => vec![self.package_version.clone()],
                     ExecutionMode::Remove => vec![self.package_version.clone()],
                     ExecutionMode::Upgrade { old_version } => {
                         vec![self.package_version.clone(), old_version.clone()]
+                    }
+                    ExecutionMode::UpgradeRemoval { .. } => {
+                        // This should never be called for Arch - log warning
+                        // Arch does NOT run old package scripts during upgrade
+                        warn!("UpgradeRemoval mode called for Arch package - this is a bug!");
+                        vec![self.package_version.clone()]
                     }
                 }
             }
@@ -395,6 +412,13 @@ mod tests {
             }, "pre-install"),
             vec!["2"]
         );
+        // UpgradeRemoval: old package scripts get $1=1 (NOT 0!)
+        assert_eq!(
+            executor.get_args(&ExecutionMode::UpgradeRemoval {
+                new_version: "1.0.0".to_string()
+            }, "pre-remove"),
+            vec!["1"]
+        );
     }
 
     #[test]
@@ -427,11 +451,17 @@ mod tests {
             }, "post-install"),
             vec!["configure", "0.9.0"]
         );
-        // For remove scripts during upgrade, $2 is the NEW version
+        // UpgradeRemoval: OLD package scripts get "upgrade <new_version>"
         assert_eq!(
-            executor.get_args(&ExecutionMode::Upgrade {
-                old_version: "0.9.0".to_string()
+            executor.get_args(&ExecutionMode::UpgradeRemoval {
+                new_version: "1.0.0".to_string()
             }, "pre-remove"),
+            vec!["upgrade", "1.0.0"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::UpgradeRemoval {
+                new_version: "1.0.0".to_string()
+            }, "post-remove"),
             vec!["upgrade", "1.0.0"]
         );
     }
