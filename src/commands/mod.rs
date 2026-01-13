@@ -3,6 +3,7 @@
 
 mod adopt;
 mod install;
+pub mod progress;
 mod query;
 mod repo;
 mod restore;

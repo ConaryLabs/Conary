@@ -2,12 +2,11 @@
 //! Update and delta statistics commands
 
 use super::install_package_from_file;
+use super::progress::{UpdatePhase, UpdateProgress};
 use anyhow::Result;
 use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
 use conary::delta::DeltaApplier;
-use conary::repository::{
-    self, download_package_verified_with_progress, DownloadOptions, DownloadProgress,
-};
+use conary::repository::{self, DownloadOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -28,16 +27,9 @@ fn get_keyring_dir(db_path: &str) -> PathBuf {
 #[derive(Debug)]
 enum DownloadResult {
     /// Full package was downloaded
-    Full {
-        trove: Trove,
-        repo_pkg: Box<RepositoryPackage>,
-        pkg_path: PathBuf,
-    },
+    Full { trove: Trove, pkg_path: PathBuf },
     /// Download failed completely
-    Failed {
-        name: String,
-        error: String,
-    },
+    Failed { name: String, error: String },
 }
 
 /// Check for and apply package updates
@@ -131,10 +123,14 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
     let mut full_downloads = 0i32;
     let mut delta_failures = 0i32;
 
+    // Save counts before consuming the vectors
+    let delta_count = delta_updates.len();
+    let initial_full_count = full_updates.len();
+
     let changeset_id = conary::db::transaction(&mut conn, |tx| {
         let mut changeset = conary::db::models::Changeset::new(format!(
             "Update {} package(s)",
-            delta_updates.len() + full_updates.len()
+            delta_count + initial_full_count
         ));
         changeset.insert(tx)
     })?;
@@ -192,21 +188,19 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
         }
     }
 
-    // Phase 3: Download full packages in parallel with progress bars
+    // Phase 3 & 4: Download and install full packages with progress tracking
     if !full_updates.is_empty() {
-        println!(
-            "\nDownloading {} full package(s) in parallel...",
-            full_updates.len()
-        );
+        let total_to_install = full_updates.len() as u64;
+        let mut progress = UpdateProgress::new(total_to_install);
 
-        // Create multi-progress manager for parallel progress bars
-        let progress = DownloadProgress::new();
+        // Download full packages in parallel
+        progress.set_status("Downloading packages...");
 
         // Pre-create progress bars for all downloads
         let progress_bars: Vec<_> = full_updates
             .iter()
             .map(|(trove, repo_pkg, _)| {
-                progress.add_download(&trove.name, repo_pkg.size as u64)
+                progress.add_download_progress(&trove.name, repo_pkg.size as u64)
             })
             .collect();
 
@@ -227,22 +221,21 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                     None
                 };
 
-                match download_package_verified_with_progress(
+                match repository::download_package_verified_with_progress(
                     repo_pkg,
                     &temp_dir,
                     gpg_options.as_ref(),
                     Some(pb),
                 ) {
                     Ok(pkg_path) => {
-                        DownloadProgress::finish_download(pb, &trove.name);
+                        pb.finish_with_message(format!("{} [done]", trove.name));
                         DownloadResult::Full {
                             trove: trove.clone(),
-                            repo_pkg: Box::new(repo_pkg.clone()),
                             pkg_path,
                         }
                     }
                     Err(e) => {
-                        DownloadProgress::fail_download(pb, &trove.name, &e.to_string());
+                        pb.abandon_with_message(format!("{} [FAILED]", trove.name));
                         DownloadResult::Failed {
                             name: trove.name.clone(),
                             error: e.to_string(),
@@ -252,33 +245,36 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
             })
             .collect();
 
-        // Phase 4: Install downloaded packages sequentially
+        // Install downloaded packages sequentially
         for result in download_results {
             match result {
-                DownloadResult::Full {
-                    trove,
-                    repo_pkg,
-                    pkg_path,
-                } => {
-                    println!("\nInstalling {} ...", trove.name);
-                    full_downloads += 1;
+                DownloadResult::Full { trove, pkg_path } => {
+                    progress.set_phase(&trove.name, UpdatePhase::Installing);
 
                     if let Err(e) =
                         install_package_from_file(&pkg_path, &mut conn, root, Some(&trove))
                     {
+                        progress.fail_package(&trove.name, &e.to_string());
                         warn!("  Package installation failed: {}", e);
                         let _ = std::fs::remove_file(&pkg_path);
                         continue;
                     }
 
-                    println!("  [OK] Installed {} bytes", repo_pkg.size);
+                    full_downloads += 1;
+                    progress.complete_package(&trove.name);
                     let _ = std::fs::remove_file(pkg_path);
                 }
                 DownloadResult::Failed { name, error } => {
+                    progress.fail_package(&name, &error);
                     warn!("  Failed to download {}: {}", name, error);
                 }
             }
         }
+
+        progress.finish(&format!(
+            "Updated {} package(s)",
+            deltas_applied + full_downloads
+        ));
     }
 
     conary::db::transaction(&mut conn, |tx| {
