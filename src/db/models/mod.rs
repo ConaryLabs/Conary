@@ -6,6 +6,7 @@
 //! and provides methods for creating, reading, updating, and deleting records.
 
 mod changeset;
+mod collection;
 mod component;
 mod component_dependency;
 mod delta;
@@ -19,6 +20,7 @@ mod scriptlet_entry;
 mod trove;
 
 pub use changeset::{Changeset, ChangesetStatus};
+pub use collection::CollectionMember;
 pub use component::Component;
 pub use component_dependency::{ComponentDependency, ComponentDepType, ComponentProvide};
 pub use delta::{DeltaStats, PackageDelta};
@@ -29,7 +31,7 @@ pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use repository::{Repository, RepositoryPackage};
 pub use scriptlet_entry::ScriptletEntry;
-pub use trove::{InstallSource, Trove, TroveType};
+pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 
 #[cfg(test)]
 mod tests {

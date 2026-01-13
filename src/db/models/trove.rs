@@ -79,6 +79,36 @@ impl FromStr for InstallSource {
     }
 }
 
+/// Reason why a package was installed
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallReason {
+    /// User explicitly requested this package
+    Explicit,
+    /// Installed automatically as a dependency of another package
+    Dependency,
+}
+
+impl InstallReason {
+    pub fn as_str(&self) -> &str {
+        match self {
+            InstallReason::Explicit => "explicit",
+            InstallReason::Dependency => "dependency",
+        }
+    }
+}
+
+impl FromStr for InstallReason {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "explicit" => Ok(InstallReason::Explicit),
+            "dependency" => Ok(InstallReason::Dependency),
+            _ => Err(format!("Invalid install reason: {s}")),
+        }
+    }
+}
+
 /// A Trove represents a package, component, or collection
 #[derive(Debug, Clone)]
 pub struct Trove {
@@ -91,6 +121,7 @@ pub struct Trove {
     pub installed_at: Option<String>,
     pub installed_by_changeset_id: Option<i64>,
     pub install_source: InstallSource,
+    pub install_reason: InstallReason,
 }
 
 impl Trove {
@@ -106,6 +137,7 @@ impl Trove {
             installed_at: None,
             installed_by_changeset_id: None,
             install_source: InstallSource::File,
+            install_reason: InstallReason::Explicit,
         }
     }
 
@@ -126,14 +158,15 @@ impl Trove {
             installed_at: None,
             installed_by_changeset_id: None,
             install_source,
+            install_reason: InstallReason::Explicit,
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &self.name,
                 &self.version,
@@ -142,6 +175,7 @@ impl Trove {
                 &self.description,
                 &self.installed_by_changeset_id,
                 self.install_source.as_str(),
+                self.install_reason.as_str(),
             ],
         )?;
 
@@ -153,7 +187,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -163,7 +197,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -175,7 +209,30 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves ORDER BY name, version")?;
+
+        let troves = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(troves)
+    }
+
+    /// Find orphaned packages (installed as dependency, no longer needed)
+    pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
+        // Find packages that:
+        // 1. Were installed as dependencies (not explicitly)
+        // 2. Have no other packages depending on them
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason
+             FROM troves
+             WHERE install_reason = 'dependency'
+             AND name NOT IN (
+                 SELECT DISTINCT depends_on_name FROM dependencies
+                 WHERE trove_id IN (SELECT id FROM troves)
+             )
+             ORDER BY name, version"
+        )?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -207,6 +264,12 @@ impl Trove {
             .and_then(|s| s.parse::<InstallSource>().ok())
             .unwrap_or(InstallSource::File);
 
+        // Handle install_reason with default for older databases
+        let reason_str: Option<String> = row.get(9)?;
+        let install_reason = reason_str
+            .and_then(|s| s.parse::<InstallReason>().ok())
+            .unwrap_or(InstallReason::Explicit);
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -217,6 +280,7 @@ impl Trove {
             installed_at: row.get(6)?,
             installed_by_changeset_id: row.get(7)?,
             install_source,
+            install_reason,
         })
     }
 }

@@ -139,7 +139,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     conary::db::transaction(&mut conn, |tx| {
         let troves = {
             let mut stmt = tx.prepare(
-                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source
+                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason
                  FROM troves WHERE installed_by_changeset_id = ?1",
             )?;
             let rows = stmt.query_map([changeset_id], |row| {
@@ -156,6 +156,20 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                         )
                     })?,
                     None => conary::db::models::InstallSource::File,
+                };
+                let reason_str: Option<String> = row.get(9)?;
+                let install_reason = match reason_str {
+                    Some(s) => s.parse().map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            9,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Invalid install_reason '{}': {}", s, e),
+                            )),
+                        )
+                    })?,
+                    None => conary::db::models::InstallReason::Explicit,
                 };
                 let trove_type_str: String = row.get(3)?;
                 let trove_type = trove_type_str.parse().map_err(|e| {
@@ -178,6 +192,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                     installed_at: row.get(6)?,
                     installed_by_changeset_id: row.get(7)?,
                     install_source,
+                    install_reason,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?

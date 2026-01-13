@@ -83,6 +83,25 @@ enum Commands {
         no_scripts: bool,
     },
 
+    /// Remove orphaned packages (installed as dependencies but no longer needed)
+    Autoremove {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Show what would be removed without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip running package scriptlets (install/remove hooks)
+        #[arg(long)]
+        no_scripts: bool,
+    },
+
     /// Adopt all installed system packages into Conary tracking
     AdoptSystem {
         /// Path to the database file
@@ -203,6 +222,16 @@ enum Commands {
     Whatbreaks {
         /// Package name
         package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Find which package provides a capability
+    Whatprovides {
+        /// Capability to search for (package name, file path, library, virtual provide)
+        capability: String,
 
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
@@ -412,6 +441,101 @@ enum Commands {
         /// Path to package file (RPM, DEB, or Arch)
         package_path: String,
     },
+
+    /// Create a new collection (package group)
+    CollectionCreate {
+        /// Name of the collection
+        name: String,
+
+        /// Description of the collection
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Comma-separated list of member packages
+        #[arg(long, value_delimiter = ',')]
+        members: Vec<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// List all collections
+    CollectionList {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Show details of a collection
+    CollectionShow {
+        /// Name of the collection
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Add packages to a collection
+    CollectionAdd {
+        /// Name of the collection
+        name: String,
+
+        /// Packages to add (comma-separated)
+        #[arg(value_delimiter = ',')]
+        members: Vec<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Remove packages from a collection
+    CollectionRemove {
+        /// Name of the collection
+        name: String,
+
+        /// Packages to remove (comma-separated)
+        #[arg(value_delimiter = ',')]
+        members: Vec<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Delete a collection
+    CollectionDelete {
+        /// Name of the collection
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Install all packages in a collection
+    CollectionInstall {
+        /// Name of the collection
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Show what would be installed without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip optional packages in the collection
+        #[arg(long)]
+        skip_optional: bool,
+    },
 }
 
 // =============================================================================
@@ -437,6 +561,10 @@ fn main() -> Result<()> {
 
         Some(Commands::Remove { package_name, db_path, root, no_scripts }) => {
             commands::cmd_remove(&package_name, &db_path, &root, no_scripts)
+        }
+
+        Some(Commands::Autoremove { db_path, root, dry_run, no_scripts }) => {
+            commands::cmd_autoremove(&db_path, &root, dry_run, no_scripts)
         }
 
         Some(Commands::AdoptSystem { db_path, full, dry_run }) => {
@@ -479,6 +607,10 @@ fn main() -> Result<()> {
 
         Some(Commands::Whatbreaks { package_name, db_path }) => {
             commands::cmd_whatbreaks(&package_name, &db_path)
+        }
+
+        Some(Commands::Whatprovides { capability, db_path }) => {
+            commands::cmd_whatprovides(&capability, &db_path)
         }
 
         Some(Commands::ListComponents { package_name, db_path }) => {
@@ -547,6 +679,34 @@ fn main() -> Result<()> {
 
         Some(Commands::Scripts { package_path }) => {
             commands::cmd_scripts(&package_path)
+        }
+
+        Some(Commands::CollectionCreate { name, description, members, db_path }) => {
+            commands::cmd_collection_create(&name, description.as_deref(), &members, &db_path)
+        }
+
+        Some(Commands::CollectionList { db_path }) => {
+            commands::cmd_collection_list(&db_path)
+        }
+
+        Some(Commands::CollectionShow { name, db_path }) => {
+            commands::cmd_collection_show(&name, &db_path)
+        }
+
+        Some(Commands::CollectionAdd { name, members, db_path }) => {
+            commands::cmd_collection_add(&name, &members, &db_path)
+        }
+
+        Some(Commands::CollectionRemove { name, members, db_path }) => {
+            commands::cmd_collection_remove_member(&name, &members, &db_path)
+        }
+
+        Some(Commands::CollectionDelete { name, db_path }) => {
+            commands::cmd_collection_delete(&name, &db_path)
+        }
+
+        Some(Commands::CollectionInstall { name, db_path, root, dry_run, skip_optional }) => {
+            commands::cmd_collection_install(&name, &db_path, &root, dry_run, skip_optional)
         }
 
         None => {

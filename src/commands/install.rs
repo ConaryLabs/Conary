@@ -1450,3 +1450,63 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
 
     variations
 }
+
+/// Remove orphaned packages (installed as dependencies but no longer needed)
+///
+/// Finds packages that were installed as dependencies of other packages,
+/// but are no longer required by any installed package.
+pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool) -> Result<()> {
+    info!("Finding orphaned packages...");
+
+    let conn = conary::db::open(db_path)
+        .context("Failed to open package database")?;
+
+    let orphans = conary::db::models::Trove::find_orphans(&conn)?;
+
+    if orphans.is_empty() {
+        println!("No orphaned packages found.");
+        return Ok(());
+    }
+
+    println!("Found {} orphaned package(s):", orphans.len());
+    for trove in &orphans {
+        print!("  {} {}", trove.name, trove.version);
+        if let Some(arch) = &trove.architecture {
+            print!(" [{}]", arch);
+        }
+        println!();
+    }
+
+    if dry_run {
+        println!("\nDry run - no packages will be removed.");
+        println!("Run without --dry-run to remove these packages.");
+        return Ok(());
+    }
+
+    println!("\nRemoving {} orphaned package(s)...", orphans.len());
+
+    // Remove each orphaned package
+    let mut removed_count = 0;
+    let mut failed_count = 0;
+
+    for trove in &orphans {
+        println!("\nRemoving {} {}...", trove.name, trove.version);
+        match cmd_remove(&trove.name, db_path, root, no_scripts) {
+            Ok(()) => {
+                removed_count += 1;
+            }
+            Err(e) => {
+                eprintln!("  Failed to remove {}: {}", trove.name, e);
+                failed_count += 1;
+            }
+        }
+    }
+
+    println!("\nAutoremove complete:");
+    println!("  Removed: {} package(s)", removed_count);
+    if failed_count > 0 {
+        println!("  Failed: {} package(s)", failed_count);
+    }
+
+    Ok(())
+}

@@ -214,6 +214,49 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Find what package provides a capability
+///
+/// Searches for packages that provide a given capability, which can be:
+/// - A package name
+/// - A virtual provide (e.g., perl(DBI))
+/// - A file path (e.g., /usr/bin/python3)
+/// - A shared library (e.g., libssl.so.3)
+pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+
+    // First try exact match
+    let mut providers = conary::db::models::ProvideEntry::find_all_by_capability(&conn, capability)?;
+
+    // If no exact match, try pattern search
+    if providers.is_empty() {
+        // Try with wildcards for partial matching
+        let pattern = format!("%{}%", capability);
+        providers = conary::db::models::ProvideEntry::search_capability(&conn, &pattern)?;
+    }
+
+    if providers.is_empty() {
+        println!("No package provides '{}'", capability);
+        return Ok(());
+    }
+
+    println!("Capability '{}' is provided by:", capability);
+    for provide in &providers {
+        if let Ok(Some(trove)) = conary::db::models::Trove::find_by_id(&conn, provide.trove_id) {
+            print!("  {} {}", trove.name, trove.version);
+            if let Some(ref ver) = provide.version {
+                print!(" (provides version: {})", ver);
+            }
+            if let Some(ref arch) = trove.architecture {
+                print!(" [{}]", arch);
+            }
+            println!();
+        }
+    }
+
+    println!("\nTotal: {} provider(s)", providers.len());
+    Ok(())
+}
+
 /// Query files in a specific component
 pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
     let conn = conary::db::open(db_path)?;

@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 11;
+pub const SCHEMA_VERSION: i32 = 13;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -86,6 +86,8 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         9 => migrate_v9(conn),
         10 => migrate_v10(conn),
         11 => migrate_v11(conn),
+        12 => migrate_v12(conn),
+        13 => migrate_v13(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -570,6 +572,66 @@ fn migrate_v11(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 11 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 12: Add install_reason for autoremove support
+///
+/// Adds install_reason column to troves table to track why a package was installed:
+/// - 'explicit': User explicitly requested this package
+/// - 'dependency': Installed automatically as a dependency
+///
+/// This enables the autoremove command to find orphaned dependencies.
+fn migrate_v12(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 12");
+
+    // Add install_reason column - default 'explicit' for backwards compatibility
+    // (all existing packages are assumed to be explicitly installed)
+    conn.execute(
+        "ALTER TABLE troves ADD COLUMN install_reason TEXT NOT NULL DEFAULT 'explicit'",
+        [],
+    )?;
+
+    // Create index for efficient orphan detection queries
+    conn.execute(
+        "CREATE INDEX idx_troves_install_reason ON troves(install_reason)",
+        [],
+    )?;
+
+    info!("Schema version 12 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 13: Add collections/groups support
+///
+/// Creates tables for managing collections (meta-packages that group other packages):
+/// - collection_members: Links collections to their member packages
+///
+/// Collections allow users to:
+/// - Create named groups of packages (e.g., "development-tools", "server-base")
+/// - Install/remove all packages in a group with a single command
+/// - Define system profiles or roles
+fn migrate_v13(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 13");
+
+    conn.execute_batch(
+        "
+        -- Collection members: Links collections to their member packages
+        CREATE TABLE collection_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            member_name TEXT NOT NULL,
+            member_version TEXT,
+            is_optional INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(collection_id, member_name)
+        );
+
+        CREATE INDEX idx_collection_members_collection ON collection_members(collection_id);
+        CREATE INDEX idx_collection_members_member ON collection_members(member_name);
+        ",
+    )?;
+
+    info!("Schema version 13 applied successfully");
     Ok(())
 }
 

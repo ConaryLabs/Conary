@@ -75,7 +75,14 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v5. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats.
+Currently v13. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members.
+
+Key schema additions:
+- v8: `provides` - capability tracking for dependency resolution
+- v9: `scriptlets` - package install/remove hooks
+- v11: `components`, `component_dependencies`, `component_provides` - component model
+- v12: `install_reason` column on troves - for autoremove support
+- v13: `collection_members` - package group/collection support
 
 ## Testing
 
@@ -85,4 +92,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-98 tests total (lib + bin + integration).
+289 tests total (264 lib + 3 bin + 22 integration).

@@ -1122,3 +1122,180 @@ fn test_language_deps_in_database() {
         println!("    - {} (version: {:?})", p.capability, p.version);
     }
 }
+
+/// Test InstallReason tracking for autoremove functionality
+#[test]
+fn test_install_reason_tracking() {
+    use conary::db;
+    use conary::db::models::{InstallReason, Trove, TroveType};
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let db_path = temp_file.path().to_str().unwrap().to_string();
+    drop(temp_file);
+
+    db::init(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
+
+    db::transaction(&mut conn, |tx| {
+        // Install package explicitly
+        let mut explicit_pkg = Trove::new(
+            "explicit-pkg".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        explicit_pkg.install_reason = InstallReason::Explicit;
+        explicit_pkg.insert(tx)?;
+
+        // Install package as dependency
+        let mut dep_pkg = Trove::new(
+            "dependency-pkg".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        dep_pkg.install_reason = InstallReason::Dependency;
+        dep_pkg.insert(tx)?;
+
+        Ok(())
+    }).unwrap();
+
+    // Verify install reasons are stored correctly
+    let explicit = Trove::find_by_name(&conn, "explicit-pkg").unwrap();
+    assert_eq!(explicit.len(), 1);
+    assert_eq!(explicit[0].install_reason, InstallReason::Explicit);
+
+    let dep = Trove::find_by_name(&conn, "dependency-pkg").unwrap();
+    assert_eq!(dep.len(), 1);
+    assert_eq!(dep[0].install_reason, InstallReason::Dependency);
+
+    println!("Install reason tracking test passed");
+}
+
+/// Test collection creation and member management
+#[test]
+fn test_collection_management() {
+    use conary::db;
+    use conary::db::models::{CollectionMember, Trove, TroveType};
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let db_path = temp_file.path().to_str().unwrap().to_string();
+    drop(temp_file);
+
+    db::init(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
+
+    db::transaction(&mut conn, |tx| {
+        // Create a collection
+        let mut collection = Trove::new(
+            "dev-tools".to_string(),
+            "1.0".to_string(),
+            TroveType::Collection,
+        );
+        collection.description = Some("Development tools collection".to_string());
+        let collection_id = collection.insert(tx)?;
+
+        // Add members
+        let mut m1 = CollectionMember::new(collection_id, "gcc".to_string());
+        m1.insert(tx)?;
+
+        let mut m2 = CollectionMember::new(collection_id, "make".to_string());
+        m2.insert(tx)?;
+
+        let mut m3 = CollectionMember::new(collection_id, "gdb".to_string())
+            .optional();
+        m3.insert(tx)?;
+
+        Ok(())
+    }).unwrap();
+
+    // Verify collection was created
+    let collections = Trove::find_by_name(&conn, "dev-tools").unwrap();
+    assert_eq!(collections.len(), 1);
+    assert_eq!(collections[0].trove_type, TroveType::Collection);
+    assert_eq!(collections[0].description, Some("Development tools collection".to_string()));
+
+    let collection_id = collections[0].id.unwrap();
+
+    // Verify members
+    let members = CollectionMember::find_by_collection(&conn, collection_id).unwrap();
+    assert_eq!(members.len(), 3);
+
+    // Check member names (should be ordered by name)
+    let names: Vec<&str> = members.iter().map(|m| m.member_name.as_str()).collect();
+    assert!(names.contains(&"gcc"));
+    assert!(names.contains(&"make"));
+    assert!(names.contains(&"gdb"));
+
+    // Check that gdb is optional
+    let gdb_member = members.iter().find(|m| m.member_name == "gdb").unwrap();
+    assert!(gdb_member.is_optional);
+
+    // Check is_member function
+    assert!(CollectionMember::is_member(&conn, collection_id, "gcc").unwrap());
+    assert!(!CollectionMember::is_member(&conn, collection_id, "clang").unwrap());
+
+    // Check find_collections_containing
+    let gcc_collections = CollectionMember::find_collections_containing(&conn, "gcc").unwrap();
+    assert_eq!(gcc_collections.len(), 1);
+    assert_eq!(gcc_collections[0], collection_id);
+
+    println!("Collection management test passed:");
+    println!("  - Created collection: dev-tools");
+    println!("  - Members: {:?}", names);
+}
+
+/// Test whatprovides query capability
+#[test]
+fn test_whatprovides_query() {
+    use conary::db;
+    use conary::db::models::{ProvideEntry, Trove, TroveType};
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let db_path = temp_file.path().to_str().unwrap().to_string();
+    drop(temp_file);
+
+    db::init(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
+
+    db::transaction(&mut conn, |tx| {
+        // Create a package with various provides
+        let mut trove = Trove::new(
+            "openssl".to_string(),
+            "3.0.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(tx)?;
+
+        // Add provides
+        let mut p1 = ProvideEntry::new(trove_id, "openssl".to_string(), Some("3.0.0".to_string()));
+        p1.insert(tx)?;
+
+        let mut p2 = ProvideEntry::new(trove_id, "soname(libssl.so.3)".to_string(), None);
+        p2.insert(tx)?;
+
+        let mut p3 = ProvideEntry::new(trove_id, "soname(libcrypto.so.3)".to_string(), None);
+        p3.insert(tx)?;
+
+        Ok(())
+    }).unwrap();
+
+    // Test exact capability lookup
+    let providers = ProvideEntry::find_all_by_capability(&conn, "openssl").unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].version, Some("3.0.0".to_string()));
+
+    // Test soname lookup
+    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    assert_eq!(ssl_providers.len(), 1);
+
+    // Test pattern search
+    let pattern_results = ProvideEntry::search_capability(&conn, "soname%").unwrap();
+    assert_eq!(pattern_results.len(), 2);
+
+    // Test satisfying provider lookup
+    let (provider_name, _version) = ProvideEntry::find_satisfying_provider(&conn, "openssl")
+        .unwrap()
+        .expect("Should find provider");
+    assert_eq!(provider_name, "openssl");
+
+    println!("whatprovides query test passed");
+}

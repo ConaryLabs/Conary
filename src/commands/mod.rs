@@ -2,6 +2,7 @@
 //! Command handlers for the Conary CLI
 
 mod adopt;
+mod collection;
 mod install;
 pub mod progress;
 mod query;
@@ -12,9 +13,13 @@ mod update;
 
 // Re-export all command handlers
 pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
-pub use install::{cmd_install, cmd_remove};
+pub use collection::{
+    cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
+    cmd_collection_list, cmd_collection_remove_member, cmd_collection_show,
+};
+pub use install::{cmd_autoremove, cmd_install, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_rdepends, cmd_whatbreaks};
+pub use query::{cmd_depends, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_rdepends, cmd_whatbreaks, cmd_whatprovides};
 pub use repo::{
     cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
