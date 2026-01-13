@@ -267,6 +267,8 @@ impl<'a> ComponentResolver<'a> {
             ComponentType::Config => vec![ComponentType::Runtime],
             ComponentType::Lib => vec![],
             ComponentType::Runtime => vec![],
+            ComponentType::Debuginfo => vec![], // Debug symbols are standalone
+            ComponentType::Test => vec![ComponentType::Runtime], // Tests may need runtime
         }
     }
 

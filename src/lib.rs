@@ -16,6 +16,7 @@
 pub mod components;
 pub mod db;
 pub mod delta;
+pub mod dependencies;
 mod error;
 pub mod filesystem;
 pub mod packages;
@@ -25,4 +26,5 @@ pub mod scriptlet;
 pub mod version;
 
 pub use components::{ComponentClassifier, ComponentType};
+pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 pub use error::{Error, Result};

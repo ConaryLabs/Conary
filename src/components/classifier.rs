@@ -25,6 +25,10 @@ pub enum ComponentType {
     Doc,
     /// Configuration files (/etc/*)
     Config,
+    /// Debug symbols (/usr/lib/debug/*, *.debug, build-id indexed)
+    Debuginfo,
+    /// Test suites and test data
+    Test,
 }
 
 impl ComponentType {
@@ -36,6 +40,8 @@ impl ComponentType {
             Self::Devel => "devel",
             Self::Doc => "doc",
             Self::Config => "config",
+            Self::Debuginfo => "debuginfo",
+            Self::Test => "test",
         }
     }
 
@@ -47,6 +53,8 @@ impl ComponentType {
             "devel" => Some(Self::Devel),
             "doc" => Some(Self::Doc),
             "config" => Some(Self::Config),
+            "debuginfo" => Some(Self::Debuginfo),
+            "test" => Some(Self::Test),
             _ => None,
         }
     }
@@ -54,7 +62,7 @@ impl ComponentType {
     /// Is this component installed by default when user doesn't specify?
     ///
     /// Default components: :runtime, :lib, :config
-    /// Optional components: :devel, :doc (must be explicitly requested)
+    /// Optional components: :devel, :doc, :debuginfo, :test (must be explicitly requested)
     pub fn is_default(&self) -> bool {
         matches!(self, Self::Runtime | Self::Lib | Self::Config)
     }
@@ -67,6 +75,8 @@ impl ComponentType {
             Self::Devel,
             Self::Doc,
             Self::Config,
+            Self::Debuginfo,
+            Self::Test,
         ]
     }
 
@@ -100,24 +110,34 @@ impl ComponentClassifier {
             return ComponentType::Config;
         }
 
-        // 2. DEVEL (Headers, pkgconfig, static libs, cmake)
+        // 2. DEBUGINFO (Debug symbols - check early to catch .debug files)
+        if Self::is_debuginfo_file(&path_str) {
+            return ComponentType::Debuginfo;
+        }
+
+        // 3. TEST (Test suites and test data)
+        if Self::is_test_file(&path_str) {
+            return ComponentType::Test;
+        }
+
+        // 4. DEVEL (Headers, pkgconfig, static libs, cmake)
         // Check before :lib to ensure static libs go to :devel, not :lib
         if Self::is_devel_file(&path_str) {
             return ComponentType::Devel;
         }
 
-        // 3. DOC (Man pages, info, doc share)
+        // 5. DOC (Man pages, info, doc share)
         if Self::is_doc_file(path) {
             return ComponentType::Doc;
         }
 
-        // 4. LIB (Shared objects in library paths)
+        // 6. LIB (Shared objects in library paths)
         // Uses expanded detection for multi-arch support
         if Self::is_lib_file(&path_str) {
             return ComponentType::Lib;
         }
 
-        // 5. RUNTIME (The Safe Default)
+        // 7. RUNTIME (The Safe Default)
         // Includes /bin, /sbin, /usr/share (assets), /usr/libexec, and everything else
         ComponentType::Runtime
     }
@@ -176,6 +196,62 @@ impl ComponentClassifier {
         // Supports: /lib/, /lib64/, /usr/lib/, /usr/lib64/,
         // /usr/lib/x86_64-linux-gnu/, etc.
         path_str.contains("/lib/") || path_str.contains("/lib64/")
+    }
+
+    /// Check if file is a debug symbol file
+    ///
+    /// Detects:
+    /// - /usr/lib/debug/* - standard debug symbol directory
+    /// - /usr/lib/.build-id/* - build-id indexed debug symbols
+    /// - *.debug files anywhere (standalone debug symbol files)
+    fn is_debuginfo_file(path_str: &str) -> bool {
+        // Standard debug symbol directories
+        if path_str.starts_with("/usr/lib/debug/") {
+            return true;
+        }
+
+        // Build-ID indexed debug symbols
+        if path_str.starts_with("/usr/lib/.build-id/") {
+            return true;
+        }
+
+        // Standalone .debug files (debug symbols extracted from binaries)
+        if path_str.ends_with(".debug") {
+            return true;
+        }
+
+        // GNU debuglink sections often reference files ending in .debug
+        // Also check for .dwz files (DWARF compression)
+        if path_str.ends_with(".dwz") {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if file is a test file
+    ///
+    /// Detects test suites and test data in standard locations:
+    /// - /usr/share/*/tests/* - test data in share directories
+    /// - /usr/libexec/*/tests/* - test executables
+    /// - /usr/lib/*/tests/* - test libraries and data
+    /// - Files in directories named "test" or "tests"
+    fn is_test_file(path_str: &str) -> bool {
+        // Test directories under common locations
+        if path_str.contains("/tests/") || path_str.contains("/test/") {
+            // But not if it's documentation about tests
+            if path_str.starts_with("/usr/share/doc/") {
+                return false;
+            }
+            return true;
+        }
+
+        // Installed test programs (common pattern)
+        if path_str.starts_with("/usr/libexec/installed-tests/") {
+            return true;
+        }
+
+        false
     }
 
     /// Classify multiple paths and return grouped results
@@ -417,6 +493,8 @@ mod tests {
         assert!(ComponentType::Config.is_default());
         assert!(!ComponentType::Devel.is_default());
         assert!(!ComponentType::Doc.is_default());
+        assert!(!ComponentType::Debuginfo.is_default());
+        assert!(!ComponentType::Test.is_default());
     }
 
     #[test]
@@ -426,6 +504,8 @@ mod tests {
         assert_eq!(ComponentType::parse("devel"), Some(ComponentType::Devel));
         assert_eq!(ComponentType::parse("doc"), Some(ComponentType::Doc));
         assert_eq!(ComponentType::parse("config"), Some(ComponentType::Config));
+        assert_eq!(ComponentType::parse("debuginfo"), Some(ComponentType::Debuginfo));
+        assert_eq!(ComponentType::parse("test"), Some(ComponentType::Test));
         assert_eq!(ComponentType::parse("invalid"), None);
     }
 
@@ -456,6 +536,103 @@ mod tests {
         assert_eq!(classified.get(&ComponentType::Config).map(|v| v.len()), Some(1));
         assert_eq!(classified.get(&ComponentType::Doc).map(|v| v.len()), Some(1));
         assert_eq!(classified.get(&ComponentType::Devel).map(|v| v.len()), Some(1));
+    }
+
+    // ===================
+    // Debuginfo
+    // ===================
+
+    #[test]
+    fn test_classify_debuginfo_standard_dir() {
+        // Standard /usr/lib/debug directory
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/debug/usr/bin/nginx.debug")),
+            ComponentType::Debuginfo
+        );
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/debug/.dwz/nginx")),
+            ComponentType::Debuginfo
+        );
+    }
+
+    #[test]
+    fn test_classify_debuginfo_build_id() {
+        // Build-ID indexed debug symbols
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/.build-id/ab/cdef1234567890.debug")),
+            ComponentType::Debuginfo
+        );
+    }
+
+    #[test]
+    fn test_classify_debuginfo_dot_debug() {
+        // Standalone .debug files
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/bin/nginx.debug")),
+            ComponentType::Debuginfo
+        );
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/libssl.so.3.debug")),
+            ComponentType::Debuginfo
+        );
+    }
+
+    #[test]
+    fn test_classify_debuginfo_dwz() {
+        // DWARF compression files
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/debug/.dwz/openssl.dwz")),
+            ComponentType::Debuginfo
+        );
+    }
+
+    // ===================
+    // Test
+    // ===================
+
+    #[test]
+    fn test_classify_test_share_tests() {
+        // Test data in /usr/share
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/share/glib-2.0/tests/test-data.txt")),
+            ComponentType::Test
+        );
+    }
+
+    #[test]
+    fn test_classify_test_libexec_tests() {
+        // Test executables in libexec
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/libexec/gnome-settings-daemon/tests/test-input")),
+            ComponentType::Test
+        );
+    }
+
+    #[test]
+    fn test_classify_test_installed_tests() {
+        // GNOME-style installed tests
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/libexec/installed-tests/glib/test-spawn")),
+            ComponentType::Test
+        );
+    }
+
+    #[test]
+    fn test_classify_test_lib_tests() {
+        // Test data in lib directories
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/lib/python3.11/tests/test_module.py")),
+            ComponentType::Test
+        );
+    }
+
+    #[test]
+    fn test_classify_test_not_doc_about_tests() {
+        // Documentation ABOUT tests should still be :doc, not :test
+        assert_eq!(
+            ComponentClassifier::classify(Path::new("/usr/share/doc/myapp/tests/README.md")),
+            ComponentType::Doc
+        );
     }
 
     // ===================

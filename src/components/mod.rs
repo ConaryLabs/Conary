@@ -15,6 +15,8 @@
 //! | `:config` | Configuration files | Yes |
 //! | `:devel` | Headers, static libs, pkg-config | No |
 //! | `:doc` | Documentation, man pages | No |
+//! | `:debuginfo` | Debug symbols | No |
+//! | `:test` | Test suites | No |
 //!
 //! # Usage
 //!
@@ -29,10 +31,24 @@
 //! assert!(ComponentType::Runtime.is_default());
 //! assert!(!ComponentType::Doc.is_default());
 //! ```
+//!
+//! # External Filters
+//!
+//! Custom classification rules can be loaded from configuration files:
+//!
+//! ```ignore
+//! use conary::components::{FilterSet, FilteredClassifier};
+//!
+//! let filters = FilterSet::load_from_file(Path::new("/etc/conary/filters.d/custom.conf"))?;
+//! let classifier = FilteredClassifier::new(filters);
+//! let comp = classifier.classify("/opt/myapp/bin/foo");
+//! ```
 
 mod classifier;
+mod filters;
 
 pub use classifier::{ComponentClassifier, ComponentType};
+pub use filters::{FilterRule, FilterSet, FilteredClassifier};
 
 /// Parse a component spec string like "package:component"
 ///
