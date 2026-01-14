@@ -560,6 +560,219 @@ impl VfsTree {
         Ok(())
     }
 
+    /// Reparent a subtree to a new location
+    ///
+    /// Moves a node and all its descendants to become a child of a new parent.
+    /// This is useful for component operations that reorganize file hierarchies.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Path of the node to move
+    /// * `new_parent` - Path of the new parent directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Source path doesn't exist
+    /// - Source is the root node
+    /// - New parent doesn't exist
+    /// - New parent is not a directory
+    /// - New parent is a descendant of source (would create a cycle)
+    /// - A node with the same name already exists in the new parent
+    pub fn reparent(
+        &mut self,
+        source: impl AsRef<Path>,
+        new_parent: impl AsRef<Path>,
+    ) -> Result<()> {
+        let source_path = normalize_path(source.as_ref());
+        let new_parent_path = normalize_path(new_parent.as_ref());
+
+        // Cannot reparent root
+        if source_path == Path::new("/") {
+            return Err(Error::InvalidPath("cannot reparent root".into()));
+        }
+
+        // Get source node
+        let source_id = self.lookup(&source_path).ok_or_else(|| {
+            Error::NotFound(format!("source path not found: {}", source_path.display()))
+        })?;
+
+        // Get new parent node
+        let new_parent_id = self.lookup(&new_parent_path).ok_or_else(|| {
+            Error::NotFound(format!(
+                "new parent not found: {}",
+                new_parent_path.display()
+            ))
+        })?;
+
+        // Verify new parent is a directory
+        if !self.get_node(new_parent_id).is_directory() {
+            return Err(Error::InvalidPath(format!(
+                "new parent is not a directory: {}",
+                new_parent_path.display()
+            )));
+        }
+
+        // Check if new parent is a descendant of source (would create cycle)
+        if self.is_descendant_of(new_parent_id, source_id) {
+            return Err(Error::InvalidPath(
+                "cannot reparent a node into its own subtree".into(),
+            ));
+        }
+
+        // Get source node name and check for name collision in new parent
+        let source_name = self.get_node(source_id).name.clone();
+        let new_path = new_parent_path.join(&source_name);
+
+        if self.exists(&new_path) {
+            return Err(Error::AlreadyExists(format!(
+                "path already exists: {}",
+                new_path.display()
+            )));
+        }
+
+        // Get old parent ID
+        let old_parent_id = self.get_node(source_id).parent.unwrap();
+
+        // Collect all nodes in the subtree for path index updates
+        let mut subtree_nodes = vec![source_id];
+        self.collect_descendants(source_id, &mut subtree_nodes);
+
+        // Collect old paths before modifying the tree
+        let old_paths: Vec<(NodeId, PathBuf)> = subtree_nodes
+            .iter()
+            .map(|&id| (id, self.get_path(id)))
+            .collect();
+
+        // Remove from old parent's children list
+        self.get_node_mut(old_parent_id)
+            .children
+            .retain(|&id| id != source_id);
+
+        // Update source node's parent
+        self.get_node_mut(source_id).parent = Some(new_parent_id);
+
+        // Add to new parent's children list
+        self.get_node_mut(new_parent_id).children.push(source_id);
+
+        // Update path index for all nodes in the subtree
+        for (id, old_path) in old_paths {
+            self.path_index.remove(&old_path);
+            let new_node_path = self.get_path(id);
+            self.path_index.insert(new_node_path, id);
+        }
+
+        Ok(())
+    }
+
+    /// Reparent with rename - move a subtree to a new location with a new name
+    ///
+    /// Similar to `reparent`, but also renames the moved node.
+    pub fn reparent_with_rename(
+        &mut self,
+        source: impl AsRef<Path>,
+        new_parent: impl AsRef<Path>,
+        new_name: impl Into<String>,
+    ) -> Result<()> {
+        let source_path = normalize_path(source.as_ref());
+        let new_parent_path = normalize_path(new_parent.as_ref());
+        let new_name = new_name.into();
+
+        // Cannot reparent root
+        if source_path == Path::new("/") {
+            return Err(Error::InvalidPath("cannot reparent root".into()));
+        }
+
+        // Validate new name
+        if new_name.is_empty() || new_name.contains('/') {
+            return Err(Error::InvalidPath(format!("invalid name: {}", new_name)));
+        }
+
+        // Get source node
+        let source_id = self.lookup(&source_path).ok_or_else(|| {
+            Error::NotFound(format!("source path not found: {}", source_path.display()))
+        })?;
+
+        // Get new parent node
+        let new_parent_id = self.lookup(&new_parent_path).ok_or_else(|| {
+            Error::NotFound(format!(
+                "new parent not found: {}",
+                new_parent_path.display()
+            ))
+        })?;
+
+        // Verify new parent is a directory
+        if !self.get_node(new_parent_id).is_directory() {
+            return Err(Error::InvalidPath(format!(
+                "new parent is not a directory: {}",
+                new_parent_path.display()
+            )));
+        }
+
+        // Check if new parent is a descendant of source (would create cycle)
+        if self.is_descendant_of(new_parent_id, source_id) {
+            return Err(Error::InvalidPath(
+                "cannot reparent a node into its own subtree".into(),
+            ));
+        }
+
+        // Check for name collision in new parent
+        let new_path = new_parent_path.join(&new_name);
+        if self.exists(&new_path) {
+            return Err(Error::AlreadyExists(format!(
+                "path already exists: {}",
+                new_path.display()
+            )));
+        }
+
+        // Get old parent ID
+        let old_parent_id = self.get_node(source_id).parent.unwrap();
+
+        // Collect all nodes in the subtree for path index updates
+        let mut subtree_nodes = vec![source_id];
+        self.collect_descendants(source_id, &mut subtree_nodes);
+
+        // Collect old paths before modifying the tree
+        let old_paths: Vec<(NodeId, PathBuf)> = subtree_nodes
+            .iter()
+            .map(|&id| (id, self.get_path(id)))
+            .collect();
+
+        // Remove from old parent's children list
+        self.get_node_mut(old_parent_id)
+            .children
+            .retain(|&id| id != source_id);
+
+        // Update source node's parent and name
+        let source_node = self.get_node_mut(source_id);
+        source_node.parent = Some(new_parent_id);
+        source_node.name = new_name;
+
+        // Add to new parent's children list
+        self.get_node_mut(new_parent_id).children.push(source_id);
+
+        // Update path index for all nodes in the subtree
+        for (id, old_path) in old_paths {
+            self.path_index.remove(&old_path);
+            let new_node_path = self.get_path(id);
+            self.path_index.insert(new_node_path, id);
+        }
+
+        Ok(())
+    }
+
+    /// Check if a node is a descendant of another node
+    fn is_descendant_of(&self, potential_descendant: NodeId, potential_ancestor: NodeId) -> bool {
+        let mut current = potential_descendant;
+        while let Some(parent_id) = self.get_node(current).parent {
+            if parent_id == potential_ancestor {
+                return true;
+            }
+            current = parent_id;
+        }
+        false
+    }
+
     /// Collect all descendant node IDs
     fn collect_descendants(&self, id: NodeId, result: &mut Vec<NodeId>) {
         let node = self.get_node(id);
@@ -936,5 +1149,175 @@ mod tests {
 
         let shadow = tree.get("/etc/shadow").unwrap();
         assert_eq!(shadow.permissions(), 0o600);
+    }
+
+    #[test]
+    fn test_reparent_simple() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/src").unwrap();
+        tree.mkdir("/dest").unwrap();
+        tree.add_file("/src/file.txt", "hash", 100, 0o644).unwrap();
+
+        tree.reparent("/src/file.txt", "/dest").unwrap();
+
+        assert!(!tree.exists("/src/file.txt"));
+        assert!(tree.exists("/dest/file.txt"));
+    }
+
+    #[test]
+    fn test_reparent_directory_with_children() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir_p("/project/src/components").unwrap();
+        tree.add_file("/project/src/components/button.rs", "hash1", 100, 0o644).unwrap();
+        tree.add_file("/project/src/components/input.rs", "hash2", 100, 0o644).unwrap();
+        tree.mkdir("/project/lib").unwrap();
+
+        // Move entire components directory to lib
+        tree.reparent("/project/src/components", "/project/lib").unwrap();
+
+        // Old paths should not exist
+        assert!(!tree.exists("/project/src/components"));
+        assert!(!tree.exists("/project/src/components/button.rs"));
+        assert!(!tree.exists("/project/src/components/input.rs"));
+
+        // New paths should exist
+        assert!(tree.exists("/project/lib/components"));
+        assert!(tree.exists("/project/lib/components/button.rs"));
+        assert!(tree.exists("/project/lib/components/input.rs"));
+    }
+
+    #[test]
+    fn test_reparent_to_root() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir_p("/deep/nested/dir").unwrap();
+        tree.add_file("/deep/nested/dir/file.txt", "hash", 100, 0o644).unwrap();
+
+        tree.reparent("/deep/nested/dir", "/").unwrap();
+
+        assert!(!tree.exists("/deep/nested/dir"));
+        assert!(tree.exists("/dir"));
+        assert!(tree.exists("/dir/file.txt"));
+    }
+
+    #[test]
+    fn test_reparent_cannot_move_root() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/dest").unwrap();
+
+        let result = tree.reparent("/", "/dest");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reparent_cannot_create_cycle() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir_p("/a/b/c").unwrap();
+
+        // Cannot move /a into /a/b/c (would create a cycle)
+        let result = tree.reparent("/a", "/a/b/c");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reparent_name_collision() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/src").unwrap();
+        tree.mkdir("/dest").unwrap();
+        tree.add_file("/src/file.txt", "hash1", 100, 0o644).unwrap();
+        tree.add_file("/dest/file.txt", "hash2", 200, 0o644).unwrap();
+
+        // Cannot move - name collision
+        let result = tree.reparent("/src/file.txt", "/dest");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reparent_to_non_directory() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/src").unwrap();
+        tree.add_file("/src/file1.txt", "hash1", 100, 0o644).unwrap();
+        tree.add_file("/dest.txt", "hash2", 100, 0o644).unwrap();
+
+        // Cannot move to a file
+        let result = tree.reparent("/src/file1.txt", "/dest.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reparent_with_rename() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/src").unwrap();
+        tree.mkdir("/dest").unwrap();
+        tree.add_file("/src/old_name.txt", "hash", 100, 0o644).unwrap();
+
+        tree.reparent_with_rename("/src/old_name.txt", "/dest", "new_name.txt")
+            .unwrap();
+
+        assert!(!tree.exists("/src/old_name.txt"));
+        assert!(tree.exists("/dest/new_name.txt"));
+    }
+
+    #[test]
+    fn test_reparent_with_rename_directory() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir_p("/project/old_module").unwrap();
+        tree.add_file("/project/old_module/mod.rs", "hash", 100, 0o644).unwrap();
+        tree.mkdir("/lib").unwrap();
+
+        tree.reparent_with_rename("/project/old_module", "/lib", "new_module")
+            .unwrap();
+
+        assert!(!tree.exists("/project/old_module"));
+        assert!(!tree.exists("/project/old_module/mod.rs"));
+        assert!(tree.exists("/lib/new_module"));
+        assert!(tree.exists("/lib/new_module/mod.rs"));
+    }
+
+    #[test]
+    fn test_reparent_preserves_node_ids() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir("/src").unwrap();
+        tree.mkdir("/dest").unwrap();
+        let file_id = tree
+            .add_file("/src/file.txt", "hash", 100, 0o644)
+            .unwrap();
+
+        tree.reparent("/src/file.txt", "/dest").unwrap();
+
+        // The node ID should still be valid and point to the same node
+        let node = tree.get_node(file_id);
+        assert_eq!(node.name(), "file.txt");
+        assert!(node.is_file());
+    }
+
+    #[test]
+    fn test_reparent_updates_path_index() {
+        let mut tree = VfsTree::new();
+
+        tree.mkdir_p("/a/b/c").unwrap();
+        tree.add_file("/a/b/c/file.txt", "hash", 100, 0o644).unwrap();
+        tree.mkdir("/x").unwrap();
+
+        // Get the file ID before reparenting
+        let file_id = tree.lookup("/a/b/c/file.txt").unwrap();
+
+        tree.reparent("/a/b", "/x").unwrap();
+
+        // O(1) lookup should work with new paths
+        let new_file_id = tree.lookup("/x/b/c/file.txt").unwrap();
+        assert_eq!(file_id, new_file_id);
+
+        // Old path should not be in index
+        assert!(tree.lookup("/a/b/c/file.txt").is_none());
     }
 }
