@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 21;
+pub const SCHEMA_VERSION: i32 = 22;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -96,6 +96,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         19 => migrate_v19(conn),
         20 => migrate_v20(conn),
         21 => migrate_v21(conn),
+        22 => migrate_v22(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -1226,6 +1227,30 @@ fn migrate_v21(conn: &Connection) -> Result<()> {
     }
 
     info!("Schema version 21 applied successfully (configuration management)");
+    Ok(())
+}
+
+/// Version 22: Update improvements - security metadata
+///
+/// Adds security update tracking to repository packages for critical update filtering.
+fn migrate_v22(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 22");
+
+    conn.execute_batch(
+        "
+        -- Add security update columns to repository_packages
+        ALTER TABLE repository_packages ADD COLUMN is_security_update INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repository_packages ADD COLUMN severity TEXT;
+        ALTER TABLE repository_packages ADD COLUMN cve_ids TEXT;
+        ALTER TABLE repository_packages ADD COLUMN advisory_id TEXT;
+        ALTER TABLE repository_packages ADD COLUMN advisory_url TEXT;
+
+        -- Index for filtering security updates
+        CREATE INDEX idx_repo_packages_security ON repository_packages(is_security_update) WHERE is_security_update = 1;
+        ",
+    )?;
+
+    info!("Schema version 22 applied successfully (update improvements)");
     Ok(())
 }
 

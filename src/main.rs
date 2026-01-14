@@ -473,6 +473,29 @@ enum Commands {
         /// Installation root directory
         #[arg(short, long, default_value = "/")]
         root: String,
+
+        /// Only apply security updates (critical/important severity)
+        #[arg(long)]
+        security: bool,
+    },
+
+    /// Update all members of a collection/group atomically
+    #[command(name = "update-group")]
+    UpdateGroup {
+        /// Collection name to update
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Only apply security updates
+        #[arg(long)]
+        security: bool,
     },
 
     /// Pin a package to prevent updates and removal
@@ -1129,8 +1152,12 @@ fn main() -> Result<()> {
             commands::cmd_search(&pattern, &db_path)
         }
 
-        Some(Commands::Update { package, db_path, root }) => {
-            commands::cmd_update(package, &db_path, &root)
+        Some(Commands::Update { package, db_path, root, security }) => {
+            commands::cmd_update(package, &db_path, &root, security)
+        }
+
+        Some(Commands::UpdateGroup { name, db_path, root, security }) => {
+            commands::cmd_update_group(&name, &db_path, &root, security)
         }
 
         Some(Commands::Pin { package_name, db_path }) => {

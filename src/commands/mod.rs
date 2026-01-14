@@ -43,7 +43,7 @@ pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list,
     cmd_trigger_remove, cmd_trigger_run, cmd_trigger_show,
 };
-pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update};
+pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group};
 
 use anyhow::Result;
 use conary::components::{ComponentClassifier, ComponentType};

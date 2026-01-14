@@ -106,8 +106,14 @@ enum DownloadResult {
 }
 
 /// Check for and apply package updates
-pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<()> {
-    info!("Checking for package updates");
+///
+/// If `security_only` is true, only applies security updates (critical/important severity).
+pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_only: bool) -> Result<()> {
+    if security_only {
+        info!("Checking for security updates only");
+    } else {
+        info!("Checking for package updates");
+    }
 
     let mut conn = conary::db::open(db_path)?;
 
@@ -150,11 +156,21 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
             if repo_pkg.version != trove.version
                 && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
             {
+                // Filter by security if requested
+                if security_only && !repo_pkg.is_security_update {
+                    continue;
+                }
+
                 // Get the repository for GPG verification
                 if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
+                    let security_marker = if repo_pkg.is_security_update {
+                        format!(" [{}]", repo_pkg.severity.as_deref().unwrap_or("security"))
+                    } else {
+                        String::new()
+                    };
                     info!(
-                        "Update available: {} {} -> {}",
-                        trove.name, trove.version, repo_pkg.version
+                        "Update available: {} {} -> {}{}",
+                        trove.name, trove.version, repo_pkg.version, security_marker
                     );
                     updates_available.push((trove.clone(), repo_pkg, repo));
                     break;
@@ -173,16 +189,31 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
     }
 
     if updates_available.is_empty() {
-        println!("All packages are up to date");
+        if security_only {
+            println!("No security updates available");
+        } else {
+            println!("All packages are up to date");
+        }
         return Ok(());
     }
 
-    println!(
-        "Found {} package(s) with updates available:",
-        updates_available.len()
-    );
+    let security_count = updates_available.iter().filter(|(_, pkg, _)| pkg.is_security_update).count();
+    if security_only {
+        println!("Found {} security update(s) available:", updates_available.len());
+    } else {
+        println!(
+            "Found {} package(s) with updates available{}:",
+            updates_available.len(),
+            if security_count > 0 { format!(" ({} security)", security_count) } else { String::new() }
+        );
+    }
     for (trove, repo_pkg, _) in &updates_available {
-        println!("  {} {} -> {}", trove.name, trove.version, repo_pkg.version);
+        let security_marker = if repo_pkg.is_security_update {
+            format!(" [{}]", repo_pkg.severity.as_deref().unwrap_or("security"))
+        } else {
+            String::new()
+        };
+        println!("  {} {} -> {}{}", trove.name, trove.version, repo_pkg.version, security_marker);
     }
 
     // Phase 1: Check for deltas and categorize updates
@@ -465,6 +496,114 @@ pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
 
     if all_stats.len() > 10 {
         println!("\n... and {} more operations", all_stats.len() - 10);
+    }
+
+    Ok(())
+}
+
+/// Update all members of a collection/group atomically
+///
+/// This updates all installed packages that are members of the specified collection.
+/// If `security_only` is true, only applies security updates.
+pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bool) -> Result<()> {
+    info!("Updating collection: {}", name);
+    let conn = conary::db::open(db_path)?;
+
+    // Find the collection
+    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let collection = troves
+        .iter()
+        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
+
+    let collection_id = collection.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+
+    if members.is_empty() {
+        println!("Collection '{}' has no members.", name);
+        return Ok(());
+    }
+
+    // Find installed members that need updates
+    let mut updates_to_apply: Vec<String> = Vec::new();
+    let mut not_installed: Vec<String> = Vec::new();
+
+    for member in &members {
+        let installed = Trove::find_by_name(&conn, &member.member_name)?;
+        if installed.is_empty() {
+            not_installed.push(member.member_name.clone());
+            continue;
+        }
+
+        let trove = &installed[0];
+        if trove.pinned {
+            println!("  {} is pinned, skipping", member.member_name);
+            continue;
+        }
+
+        // Check for updates
+        let repo_packages = RepositoryPackage::find_by_name(&conn, &member.member_name)?;
+        for repo_pkg in &repo_packages {
+            if repo_pkg.version != trove.version
+                && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
+            {
+                // Filter by security if requested
+                if security_only && !repo_pkg.is_security_update {
+                    continue;
+                }
+                updates_to_apply.push(member.member_name.clone());
+                break;
+            }
+        }
+    }
+
+    drop(conn);
+
+    if !not_installed.is_empty() {
+        println!(
+            "Note: {} member(s) not installed: {}",
+            not_installed.len(),
+            not_installed.join(", ")
+        );
+    }
+
+    if updates_to_apply.is_empty() {
+        if security_only {
+            println!("No security updates available for collection '{}'", name);
+        } else {
+            println!("All members of collection '{}' are up to date", name);
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Updating {} package(s) from collection '{}':",
+        updates_to_apply.len(),
+        name
+    );
+    for pkg in &updates_to_apply {
+        println!("  {}", pkg);
+    }
+
+    // Update each package
+    let mut updated_count = 0;
+    let mut failed_count = 0;
+
+    for pkg_name in &updates_to_apply {
+        println!("\nUpdating {}...", pkg_name);
+        match cmd_update(Some(pkg_name.clone()), db_path, root, security_only) {
+            Ok(()) => updated_count += 1,
+            Err(e) => {
+                eprintln!("  Failed to update {}: {}", pkg_name, e);
+                failed_count += 1;
+            }
+        }
+    }
+
+    println!("\nCollection update complete:");
+    println!("  Updated: {} package(s)", updated_count);
+    if failed_count > 0 {
+        println!("  Failed: {} package(s)", failed_count);
     }
 
     Ok(())

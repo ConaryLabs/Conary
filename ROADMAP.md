@@ -8,7 +8,7 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v21)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v22)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
 - [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v13)
@@ -213,9 +213,10 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 ### Update Improvements
 
-- [ ] **updateall** - Update all packages to latest versions
-- [ ] **Critical Updates** - `--apply-critical` for security updates only
-- [ ] **Update Groups** - Update entire groups atomically
+- [COMPLETE] **updateall** - Update all packages (`conary update` with no args updates all)
+- [COMPLETE] **Security Updates** - `--security` flag for security updates only (schema v22)
+- [COMPLETE] **Security Metadata** - Track severity, CVE IDs, advisory info on repository packages
+- [COMPLETE] **Update Groups** - `conary update-group <name>` updates collection members atomically
 
 ---
 
@@ -331,6 +332,7 @@ These features from original Conary are not planned for implementation:
 | v19 | Typed dependencies with explicit kind prefixes (python, soname, pkgconfig, etc.) |
 | v20 | Labels system for package provenance tracking (labels, label_path tables, label commands) |
 | v21 | Configuration file management (config_files, config_backups tables, noreplace support) |
+| v22 | Update improvements (security metadata on repository_packages, update-group command) |
 
 ---
 

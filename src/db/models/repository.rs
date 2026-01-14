@@ -179,6 +179,16 @@ pub struct RepositoryPackage {
     pub dependencies: Option<String>,
     pub metadata: Option<String>,
     pub synced_at: Option<String>,
+    /// Whether this update is a security update
+    pub is_security_update: bool,
+    /// Severity level: critical, important, moderate, low
+    pub severity: Option<String>,
+    /// Comma-separated list of CVE IDs (e.g., "CVE-2024-1234,CVE-2024-5678")
+    pub cve_ids: Option<String>,
+    /// Advisory ID (e.g., "RHSA-2024:1234", "DSA-5678-1")
+    pub advisory_id: Option<String>,
+    /// URL to the advisory
+    pub advisory_url: Option<String>,
 }
 
 impl RepositoryPackage {
@@ -204,6 +214,11 @@ impl RepositoryPackage {
             dependencies: None,
             metadata: None,
             synced_at: None,
+            is_security_update: false,
+            severity: None,
+            cve_ids: None,
+            advisory_id: None,
+            advisory_url: None,
         }
     }
 
@@ -211,8 +226,9 @@ impl RepositoryPackage {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
+              is_security_update, severity, cve_ids, advisory_id, advisory_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &self.repository_id,
                 &self.name,
@@ -224,6 +240,11 @@ impl RepositoryPackage {
                 &self.download_url,
                 &self.dependencies,
                 &self.metadata,
+                self.is_security_update as i32,
+                &self.severity,
+                &self.cve_ids,
+                &self.advisory_id,
+                &self.advisory_url,
             ],
         )?;
 
@@ -236,7 +257,8 @@ impl RepositoryPackage {
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at
+                    download_url, dependencies, metadata, synced_at,
+                    is_security_update, severity, cve_ids, advisory_id, advisory_url
              FROM repository_packages WHERE name = ?1",
         )?;
 
@@ -251,7 +273,8 @@ impl RepositoryPackage {
     pub fn find_by_repository(conn: &Connection, repository_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at
+                    download_url, dependencies, metadata, synced_at,
+                    is_security_update, severity, cve_ids, advisory_id, advisory_url
              FROM repository_packages WHERE repository_id = ?1",
         )?;
 
@@ -267,7 +290,8 @@ impl RepositoryPackage {
         let search_pattern = format!("%{pattern}%");
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at
+                    download_url, dependencies, metadata, synced_at,
+                    is_security_update, severity, cve_ids, advisory_id, advisory_url
              FROM repository_packages
              WHERE name LIKE ?1 OR description LIKE ?1
              ORDER BY name, version",
@@ -319,7 +343,8 @@ impl RepositoryPackage {
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
-                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at
+                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
+                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE r.enabled = 1
@@ -337,7 +362,8 @@ impl RepositoryPackage {
     pub fn find_by_name_version(conn: &Connection, name: &str, version: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
-                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at
+                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
+                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE r.enabled = 1 AND rp.name = ?1 AND rp.version = ?2",
@@ -388,6 +414,36 @@ impl RepositoryPackage {
             dependencies: row.get(9)?,
             metadata: row.get(10)?,
             synced_at: row.get(11)?,
+            is_security_update: row.get::<_, i32>(12)? != 0,
+            severity: row.get(13)?,
+            cve_ids: row.get(14)?,
+            advisory_id: row.get(15)?,
+            advisory_url: row.get(16)?,
         })
+    }
+
+    /// Find all security updates available
+    pub fn find_security_updates(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
+                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
+                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
+             FROM repository_packages rp
+             JOIN repositories r ON rp.repository_id = r.id
+             WHERE r.enabled = 1 AND rp.is_security_update = 1
+             ORDER BY CASE rp.severity
+                 WHEN 'critical' THEN 1
+                 WHEN 'important' THEN 2
+                 WHEN 'moderate' THEN 3
+                 WHEN 'low' THEN 4
+                 ELSE 5
+             END, rp.name",
+        )?;
+
+        let packages = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(packages)
     }
 }
