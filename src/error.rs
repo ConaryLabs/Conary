@@ -60,6 +60,18 @@ pub enum Error {
     /// Trigger execution error
     #[error("Trigger error: {0}")]
     TriggerError(String),
+
+    /// Path already exists
+    #[error("Already exists: {0}")]
+    AlreadyExists(String),
+
+    /// Invalid path
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
+
+    /// Resource not found (generic)
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 /// Result type alias using Conary's Error type
