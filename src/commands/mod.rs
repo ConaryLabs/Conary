@@ -21,7 +21,7 @@ pub use collection::{
 };
 pub use install::{cmd_autoremove, cmd_install, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_whatbreaks, cmd_whatprovides};
+pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_whatbreaks, cmd_whatprovides, QueryOptions};
 pub use repo::{
     cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,

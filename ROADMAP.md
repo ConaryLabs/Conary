@@ -194,10 +194,10 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 ### Enhanced Queries
 
-- [ ] **repquery** - Query available packages in repositories (not just installed)
-- [ ] **Path Query** - `conary query --path /usr/bin/foo` - find package by file
-- [ ] **Info Query** - Detailed package information with `--info` flag
-- [ ] **File Listing** - `--lsl` for ls -l style file listing
+- [COMPLETE] **repquery** - Query available packages in repositories (not just installed)
+- [COMPLETE] **Path Query** - `conary query --path /usr/bin/foo` - find package by file
+- [COMPLETE] **Info Query** - Detailed package information with `--info` flag
+- [COMPLETE] **File Listing** - `--lsl` for ls -l style file listing, `--files` for simple listing
 
 ### Configuration Management
 

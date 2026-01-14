@@ -315,6 +315,64 @@ impl RepositoryPackage {
         }
     }
 
+    /// List all packages in all enabled repositories
+    pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
+                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at
+             FROM repository_packages rp
+             JOIN repositories r ON rp.repository_id = r.id
+             WHERE r.enabled = 1
+             ORDER BY rp.name, rp.version",
+        )?;
+
+        let packages = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(packages)
+    }
+
+    /// Find a specific package by name and version in enabled repositories
+    pub fn find_by_name_version(conn: &Connection, name: &str, version: &str) -> Result<Option<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
+                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at
+             FROM repository_packages rp
+             JOIN repositories r ON rp.repository_id = r.id
+             WHERE r.enabled = 1 AND rp.name = ?1 AND rp.version = ?2",
+        )?;
+
+        let pkg = stmt.query_row([name, version], Self::from_row).optional()?;
+        Ok(pkg)
+    }
+
+    /// Get repository name for this package
+    pub fn get_repository_name(&self, conn: &Connection) -> Result<String> {
+        if let Some(repo) = Repository::find_by_id(conn, self.repository_id)? {
+            Ok(repo.name)
+        } else {
+            Ok("unknown".to_string())
+        }
+    }
+
+    /// Format size as human-readable string
+    pub fn size_human(&self) -> String {
+        const KB: i64 = 1024;
+        const MB: i64 = KB * 1024;
+        const GB: i64 = MB * 1024;
+
+        if self.size >= GB {
+            format!("{:.1} GB", self.size as f64 / GB as f64)
+        } else if self.size >= MB {
+            format!("{:.1} MB", self.size as f64 / MB as f64)
+        } else if self.size >= KB {
+            format!("{:.1} KB", self.size as f64 / KB as f64)
+        } else {
+            format!("{} B", self.size)
+        }
+    }
+
     /// Convert a database row to a RepositoryPackage
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {

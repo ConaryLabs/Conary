@@ -157,6 +157,39 @@ enum Commands {
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+
+        /// Find package owning a file path
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Show detailed package information
+        #[arg(short, long)]
+        info: bool,
+
+        /// List files in package
+        #[arg(short, long)]
+        files: bool,
+
+        /// List files in ls -l style format
+        #[arg(long)]
+        lsl: bool,
+    },
+
+    /// Query packages available in repositories (not installed)
+    ///
+    /// Similar to dnf repoquery or apt-cache search.
+    /// Searches package names and descriptions in synced repository metadata.
+    Repquery {
+        /// Optional pattern to filter packages
+        pattern: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show detailed package information
+        #[arg(short, long)]
+        info: bool,
     },
 
     /// Query packages by installation reason
@@ -816,8 +849,18 @@ fn main() -> Result<()> {
             commands::cmd_conflicts(&db_path, verbose)
         }
 
-        Some(Commands::Query { pattern, db_path }) => {
-            commands::cmd_query(pattern.as_deref(), &db_path)
+        Some(Commands::Query { pattern, db_path, path, info, files, lsl }) => {
+            let options = commands::QueryOptions {
+                info,
+                lsl,
+                path,
+                files,
+            };
+            commands::cmd_query(pattern.as_deref(), &db_path, options)
+        }
+
+        Some(Commands::Repquery { pattern, db_path, info }) => {
+            commands::cmd_repquery(pattern.as_deref(), &db_path, info)
         }
 
         Some(Commands::QueryReason { pattern, db_path }) => {

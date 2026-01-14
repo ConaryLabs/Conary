@@ -154,6 +154,76 @@ impl FileEntry {
         Ok(files)
     }
 
+    /// Find files matching a path pattern (LIKE query)
+    pub fn find_by_path_pattern(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at, component_id
+             FROM files WHERE path LIKE ?1 ORDER BY path",
+        )?;
+
+        let files = stmt
+            .query_map([pattern], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
+    /// List all files for a trove with ls -l style information
+    pub fn list_files_lsl(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, trove_id, installed_at, component_id
+             FROM files WHERE trove_id = ?1 ORDER BY path",
+        )?;
+
+        let files = stmt
+            .query_map([trove_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
+    /// Format permissions as rwx string (e.g., -rw-r--r--)
+    pub fn format_permissions(&self) -> String {
+        let mode = self.permissions as u32;
+        let file_type = if mode & 0o40000 != 0 { 'd' }
+        else if mode & 0o120000 == 0o120000 { 'l' }
+        else { '-' };
+
+        let owner_r = if mode & 0o400 != 0 { 'r' } else { '-' };
+        let owner_w = if mode & 0o200 != 0 { 'w' } else { '-' };
+        let owner_x = if mode & 0o100 != 0 { 'x' } else { '-' };
+        let group_r = if mode & 0o040 != 0 { 'r' } else { '-' };
+        let group_w = if mode & 0o020 != 0 { 'w' } else { '-' };
+        let group_x = if mode & 0o010 != 0 { 'x' } else { '-' };
+        let other_r = if mode & 0o004 != 0 { 'r' } else { '-' };
+        let other_w = if mode & 0o002 != 0 { 'w' } else { '-' };
+        let other_x = if mode & 0o001 != 0 { 'x' } else { '-' };
+
+        format!(
+            "{}{}{}{}{}{}{}{}{}{}",
+            file_type, owner_r, owner_w, owner_x,
+            group_r, group_w, group_x,
+            other_r, other_w, other_x
+        )
+    }
+
+    /// Format size as human-readable string
+    pub fn size_human(&self) -> String {
+        const KB: i64 = 1024;
+        const MB: i64 = KB * 1024;
+        const GB: i64 = MB * 1024;
+
+        if self.size >= GB {
+            format!("{:.1}G", self.size as f64 / GB as f64)
+        } else if self.size >= MB {
+            format!("{:.1}M", self.size as f64 / MB as f64)
+        } else if self.size >= KB {
+            format!("{:.1}K", self.size as f64 / KB as f64)
+        } else {
+            format!("{}", self.size)
+        }
+    }
+
     /// Delete a file by path
     pub fn delete(conn: &Connection, path: &str) -> Result<()> {
         conn.execute("DELETE FROM files WHERE path = ?1", [path])?;
