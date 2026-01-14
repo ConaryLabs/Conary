@@ -41,6 +41,32 @@ pub struct DependencyEdge {
     pub to: String,
     pub constraint: VersionConstraint,
     pub dep_type: String,
+    /// The kind of dependency (package, python, soname, pkgconfig, etc.)
+    pub kind: String,
+}
+
+impl DependencyEdge {
+    /// Create a new package dependency edge
+    pub fn new(from: String, to: String, constraint: VersionConstraint, dep_type: String) -> Self {
+        Self {
+            from,
+            to,
+            constraint,
+            dep_type,
+            kind: "package".to_string(),
+        }
+    }
+
+    /// Create a new typed dependency edge
+    pub fn typed(from: String, to: String, constraint: VersionConstraint, dep_type: String, kind: String) -> Self {
+        Self {
+            from,
+            to,
+            constraint,
+            dep_type,
+            kind,
+        }
+    }
 }
 
 /// Dependency graph for resolution and ordering
@@ -98,6 +124,7 @@ impl DependencyGraph {
                     to: dep.depends_on_name.clone(),
                     constraint,
                     dep_type: dep.dependency_type.clone(),
+                    kind: dep.kind.clone(),
                 };
 
                 graph.add_edge(edge);

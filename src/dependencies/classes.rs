@@ -12,6 +12,9 @@ use std::fmt;
 /// These correspond to OG Conary's dependency classes but focused on
 /// the most commonly used ones. Each class has a specific syntax for
 /// expressing dependencies within that ecosystem.
+///
+/// Inspired by Aeryn OS typed dependencies, this provides explicit
+/// type prefixes for all dependency kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DependencyClass {
     /// System/package-level dependency (default)
@@ -62,6 +65,26 @@ pub enum DependencyClass {
     /// Format: abi(name)
     /// Example: abi(x86_64-linux-gnu)
     Abi,
+
+    /// pkg-config dependency
+    /// Format: pkgconfig(name)
+    /// Example: pkgconfig(zlib>=1.2)
+    PkgConfig,
+
+    /// CMake package dependency
+    /// Format: cmake(name)
+    /// Example: cmake(Qt5Core>=5.15)
+    CMake,
+
+    /// Binary/executable dependency
+    /// Format: binary(name)
+    /// Example: binary(python3)
+    Binary,
+
+    /// Kernel module dependency
+    /// Format: kmod(name)
+    /// Example: kmod(nvidia)
+    KernelModule,
 }
 
 impl DependencyClass {
@@ -78,6 +101,10 @@ impl DependencyClass {
             Self::File => "file",
             Self::Interpreter => "interpreter",
             Self::Abi => "abi",
+            Self::PkgConfig => "pkgconfig",
+            Self::CMake => "cmake",
+            Self::Binary => "binary",
+            Self::KernelModule => "kmod",
         }
     }
 
@@ -86,7 +113,7 @@ impl DependencyClass {
         match prefix.to_lowercase().as_str() {
             "" => Some(Self::Package),
             "soname" => Some(Self::Soname),
-            "python" => Some(Self::Python),
+            "python" | "python3" | "python3dist" => Some(Self::Python),
             "perl" => Some(Self::Perl),
             "ruby" => Some(Self::Ruby),
             "java" => Some(Self::Java),
@@ -94,6 +121,10 @@ impl DependencyClass {
             "file" => Some(Self::File),
             "interpreter" => Some(Self::Interpreter),
             "abi" => Some(Self::Abi),
+            "pkgconfig" | "pkg-config" => Some(Self::PkgConfig),
+            "cmake" => Some(Self::CMake),
+            "binary" | "bin" => Some(Self::Binary),
+            "kmod" | "kernel" => Some(Self::KernelModule),
             _ => None,
         }
     }
@@ -111,6 +142,10 @@ impl DependencyClass {
             Self::File,
             Self::Interpreter,
             Self::Abi,
+            Self::PkgConfig,
+            Self::CMake,
+            Self::Binary,
+            Self::KernelModule,
         ]
     }
 
@@ -120,6 +155,39 @@ impl DependencyClass {
             self,
             Self::Python | Self::Perl | Self::Ruby | Self::Java | Self::Cil
         )
+    }
+
+    /// Is this a build-time dependency class?
+    pub fn is_build_time(&self) -> bool {
+        matches!(self, Self::PkgConfig | Self::CMake)
+    }
+
+    /// Is this a system-level dependency class?
+    pub fn is_system(&self) -> bool {
+        matches!(
+            self,
+            Self::Package | Self::Soname | Self::File | Self::Interpreter | Self::Abi | Self::Binary | Self::KernelModule
+        )
+    }
+
+    /// Get a human-readable description of this dependency class
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Package => "Package dependency",
+            Self::Soname => "Shared library (soname)",
+            Self::Python => "Python module",
+            Self::Perl => "Perl module",
+            Self::Ruby => "Ruby gem",
+            Self::Java => "Java package",
+            Self::Cil => ".NET/Mono assembly",
+            Self::File => "File path",
+            Self::Interpreter => "ELF interpreter",
+            Self::Abi => "ABI compatibility",
+            Self::PkgConfig => "pkg-config module",
+            Self::CMake => "CMake package",
+            Self::Binary => "Executable binary",
+            Self::KernelModule => "Kernel module",
+        }
     }
 }
 

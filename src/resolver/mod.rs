@@ -63,6 +63,7 @@ mod tests {
             to: "package-b".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         };
 
         graph.add_edge(edge);
@@ -90,6 +91,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -97,6 +99,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let sorted = graph.topological_sort().unwrap();
@@ -131,6 +134,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -138,6 +142,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -145,6 +150,7 @@ mod tests {
             to: "D".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -152,6 +158,7 @@ mod tests {
             to: "D".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let sorted = graph.topological_sort().unwrap();
@@ -182,6 +189,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -189,6 +197,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -196,6 +205,7 @@ mod tests {
             to: "A".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let cycle = graph.detect_cycle();
@@ -220,6 +230,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -227,6 +238,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let cycle = graph.detect_cycle();
@@ -245,6 +257,7 @@ mod tests {
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let lib_version = make_version("2.0.0");
@@ -263,6 +276,7 @@ mod tests {
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let lib_version = make_version("0.5.0");
@@ -283,6 +297,7 @@ mod tests {
             to: "lib".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -290,6 +305,7 @@ mod tests {
             to: "app1".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let breaking = graph.find_breaking_packages("lib");
@@ -313,6 +329,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -320,6 +337,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let stats = graph.stats();
@@ -342,6 +360,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);
@@ -364,6 +383,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);
@@ -387,6 +407,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::parse(">= 2.0.0").unwrap(),
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);
@@ -423,6 +444,7 @@ mod tests {
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -430,6 +452,7 @@ mod tests {
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -437,6 +460,7 @@ mod tests {
             to: "A".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);
@@ -465,6 +489,7 @@ mod tests {
             to: "lib".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -472,6 +497,7 @@ mod tests {
             to: "app1".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);
@@ -498,6 +524,7 @@ mod tests {
             to: "lib1".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -505,6 +532,7 @@ mod tests {
             to: "lib3".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         graph.add_edge(DependencyEdge {
@@ -512,6 +540,7 @@ mod tests {
             to: "lib2".to_string(),
             constraint: VersionConstraint::Any,
             dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
         });
 
         let resolver = Resolver::with_graph(graph);

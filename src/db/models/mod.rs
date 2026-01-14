@@ -17,6 +17,8 @@ mod provenance;
 mod provide_entry;
 mod repository;
 mod scriptlet_entry;
+mod state;
+mod trigger;
 mod trove;
 
 pub use changeset::{Changeset, ChangesetStatus};
@@ -31,6 +33,8 @@ pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use repository::{Repository, RepositoryPackage};
 pub use scriptlet_entry::ScriptletEntry;
+pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
+pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerEngine, TriggerStatus};
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 
 #[cfg(test)]

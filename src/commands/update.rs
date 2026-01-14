@@ -1,5 +1,5 @@
 // src/commands/update.rs
-//! Update and delta statistics commands
+//! Update, pinning, and delta statistics commands
 
 use super::install_package_from_file;
 use super::progress::{UpdatePhase, UpdateProgress};
@@ -10,6 +10,79 @@ use conary::repository::{self, DownloadOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+/// Pin a package to prevent updates and removal
+pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Pinning package: {}", package_name);
+
+    let conn = conary::db::open(db_path)?;
+
+    let troves = Trove::find_by_name(&conn, package_name)?;
+    if troves.is_empty() {
+        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+    }
+
+    let trove = &troves[0];
+    if trove.pinned {
+        println!("Package '{}' is already pinned", package_name);
+        return Ok(());
+    }
+
+    Trove::pin(&conn, trove.id.unwrap())?;
+    println!("Pinned package '{}' at version {}", package_name, trove.version);
+    println!("This package will be skipped during updates and cannot be removed until unpinned.");
+
+    Ok(())
+}
+
+/// Unpin a package to allow updates and removal
+pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
+    info!("Unpinning package: {}", package_name);
+
+    let conn = conary::db::open(db_path)?;
+
+    let troves = Trove::find_by_name(&conn, package_name)?;
+    if troves.is_empty() {
+        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+    }
+
+    let trove = &troves[0];
+    if !trove.pinned {
+        println!("Package '{}' is not pinned", package_name);
+        return Ok(());
+    }
+
+    Trove::unpin(&conn, trove.id.unwrap())?;
+    println!("Unpinned package '{}' (version {})", package_name, trove.version);
+    println!("This package can now be updated or removed.");
+
+    Ok(())
+}
+
+/// List all pinned packages
+pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
+    info!("Listing pinned packages");
+
+    let conn = conary::db::open(db_path)?;
+    let pinned = Trove::find_pinned(&conn)?;
+
+    if pinned.is_empty() {
+        println!("No packages are pinned.");
+        return Ok(());
+    }
+
+    println!("Pinned packages:");
+    for trove in &pinned {
+        print!("  {} {}", trove.name, trove.version);
+        if let Some(arch) = &trove.architecture {
+            print!(" [{}]", arch);
+        }
+        println!();
+    }
+    println!("\nTotal: {} pinned package(s)", pinned.len());
+
+    Ok(())
+}
 
 /// Get the keyring directory based on db_path
 fn get_keyring_dir(db_path: &str) -> PathBuf {
@@ -63,7 +136,15 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
 
     // Collect updates with their repository info (needed for GPG verification)
     let mut updates_available: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
+    let mut pinned_skipped: Vec<String> = Vec::new();
+
     for trove in &installed_troves {
+        // Skip pinned packages
+        if trove.pinned {
+            pinned_skipped.push(trove.name.clone());
+            continue;
+        }
+
         let repo_packages = RepositoryPackage::find_by_name(&conn, &trove.name)?;
         for repo_pkg in repo_packages {
             if repo_pkg.version != trove.version
@@ -80,6 +161,15 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                 }
             }
         }
+    }
+
+    // Report pinned packages that were skipped
+    if !pinned_skipped.is_empty() {
+        println!(
+            "Skipping {} pinned package(s): {}",
+            pinned_skipped.len(),
+            pinned_skipped.join(", ")
+        );
     }
 
     if updates_available.is_empty() {
@@ -253,7 +343,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str) -> Result<
                     progress.set_phase(&trove.name, UpdatePhase::Installing);
 
                     if let Err(e) =
-                        install_package_from_file(&pkg_path, &mut conn, root, db_path, Some(&trove))
+                        install_package_from_file(&pkg_path, &mut conn, root, db_path, Some(&trove), None)
                     {
                         progress.fail_package(&trove.name, &e.to_string());
                         warn!("  Package installation failed: {}", e);

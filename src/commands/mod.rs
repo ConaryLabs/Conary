@@ -8,7 +8,9 @@ pub mod progress;
 mod query;
 mod repo;
 mod restore;
+mod state;
 mod system;
+mod triggers;
 mod update;
 
 // Re-export all command handlers
@@ -19,14 +21,22 @@ pub use collection::{
 };
 pub use install::{cmd_autoremove, cmd_install, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_rdepends, cmd_whatbreaks, cmd_whatprovides};
+pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_whatbreaks, cmd_whatprovides};
 pub use repo::{
     cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use restore::{cmd_restore, cmd_restore_all};
+pub use state::{
+    cmd_state_create, cmd_state_diff, cmd_state_list, cmd_state_prune, cmd_state_restore,
+    cmd_state_show,
+};
 pub use system::{cmd_init, cmd_rollback, cmd_verify};
-pub use update::{cmd_delta_stats, cmd_update};
+pub use triggers::{
+    cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list,
+    cmd_trigger_remove, cmd_trigger_run, cmd_trigger_show,
+};
+pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update};
 
 use anyhow::Result;
 use conary::components::{ComponentClassifier, ComponentType};
@@ -91,12 +101,21 @@ pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
 }
 
 /// Install a package from a file path (used by install and update commands)
+///
+/// # Arguments
+/// * `package_path` - Path to the package file
+/// * `conn` - Database connection
+/// * `root` - Filesystem root for installation
+/// * `db_path` - Path to the database
+/// * `old_trove` - Previous version being upgraded (if any)
+/// * `selection_reason` - Human-readable reason for installation (e.g., "Required by nginx")
 pub fn install_package_from_file(
     package_path: &Path,
     conn: &mut rusqlite::Connection,
     root: &str,
     db_path: &str,
     old_trove: Option<&conary::db::models::Trove>,
+    selection_reason: Option<&str>,
 ) -> Result<()> {
     let path_str = package_path
         .to_str()
@@ -161,6 +180,16 @@ pub fn install_package_from_file(
 
         let mut trove = package.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
+
+        // Set selection reason if provided (e.g., for dependencies)
+        if let Some(reason) = selection_reason {
+            trove.selection_reason = Some(reason.to_string());
+            // If it's a dependency reason, also set install_reason
+            if reason.starts_with("Required by") {
+                trove.install_reason = conary::db::models::InstallReason::Dependency;
+            }
+        }
+
         let trove_id = trove.insert(tx)?;
 
         // Create components and build path-to-component-id mapping

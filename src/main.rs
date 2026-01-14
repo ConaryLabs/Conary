@@ -159,6 +159,23 @@ enum Commands {
         db_path: String,
     },
 
+    /// Query packages by installation reason
+    ///
+    /// Shows why packages were installed. Supports filters:
+    /// - "explicit" - directly installed by user
+    /// - "dependency" - installed as a dependency
+    /// - "collection" - installed via a collection
+    /// - "@name" - installed via specific collection
+    /// - Custom pattern with * wildcard
+    QueryReason {
+        /// Reason filter pattern (or show all grouped if not specified)
+        pattern: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
     /// Show changeset history
     History {
         /// Path to the database file
@@ -216,6 +233,24 @@ enum Commands {
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+    },
+
+    /// Show full dependency tree for a package
+    Deptree {
+        /// Package name
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show reverse dependency tree (what depends on this, transitively)
+        #[arg(short, long)]
+        reverse: bool,
+
+        /// Maximum depth to traverse (default: unlimited)
+        #[arg(long)]
+        depth: Option<usize>,
     },
 
     /// Show what packages would break if a package is removed
@@ -407,8 +442,206 @@ enum Commands {
         root: String,
     },
 
+    /// Pin a package to prevent updates and removal
+    Pin {
+        /// Package name to pin
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Unpin a package to allow updates and removal
+    Unpin {
+        /// Package name to unpin
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// List all pinned packages
+    ListPinned {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
     /// Show delta update statistics
     DeltaStats {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// List all triggers
+    TriggerList {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show disabled triggers too
+        #[arg(long)]
+        all: bool,
+
+        /// Show only built-in triggers
+        #[arg(long)]
+        builtin: bool,
+    },
+
+    /// Show details of a trigger
+    TriggerShow {
+        /// Trigger name
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Enable a trigger
+    TriggerEnable {
+        /// Trigger name to enable
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Disable a trigger
+    TriggerDisable {
+        /// Trigger name to disable
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Add a custom trigger
+    TriggerAdd {
+        /// Trigger name
+        name: String,
+
+        /// File path pattern (glob, comma-separated for multiple)
+        #[arg(long)]
+        pattern: String,
+
+        /// Handler command to execute
+        #[arg(long)]
+        handler: String,
+
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Priority (lower runs first, default 50)
+        #[arg(long)]
+        priority: Option<i32>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Remove a custom trigger (built-in triggers cannot be removed)
+    TriggerRemove {
+        /// Trigger name to remove
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Run pending triggers for a changeset
+    TriggerRun {
+        /// Changeset ID (defaults to most recent)
+        changeset_id: Option<i64>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+    },
+
+    /// List system state snapshots
+    StateList {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Limit number of states shown
+        #[arg(short, long)]
+        limit: Option<i64>,
+    },
+
+    /// Show details of a specific state
+    StateShow {
+        /// State number to show
+        state_number: i64,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Compare two system states
+    StateDiff {
+        /// Source state number
+        from_state: i64,
+
+        /// Target state number
+        to_state: i64,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Restore system to a previous state
+    StateRestore {
+        /// State number to restore to
+        state_number: i64,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Prune old states, keeping only the most recent N
+    StatePrune {
+        /// Number of states to keep
+        keep: i64,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show what would be pruned without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Create a manual state snapshot
+    StateCreate {
+        /// Summary description for the state
+        summary: String,
+
+        /// Optional detailed description
+        #[arg(long)]
+        description: Option<String>,
+
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
@@ -556,7 +789,7 @@ fn main() -> Result<()> {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
         Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts }) => {
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts)
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None)
         }
 
         Some(Commands::Remove { package_name, db_path, root, no_scripts }) => {
@@ -587,6 +820,10 @@ fn main() -> Result<()> {
             commands::cmd_query(pattern.as_deref(), &db_path)
         }
 
+        Some(Commands::QueryReason { pattern, db_path }) => {
+            commands::cmd_query_reason(pattern.as_deref(), &db_path)
+        }
+
         Some(Commands::History { db_path }) => commands::cmd_history(&db_path),
 
         Some(Commands::Rollback { changeset_id, db_path, root }) => {
@@ -603,6 +840,10 @@ fn main() -> Result<()> {
 
         Some(Commands::Rdepends { package_name, db_path }) => {
             commands::cmd_rdepends(&package_name, &db_path)
+        }
+
+        Some(Commands::Deptree { package_name, db_path, reverse, depth }) => {
+            commands::cmd_deptree(&package_name, &db_path, reverse, depth)
         }
 
         Some(Commands::Whatbreaks { package_name, db_path }) => {
@@ -667,7 +908,69 @@ fn main() -> Result<()> {
             commands::cmd_update(package, &db_path, &root)
         }
 
+        Some(Commands::Pin { package_name, db_path }) => {
+            commands::cmd_pin(&package_name, &db_path)
+        }
+
+        Some(Commands::Unpin { package_name, db_path }) => {
+            commands::cmd_unpin(&package_name, &db_path)
+        }
+
+        Some(Commands::ListPinned { db_path }) => commands::cmd_list_pinned(&db_path),
+
         Some(Commands::DeltaStats { db_path }) => commands::cmd_delta_stats(&db_path),
+
+        Some(Commands::TriggerList { db_path, all, builtin }) => {
+            commands::cmd_trigger_list(&db_path, all, builtin)
+        }
+
+        Some(Commands::TriggerShow { name, db_path }) => {
+            commands::cmd_trigger_show(&name, &db_path)
+        }
+
+        Some(Commands::TriggerEnable { name, db_path }) => {
+            commands::cmd_trigger_enable(&name, &db_path)
+        }
+
+        Some(Commands::TriggerDisable { name, db_path }) => {
+            commands::cmd_trigger_disable(&name, &db_path)
+        }
+
+        Some(Commands::TriggerAdd { name, pattern, handler, description, priority, db_path }) => {
+            commands::cmd_trigger_add(&name, &pattern, &handler, description.as_deref(), priority, &db_path)
+        }
+
+        Some(Commands::TriggerRemove { name, db_path }) => {
+            commands::cmd_trigger_remove(&name, &db_path)
+        }
+
+        Some(Commands::TriggerRun { changeset_id, db_path, root }) => {
+            commands::cmd_trigger_run(changeset_id, &db_path, &root)
+        }
+
+        Some(Commands::StateList { db_path, limit }) => {
+            commands::cmd_state_list(&db_path, limit)
+        }
+
+        Some(Commands::StateShow { state_number, db_path }) => {
+            commands::cmd_state_show(&db_path, state_number)
+        }
+
+        Some(Commands::StateDiff { from_state, to_state, db_path }) => {
+            commands::cmd_state_diff(&db_path, from_state, to_state)
+        }
+
+        Some(Commands::StateRestore { state_number, db_path, dry_run }) => {
+            commands::cmd_state_restore(&db_path, state_number, dry_run)
+        }
+
+        Some(Commands::StatePrune { keep, db_path, dry_run }) => {
+            commands::cmd_state_prune(&db_path, keep, dry_run)
+        }
+
+        Some(Commands::StateCreate { summary, description, db_path }) => {
+            commands::cmd_state_create(&db_path, &summary, description.as_deref())
+        }
 
         Some(Commands::Restore { package, db_path, root, force, dry_run }) => {
             if package == "all" {

@@ -18,6 +18,8 @@ pub struct ProvideEntry {
     pub capability: String,
     /// Optional version of this capability
     pub version: Option<String>,
+    /// The kind of capability (package, python, soname, pkgconfig, etc.)
+    pub kind: String,
 }
 
 impl ProvideEntry {
@@ -28,15 +30,27 @@ impl ProvideEntry {
             trove_id,
             capability,
             version,
+            kind: "package".to_string(),
+        }
+    }
+
+    /// Create a new typed ProvideEntry
+    pub fn new_typed(trove_id: i64, kind: &str, capability: String, version: Option<String>) -> Self {
+        Self {
+            id: None,
+            trove_id,
+            capability,
+            version,
+            kind: kind.to_string(),
         }
     }
 
     /// Insert this provide into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO provides (trove_id, capability, version)
-             VALUES (?1, ?2, ?3)",
-            params![&self.trove_id, &self.capability, &self.version],
+            "INSERT INTO provides (trove_id, capability, version, kind)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![&self.trove_id, &self.capability, &self.version, &self.kind],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -47,9 +61,9 @@ impl ProvideEntry {
     /// Insert or ignore if already exists (for idempotent imports)
     pub fn insert_or_ignore(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT OR IGNORE INTO provides (trove_id, capability, version)
-             VALUES (?1, ?2, ?3)",
-            params![&self.trove_id, &self.capability, &self.version],
+            "INSERT OR IGNORE INTO provides (trove_id, capability, version, kind)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![&self.trove_id, &self.capability, &self.version, &self.kind],
         )?;
 
         // Get the ID (either new or existing)
@@ -68,7 +82,7 @@ impl ProvideEntry {
     /// Returns the first trove that provides this capability
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version
+            "SELECT id, trove_id, capability, version, kind
              FROM provides WHERE capability = ?1 LIMIT 1",
         )?;
 
@@ -76,10 +90,21 @@ impl ProvideEntry {
         Ok(provide)
     }
 
+    /// Find a provide by kind and capability name
+    pub fn find_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Option<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, capability, version, kind
+             FROM provides WHERE kind = ?1 AND capability = ?2 LIMIT 1",
+        )?;
+
+        let provide = stmt.query_row([kind, capability], Self::from_row).optional()?;
+        Ok(provide)
+    }
+
     /// Find all troves that provide a capability
     pub fn find_all_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version
+            "SELECT id, trove_id, capability, version, kind
              FROM provides WHERE capability = ?1",
         )?;
 
@@ -90,15 +115,43 @@ impl ProvideEntry {
         Ok(provides)
     }
 
+    /// Find all typed provides (by kind and capability)
+    pub fn find_all_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, capability, version, kind
+             FROM provides WHERE kind = ?1 AND capability = ?2",
+        )?;
+
+        let provides = stmt
+            .query_map([kind, capability], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(provides)
+    }
+
     /// Find all provides for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version
+            "SELECT id, trove_id, capability, version, kind
              FROM provides WHERE trove_id = ?1",
         )?;
 
         let provides = stmt
             .query_map([trove_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(provides)
+    }
+
+    /// Find all provides of a specific kind for a trove
+    pub fn find_by_trove_and_kind(conn: &Connection, trove_id: i64, kind: &str) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, capability, version, kind
+             FROM provides WHERE trove_id = ?1 AND kind = ?2",
+        )?;
+
+        let provides = stmt
+            .query_map(params![trove_id, kind], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(provides)
@@ -178,12 +231,26 @@ impl ProvideEntry {
     /// Search for capabilities matching a pattern (using SQL LIKE)
     pub fn search_capability(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version
+            "SELECT id, trove_id, capability, version, kind
              FROM provides WHERE capability LIKE ?1",
         )?;
 
         let provides = stmt
             .query_map([pattern], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(provides)
+    }
+
+    /// Search for typed capabilities matching a kind and pattern
+    pub fn search_typed(conn: &Connection, kind: &str, pattern: &str) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, trove_id, capability, version, kind
+             FROM provides WHERE kind = ?1 AND capability LIKE ?2",
+        )?;
+
+        let provides = stmt
+            .query_map([kind, pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(provides)
@@ -202,7 +269,17 @@ impl ProvideEntry {
             trove_id: row.get(1)?,
             capability: row.get(2)?,
             version: row.get(3)?,
+            kind: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "package".to_string()),
         })
+    }
+
+    /// Format this provide as a typed string (e.g., "python(requests)")
+    pub fn to_typed_string(&self) -> String {
+        if self.kind == "package" || self.kind.is_empty() {
+            self.capability.clone()
+        } else {
+            format!("{}({})", self.kind, self.capability)
+        }
     }
 }
 
@@ -225,9 +302,11 @@ mod tests {
                 trove_id INTEGER NOT NULL REFERENCES troves(id),
                 capability TEXT NOT NULL,
                 version TEXT,
+                kind TEXT DEFAULT 'package',
                 UNIQUE(trove_id, capability)
             );
             CREATE INDEX idx_provides_capability ON provides(capability);
+            CREATE INDEX idx_provides_kind ON provides(kind);
 
             INSERT INTO troves (id, name, version) VALUES (1, 'perl-Text-CharWidth', '0.04');
             ",
@@ -240,13 +319,14 @@ mod tests {
     fn test_insert_and_find() {
         let conn = setup_test_db();
 
-        let mut provide = ProvideEntry::new(1, "perl(Text::CharWidth)".to_string(), Some("0.04".to_string()));
+        let mut provide = ProvideEntry::new_typed(1, "perl", "Text::CharWidth".to_string(), Some("0.04".to_string()));
         provide.insert(&conn).unwrap();
 
-        let found = ProvideEntry::find_by_capability(&conn, "perl(Text::CharWidth)").unwrap();
+        let found = ProvideEntry::find_typed(&conn, "perl", "Text::CharWidth").unwrap();
         assert!(found.is_some());
         let found = found.unwrap();
-        assert_eq!(found.capability, "perl(Text::CharWidth)");
+        assert_eq!(found.capability, "Text::CharWidth");
+        assert_eq!(found.kind, "perl");
         assert_eq!(found.version, Some("0.04".to_string()));
     }
 
@@ -254,9 +334,10 @@ mod tests {
     fn test_is_capability_satisfied() {
         let conn = setup_test_db();
 
-        let mut provide = ProvideEntry::new(1, "libc.so.6".to_string(), None);
+        let mut provide = ProvideEntry::new_typed(1, "soname", "libc.so.6".to_string(), None);
         provide.insert(&conn).unwrap();
 
+        // Direct capability check still works
         assert!(ProvideEntry::is_capability_satisfied(&conn, "libc.so.6").unwrap());
         assert!(!ProvideEntry::is_capability_satisfied(&conn, "libfoo.so.1").unwrap());
     }
@@ -265,12 +346,21 @@ mod tests {
     fn test_search_capability() {
         let conn = setup_test_db();
 
-        let mut p1 = ProvideEntry::new(1, "perl(Text::CharWidth)".to_string(), None);
-        let mut p2 = ProvideEntry::new(1, "perl(Text::Wrap)".to_string(), None);
+        let mut p1 = ProvideEntry::new_typed(1, "perl", "Text::CharWidth".to_string(), None);
+        let mut p2 = ProvideEntry::new_typed(1, "perl", "Text::Wrap".to_string(), None);
         p1.insert(&conn).unwrap();
         p2.insert(&conn).unwrap();
 
-        let results = ProvideEntry::search_capability(&conn, "perl(Text::%)").unwrap();
+        let results = ProvideEntry::search_typed(&conn, "perl", "Text::%").unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_to_typed_string() {
+        let provide = ProvideEntry::new_typed(1, "python", "requests".to_string(), Some("2.28".to_string()));
+        assert_eq!(provide.to_typed_string(), "python(requests)");
+
+        let provide = ProvideEntry::new(1, "nginx".to_string(), Some("1.24".to_string()));
+        assert_eq!(provide.to_typed_string(), "nginx");
     }
 }

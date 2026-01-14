@@ -231,13 +231,21 @@ pub fn download_dependencies(
         return Ok(Vec::new());
     }
 
+    // Calculate total size for aggregate progress
+    let total_size: u64 = dependencies
+        .iter()
+        .map(|(_, pkg)| pkg.package.size as u64)
+        .sum();
+    let total_mb = total_size as f64 / 1_048_576.0;
+
     info!(
-        "Downloading {} dependencies in parallel...",
-        dependencies.len()
+        "Downloading {} dependencies in parallel ({:.2} MB total)...",
+        dependencies.len(),
+        total_mb
     );
 
-    // Create multi-progress manager for parallel progress bars
-    let progress = DownloadProgress::new();
+    // Create multi-progress manager with aggregate tracking
+    let progress = DownloadProgress::with_aggregate(dependencies.len(), total_size);
 
     // Pre-create progress bars for all downloads
     let progress_bars: Vec<_> = dependencies
@@ -248,7 +256,8 @@ pub fn download_dependencies(
         .collect();
 
     // Use parallel iterator for concurrent downloads with progress
-    let results: Result<Vec<_>> = dependencies
+    // Collect as Vec<Result<_>> to track individual successes/failures
+    let individual_results: Vec<Result<(String, PathBuf, u64)>> = dependencies
         .par_iter()
         .zip(progress_bars.par_iter())
         .map(|((dep_name, pkg_with_repo), pb)| {
@@ -278,7 +287,7 @@ pub fn download_dependencies(
             ) {
                 Ok(path) => {
                     DownloadProgress::finish_download(pb, dep_name);
-                    Ok((dep_name.clone(), path))
+                    Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
                 }
                 Err(e) => {
                     DownloadProgress::fail_download(pb, dep_name, &e.to_string());
@@ -288,5 +297,33 @@ pub fn download_dependencies(
         })
         .collect();
 
-    results
+    // Calculate statistics and show summary
+    let mut succeeded_results = Vec::new();
+    let mut failed_count = 0;
+    let mut bytes_downloaded: u64 = 0;
+
+    for result in individual_results {
+        match result {
+            Ok((name, path, size)) => {
+                bytes_downloaded += size;
+                succeeded_results.push((name, path));
+            }
+            Err(_) => {
+                failed_count += 1;
+            }
+        }
+    }
+
+    progress.finish_all(succeeded_results.len(), failed_count, bytes_downloaded);
+
+    // If any downloads failed, return error
+    if failed_count > 0 {
+        return Err(Error::DownloadError(format!(
+            "{} of {} dependency downloads failed",
+            failed_count,
+            dependencies.len()
+        )));
+    }
+
+    Ok(succeeded_results)
 }

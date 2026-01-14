@@ -116,28 +116,32 @@ This document tracks the implementation status of Conary features, both complete
 
 ### Package Pinning
 
-- [ ] **Pin Command** - Pin packages to prevent modification during updates
-- [ ] **Unpin Command** - Allow pinned packages to be updated
+- [COMPLETE] **Pin Command** - Pin packages to prevent modification during updates (`conary pin`)
+- [COMPLETE] **Unpin Command** - Allow pinned packages to be updated (`conary unpin`)
+- [COMPLETE] **List Pinned** - List all pinned packages (`conary list-pinned`)
+- [COMPLETE] **Update Protection** - Pinned packages are skipped during `conary update`
+- [COMPLETE] **Remove Protection** - Pinned packages cannot be removed until unpinned
 - [ ] **Multi-Version Support** - Keep multiple versions of pinned packages (like kernels)
 
 ### Parallel Operations
 
-- [ ] **Parallel Downloads** - Download multiple packages concurrently
-- [ ] **Parallel Extraction** - Extract package contents in parallel
-- [ ] **Download Progress** - Show aggregate progress for parallel downloads
+- [COMPLETE] **Parallel Downloads** - Download multiple packages concurrently (via rayon par_iter in `download_dependencies`)
+- [COMPLETE] **Parallel Extraction** - Extract package contents in parallel (`extract_packages_parallel` in packages module)
+- [COMPLETE] **Download Progress** - Show aggregate progress for parallel downloads (total bytes, package count, speed)
+- [COMPLETE] **Parallel Repo Sync** - Sync multiple repositories concurrently
 
 ### Transitive Dependencies
 
-- [ ] **Deep Resolution** - Recursively resolve all dependencies
-- [ ] **Dependency Tree** - Show full dependency tree visualization
-- [ ] **Circular Detection** - Better handling of circular dependencies
+- [COMPLETE] **Deep Resolution** - Recursively resolve all dependencies (via `resolve_dependencies_transitive`)
+- [COMPLETE] **Dependency Tree** - Show full dependency tree visualization (`conary deptree` command)
+- [COMPLETE] **Circular Detection** - Better handling of circular dependencies (marked as `[circular]` in tree)
 
 ### Selection Reasons (Inspired by Aeryn OS)
 
-- [ ] **Reason Text Field** - Add human-readable reason to install tracking
-- [ ] **Dependency Chain** - Track "Required by X" for dependency installs
-- [ ] **Collection Attribution** - Track "Installed via collection Y"
-- [ ] **Query by Reason** - Filter packages by installation reason
+- [COMPLETE] **Reason Text Field** - Add human-readable reason to install tracking (`selection_reason` column, schema v16)
+- [COMPLETE] **Dependency Chain** - Track "Required by X" for dependency installs
+- [COMPLETE] **Collection Attribution** - Track "Installed via @collection" for collection installs
+- [COMPLETE] **Query by Reason** - Filter packages by installation reason (`conary query-reason`)
 
 ---
 
@@ -147,32 +151,37 @@ This document tracks the implementation status of Conary features, both complete
 
 A general-purpose handler system for post-installation actions, more flexible than scriptlets.
 
-- [ ] **Trigger Definition** - Path patterns mapped to handler scripts
-- [ ] **Handler Registry** - Register handlers for file types (ldconfig, mime, icons, etc.)
-- [ ] **DAG Ordering** - Triggers declare before/after dependencies
-- [ ] **Topological Execution** - Run triggers in dependency order
-- [ ] **Built-in Triggers** - ldconfig, update-mime-database, gtk-update-icon-cache, systemd-reload
+- [COMPLETE] **Trigger Definition** - Path patterns mapped to handler scripts (schema v17, `triggers` table)
+- [COMPLETE] **Handler Registry** - Register handlers for file types (10 built-in triggers: ldconfig, mime, icons, etc.)
+- [COMPLETE] **DAG Ordering** - Triggers declare before/after dependencies (`trigger_dependencies` table)
+- [COMPLETE] **Topological Execution** - Run triggers in dependency order (Kahn's algorithm)
+- [COMPLETE] **Built-in Triggers** - ldconfig, update-mime-database, gtk-update-icon-cache, systemd-reload, fc-cache, depmod, etc.
+- [COMPLETE] **CLI Commands** - trigger-list, trigger-show, trigger-enable, trigger-disable, trigger-add, trigger-remove, trigger-run
 
 ### System State Snapshots (Inspired by Aeryn OS)
 
 Full system state tracking for cleaner rollback semantics.
 
-- [ ] **State Table** - Store complete package sets as numbered states
-- [ ] **State Metadata** - ID, timestamp, summary, description for each state
-- [ ] **State Diff** - Compare two states to see what changed
-- [ ] **State Restore** - Rollback to any previous state by ID
-- [ ] **State Pruning** - Garbage collect old states to save space
-- [ ] **Active State Tracking** - Track current system state ID
+- [COMPLETE] **State Table** - Store complete package sets as numbered states (`system_states` table, schema v18)
+- [COMPLETE] **State Metadata** - ID, timestamp, summary, description for each state
+- [COMPLETE] **State Members** - Package list per state (`state_members` table)
+- [COMPLETE] **State Diff** - Compare two states to see what changed (`state-diff` command)
+- [COMPLETE] **State Restore Plan** - Show operations needed to rollback to a previous state
+- [COMPLETE] **State Pruning** - Garbage collect old states to save space (`state-prune` command)
+- [COMPLETE] **Active State Tracking** - Track current system state ID
+- [COMPLETE] **Automatic Snapshots** - States created automatically after install/remove operations
+- [COMPLETE] **CLI Commands** - state-list, state-show, state-diff, state-restore, state-prune, state-create
 
 ### Typed Dependencies (Inspired by Aeryn OS)
 
 Formalize dependency kinds with explicit type prefixes.
 
-- [ ] **Dependency Kinds** - PackageName, SharedLibrary, PkgConfig, Interpreter, CMake, Python, Binary
-- [ ] **Kind Format** - `kind(target)` syntax e.g., `pkgconfig(zlib)`, `python(flask)`
-- [ ] **Kind Matching** - Resolve dependencies by matching kinds
-- [ ] **Provider Kinds** - Packages declare what kinds they provide
-- [ ] **Migration** - Convert existing string deps to typed format
+- [COMPLETE] **Dependency Kinds** - Package, Soname, Python, Perl, Ruby, Java, PkgConfig, CMake, Binary, File, Interpreter, Abi, KernelModule
+- [COMPLETE] **Kind Format** - `kind(target)` syntax e.g., `pkgconfig(zlib)`, `python(flask)`
+- [COMPLETE] **Kind Matching** - Resolve dependencies by matching kinds (schema v19 with `kind` column)
+- [COMPLETE] **Provider Kinds** - Provides table has `kind` column for typed matching
+- [COMPLETE] **Migration** - Automatic migration parses existing `kind(name)` strings into typed format
+- [COMPLETE] **CLI Support** - `depends` and `rdepends` display typed dependencies
 
 ### Labels System
 
@@ -309,17 +318,20 @@ These features from original Conary are not planned for implementation:
 | v11 | Component model with classification and dependencies |
 | v12 | Install reason tracking (explicit vs dependency) |
 | v13 | Collections/groups support |
-| v14 | Enhanced flavor support (parsing, matching, operators, architecture) |
+| v14 | Enhanced flavor support (parsing, matching, operators, architecture), transitive dependency tree |
+| v15 | Package pinning support (`pinned` column on troves) |
+| v16 | Selection reason tracking (`selection_reason` column), query-reason command |
+| v17 | Trigger system for post-installation actions (ldconfig, mime, icons, systemd, etc.) |
+| v18 | System state snapshots for full system state tracking and rollback |
+| v19 | Typed dependencies with explicit kind prefixes (python, soname, pkgconfig, etc.) |
 
 ---
 
 ## Contributing
 
 Contributions welcome. Priority areas:
-1. Trigger system implementation
-2. System state snapshots
-3. Typed dependencies
-4. Package pinning
-5. Parallel downloads
+1. Container-isolated scriptlets
+2. Atomic filesystem updates
+3. VFS tree with reparenting
 
 See README.md for development setup and CLAUDE.md for coding conventions.

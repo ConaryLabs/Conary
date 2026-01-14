@@ -5,7 +5,7 @@ use super::progress::{InstallPhase, InstallProgress, RemovePhase, RemoveProgress
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
-use conary::db::models::{Component, ProvideEntry, ScriptletEntry};
+use conary::db::models::{Component, ProvideEntry, ScriptletEntry, StateEngine};
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
@@ -170,8 +170,8 @@ fn parse_package(path: &Path, format: PackageFormatType) -> Result<Box<dyn Packa
 enum UpgradeCheck {
     /// Fresh install - no existing package
     FreshInstall,
-    /// Upgrade from an older version
-    Upgrade(conary::db::models::Trove),
+    /// Upgrade from an older version (boxed to reduce enum size)
+    Upgrade(Box<conary::db::models::Trove>),
 }
 
 /// Check if package is already installed and determine upgrade status
@@ -204,7 +204,7 @@ fn check_upgrade_status(
                             trove.version,
                             pkg.version()
                         );
-                        return Ok(UpgradeCheck::Upgrade(trove.clone()));
+                        return Ok(UpgradeCheck::Upgrade(Box::new(trove.clone())));
                     } else {
                         return Err(anyhow::anyhow!(
                             "Cannot downgrade package {} from version {} to {}",
@@ -338,6 +338,17 @@ impl ComponentSelection {
 }
 
 /// Install a package
+///
+/// # Arguments
+/// * `package` - Package name or path
+/// * `db_path` - Path to the database
+/// * `root` - Filesystem root for installation
+/// * `version` - Specific version to install (optional)
+/// * `repo` - Specific repository to use (optional)
+/// * `dry_run` - Preview without installing
+/// * `no_deps` - Skip dependency resolution
+/// * `no_scripts` - Skip scriptlet execution
+/// * `selection_reason` - Human-readable reason for installation (e.g., "Installed via @server")
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
@@ -348,6 +359,7 @@ pub fn cmd_install(
     dry_run: bool,
     no_deps: bool,
     no_scripts: bool,
+    selection_reason: Option<&str>,
 ) -> Result<()> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
@@ -414,6 +426,7 @@ pub fn cmd_install(
                 to: d.name.clone(),
                 constraint,
                 dep_type: "runtime".to_string(),
+                kind: "package".to_string(),
             }
         })
         .collect();
@@ -481,12 +494,15 @@ pub fn cmd_install(
                             let keyring_dir = get_keyring_dir(db_path);
                             match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
                                 Ok(downloaded) => {
+                                    // Capture parent package name for selection reason
+                                    let parent_name = pkg.name().to_string();
                                     for (dep_name, dep_path) in downloaded {
                                         progress.set_status(&format!("Installing dependency: {}", dep_name));
                                         info!("Installing dependency: {}", dep_name);
                                         println!("Installing dependency: {}", dep_name);
+                                        let reason = format!("Required by {}", parent_name);
                                         if let Err(e) =
-                                            install_package_from_file(&dep_path, &mut conn, root, db_path, None)
+                                            install_package_from_file(&dep_path, &mut conn, root, db_path, None, Some(&reason))
                                         {
                                             return Err(anyhow::anyhow!(
                                                 "Failed to install dependency {}: {}",
@@ -841,6 +857,12 @@ pub fn cmd_install(
 
         let mut trove = pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
+
+        // Set custom selection reason if provided (e.g., from collection install)
+        if let Some(reason) = selection_reason {
+            trove.selection_reason = Some(reason.to_string());
+        }
+
         let trove_id = trove.insert(tx)?;
 
         // Create components and build path-to-component-id mapping
@@ -949,10 +971,13 @@ pub fn cmd_install(
     });
 
     // If DB transaction failed, rollback deployed files
-    if let Err(e) = db_result {
-        rollback_deployed_files(&deployer, &file_hashes);
-        return Err(anyhow::anyhow!("Database transaction failed: {}", e));
-    }
+    let changeset_id = match db_result {
+        Ok(id) => id,
+        Err(e) => {
+            rollback_deployed_files(&deployer, &file_hashes);
+            return Err(anyhow::anyhow!("Database transaction failed: {}", e));
+        }
+    };
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
     // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
@@ -1014,6 +1039,41 @@ pub fn cmd_install(
         }
     }
 
+    // Execute triggers based on installed files
+    progress.set_phase(pkg.name(), InstallPhase::Triggers);
+    let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let trigger_executor = conary::trigger::TriggerExecutor::new(&conn, Path::new(root));
+
+    // Record which triggers need to run
+    let triggered = trigger_executor.record_triggers(changeset_id, &file_paths)
+        .unwrap_or_else(|e| {
+            warn!("Failed to record triggers: {}", e);
+            Vec::new()
+        });
+
+    if !triggered.is_empty() {
+        info!("Recorded {} trigger(s) for execution", triggered.len());
+        // Execute triggers
+        match trigger_executor.execute_pending(changeset_id) {
+            Ok(results) => {
+                if results.total() > 0 {
+                    info!(
+                        "Triggers: {} succeeded, {} failed, {} skipped",
+                        results.succeeded, results.failed, results.skipped
+                    );
+                    if !results.all_succeeded() {
+                        for error in &results.errors {
+                            warn!("Trigger error: {}", error);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Trigger execution failed: {}", e);
+            }
+        }
+    }
+
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
     // Show what components were available vs installed
@@ -1046,6 +1106,9 @@ pub fn cmd_install(
     if !language_provides.is_empty() {
         println!("  Provides: {} (language-specific capabilities)", language_provides.len());
     }
+
+    // Create state snapshot after successful install
+    create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;
 
     Ok(())
 }
@@ -1083,6 +1146,15 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     let trove_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+
+    // Check if package is pinned
+    if trove.pinned {
+        return Err(anyhow::anyhow!(
+            "Package '{}' is pinned and cannot be removed. Use 'conary unpin {}' first.",
+            package_name,
+            package_name
+        ));
+    }
 
     let resolver = conary::resolver::Resolver::new(&conn)?;
     let breaking = resolver.check_removal(package_name)?;
@@ -1162,7 +1234,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
     progress.set_phase(RemovePhase::UpdatingDb);
-    conary::db::transaction(&mut conn, |tx| {
+    let remove_changeset_id = conary::db::transaction(&mut conn, |tx| {
         let mut changeset =
             conary::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
         let changeset_id = changeset.insert(tx)?;
@@ -1214,7 +1286,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
 
         conary::db::models::Trove::delete(tx, trove_id)?;
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
-        Ok(())
+        Ok(changeset_id)
     })?;
 
     // Separate files and directories
@@ -1305,6 +1377,9 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
     if failed_count > 0 {
         println!("  Files failed to remove: {}", failed_count);
     }
+
+    // Create state snapshot after successful remove
+    create_state_snapshot(&conn, remove_changeset_id, &format!("Remove {}", trove.name))?;
 
     Ok(())
 }
@@ -1449,6 +1524,21 @@ fn generate_capability_variations(capability: &str) -> Vec<String> {
     }
 
     variations
+}
+
+/// Create a state snapshot after a successful operation
+fn create_state_snapshot(conn: &Connection, changeset_id: i64, summary: &str) -> Result<()> {
+    let engine = StateEngine::new(conn);
+    match engine.create_snapshot(summary, None, Some(changeset_id)) {
+        Ok(state) => {
+            info!("Created state {} ({})", state.state_number, summary);
+        }
+        Err(e) => {
+            warn!("Failed to create state snapshot: {}", e);
+            // Don't fail the operation if snapshot creation fails
+        }
+    }
+    Ok(())
 }
 
 /// Remove orphaned packages (installed as dependencies but no longer needed)

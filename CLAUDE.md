@@ -75,7 +75,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v14. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members.
+Currently v15. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -84,6 +84,7 @@ Key schema additions:
 - v12: `install_reason` column on troves - for autoremove support
 - v13: `collection_members` - package group/collection support
 - v14: `flavor_spec` column on troves - Conary-style flavor specifications
+- v15: `pinned` column on troves - package pinning support
 
 ## Testing
 

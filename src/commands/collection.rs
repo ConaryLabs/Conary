@@ -292,6 +292,7 @@ pub fn cmd_collection_install(
         }
 
         println!("\nInstalling {}...", member.member_name);
+        let reason = format!("Installed via @{}", name);
         match super::cmd_install(
             &member.member_name,
             db_path,
@@ -301,6 +302,7 @@ pub fn cmd_collection_install(
             false,
             false,
             false,
+            Some(&reason),
         ) {
             Ok(()) => {
                 installed_count += 1;

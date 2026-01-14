@@ -56,6 +56,10 @@ pub enum Error {
     /// Scriptlet execution error
     #[error("Scriptlet error: {0}")]
     ScriptletError(String),
+
+    /// Trigger execution error
+    #[error("Trigger error: {0}")]
+    TriggerError(String),
 }
 
 /// Result type alias using Conary's Error type

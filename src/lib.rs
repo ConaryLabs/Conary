@@ -24,6 +24,7 @@ pub mod packages;
 pub mod repository;
 pub mod resolver;
 pub mod scriptlet;
+pub mod trigger;
 pub mod version;
 
 pub use components::{ComponentClassifier, ComponentType};

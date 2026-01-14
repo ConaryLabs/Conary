@@ -369,9 +369,13 @@ pub fn download_package_verified_with_progress(
 /// Multi-progress manager for parallel downloads
 ///
 /// Provides a wrapper around indicatif's MultiProgress for managing
-/// multiple concurrent download progress bars.
+/// multiple concurrent download progress bars, with aggregate statistics.
 pub struct DownloadProgress {
     multi: MultiProgress,
+    /// Overall progress bar showing total bytes
+    overall: Option<ProgressBar>,
+    /// Total size in bytes
+    total_size: u64,
 }
 
 impl DownloadProgress {
@@ -379,6 +383,34 @@ impl DownloadProgress {
     pub fn new() -> Self {
         Self {
             multi: MultiProgress::new(),
+            overall: None,
+            total_size: 0,
+        }
+    }
+
+    /// Create a new multi-progress manager with aggregate tracking
+    ///
+    /// Shows an overall progress bar tracking total bytes downloaded
+    /// across all packages.
+    pub fn with_aggregate(package_count: usize, total_size: u64) -> Self {
+        let multi = MultiProgress::new();
+
+        // Create overall progress bar
+        let overall = ProgressBar::new(total_size);
+        overall.set_style(
+            ProgressStyle::default_bar()
+                .template("Total: [{bar:40.green/dim}] {bytes}/{total_bytes} ({bytes_per_sec}) - {msg}")
+                .expect("Invalid progress bar template")
+                .progress_chars("=>-"),
+        );
+        overall.set_message(format!("0/{} packages", package_count));
+
+        let overall_bar = multi.add(overall);
+
+        Self {
+            multi,
+            overall: Some(overall_bar),
+            total_size,
         }
     }
 
@@ -402,6 +434,14 @@ impl DownloadProgress {
         self.multi.add(pb)
     }
 
+    /// Update the overall progress with bytes downloaded
+    pub fn update_overall(&self, bytes: u64, completed: usize, total: usize) {
+        if let Some(ref overall) = self.overall {
+            overall.set_position(bytes);
+            overall.set_message(format!("{}/{} packages", completed, total));
+        }
+    }
+
     /// Mark a download as complete with success message
     pub fn finish_download(pb: &ProgressBar, name: &str) {
         pb.finish_with_message(format!("{} [done]", name));
@@ -410,6 +450,26 @@ impl DownloadProgress {
     /// Mark a download as failed
     pub fn fail_download(pb: &ProgressBar, name: &str, error: &str) {
         pb.abandon_with_message(format!("{} [FAILED: {}]", name, error));
+    }
+
+    /// Finish all downloads and show summary
+    pub fn finish_all(&self, succeeded: usize, failed: usize, total_bytes: u64) {
+        if let Some(ref overall) = self.overall {
+            let mb = total_bytes as f64 / 1_048_576.0;
+            if failed > 0 {
+                overall.finish_with_message(format!(
+                    "{} succeeded, {} failed ({:.2} MB)",
+                    succeeded, failed, mb
+                ));
+            } else {
+                overall.finish_with_message(format!("{} packages ({:.2} MB)", succeeded, mb));
+            }
+        }
+    }
+
+    /// Get total configured size
+    pub fn total_size(&self) -> u64 {
+        self.total_size
     }
 }
 

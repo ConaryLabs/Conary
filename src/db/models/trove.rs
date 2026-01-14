@@ -125,6 +125,10 @@ pub struct Trove {
     pub install_reason: InstallReason,
     /// Conary-style flavor specification (e.g., `[ssl, !debug, is: x86_64]`)
     pub flavor_spec: Option<String>,
+    /// Whether this package is pinned (protected from updates/removal)
+    pub pinned: bool,
+    /// Human-readable reason for installation (e.g., "Required by nginx", "Installed via @server")
+    pub selection_reason: Option<String>,
 }
 
 impl Trove {
@@ -142,6 +146,8 @@ impl Trove {
             install_source: InstallSource::File,
             install_reason: InstallReason::Explicit,
             flavor_spec: None,
+            pinned: false,
+            selection_reason: Some("Explicitly installed".to_string()),
         }
     }
 
@@ -164,14 +170,64 @@ impl Trove {
             install_source,
             install_reason: InstallReason::Explicit,
             flavor_spec: None,
+            pinned: false,
+            selection_reason: Some("Explicitly installed".to_string()),
+        }
+    }
+
+    /// Create a Trove installed as a dependency of another package
+    pub fn new_as_dependency(
+        name: String,
+        version: String,
+        trove_type: TroveType,
+        required_by: &str,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            version,
+            trove_type,
+            architecture: None,
+            description: None,
+            installed_at: None,
+            installed_by_changeset_id: None,
+            install_source: InstallSource::Repository,
+            install_reason: InstallReason::Dependency,
+            flavor_spec: None,
+            pinned: false,
+            selection_reason: Some(format!("Required by {}", required_by)),
+        }
+    }
+
+    /// Create a Trove installed via a collection
+    pub fn new_from_collection(
+        name: String,
+        version: String,
+        trove_type: TroveType,
+        collection_name: &str,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            version,
+            trove_type,
+            architecture: None,
+            description: None,
+            installed_at: None,
+            installed_by_changeset_id: None,
+            install_source: InstallSource::Repository,
+            install_reason: InstallReason::Explicit,
+            flavor_spec: None,
+            pinned: false,
+            selection_reason: Some(format!("Installed via @{}", collection_name)),
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &self.name,
                 &self.version,
@@ -182,6 +238,8 @@ impl Trove {
                 self.install_source.as_str(),
                 self.install_reason.as_str(),
                 &self.flavor_spec,
+                self.pinned,
+                &self.selection_reason,
             ],
         )?;
 
@@ -193,7 +251,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -203,7 +261,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -215,7 +273,7 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves ORDER BY name, version")?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -279,6 +337,12 @@ impl Trove {
         // flavor_spec is nullable
         let flavor_spec: Option<String> = row.get(10)?;
 
+        // Handle pinned with default for older databases
+        let pinned: i32 = row.get(11).unwrap_or(0);
+
+        // Handle selection_reason (added in v16)
+        let selection_reason: Option<String> = row.get(12).unwrap_or(None);
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -291,6 +355,8 @@ impl Trove {
             install_source,
             install_reason,
             flavor_spec,
+            pinned: pinned != 0,
+            selection_reason,
         })
     }
 
@@ -309,5 +375,79 @@ impl Trove {
         let mut canonical = flavor.clone();
         canonical.canonicalize();
         self.flavor_spec = Some(canonical.to_string());
+    }
+
+    /// Pin a package to prevent updates/removal
+    pub fn pin(conn: &Connection, id: i64) -> Result<()> {
+        conn.execute("UPDATE troves SET pinned = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Unpin a package to allow updates/removal
+    pub fn unpin(conn: &Connection, id: i64) -> Result<()> {
+        conn.execute("UPDATE troves SET pinned = 0 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Find all pinned packages
+    pub fn find_pinned(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE pinned = 1 ORDER BY name, version"
+        )?;
+
+        let troves = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(troves)
+    }
+
+    /// Check if a package is pinned by name
+    pub fn is_pinned_by_name(conn: &Connection, name: &str) -> Result<bool> {
+        let count: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM troves WHERE name = ?1 AND pinned = 1",
+            [name],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Find troves by selection reason pattern
+    ///
+    /// Supports patterns like:
+    /// - "Required by *" - packages installed as dependencies
+    /// - "Installed via @*" - packages installed via collections
+    /// - "Explicitly installed" - packages installed directly
+    pub fn find_by_reason(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
+        // Convert glob-style pattern to SQL LIKE pattern
+        let sql_pattern = pattern.replace('*', "%");
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason
+             FROM troves
+             WHERE selection_reason LIKE ?1
+             ORDER BY name, version"
+        )?;
+
+        let troves = stmt
+            .query_map([sql_pattern], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(troves)
+    }
+
+    /// Find all packages installed as dependencies
+    pub fn find_dependencies_installed(conn: &Connection) -> Result<Vec<Self>> {
+        Self::find_by_reason(conn, "Required by *")
+    }
+
+    /// Find all packages installed via collections
+    pub fn find_collection_installed(conn: &Connection) -> Result<Vec<Self>> {
+        Self::find_by_reason(conn, "Installed via @*")
+    }
+
+    /// Find all explicitly installed packages
+    pub fn find_explicitly_installed(conn: &Connection) -> Result<Vec<Self>> {
+        Self::find_by_reason(conn, "Explicitly installed")
     }
 }

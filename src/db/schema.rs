@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 14;
+pub const SCHEMA_VERSION: i32 = 19;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -89,6 +89,11 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         12 => migrate_v12(conn),
         13 => migrate_v13(conn),
         14 => migrate_v14(conn),
+        15 => migrate_v15(conn),
+        16 => migrate_v16(conn),
+        17 => migrate_v17(conn),
+        18 => migrate_v18(conn),
+        19 => migrate_v19(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -662,6 +667,424 @@ fn migrate_v14(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 14 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 15: Add package pinning support
+///
+/// Adds a `pinned` column to the troves table to support preventing
+/// packages from being modified during updates.
+///
+/// Pinned packages:
+/// - Are skipped during `conary update` operations
+/// - Cannot be removed without first unpinning
+/// - Can have multiple versions installed (for kernels, etc.)
+fn migrate_v15(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 15");
+
+    // Add pinned column - default false (0) for existing packages
+    conn.execute(
+        "ALTER TABLE troves ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+        [],
+    )?;
+
+    // Index for efficient pinned package queries
+    conn.execute(
+        "CREATE INDEX idx_troves_pinned ON troves(pinned) WHERE pinned = 1",
+        [],
+    )?;
+
+    info!("Schema version 15 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 16: Add selection reason tracking
+///
+/// Adds a `selection_reason` column to track human-readable reasons
+/// for why a package was installed:
+///
+/// - "Explicitly installed by user"
+/// - "Required by nginx"
+/// - "Installed via @server collection"
+///
+/// This enables better tracking of the dependency chain and
+/// collection attribution for installed packages.
+fn migrate_v16(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 16");
+
+    // Add selection_reason column - NULL for existing packages (will show as "Unknown")
+    conn.execute(
+        "ALTER TABLE troves ADD COLUMN selection_reason TEXT",
+        [],
+    )?;
+
+    // Update existing packages with default reasons based on install_reason
+    conn.execute(
+        "UPDATE troves SET selection_reason = 'Explicitly installed' WHERE install_reason = 'explicit' AND selection_reason IS NULL",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE troves SET selection_reason = 'Installed as dependency' WHERE install_reason = 'dependency' AND selection_reason IS NULL",
+        [],
+    )?;
+
+    info!("Schema version 16 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 17: Add trigger system for post-installation actions
+///
+/// Creates tables for the trigger system which provides:
+/// - Path-based triggers that run when files matching patterns are installed/removed
+/// - DAG-ordered execution (triggers can depend on other triggers)
+/// - Built-in triggers for common system actions (ldconfig, update-desktop-database, etc.)
+///
+/// Tables:
+/// - triggers: Defines trigger handlers with path patterns
+/// - trigger_dependencies: DAG ordering between triggers
+/// - changeset_triggers: Tracks which triggers were activated per changeset
+fn migrate_v17(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 17");
+
+    conn.execute_batch(
+        "
+        -- Triggers: Path-based handlers for post-installation actions
+        CREATE TABLE triggers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            pattern TEXT NOT NULL,
+            handler TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 50,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            builtin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_triggers_name ON triggers(name);
+        CREATE INDEX idx_triggers_enabled ON triggers(enabled) WHERE enabled = 1;
+        CREATE INDEX idx_triggers_builtin ON triggers(builtin);
+
+        -- Trigger dependencies: DAG ordering between triggers
+        CREATE TABLE trigger_dependencies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger_id INTEGER NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
+            depends_on TEXT NOT NULL,
+            UNIQUE(trigger_id, depends_on)
+        );
+
+        CREATE INDEX idx_trigger_deps_trigger ON trigger_dependencies(trigger_id);
+        CREATE INDEX idx_trigger_deps_depends ON trigger_dependencies(depends_on);
+
+        -- Changeset triggers: Track which triggers were activated per changeset
+        CREATE TABLE changeset_triggers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changeset_id INTEGER NOT NULL REFERENCES changesets(id) ON DELETE CASCADE,
+            trigger_id INTEGER NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            matched_files INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT,
+            completed_at TEXT,
+            output TEXT,
+            UNIQUE(changeset_id, trigger_id)
+        );
+
+        CREATE INDEX idx_changeset_triggers_changeset ON changeset_triggers(changeset_id);
+        CREATE INDEX idx_changeset_triggers_status ON changeset_triggers(status);
+        ",
+    )?;
+
+    // Insert built-in system triggers
+    conn.execute_batch(
+        "
+        -- ldconfig: Update shared library cache
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('ldconfig', 'Update shared library cache', '/usr/lib/*.so*,/usr/lib64/*.so*,/lib/*.so*,/lib64/*.so*', '/sbin/ldconfig', 10, 1);
+
+        -- update-mime-database: Update MIME type database
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('update-mime-database', 'Update MIME type database', '/usr/share/mime/*', 'update-mime-database /usr/share/mime', 30, 1);
+
+        -- update-desktop-database: Update desktop entry database
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('update-desktop-database', 'Update desktop entry database', '/usr/share/applications/*.desktop', 'update-desktop-database /usr/share/applications', 30, 1);
+
+        -- gtk-update-icon-cache: Update GTK icon cache
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('gtk-update-icon-cache', 'Update GTK icon cache', '/usr/share/icons/*', 'gtk-update-icon-cache -f /usr/share/icons/hicolor', 40, 1);
+
+        -- glib-compile-schemas: Compile GSettings schemas
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('glib-compile-schemas', 'Compile GSettings schemas', '/usr/share/glib-2.0/schemas/*.xml,/usr/share/glib-2.0/schemas/*.gschema.override', 'glib-compile-schemas /usr/share/glib-2.0/schemas', 30, 1);
+
+        -- systemd-tmpfiles: Create tmpfiles.d entries
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('systemd-tmpfiles', 'Create tmpfiles entries', '/usr/lib/tmpfiles.d/*.conf', 'systemd-tmpfiles --create', 20, 1);
+
+        -- systemd-sysusers: Create system users
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('systemd-sysusers', 'Create system users', '/usr/lib/sysusers.d/*.conf', 'systemd-sysusers', 15, 1);
+
+        -- systemctl-daemon-reload: Reload systemd units
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('systemctl-daemon-reload', 'Reload systemd daemon', '/usr/lib/systemd/system/*,/usr/lib/systemd/user/*', 'systemctl daemon-reload', 50, 1);
+
+        -- fc-cache: Update font cache
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('fc-cache', 'Update font cache', '/usr/share/fonts/*', 'fc-cache -s', 40, 1);
+
+        -- depmod: Update kernel module dependencies
+        INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
+        VALUES ('depmod', 'Update kernel module dependencies', '/lib/modules/*/modules.*,/usr/lib/modules/*/*.ko*', 'depmod -a', 20, 1);
+        ",
+    )?;
+
+    // Add trigger dependencies (systemd-sysusers before systemd-tmpfiles)
+    conn.execute(
+        "INSERT INTO trigger_dependencies (trigger_id, depends_on)
+         SELECT t.id, 'systemd-sysusers'
+         FROM triggers t
+         WHERE t.name = 'systemd-tmpfiles'",
+        [],
+    )?;
+
+    info!("Schema version 17 applied successfully (trigger system with {} built-in triggers)", 10);
+    Ok(())
+}
+
+/// Schema Version 18: Add system state snapshots
+///
+/// Creates tables for full system state tracking:
+/// - system_states: Stores numbered snapshots of system state
+/// - state_members: Packages in each state snapshot
+///
+/// State snapshots provide cleaner rollback semantics than per-changeset rollback:
+/// - Each state captures the complete set of installed packages
+/// - States are numbered sequentially (1, 2, 3...)
+/// - The "active" state marks the current system configuration
+/// - Rollback to any previous state computes the minimal operations needed
+/// - State pruning removes old states to save space
+fn migrate_v18(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 18");
+
+    conn.execute_batch(
+        "
+        -- System states: Numbered snapshots of complete system state
+        CREATE TABLE system_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            state_number INTEGER NOT NULL UNIQUE,
+            summary TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            package_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX idx_system_states_number ON system_states(state_number);
+        CREATE INDEX idx_system_states_active ON system_states(is_active) WHERE is_active = 1;
+        CREATE INDEX idx_system_states_created ON system_states(created_at);
+
+        -- State members: Packages in each state snapshot
+        CREATE TABLE state_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            state_id INTEGER NOT NULL REFERENCES system_states(id) ON DELETE CASCADE,
+            trove_name TEXT NOT NULL,
+            trove_version TEXT NOT NULL,
+            architecture TEXT,
+            install_reason TEXT NOT NULL DEFAULT 'explicit',
+            selection_reason TEXT,
+            UNIQUE(state_id, trove_name)
+        );
+
+        CREATE INDEX idx_state_members_state ON state_members(state_id);
+        CREATE INDEX idx_state_members_name ON state_members(trove_name);
+        ",
+    )?;
+
+    // Create initial state (state 0) representing the pre-Conary system
+    // This is only created if there are already packages installed
+    let package_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM troves WHERE type = 'package'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if package_count > 0 {
+        // Create state 0 with current packages
+        conn.execute(
+            "INSERT INTO system_states (state_number, summary, description, is_active, package_count)
+             VALUES (0, 'Initial system state', 'State snapshot created during migration to capture existing packages', 1, ?1)",
+            [package_count],
+        )?;
+
+        // Populate state 0 with current packages
+        conn.execute(
+            "INSERT INTO state_members (state_id, trove_name, trove_version, architecture, install_reason, selection_reason)
+             SELECT (SELECT id FROM system_states WHERE state_number = 0),
+                    name, version, architecture, install_reason, selection_reason
+             FROM troves WHERE type = 'package'",
+            [],
+        )?;
+    }
+
+    info!("Schema version 18 applied successfully (system state snapshots)");
+    Ok(())
+}
+
+/// Schema Version 19: Add typed dependencies
+///
+/// Adds explicit dependency kind tracking for type-safe dependency resolution.
+/// Each dependency now has a `kind` field indicating its type:
+/// - package: Standard package dependency
+/// - soname: Shared library (libfoo.so.1)
+/// - python: Python module
+/// - perl: Perl module
+/// - ruby: Ruby gem
+/// - java: Java package
+/// - pkgconfig: pkg-config module
+/// - cmake: CMake package
+/// - binary: Executable binary
+/// - file: Specific file path
+/// - interpreter: ELF interpreter
+/// - abi: ABI compatibility
+/// - kmod: Kernel module
+///
+/// Also adds kind to provides table for typed provider matching.
+fn migrate_v19(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 19");
+
+    conn.execute_batch(
+        "
+        -- Add kind column to dependencies table
+        ALTER TABLE dependencies ADD COLUMN kind TEXT DEFAULT 'package';
+
+        -- Create index for kind-based lookups
+        CREATE INDEX idx_dependencies_kind ON dependencies(kind);
+        CREATE INDEX idx_dependencies_kind_name ON dependencies(kind, depends_on_name);
+
+        -- Add kind column to provides table
+        ALTER TABLE provides ADD COLUMN kind TEXT DEFAULT 'package';
+
+        -- Create index for typed provider lookups
+        CREATE INDEX idx_provides_kind ON provides(kind);
+        CREATE INDEX idx_provides_kind_capability ON provides(kind, capability);
+        ",
+    )?;
+
+    // Migrate existing dependencies by parsing kind from depends_on_name
+    // Pattern: kind(name) -> kind, name
+    // Example: python(requests) -> kind='python', depends_on_name='requests'
+    let dep_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM dependencies WHERE depends_on_name LIKE '%(%'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if dep_count > 0 {
+        info!("Migrating {} typed dependencies...", dep_count);
+
+        // Update python dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'python',
+             depends_on_name = SUBSTR(depends_on_name, 8, LENGTH(depends_on_name) - 8)
+             WHERE depends_on_name LIKE 'python(%)'",
+            [],
+        )?;
+
+        // Update perl dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'perl',
+             depends_on_name = SUBSTR(depends_on_name, 6, LENGTH(depends_on_name) - 6)
+             WHERE depends_on_name LIKE 'perl(%)'",
+            [],
+        )?;
+
+        // Update ruby dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'ruby',
+             depends_on_name = SUBSTR(depends_on_name, 6, LENGTH(depends_on_name) - 6)
+             WHERE depends_on_name LIKE 'ruby(%)'",
+            [],
+        )?;
+
+        // Update soname dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'soname',
+             depends_on_name = SUBSTR(depends_on_name, 8, LENGTH(depends_on_name) - 8)
+             WHERE depends_on_name LIKE 'soname(%)'",
+            [],
+        )?;
+
+        // Update pkgconfig dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'pkgconfig',
+             depends_on_name = SUBSTR(depends_on_name, 11, LENGTH(depends_on_name) - 11)
+             WHERE depends_on_name LIKE 'pkgconfig(%)'",
+            [],
+        )?;
+
+        // Update file dependencies
+        conn.execute(
+            "UPDATE dependencies SET kind = 'file',
+             depends_on_name = SUBSTR(depends_on_name, 6, LENGTH(depends_on_name) - 6)
+             WHERE depends_on_name LIKE 'file(%)'",
+            [],
+        )?;
+    }
+
+    // Migrate existing provides by parsing kind from capability
+    let provides_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM provides WHERE capability LIKE '%(%'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if provides_count > 0 {
+        info!("Migrating {} typed provides...", provides_count);
+
+        // Update python provides
+        conn.execute(
+            "UPDATE provides SET kind = 'python',
+             capability = SUBSTR(capability, 8, LENGTH(capability) - 8)
+             WHERE capability LIKE 'python(%)'",
+            [],
+        )?;
+
+        // Update perl provides
+        conn.execute(
+            "UPDATE provides SET kind = 'perl',
+             capability = SUBSTR(capability, 6, LENGTH(capability) - 6)
+             WHERE capability LIKE 'perl(%)'",
+            [],
+        )?;
+
+        // Update ruby provides
+        conn.execute(
+            "UPDATE provides SET kind = 'ruby',
+             capability = SUBSTR(capability, 6, LENGTH(capability) - 6)
+             WHERE capability LIKE 'ruby(%)'",
+            [],
+        )?;
+
+        // Update soname provides
+        conn.execute(
+            "UPDATE provides SET kind = 'soname',
+             capability = SUBSTR(capability, 8, LENGTH(capability) - 8)
+             WHERE capability LIKE 'soname(%)'",
+            [],
+        )?;
+
+        // Update java provides
+        conn.execute(
+            "UPDATE provides SET kind = 'java',
+             capability = SUBSTR(capability, 6, LENGTH(capability) - 6)
+             WHERE capability LIKE 'java(%)'",
+            [],
+        )?;
+    }
+
+    info!("Schema version 19 applied successfully (typed dependencies)");
     Ok(())
 }
 
