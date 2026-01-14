@@ -5,8 +5,8 @@
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::traits::{
-    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-    ScriptletPhase,
+    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
+    Scriptlet, ScriptletPhase,
 };
 use rpm::Package;
 use std::fs::File;
@@ -24,6 +24,7 @@ pub struct RpmPackage {
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
     scriptlets: Vec<Scriptlet>,
+    config_files: Vec<ConfigFileInfo>,
     // Provenance information
     source_rpm: Option<String>,
     build_host: Option<String>,
@@ -173,6 +174,93 @@ impl RpmPackage {
         files
     }
 
+    /// Extract config files from RPM package using rpm command
+    ///
+    /// Uses `rpm -qpc` to list config files with their flags.
+    /// RPM config file flags:
+    /// - %config - regular config file
+    /// - %config(noreplace) - preserve user's version on upgrade
+    /// - %config(missingok) - don't complain if missing
+    /// - %ghost - file not in payload, just tracked
+    fn extract_config_files(path: &std::path::Path) -> Vec<ConfigFileInfo> {
+        use std::process::Command;
+
+        // Query config files with flags: %{FILEFLAGS:fflags} gives us c=config, n=noreplace, g=ghost
+        // Format: path|flags
+        let output = match Command::new("rpm")
+            .args(["-qpc", "--qf", "[%{FILENAMES}|%{FILEFLAGS:fflags}\n]"])
+            .arg(path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => {
+                debug!("Failed to run rpm -qpc: {}", e);
+                return Vec::new();
+            }
+        };
+
+        if !output.status.success() {
+            // No config files or error - try simple listing
+            let simple_output = match Command::new("rpm")
+                .args(["-qpc"])
+                .arg(path)
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => return Vec::new(),
+            };
+
+            if !simple_output.status.success() {
+                return Vec::new();
+            }
+
+            // Simple listing without flags
+            return String::from_utf8_lossy(&simple_output.stdout)
+                .lines()
+                .filter(|line| !line.is_empty() && line.starts_with('/'))
+                .map(|path| ConfigFileInfo {
+                    path: path.to_string(),
+                    noreplace: false,
+                    ghost: false,
+                })
+                .collect();
+        }
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let mut config_files = Vec::new();
+
+        for line in output_str.lines() {
+            if line.is_empty() {
+                continue;
+            }
+
+            // Parse "path|flags" format
+            if let Some((path, flags)) = line.split_once('|') {
+                if path.is_empty() || !path.starts_with('/') {
+                    continue;
+                }
+
+                // Check if this is a config file (has 'c' flag)
+                if flags.contains('c') {
+                    config_files.push(ConfigFileInfo {
+                        path: path.to_string(),
+                        noreplace: flags.contains('n'),
+                        ghost: flags.contains('g'),
+                    });
+                }
+            } else if line.starts_with('/') {
+                // Simple path without flags - assume regular config
+                config_files.push(ConfigFileInfo {
+                    path: line.to_string(),
+                    noreplace: false,
+                    ghost: false,
+                });
+            }
+        }
+
+        config_files
+    }
+
     /// Extract dependencies from RPM package
     fn extract_dependencies(pkg: &Package) -> Vec<Dependency> {
         let mut deps = Vec::new();
@@ -265,16 +353,18 @@ impl PackageFormat for RpmPackage {
         let files = Self::extract_files(&pkg);
         let dependencies = Self::extract_dependencies(&pkg);
 
-        // Extract scriptlets using rpm command
+        // Extract scriptlets and config files using rpm command
         let scriptlets = Self::extract_scriptlets(std::path::Path::new(path));
+        let config_files = Self::extract_config_files(std::path::Path::new(path));
 
         debug!(
-            "Parsed RPM: {} version {} ({} files, {} dependencies, {} scriptlets)",
+            "Parsed RPM: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
             name,
             version,
             files.len(),
             dependencies.len(),
-            scriptlets.len()
+            scriptlets.len(),
+            config_files.len()
         );
 
         Ok(Self {
@@ -286,6 +376,7 @@ impl PackageFormat for RpmPackage {
             files,
             dependencies,
             scriptlets,
+            config_files,
             source_rpm,
             build_host,
             vendor,
@@ -405,6 +496,10 @@ impl PackageFormat for RpmPackage {
     fn scriptlets(&self) -> Vec<Scriptlet> {
         self.scriptlets.clone()
     }
+
+    fn config_files(&self) -> Vec<ConfigFileInfo> {
+        self.config_files.clone()
+    }
 }
 
 impl RpmPackage {
@@ -464,6 +559,7 @@ mod tests {
             files: vec![],
             dependencies: vec![],
             scriptlets: vec![],
+            config_files: vec![],
             source_rpm: Some("test-package-1.0.0.src.rpm".to_string()),
             build_host: Some("buildhost.example.com".to_string()),
             vendor: Some("Test Vendor".to_string()),
@@ -490,6 +586,7 @@ mod tests {
             files: vec![],
             dependencies: vec![],
             scriptlets: vec![],
+            config_files: vec![],
             source_rpm: Some("test-1.0.src.rpm".to_string()),
             build_host: Some("builder".to_string()),
             vendor: Some("Vendor".to_string()),

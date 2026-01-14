@@ -3,6 +3,7 @@
 
 mod adopt;
 mod collection;
+mod config;
 mod install;
 mod label;
 pub mod progress;
@@ -19,6 +20,10 @@ pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
     cmd_collection_list, cmd_collection_remove_member, cmd_collection_show,
+};
+pub use config::{
+    cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
+    cmd_config_restore,
 };
 pub use install::{cmd_autoremove, cmd_install, cmd_remove};
 pub use label::{cmd_label_add, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
@@ -42,7 +47,7 @@ pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_updat
 
 use anyhow::Result;
 use conary::components::{ComponentClassifier, ComponentType};
-use conary::db::models::{Component, ProvideEntry};
+use conary::db::models::{Component, ConfigFile, ConfigSource, ProvideEntry};
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
@@ -304,6 +309,41 @@ pub fn install_package_from_file(
             Some(package.version().to_string()),
         );
         pkg_provide.insert_or_ignore(tx)?;
+
+        // Track configuration files from the package
+        let pkg_config_files = package.config_files();
+        if !pkg_config_files.is_empty() {
+            info!("Tracking {} configuration files", pkg_config_files.len());
+
+            // Build path-to-hash map from extracted files
+            let path_to_hash: HashMap<&str, String> = extracted_files
+                .iter()
+                .map(|f| (f.path.as_str(), conary::filesystem::CasStore::compute_hash(&f.content)))
+                .collect();
+
+            // Determine config source from package format
+            let config_source = match format {
+                PackageFormatType::Rpm => ConfigSource::Rpm,
+                PackageFormatType::Deb => ConfigSource::Deb,
+                PackageFormatType::Arch => ConfigSource::Arch,
+            };
+
+            for config_info in &pkg_config_files {
+                if let Some(hash) = path_to_hash.get(config_info.path.as_str()) {
+                    let mut config_file = ConfigFile::new(
+                        config_info.path.clone(),
+                        trove_id,
+                        hash.clone(),
+                    );
+                    config_file.noreplace = config_info.noreplace;
+                    config_file.source = config_source;
+
+                    // Use upsert in case the file is already tracked (e.g., upgrade scenario)
+                    config_file.upsert(tx)?;
+                    info!("  Tracked config: {} (noreplace={})", config_info.path, config_info.noreplace);
+                }
+            }
+        }
 
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
         Ok(())

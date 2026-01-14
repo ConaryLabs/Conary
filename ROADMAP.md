@@ -8,7 +8,7 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v20)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v21)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
 - [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v13)
@@ -202,10 +202,14 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 ### Configuration Management
 
-- [ ] **Config File Merging** - Preserve user config during upgrades
-- [ ] **Config File Tracking** - Track which files are configuration
-- [ ] **Config Backup** - Backup configs before modification
-- [ ] **Config Diff** - Show differences between installed and package configs
+- [COMPLETE] **Config File Tracking** - Track which files are configuration (schema v21, `config_files` table)
+- [COMPLETE] **Config Source Detection** - Detect config files from RPM %config, DEB conffiles, Arch backup
+- [COMPLETE] **Config Backup** - Backup configs before modification (`config_backups` table, CAS storage)
+- [COMPLETE] **Config Restore** - Restore configs from backup with pre-restore safety backup
+- [COMPLETE] **Config Diff** - Show differences between installed and package configs
+- [COMPLETE] **Config Status** - Track pristine/modified/missing status with automatic detection
+- [COMPLETE] **Noreplace Support** - Honor %config(noreplace) to preserve user modifications
+- [COMPLETE] **CLI Commands** - config-list, config-diff, config-backup, config-restore, config-check, config-backups
 
 ### Update Improvements
 
@@ -326,6 +330,7 @@ These features from original Conary are not planned for implementation:
 | v18 | System state snapshots for full system state tracking and rollback |
 | v19 | Typed dependencies with explicit kind prefixes (python, soname, pkgconfig, etc.) |
 | v20 | Labels system for package provenance tracking (labels, label_path tables, label commands) |
+| v21 | Configuration file management (config_files, config_backups tables, noreplace support) |
 
 ---
 

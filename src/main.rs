@@ -778,6 +778,90 @@ enum Commands {
         db_path: String,
     },
 
+    /// List configuration files
+    ConfigList {
+        /// Package name (optional - if omitted, shows modified configs)
+        package: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show all config files, not just modified
+        #[arg(short, long)]
+        all: bool,
+    },
+
+    /// Show diff between installed config and package version
+    ConfigDiff {
+        /// Path to the config file
+        path: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+    },
+
+    /// Backup a configuration file
+    ConfigBackup {
+        /// Path to the config file
+        path: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+    },
+
+    /// Restore a configuration file from backup
+    ConfigRestore {
+        /// Path to the config file
+        path: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Specific backup ID to restore (default: latest)
+        #[arg(long)]
+        backup_id: Option<i64>,
+    },
+
+    /// Check status of configuration files
+    ConfigCheck {
+        /// Package name (optional - if omitted, checks all)
+        package: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+    },
+
+    /// List backups for a configuration file
+    ConfigBackups {
+        /// Path to the config file
+        path: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
     /// Restore files from CAS to filesystem
     Restore {
         /// Package name to restore (or "all" to check all packages)
@@ -1139,6 +1223,30 @@ fn main() -> Result<()> {
 
         Some(Commands::LabelQuery { label, db_path }) => {
             commands::cmd_label_query(&label, &db_path)
+        }
+
+        Some(Commands::ConfigList { package, db_path, all }) => {
+            commands::cmd_config_list(&db_path, package.as_deref(), all)
+        }
+
+        Some(Commands::ConfigDiff { path, db_path, root }) => {
+            commands::cmd_config_diff(&db_path, &path, &root)
+        }
+
+        Some(Commands::ConfigBackup { path, db_path, root }) => {
+            commands::cmd_config_backup(&db_path, &path, &root)
+        }
+
+        Some(Commands::ConfigRestore { path, db_path, root, backup_id }) => {
+            commands::cmd_config_restore(&db_path, &path, &root, backup_id)
+        }
+
+        Some(Commands::ConfigCheck { package, db_path, root }) => {
+            commands::cmd_config_check(&db_path, &root, package.as_deref())
+        }
+
+        Some(Commands::ConfigBackups { path, db_path }) => {
+            commands::cmd_config_backups(&db_path, &path)
         }
 
         Some(Commands::Restore { package, db_path, root, force, dry_run }) => {

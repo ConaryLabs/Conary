@@ -7,8 +7,8 @@
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::traits::{
-    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-    ScriptletPhase,
+    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
+    Scriptlet, ScriptletPhase,
 };
 use flate2::read::GzDecoder;
 use std::fs::File;
@@ -28,6 +28,7 @@ pub struct DebPackage {
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
     scriptlets: Vec<Scriptlet>,
+    config_files: Vec<ConfigFileInfo>,
     // Additional Debian-specific metadata
     maintainer: Option<String>,
     section: Option<String>,
@@ -266,6 +267,67 @@ impl DebPackage {
         scriptlets
     }
 
+    /// Extract conffiles list from control.tar.*
+    ///
+    /// Debian packages list config files in a file called `conffiles` in the control archive.
+    /// Each line is a path to a config file. All Debian conffiles preserve user changes
+    /// (like RPM's noreplace behavior).
+    fn extract_conffiles(path: &str) -> Vec<ConfigFileInfo> {
+        // Try different compression formats
+        for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
+            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
+                // Decompress based on extension
+                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
+                    Box::new(GzDecoder::new(&tar_data[..]))
+                } else if ext.ends_with(".xz") {
+                    Box::new(XzDecoder::new(&tar_data[..]))
+                } else if ext.ends_with(".zst") {
+                    if let Ok(decoder) = zstd::Decoder::new(&tar_data[..]) {
+                        Box::new(decoder)
+                    } else {
+                        continue;
+                    }
+                } else {
+                    Box::new(&tar_data[..])
+                };
+
+                let mut archive = Archive::new(reader);
+
+                // Look for conffiles
+                if let Ok(entries) = archive.entries() {
+                    for entry in entries.flatten() {
+                        let entry_path = match entry.path() {
+                            Ok(p) => p.to_string_lossy().to_string(),
+                            Err(_) => continue,
+                        };
+
+                        if entry_path.trim_start_matches("./") == "conffiles" {
+                            let mut entry = entry;
+                            let mut content = String::new();
+                            if entry.read_to_string(&mut content).is_ok() {
+                                // Parse conffiles - one path per line
+                                return content
+                                    .lines()
+                                    .filter(|line| !line.is_empty() && line.starts_with('/'))
+                                    .map(|line| ConfigFileInfo {
+                                        path: line.trim().to_string(),
+                                        // Debian conffiles always preserve user changes
+                                        noreplace: true,
+                                        ghost: false,
+                                    })
+                                    .collect();
+                            }
+                        }
+                    }
+                }
+
+                break;
+            }
+        }
+
+        Vec::new()
+    }
+
     /// Extract file list from data.tar.*
     fn extract_file_list(path: &str) -> Result<Vec<PackageFile>> {
         // Try different compression formats
@@ -387,16 +449,18 @@ impl PackageFormat for DebPackage {
         dependencies.extend(Self::convert_dependencies(&control.suggests, DependencyType::Optional));
         dependencies.extend(Self::convert_dependencies(&control.build_depends, DependencyType::Build));
 
-        // Extract maintainer scripts
+        // Extract maintainer scripts and conffiles
         let scriptlets = Self::extract_maintainer_scripts(path);
+        let config_files = Self::extract_conffiles(path);
 
         debug!(
-            "Parsed DEB package: {} version {} ({} files, {} dependencies, {} scriptlets)",
+            "Parsed DEB package: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
             name,
             version,
             files.len(),
             dependencies.len(),
-            scriptlets.len()
+            scriptlets.len(),
+            config_files.len()
         );
 
         Ok(Self {
@@ -408,6 +472,7 @@ impl PackageFormat for DebPackage {
             files,
             dependencies,
             scriptlets,
+            config_files,
             maintainer: control.maintainer,
             section: control.section,
             priority: control.priority,
@@ -535,6 +600,10 @@ impl PackageFormat for DebPackage {
 
     fn scriptlets(&self) -> Vec<Scriptlet> {
         self.scriptlets.clone()
+    }
+
+    fn config_files(&self) -> Vec<ConfigFileInfo> {
+        self.config_files.clone()
     }
 }
 

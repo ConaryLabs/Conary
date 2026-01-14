@@ -92,6 +92,17 @@ pub struct Scriptlet {
     pub flags: Option<String>,
 }
 
+/// Configuration file information from a package
+#[derive(Debug, Clone)]
+pub struct ConfigFileInfo {
+    /// Path to the config file
+    pub path: String,
+    /// If true, preserve user's version on upgrade (RPM %config(noreplace))
+    pub noreplace: bool,
+    /// If true, this is a ghost config (not in payload, just tracked)
+    pub ghost: bool,
+}
+
 /// Common interface for all package formats (RPM, DEB, Arch, etc.)
 pub trait PackageFormat {
     /// Parse a package file from the given path
@@ -128,6 +139,18 @@ pub trait PackageFormat {
     /// Returns a vector of Scriptlet containing phase, interpreter, and content.
     /// Default implementation returns empty vec for formats that don't support scriptlets.
     fn scriptlets(&self) -> Vec<Scriptlet> {
+        Vec::new()
+    }
+
+    /// Get the list of configuration files declared by the package
+    ///
+    /// For RPM: files marked with %config or %config(noreplace)
+    /// For DEB: files listed in DEBIAN/conffiles
+    /// For Arch: files listed in backup array in .PKGINFO
+    ///
+    /// Default implementation returns empty vec - config files detected
+    /// automatically by path (e.g., /etc/*) during installation.
+    fn config_files(&self) -> Vec<ConfigFileInfo> {
         Vec::new()
     }
 

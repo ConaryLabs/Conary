@@ -7,8 +7,8 @@
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::traits::{
-    Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-    ScriptletPhase,
+    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
+    Scriptlet, ScriptletPhase,
 };
 use flate2::read::GzDecoder;
 use std::fs::File;
@@ -28,6 +28,7 @@ pub struct ArchPackage {
     files: Vec<PackageFile>,
     dependencies: Vec<Dependency>,
     scriptlets: Vec<Scriptlet>,
+    config_files: Vec<ConfigFileInfo>,
     // Additional Arch-specific metadata
     url: Option<String>,
     licenses: Vec<String>,
@@ -110,6 +111,7 @@ impl ArchPackage {
                     "depend" => info.dependencies.push(value.to_string()),
                     "optdepend" => info.optional_deps.push(value.to_string()),
                     "makedepend" => info.make_deps.push(value.to_string()),
+                    "backup" => info.backup.push(value.to_string()),
                     _ => {} // Ignore unknown keys
                 }
             }
@@ -333,6 +335,8 @@ struct PkgInfo {
     dependencies: Vec<String>,
     optional_deps: Vec<String>,
     make_deps: Vec<String>,
+    /// Backup files (config files that should preserve user changes)
+    backup: Vec<String>,
 }
 
 impl PackageFormat for ArchPackage {
@@ -389,13 +393,30 @@ impl PackageFormat for ArchPackage {
             .map(|content| Self::parse_install_script(&content))
             .unwrap_or_default();
 
+        // Convert backup files to ConfigFileInfo
+        // Arch backup format is "path\thash" but we just need the path
+        // All Arch backup files preserve user changes (like noreplace)
+        let config_files: Vec<ConfigFileInfo> = pkginfo.backup
+            .iter()
+            .map(|entry| {
+                // Entry may be "path\thash" or just "path"
+                let path = entry.split('\t').next().unwrap_or(entry);
+                ConfigFileInfo {
+                    path: format!("/{}", path.trim_start_matches('/')),
+                    noreplace: true, // Arch backup files always preserve user changes
+                    ghost: false,
+                }
+            })
+            .collect();
+
         debug!(
-            "Parsed Arch package: {} version {} ({} files, {} dependencies, {} scriptlets)",
+            "Parsed Arch package: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
             name,
             version,
             files.len(),
             dependencies.len(),
-            scriptlets.len()
+            scriptlets.len(),
+            config_files.len()
         );
 
         Ok(Self {
@@ -407,6 +428,7 @@ impl PackageFormat for ArchPackage {
             files,
             dependencies,
             scriptlets,
+            config_files,
             url: pkginfo.url,
             licenses: pkginfo.licenses,
             groups: pkginfo.groups,
@@ -516,6 +538,10 @@ impl PackageFormat for ArchPackage {
 
     fn scriptlets(&self) -> Vec<Scriptlet> {
         self.scriptlets.clone()
+    }
+
+    fn config_files(&self) -> Vec<ConfigFileInfo> {
+        self.config_files.clone()
     }
 }
 

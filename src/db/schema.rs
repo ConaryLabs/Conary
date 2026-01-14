@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 20;
+pub const SCHEMA_VERSION: i32 = 21;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -95,6 +95,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         18 => migrate_v18(conn),
         19 => migrate_v19(conn),
         20 => migrate_v20(conn),
+        21 => migrate_v21(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -1145,6 +1146,86 @@ fn migrate_v20(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 20 applied successfully (label system)");
+    Ok(())
+}
+
+/// Version 21: Configuration file management
+///
+/// Tracks configuration files with special handling for upgrades:
+/// - Preserves user modifications during package updates
+/// - Backs up configs before modification
+/// - Enables config diff between installed and package versions
+///
+/// Creates:
+/// - config_files: Track config file status and modifications
+/// - config_backups: Store backup copies of configs before changes
+fn migrate_v21(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 21");
+
+    conn.execute_batch(
+        "
+        -- Config files table: tracks configuration file status
+        -- A config file is any file that:
+        -- 1. Is in /etc/ (automatically classified as :config)
+        -- 2. Was marked as %config in the package (RPM) or listed in conffiles (DEB)
+        CREATE TABLE IF NOT EXISTS config_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
+            -- Hash of the file as shipped by the package
+            original_hash TEXT NOT NULL,
+            -- Current hash on filesystem (NULL if not checked)
+            current_hash TEXT,
+            -- If true, preserve user's version on upgrade (like RPM %config(noreplace))
+            noreplace INTEGER NOT NULL DEFAULT 0,
+            -- Status: pristine (unchanged), modified (user changed), missing (deleted)
+            status TEXT NOT NULL DEFAULT 'pristine',
+            -- When the modification was detected
+            modified_at TEXT,
+            -- Package source that declared this as config (rpm, deb, arch, auto)
+            source TEXT DEFAULT 'auto',
+            UNIQUE(path)
+        );
+
+        CREATE INDEX idx_config_files_path ON config_files(path);
+        CREATE INDEX idx_config_files_trove ON config_files(trove_id);
+        CREATE INDEX idx_config_files_status ON config_files(status);
+
+        -- Config backups table: stores backup copies before changes
+        CREATE TABLE IF NOT EXISTS config_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            config_file_id INTEGER NOT NULL REFERENCES config_files(id) ON DELETE CASCADE,
+            -- Hash of the backed-up content (stored in CAS)
+            backup_hash TEXT NOT NULL,
+            -- Reason for backup: upgrade, restore, manual
+            reason TEXT NOT NULL,
+            -- Changeset that triggered this backup (NULL for manual)
+            changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_config_backups_file ON config_backups(config_file_id);
+        CREATE INDEX idx_config_backups_changeset ON config_backups(changeset_id);
+        ",
+    )?;
+
+    // Populate config_files from existing files in /etc/
+    // Any file under /etc is automatically considered a config file
+    let config_count = conn.execute(
+        "INSERT INTO config_files (file_id, path, trove_id, original_hash, current_hash, status, source)
+         SELECT f.id, f.path, f.trove_id, f.sha256_hash, f.sha256_hash, 'pristine', 'auto'
+         FROM files f
+         WHERE f.path LIKE '/etc/%'
+         AND NOT EXISTS (SELECT 1 FROM config_files cf WHERE cf.path = f.path)",
+        [],
+    )?;
+
+    if config_count > 0 {
+        info!("Migrated {} existing config files from /etc/", config_count);
+    }
+
+    info!("Schema version 21 applied successfully (configuration management)");
     Ok(())
 }
 
