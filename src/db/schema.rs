@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 13;
+pub const SCHEMA_VERSION: i32 = 14;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -88,6 +88,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         11 => migrate_v11(conn),
         12 => migrate_v12(conn),
         13 => migrate_v13(conn),
+        14 => migrate_v14(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -632,6 +633,35 @@ fn migrate_v13(conn: &Connection) -> Result<()> {
     )?;
 
     info!("Schema version 13 applied successfully");
+    Ok(())
+}
+
+/// Schema Version 14: Add flavor specification to troves
+///
+/// Adds flavor_spec column to troves table to store Conary-style flavor
+/// specifications. Flavors enable build-time variations like:
+/// - `[ssl, !debug]` - Required ssl, must not have debug
+/// - `[~vmware, ~!xen]` - Prefers vmware, prefers not xen
+/// - `[is: x86_64]` - Architecture requirement
+///
+/// The flavor_spec is stored as a canonicalized string for consistent
+/// matching and comparison.
+fn migrate_v14(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 14");
+
+    // Add flavor_spec column - NULL for packages without flavor requirements
+    conn.execute(
+        "ALTER TABLE troves ADD COLUMN flavor_spec TEXT",
+        [],
+    )?;
+
+    // Index for efficient flavor-based queries and matching
+    conn.execute(
+        "CREATE INDEX idx_troves_flavor ON troves(flavor_spec)",
+        [],
+    )?;
+
+    info!("Schema version 14 applied successfully");
     Ok(())
 }
 

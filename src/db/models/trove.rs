@@ -3,6 +3,7 @@
 //! Trove model - the core package/component/collection type
 
 use crate::error::Result;
+use crate::flavor::FlavorSpec;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::str::FromStr;
 
@@ -122,6 +123,8 @@ pub struct Trove {
     pub installed_by_changeset_id: Option<i64>,
     pub install_source: InstallSource,
     pub install_reason: InstallReason,
+    /// Conary-style flavor specification (e.g., `[ssl, !debug, is: x86_64]`)
+    pub flavor_spec: Option<String>,
 }
 
 impl Trove {
@@ -138,6 +141,7 @@ impl Trove {
             installed_by_changeset_id: None,
             install_source: InstallSource::File,
             install_reason: InstallReason::Explicit,
+            flavor_spec: None,
         }
     }
 
@@ -159,14 +163,15 @@ impl Trove {
             installed_by_changeset_id: None,
             install_source,
             install_reason: InstallReason::Explicit,
+            flavor_spec: None,
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.name,
                 &self.version,
@@ -176,6 +181,7 @@ impl Trove {
                 &self.installed_by_changeset_id,
                 self.install_source.as_str(),
                 self.install_reason.as_str(),
+                &self.flavor_spec,
             ],
         )?;
 
@@ -187,7 +193,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -197,7 +203,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -209,7 +215,7 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec FROM troves ORDER BY name, version")?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -224,7 +230,7 @@ impl Trove {
         // 1. Were installed as dependencies (not explicitly)
         // 2. Have no other packages depending on them
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec
              FROM troves
              WHERE install_reason = 'dependency'
              AND name NOT IN (
@@ -270,6 +276,9 @@ impl Trove {
             .and_then(|s| s.parse::<InstallReason>().ok())
             .unwrap_or(InstallReason::Explicit);
 
+        // flavor_spec is nullable
+        let flavor_spec: Option<String> = row.get(10)?;
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -281,6 +290,24 @@ impl Trove {
             installed_by_changeset_id: row.get(7)?,
             install_source,
             install_reason,
+            flavor_spec,
         })
+    }
+
+    /// Parse the flavor specification into a `FlavorSpec`
+    ///
+    /// Returns `None` if no flavor is set or if parsing fails.
+    pub fn flavor(&self) -> Option<FlavorSpec> {
+        self.flavor_spec.as_ref().and_then(|s| s.parse().ok())
+    }
+
+    /// Set the flavor specification from a `FlavorSpec`
+    ///
+    /// The flavor is canonicalized before storing to ensure consistent
+    /// storage and comparison.
+    pub fn set_flavor(&mut self, flavor: &FlavorSpec) {
+        let mut canonical = flavor.clone();
+        canonical.canonicalize();
+        self.flavor_spec = Some(canonical.to_string());
     }
 }

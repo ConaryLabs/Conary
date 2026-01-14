@@ -108,10 +108,11 @@ This document tracks the implementation status of Conary features, both complete
 
 ### Enhanced Flavors
 
-- [ ] **Flavor Parsing** - Parse flavor specifications like `[ssl, !debug, is: x86_64]`
-- [ ] **Flavor Matching** - Select packages by flavor requirements
-- [ ] **Flavor Operators** - Support `~` (prefers), `!` (not), `~!` (prefers not)
-- [ ] **Architecture Flavors** - `is: x86`, `is: x86_64`, `is: aarch64`
+- [COMPLETE] **Flavor Parsing** - Parse flavor specifications like `[ssl, !debug, is: x86_64]`
+- [COMPLETE] **Flavor Matching** - Select packages by flavor requirements
+- [COMPLETE] **Flavor Operators** - Support `~` (prefers), `!` (not), `~!` (prefers not)
+- [COMPLETE] **Architecture Flavors** - `is: x86`, `is: x86_64`, `is: aarch64`
+- [COMPLETE] **Database Integration** - `flavor_spec` column on troves table (schema v14)
 
 ### Package Pinning
 
@@ -308,6 +309,7 @@ These features from original Conary are not planned for implementation:
 | v11 | Component model with classification and dependencies |
 | v12 | Install reason tracking (explicit vs dependency) |
 | v13 | Collections/groups support |
+| v14 | Enhanced flavor support (parsing, matching, operators, architecture) |
 
 ---
 
@@ -317,8 +319,7 @@ Contributions welcome. Priority areas:
 1. Trigger system implementation
 2. System state snapshots
 3. Typed dependencies
-4. Enhanced flavor support
-5. Package pinning
-6. Parallel downloads
+4. Package pinning
+5. Parallel downloads
 
 See README.md for development setup and CLAUDE.md for coding conventions.
