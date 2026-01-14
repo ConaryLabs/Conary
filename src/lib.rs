@@ -24,6 +24,7 @@ pub mod flavor;
 pub mod hash;
 pub mod label;
 pub mod packages;
+pub mod progress;
 pub mod repository;
 pub mod resolver;
 pub mod scriptlet;
@@ -36,3 +37,7 @@ pub use error::{Error, Result};
 pub use flavor::{ArchSpec, FlavorItem, FlavorOp, FlavorSpec, SystemFlavor};
 pub use hash::{Hash, HashAlgorithm, Hasher};
 pub use label::{Label, LabelParseError, LabelPath};
+pub use progress::{
+    CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
+    SilentProgress,
+};
