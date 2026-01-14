@@ -72,6 +72,12 @@ cargo clippy -- -D warnings
 | `src/filesystem/` | CAS, file deployment |
 | `src/delta/` | Binary delta updates |
 | `src/version/` | Version parsing, constraints |
+| `src/container/` | Scriptlet sandboxing, namespace isolation |
+| `src/trigger/` | Post-install trigger system |
+| `src/scriptlet/` | Scriptlet execution, cross-distro support |
+| `src/label/` | Package provenance labels |
+| `src/flavor/` | Build variation specs |
+| `src/components/` | Component classification |
 
 ## Database Schema
 
@@ -101,4 +107,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-352 tests total (326 lib + 3 bin + 23 integration).
+358 tests total (333 lib + 3 bin + 22 integration).

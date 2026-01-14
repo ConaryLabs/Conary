@@ -52,7 +52,7 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - **SQLite** via **rusqlite** - synchronous, battle-tested, perfect for changeset operations
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2025
-- **Database schema v13** with automatic migrations
+- **Database schema v22** with automatic migrations
 
 ## Status
 
@@ -62,20 +62,27 @@ The goal isn't to replace distros - it's to decouple package management from dis
 
 **Package Management:**
 - `conary init` - Initialize database and storage
-- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts)
-- `conary remove <package>` - Remove installed packages (checks dependencies)
-- `conary update [package]` - Update packages with delta-first logic
-- `conary autoremove` - Remove orphaned dependencies no longer needed
+- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts, --sandbox)
+- `conary remove <package>` - Remove installed packages (checks dependencies, supports --sandbox)
+- `conary update [package]` - Update packages with delta-first logic (supports --security for security-only updates)
+- `conary update-group <name>` - Update all packages in a collection atomically
+- `conary autoremove` - Remove orphaned dependencies no longer needed (supports --sandbox)
 - `conary verify [package]` - Verify file integrity with SHA-256
 - `conary restore <package>` - Restore modified/deleted files from CAS
 - `conary restore-all` - Restore all modified files across all packages
+- `conary pin <package>` - Pin package to prevent updates
+- `conary unpin <package>` - Unpin package to allow updates
+- `conary list-pinned` - List all pinned packages
 
 **Query & Information:**
-- `conary query [pattern]` - List installed packages
+- `conary query [pattern]` - List installed packages (supports --path, --info, --files, --lsl)
+- `conary repquery [pattern]` - Query packages available in repositories
 - `conary depends <package>` - Show package dependencies
 - `conary rdepends <package>` - Show reverse dependencies (what depends on this)
+- `conary deptree <package>` - Show full dependency tree visualization
 - `conary whatbreaks <package>` - Show what would break if package removed
 - `conary whatprovides <capability>` - Find what package provides a capability
+- `conary query-reason [pattern]` - Show installation reasons for packages
 - `conary history` - Show all changeset operations
 - `conary scripts <package.rpm>` - Display scriptlets from a package file
 
@@ -91,6 +98,40 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - `conary collection-remove <name> --members <pkg1,pkg2>` - Remove packages from collection
 - `conary collection-delete <name>` - Delete a collection
 - `conary collection-install <name>` - Install all packages in a collection
+
+**Trigger Commands:**
+- `conary trigger-list` - List all registered triggers
+- `conary trigger-show <name>` - Show trigger details
+- `conary trigger-enable <name>` - Enable a trigger
+- `conary trigger-disable <name>` - Disable a trigger
+- `conary trigger-add` - Register a new trigger
+- `conary trigger-remove <name>` - Remove a trigger
+- `conary trigger-run <name>` - Manually run a trigger
+
+**State Snapshot Commands:**
+- `conary state-list` - List all system state snapshots
+- `conary state-show <id>` - Show state details
+- `conary state-diff <id1> <id2>` - Compare two states
+- `conary state-restore <id>` - Show restore plan to rollback to a state
+- `conary state-prune` - Remove old state snapshots
+- `conary state-create` - Create a manual state snapshot
+
+**Label Commands:**
+- `conary label-list` - List all labels
+- `conary label-add <label>` - Add a new label
+- `conary label-remove <label>` - Remove a label
+- `conary label-show <label>` - Show label details
+- `conary label-set <package> <label>` - Set package label
+- `conary label-query <label>` - Query packages by label
+- `conary label-path` - Show label search path
+
+**Config File Commands:**
+- `conary config-list [package]` - List tracked config files
+- `conary config-diff <file>` - Show config file differences
+- `conary config-backup <file>` - Backup a config file
+- `conary config-restore <file>` - Restore config from backup
+- `conary config-check` - Check config file status (pristine/modified/missing)
+- `conary config-backups` - List available config backups
 
 **System Adoption:**
 - `conary adopt <package>` - Adopt a single system package into Conary
@@ -175,6 +216,46 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - Import and manage trusted GPG keys
 - Verify package signatures before installation
 - Strict mode available for signature enforcement
+
+**Container-Isolated Scriptlets:**
+- Namespace isolation (PID, UTS, IPC, mount) for safe script execution
+- Chroot-based filesystem isolation with controlled bind mounts
+- Resource limits (memory, CPU, file size, process count)
+- Automatic dangerous script detection with risk analysis
+- Three sandbox modes: `never`, `auto`, `always` via --sandbox flag
+
+**Trigger System:**
+- Path pattern-based triggers for post-install actions
+- 10 built-in triggers: ldconfig, mime-database, icon-cache, systemd, fontconfig, etc.
+- DAG-ordered execution with before/after dependencies
+- Enable/disable individual triggers
+
+**System State Snapshots:**
+- Automatic snapshots after install/remove operations
+- Full state comparison and diff between snapshots
+- Restore plans to rollback to any previous state
+- State pruning to manage disk space
+
+**Labels & Provenance:**
+- Track package source with `repository@namespace:tag` format
+- Label-based queries and package filtering
+- Configurable label search path with priorities
+
+**Configuration File Management:**
+- Track config files from package metadata (%config, conffiles, backup)
+- Automatic backup before modifications
+- Config diff, restore, and status checking
+- Support for noreplace configs (preserve user modifications)
+
+**Package Pinning:**
+- Pin packages to prevent automatic updates
+- Update protection for critical packages
+- Easy pin/unpin management
+
+**Security Updates:**
+- `--security` flag for security-only updates
+- Severity tracking (critical, important, moderate, low)
+- CVE ID and advisory tracking in repository metadata
 
 **System Adoption:**
 - Scan and adopt packages from RPM/APT databases
@@ -270,10 +351,10 @@ conary collection-delete web-stack
 
 ### Testing
 
-- **289 tests passing** (264 lib + 3 bin + 22 integration)
-- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, and core operations
+- **358 tests passing** (333 lib + 3 bin + 22 integration)
+- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, and core operations
 - Integration tests for full install/remove/rollback workflows
 
 ### What's Next
 
-Parallel downloads for dependencies, improved transitive dependency resolution, web UI for system state visualization, and package building tools. See ROADMAP.md for details.
+Atomic filesystem updates (renameat2 RENAME_EXCHANGE), VFS tree with reparenting, fast hashing (xxhash), web UI for system state visualization, and package building tools. See ROADMAP.md for details.
