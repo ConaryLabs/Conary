@@ -75,7 +75,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v15. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members.
+Currently v20. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -85,6 +85,11 @@ Key schema additions:
 - v13: `collection_members` - package group/collection support
 - v14: `flavor_spec` column on troves - Conary-style flavor specifications
 - v15: `pinned` column on troves - package pinning support
+- v16: `selection_reason` column on troves - for tracking why packages were installed
+- v17: `triggers`, `trigger_dependencies`, `changeset_triggers` - trigger system
+- v18: `system_states`, `state_members` - system state snapshots
+- v19: `kind` column on provides and dependencies - typed dependency matching
+- v20: `labels`, `label_path` tables, `label_id` on troves - package provenance tracking
 
 ## Testing
 
@@ -94,4 +99,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-289 tests total (264 lib + 3 bin + 22 integration).
+346 tests total (321 lib + 3 bin + 22 integration).

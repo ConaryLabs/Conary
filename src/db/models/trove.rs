@@ -129,6 +129,8 @@ pub struct Trove {
     pub pinned: bool,
     /// Human-readable reason for installation (e.g., "Required by nginx", "Installed via @server")
     pub selection_reason: Option<String>,
+    /// Label ID for package provenance tracking (repository@namespace:tag)
+    pub label_id: Option<i64>,
 }
 
 impl Trove {
@@ -148,6 +150,7 @@ impl Trove {
             flavor_spec: None,
             pinned: false,
             selection_reason: Some("Explicitly installed".to_string()),
+            label_id: None,
         }
     }
 
@@ -172,6 +175,7 @@ impl Trove {
             flavor_spec: None,
             pinned: false,
             selection_reason: Some("Explicitly installed".to_string()),
+            label_id: None,
         }
     }
 
@@ -196,6 +200,7 @@ impl Trove {
             flavor_spec: None,
             pinned: false,
             selection_reason: Some(format!("Required by {}", required_by)),
+            label_id: None,
         }
     }
 
@@ -220,14 +225,15 @@ impl Trove {
             flavor_spec: None,
             pinned: false,
             selection_reason: Some(format!("Installed via @{}", collection_name)),
+            label_id: None,
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 &self.name,
                 &self.version,
@@ -240,6 +246,7 @@ impl Trove {
                 &self.flavor_spec,
                 self.pinned,
                 &self.selection_reason,
+                &self.label_id,
             ],
         )?;
 
@@ -251,7 +258,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -261,7 +268,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -273,7 +280,7 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves ORDER BY name, version")?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -288,7 +295,7 @@ impl Trove {
         // 1. Were installed as dependencies (not explicitly)
         // 2. Have no other packages depending on them
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id
              FROM troves
              WHERE install_reason = 'dependency'
              AND name NOT IN (
@@ -343,6 +350,9 @@ impl Trove {
         // Handle selection_reason (added in v16)
         let selection_reason: Option<String> = row.get(12).unwrap_or(None);
 
+        // Handle label_id (added in v20)
+        let label_id: Option<i64> = row.get(13).unwrap_or(None);
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -357,6 +367,7 @@ impl Trove {
             flavor_spec,
             pinned: pinned != 0,
             selection_reason,
+            label_id,
         })
     }
 
@@ -392,7 +403,7 @@ impl Trove {
     /// Find all pinned packages
     pub fn find_pinned(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason FROM troves WHERE pinned = 1 ORDER BY name, version"
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE pinned = 1 ORDER BY name, version"
         )?;
 
         let troves = stmt

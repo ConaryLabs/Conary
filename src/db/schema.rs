@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 19;
+pub const SCHEMA_VERSION: i32 = 20;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -94,6 +94,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         17 => migrate_v17(conn),
         18 => migrate_v18(conn),
         19 => migrate_v19(conn),
+        20 => migrate_v20(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }
@@ -1085,6 +1086,65 @@ fn migrate_v19(conn: &Connection) -> Result<()> {
     }
 
     info!("Schema version 19 applied successfully (typed dependencies)");
+    Ok(())
+}
+
+/// Version 20: Label system for package provenance tracking
+///
+/// Labels use the format `repository@namespace:tag` to identify where packages came from.
+/// This enables:
+/// - Tracking package origin (which repository/branch)
+/// - Label-based dependency resolution
+/// - Branch-aware updates and rollbacks
+///
+/// Creates:
+/// - labels: Label definitions with repository, namespace, tag
+/// - label_path: Ordered list of labels for resolution priority
+/// - trove label column: Track which label a package came from
+fn migrate_v20(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 20");
+
+    conn.execute_batch(
+        "
+        -- Labels table: defines available labels
+        -- Format: repository@namespace:tag
+        CREATE TABLE IF NOT EXISTS labels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            description TEXT,
+            parent_label_id INTEGER REFERENCES labels(id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(repository, namespace, tag)
+        );
+
+        -- Index for label lookups
+        CREATE INDEX idx_labels_full ON labels(repository, namespace, tag);
+        CREATE INDEX idx_labels_repo ON labels(repository);
+
+        -- Label path table: defines search order for package resolution
+        -- Lower priority number = higher priority (searched first)
+        CREATE TABLE IF NOT EXISTS label_path (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label_id INTEGER NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+            priority INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(label_id)
+        );
+
+        -- Index for priority-based lookups
+        CREATE INDEX idx_label_path_priority ON label_path(priority) WHERE enabled = 1;
+
+        -- Add label column to troves for provenance tracking
+        ALTER TABLE troves ADD COLUMN label_id INTEGER REFERENCES labels(id);
+
+        -- Index for label-based trove lookups
+        CREATE INDEX idx_troves_label ON troves(label_id);
+        ",
+    )?;
+
+    info!("Schema version 20 applied successfully (label system)");
     Ok(())
 }
 

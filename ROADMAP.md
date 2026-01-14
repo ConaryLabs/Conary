@@ -8,7 +8,7 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v13)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v20)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
 - [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v13)
@@ -187,10 +187,11 @@ Formalize dependency kinds with explicit type prefixes.
 
 Inspired by original Conary's label concept for tracking package provenance.
 
-- [ ] **Label Format** - `repository@namespace:tag` format
-- [ ] **Label Path** - Configure search order for labels
-- [ ] **Label Tracking** - Track which label a package came from
-- [ ] **Branch History** - Track parent labels in version strings
+- [COMPLETE] **Label Format** - `repository@namespace:tag` format (parsing, validation, wildcards)
+- [COMPLETE] **Label Path** - Configure search order for labels (priority-based ordering)
+- [COMPLETE] **Label Tracking** - Track which label a package came from (`label_id` on troves, schema v20)
+- [COMPLETE] **Branch History** - Track parent labels via `parent_label_id` relationships
+- [COMPLETE] **CLI Commands** - label-list, label-add, label-remove, label-path, label-show, label-set, label-query
 
 ### Enhanced Queries
 
@@ -324,6 +325,7 @@ These features from original Conary are not planned for implementation:
 | v17 | Trigger system for post-installation actions (ldconfig, mime, icons, systemd, etc.) |
 | v18 | System state snapshots for full system state tracking and rollback |
 | v19 | Typed dependencies with explicit kind prefixes (python, soname, pkgconfig, etc.) |
+| v20 | Labels system for package provenance tracking (labels, label_path tables, label commands) |
 
 ---
 
