@@ -281,6 +281,151 @@ impl ProvideEntry {
             format!("{}({})", self.kind, self.capability)
         }
     }
+
+    /// Find a satisfying provider, trying common cross-distro variations
+    ///
+    /// This extends `find_satisfying_provider` by also trying common variations
+    /// of the capability name for cross-distro compatibility.
+    pub fn find_satisfying_provider_fuzzy(
+        conn: &Connection,
+        capability: &str,
+    ) -> Result<Option<(String, String)>> {
+        // First try exact match
+        if let Some(result) = Self::find_satisfying_provider(conn, capability)? {
+            return Ok(Some(result));
+        }
+
+        // Try cross-distro variations
+        for variation in generate_capability_variations(capability) {
+            if let Some(result) = Self::find_satisfying_provider(conn, &variation)? {
+                return Ok(Some(result));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Check if a capability is satisfied (with fuzzy cross-distro matching)
+    pub fn is_capability_satisfied_fuzzy(conn: &Connection, capability: &str) -> Result<bool> {
+        // First try exact match
+        if Self::is_capability_satisfied(conn, capability)? {
+            return Ok(true);
+        }
+
+        // Try cross-distro variations
+        for variation in generate_capability_variations(capability) {
+            if Self::is_capability_satisfied(conn, &variation)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Check if a name looks like a virtual provide (capability) rather than a package name
+    ///
+    /// Virtual provides have patterns like:
+    /// - perl(Cwd) - Perl module
+    /// - python3dist(setuptools) - Python package
+    /// - config(package) - Configuration capability
+    /// - pkgconfig(foo) - pkg-config module
+    /// - lib*.so.* - Shared library
+    /// - /usr/bin/foo - File path
+    pub fn is_virtual_provide(name: &str) -> bool {
+        name.contains('(')  // perl(Foo), python3dist(bar), etc.
+            || name.starts_with("lib") && name.contains(".so")  // libfoo.so.1
+            || name.starts_with('/')  // File path dependencies
+    }
+}
+
+/// Generate common variations of a capability name for cross-distro matching
+///
+/// For example:
+/// - perl(Text::CharWidth) might also be: perl-Text-CharWidth
+/// - libc.so.6 might also be: glibc, libc6
+pub fn generate_capability_variations(capability: &str) -> Vec<String> {
+    let mut variations = Vec::new();
+
+    // Perl module variations: perl(Foo::Bar) <-> perl-Foo-Bar
+    if capability.starts_with("perl(") && capability.ends_with(')') {
+        let module = &capability[5..capability.len()-1];
+        // perl(Foo::Bar) -> perl-Foo-Bar
+        variations.push(format!("perl-{}", module.replace("::", "-")));
+        // Also try lowercase
+        variations.push(format!("perl-{}", module.replace("::", "-").to_lowercase()));
+    } else if let Some(rest) = capability.strip_prefix("perl-") {
+        // perl-Foo-Bar -> perl(Foo::Bar)
+        let module = rest.replace('-', "::");
+        variations.push(format!("perl({})", module));
+    }
+
+    // Python module variations
+    if let Some(module) = capability.strip_prefix("python3-") {
+        variations.push(format!("python3dist({})", module));
+        variations.push(format!("python({})", module));
+    } else if capability.starts_with("python3dist(") && capability.ends_with(')') {
+        let module = &capability[12..capability.len()-1];
+        variations.push(format!("python3-{}", module));
+    }
+
+    // Library variations
+    if capability.ends_with(".so") || capability.contains(".so.") {
+        // libc.so.6 -> glibc, libc6
+        if capability.starts_with("libc.so") {
+            variations.push("glibc".to_string());
+            variations.push("libc6".to_string());
+        }
+        // Extract library name: libfoo.so.1 -> libfoo, foo
+        if let Some(base) = capability.split(".so").next() {
+            variations.push(base.to_string());
+            if let Some(name) = base.strip_prefix("lib") {
+                variations.push(name.to_string());
+            }
+        }
+    }
+
+    // Debian :any suffix (architecture-independent)
+    // perl:any -> perl
+    if let Some(base) = capability.strip_suffix(":any") {
+        variations.push(base.to_string());
+    }
+
+    // Debian perl library naming: libfoo-bar-perl -> perl-Foo-Bar, perl(Foo::Bar)
+    if capability.starts_with("lib") && capability.ends_with("-perl") {
+        // libtext-charwidth-perl -> text-charwidth -> Text::CharWidth
+        let middle = &capability[3..capability.len()-5]; // strip "lib" and "-perl"
+        // Convert to title case with :: separators
+        let module_name: String = middle
+            .split('-')
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("::");
+        variations.push(format!("perl({})", module_name));
+        variations.push(format!("perl-{}", middle.split('-').map(|p| {
+            let mut c = p.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        }).collect::<Vec<_>>().join("-")));
+    }
+
+    // Package name might be used directly
+    // Try stripping version suffixes: foo-1.0 -> foo
+    if let Some(pos) = capability.rfind('-') {
+        let potential_name = &capability[..pos];
+        if !potential_name.is_empty() && capability[pos+1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            variations.push(potential_name.to_string());
+        }
+    }
+
+    variations
 }
 
 #[cfg(test)]

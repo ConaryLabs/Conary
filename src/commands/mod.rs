@@ -6,6 +6,7 @@ mod collection;
 mod config;
 mod install;
 mod label;
+mod remove;
 pub mod progress;
 mod query;
 mod repo;
@@ -25,7 +26,8 @@ pub use config::{
     cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
     cmd_config_restore,
 };
-pub use install::{cmd_autoremove, cmd_install, cmd_remove};
+pub use install::cmd_install;
+pub use remove::{cmd_autoremove, cmd_remove};
 pub use conary::scriptlet::SandboxMode;
 pub use label::{cmd_label_add, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
 // cmd_scripts is defined in this module, no need to re-export from submodule
@@ -408,6 +410,24 @@ pub fn cmd_scripts(package_path: &str) -> Result<()> {
         println!();
     }
 
+    Ok(())
+}
+
+/// Create a state snapshot after a successful operation
+pub(crate) fn create_state_snapshot(conn: &rusqlite::Connection, changeset_id: i64, summary: &str) -> Result<()> {
+    use conary::db::models::StateEngine;
+    use tracing::{info, warn};
+
+    let engine = StateEngine::new(conn);
+    match engine.create_snapshot(summary, None, Some(changeset_id)) {
+        Ok(state) => {
+            info!("Created state {} ({})", state.state_number, summary);
+        }
+        Err(e) => {
+            warn!("Failed to create state snapshot: {}", e);
+            // Don't fail the operation if snapshot creation fails
+        }
+    }
     Ok(())
 }
 

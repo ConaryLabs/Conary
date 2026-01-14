@@ -5,6 +5,7 @@
 //! The main resolver that uses the dependency graph to determine
 //! installation order, find missing dependencies, and detect conflicts.
 
+use crate::db::models::ProvideEntry;
 use crate::error::Result;
 use crate::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
@@ -76,7 +77,7 @@ impl Resolver {
                 // Skip virtual provides like perl(Cwd), python3dist(foo), etc.
                 // These are capabilities provided by packages, not package names.
                 // A proper solution would check the "provides" table in the DB.
-                if is_virtual_provide(&edge.to) {
+                if ProvideEntry::is_virtual_provide(&edge.to) {
                     continue;
                 }
 
@@ -112,7 +113,7 @@ impl Resolver {
         if let Some(edges) = self.graph.edges.get(package_name) {
             for edge in edges {
                 // Skip virtual provides - they don't have nodes in our graph
-                if is_virtual_provide(&edge.to) {
+                if ProvideEntry::is_virtual_provide(&edge.to) {
                     continue;
                 }
 
@@ -278,17 +279,3 @@ impl Resolver {
     }
 }
 
-/// Check if a dependency name is a virtual provide (capability) rather than a package name.
-///
-/// Virtual provides have patterns like:
-/// - perl(Cwd) - Perl module
-/// - python3dist(setuptools) - Python package
-/// - config(package) - Configuration capability
-/// - pkgconfig(foo) - pkg-config module
-/// - lib*.so.* - Shared library
-fn is_virtual_provide(name: &str) -> bool {
-    // Check for common virtual provide patterns
-    name.contains('(')  // perl(Foo), python3dist(bar), etc.
-        || name.starts_with("lib") && name.contains(".so")  // libfoo.so.1
-        || name.starts_with("/")  // File path dependencies
-}

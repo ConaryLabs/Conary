@@ -8,6 +8,7 @@
 //! - Transaction handling
 //! - CRUD operations for troves, changesets, files, etc.
 
+mod migrations;
 pub mod models;
 pub mod schema;
 
