@@ -63,6 +63,10 @@ enum Commands {
         /// Skip running package scriptlets (install/remove hooks)
         #[arg(long)]
         no_scripts: bool,
+
+        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        #[arg(long, default_value = "never")]
+        sandbox: String,
     },
 
     /// Remove an installed package
@@ -81,6 +85,10 @@ enum Commands {
         /// Skip running package scriptlets (install/remove hooks)
         #[arg(long)]
         no_scripts: bool,
+
+        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        #[arg(long, default_value = "never")]
+        sandbox: String,
     },
 
     /// Remove orphaned packages (installed as dependencies but no longer needed)
@@ -100,6 +108,10 @@ enum Commands {
         /// Skip running package scriptlets (install/remove hooks)
         #[arg(long)]
         no_scripts: bool,
+
+        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        #[arg(long, default_value = "never")]
+        sandbox: String,
     },
 
     /// Adopt all installed system packages into Conary tracking
@@ -1006,6 +1018,10 @@ enum Commands {
         /// Skip optional packages in the collection
         #[arg(long)]
         skip_optional: bool,
+
+        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        #[arg(long, default_value = "never")]
+        sandbox: String,
     },
 }
 
@@ -1026,16 +1042,22 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
-        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts }) => {
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None)
+        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .expect("Invalid sandbox mode. Use: auto, always, never");
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode)
         }
 
-        Some(Commands::Remove { package_name, db_path, root, no_scripts }) => {
-            commands::cmd_remove(&package_name, &db_path, &root, no_scripts)
+        Some(Commands::Remove { package_name, db_path, root, no_scripts, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .expect("Invalid sandbox mode. Use: auto, always, never");
+            commands::cmd_remove(&package_name, &db_path, &root, no_scripts, sandbox_mode)
         }
 
-        Some(Commands::Autoremove { db_path, root, dry_run, no_scripts }) => {
-            commands::cmd_autoremove(&db_path, &root, dry_run, no_scripts)
+        Some(Commands::Autoremove { db_path, root, dry_run, no_scripts, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .expect("Invalid sandbox mode. Use: auto, always, never");
+            commands::cmd_autoremove(&db_path, &root, dry_run, no_scripts, sandbox_mode)
         }
 
         Some(Commands::AdoptSystem { db_path, full, dry_run }) => {
@@ -1312,8 +1334,10 @@ fn main() -> Result<()> {
             commands::cmd_collection_delete(&name, &db_path)
         }
 
-        Some(Commands::CollectionInstall { name, db_path, root, dry_run, skip_optional }) => {
-            commands::cmd_collection_install(&name, &db_path, &root, dry_run, skip_optional)
+        Some(Commands::CollectionInstall { name, db_path, root, dry_run, skip_optional, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .expect("Invalid sandbox mode. Use: auto, always, never");
+            commands::cmd_collection_install(&name, &db_path, &root, dry_run, skip_optional, sandbox_mode)
         }
 
         None => {

@@ -226,12 +226,13 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 Run package scripts in lightweight Linux containers for safety.
 
-- [ ] **Namespace Isolation** - Mount, PID, IPC, UTS namespaces for scriptlets
-- [ ] **Pivot Root** - Isolate scriptlet filesystem from host
-- [ ] **Bind Mounts** - Controlled access to required host paths
-- [ ] **Rootless Containers** - Support unprivileged container execution
-- [ ] **Resource Limits** - CPU, memory, time limits for scriptlets
-- [ ] **Dangerous Script Detection** - Flag scripts that need sandboxing
+- [COMPLETE] **Namespace Isolation** - Mount, PID, IPC, UTS namespaces for scriptlets
+- [COMPLETE] **Chroot Isolation** - Isolate scriptlet filesystem from host via chroot
+- [COMPLETE] **Bind Mounts** - Controlled access to required host paths (read-only by default)
+- [COMPLETE] **Rootless Fallback** - Falls back to resource-limited execution when not root
+- [COMPLETE] **Resource Limits** - CPU, memory, file size, process limits for scriptlets
+- [COMPLETE] **Dangerous Script Detection** - Automatic risk analysis with pattern matching
+- [COMPLETE] **CLI Integration** - `--sandbox` flag (auto, always, never) for install/remove commands
 
 ### Atomic Filesystem Updates (Inspired by Aeryn OS)
 
@@ -333,14 +334,15 @@ These features from original Conary are not planned for implementation:
 | v20 | Labels system for package provenance tracking (labels, label_path tables, label commands) |
 | v21 | Configuration file management (config_files, config_backups tables, noreplace support) |
 | v22 | Update improvements (security metadata on repository_packages, update-group command) |
+| v23 | Container-isolated scriptlets (namespace isolation, resource limits, script analysis, --sandbox CLI) |
 
 ---
 
 ## Contributing
 
 Contributions welcome. Priority areas:
-1. Container-isolated scriptlets
-2. Atomic filesystem updates
-3. VFS tree with reparenting
+1. Atomic filesystem updates
+2. VFS tree with reparenting
+3. Fast hashing option (xxhash)
 
 See README.md for development setup and CLAUDE.md for coding conventions.

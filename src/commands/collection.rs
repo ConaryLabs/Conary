@@ -2,6 +2,7 @@
 //! Collection management commands
 
 use anyhow::Result;
+use conary::scriptlet::SandboxMode;
 use tracing::info;
 
 /// Create a new collection
@@ -225,6 +226,7 @@ pub fn cmd_collection_install(
     root: &str,
     dry_run: bool,
     skip_optional: bool,
+    sandbox_mode: SandboxMode,
 ) -> Result<()> {
     info!("Installing collection: {}", name);
     let conn = conary::db::open(db_path)?;
@@ -303,6 +305,7 @@ pub fn cmd_collection_install(
             false,
             false,
             Some(&reason),
+            sandbox_mode,
         ) {
             Ok(()) => {
                 installed_count += 1;

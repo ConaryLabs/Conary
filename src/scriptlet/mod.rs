@@ -13,7 +13,9 @@
 //! - Timeout protection (60 seconds)
 //! - stdin nullification to prevent hangs
 //! - Non-root install safety (skip scriptlets if root != "/")
+//! - Optional container isolation for untrusted scripts
 
+use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
 use crate::packages::traits::{Scriptlet, ScriptletPhase};
@@ -26,6 +28,30 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 use wait_timeout::ChildExt;
+
+/// Sandbox mode for scriptlet execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxMode {
+    /// No sandboxing - direct execution (default for compatibility)
+    #[default]
+    None,
+    /// Automatic - sandbox based on script risk analysis
+    Auto,
+    /// Always sandbox all scripts
+    Always,
+}
+
+impl SandboxMode {
+    /// Parse sandbox mode from string (auto, always, never)
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "never" | "none" | "off" | "false" => Some(Self::None),
+            "auto" => Some(Self::Auto),
+            "always" | "on" | "true" => Some(Self::Always),
+            _ => None,
+        }
+    }
+}
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -82,6 +108,7 @@ pub struct ScriptletExecutor {
     package_version: String,
     package_format: PackageFormat,
     timeout: Duration,
+    sandbox_mode: SandboxMode,
 }
 
 impl ScriptletExecutor {
@@ -98,12 +125,19 @@ impl ScriptletExecutor {
             package_version: version.to_string(),
             package_format: format,
             timeout: DEFAULT_TIMEOUT,
+            sandbox_mode: SandboxMode::default(),
         }
     }
 
     /// Set custom timeout
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set sandbox mode for scriptlet execution
+    pub fn with_sandbox_mode(mut self, mode: SandboxMode) -> Self {
+        self.sandbox_mode = mode;
         self
     }
 
@@ -149,23 +183,52 @@ impl ScriptletExecutor {
             return Ok(());
         }
 
+        // Prepare script content (Arch needs wrapper generation)
+        let script_content = if self.package_format == PackageFormat::Arch {
+            self.prepare_arch_wrapper(content, phase)
+        } else {
+            content.to_string()
+        };
+
+        // Analyze script for dangerous patterns
+        let analysis = analyze_script(&script_content);
+
+        // Determine if we should sandbox based on mode and risk
+        let use_sandbox = match self.sandbox_mode {
+            SandboxMode::None => false,
+            SandboxMode::Always => true,
+            SandboxMode::Auto => {
+                // Sandbox if risk is Medium or higher
+                analysis.risk >= ScriptRisk::Medium
+            }
+        };
+
+        if !analysis.patterns.is_empty() {
+            info!(
+                "{} scriptlet risk analysis: {} - {:?}",
+                phase,
+                analysis.risk.as_str(),
+                analysis.patterns
+            );
+        }
+
         info!(
-            "Executing {} scriptlet for {} v{}",
-            phase, self.package_name, self.package_version
+            "Executing {} scriptlet for {} v{} (sandbox: {})",
+            phase, self.package_name, self.package_version, use_sandbox
         );
 
         // Resolve interpreter (Arch always uses bash for wrapper)
         let interpreter_path = if self.package_format == PackageFormat::Arch {
-            PathBuf::from("/bin/bash")
+            "/bin/bash".to_string()
         } else {
-            PathBuf::from(interpreter)
+            interpreter.to_string()
         };
 
         // Validate interpreter exists - NO FALLBACK
-        if !interpreter_path.exists() {
+        if !Path::new(&interpreter_path).exists() {
             return Err(Error::ScriptletError(format!(
                 "Interpreter not found: {}. Cannot execute {} scriptlet.",
-                interpreter_path.display(),
+                interpreter_path,
                 phase
             )));
         }
@@ -173,29 +236,104 @@ impl ScriptletExecutor {
         // Prepare arguments based on distro, mode, and phase
         let args = self.get_args(mode, phase);
 
+        // Build environment variables
+        let env = [
+            ("CONARY_PACKAGE_NAME", self.package_name.as_str()),
+            ("CONARY_PACKAGE_VERSION", self.package_version.as_str()),
+            ("CONARY_ROOT", "/"),
+            ("CONARY_PHASE", phase),
+        ];
+
+        if use_sandbox {
+            // Execute in sandbox with custom timeout and writable bind mounts
+            let config = ContainerConfig {
+                timeout: self.timeout,
+                bind_mounts: {
+                    let mut mounts = ContainerConfig::default().bind_mounts;
+                    // Add writable access to common scriptlet targets
+                    mounts.push(BindMount::writable("/var", "/var"));
+                    mounts.push(BindMount::writable("/etc", "/etc"));
+                    mounts
+                },
+                ..ContainerConfig::default()
+            };
+
+            let mut sandbox = Sandbox::new(config);
+            let (code, stdout, stderr) = sandbox.execute(
+                &interpreter_path,
+                &script_content,
+                &args,
+                &env,
+            )?;
+
+            // Log output
+            if !stdout.is_empty() {
+                for line in stdout.lines() {
+                    info!("[{}] {}", phase, line);
+                }
+            }
+            if !stderr.is_empty() {
+                for line in stderr.lines() {
+                    warn!("[{}] {}", phase, line);
+                }
+            }
+
+            if code == 0 {
+                info!("{} scriptlet completed successfully (sandboxed)", phase);
+                Ok(())
+            } else {
+                Err(Error::ScriptletError(format!(
+                    "{} scriptlet failed with exit code {} (sandboxed)",
+                    phase, code
+                )))
+            }
+        } else {
+            // Execute directly (legacy behavior)
+            self.execute_direct(phase, &interpreter_path, &script_content, &args, &env)
+        }
+    }
+
+    /// Execute scriptlet directly without sandbox
+    fn execute_direct(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        content: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
         // Create temp directory for script
         let temp_dir = TempDir::new()?;
-        let script_path = self.prepare_script(temp_dir.path(), phase, content)?;
+        let script_path = temp_dir.path().join("scriptlet.sh");
+
+        {
+            let mut file = File::create(&script_path)?;
+            file.write_all(content.as_bytes())?;
+            let mut perms = fs::metadata(&script_path)?.permissions();
+            perms.set_mode(0o700);
+            fs::set_permissions(&script_path, perms)?;
+        }
 
         debug!(
             "Executing script: {} {} {:?}",
-            interpreter_path.display(),
+            interpreter,
             script_path.display(),
             args
         );
 
         // Execute with timeout and stdin nullification
-        let mut child = Command::new(&interpreter_path)
-            .arg(&script_path)
-            .args(&args)
-            .env("CONARY_PACKAGE_NAME", &self.package_name)
-            .env("CONARY_PACKAGE_VERSION", &self.package_version)
-            .env("CONARY_ROOT", self.root.to_string_lossy().as_ref())
-            .env("CONARY_PHASE", phase)
+        let mut cmd = Command::new(interpreter);
+        cmd.arg(&script_path)
+            .args(args)
             .stdin(Stdio::null()) // CRITICAL: Prevent stdin hangs
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+
+        for (key, value) in env {
+            cmd.env(*key, *value);
+        }
+
+        let mut child = cmd.spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
 
         // Wait with timeout
@@ -314,29 +452,6 @@ impl ScriptletExecutor {
                 }
             }
         }
-    }
-
-    /// Prepare the script file for execution
-    fn prepare_script(&self, temp_dir: &Path, phase: &str, content: &str) -> Result<PathBuf> {
-        let script_path = temp_dir.join("scriptlet.sh");
-
-        let script_content = if self.package_format == PackageFormat::Arch {
-            // Arch .INSTALL files are function libraries - generate wrapper
-            self.prepare_arch_wrapper(content, phase)
-        } else {
-            // RPM/DEB scripts are directly executable
-            content.to_string()
-        };
-
-        let mut file = File::create(&script_path)?;
-        file.write_all(script_content.as_bytes())?;
-
-        // Set executable permission (0700)
-        let mut perms = fs::metadata(&script_path)?.permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(&script_path, perms)?;
-
-        Ok(script_path)
     }
 
     /// Generate wrapper script for Arch .INSTALL function libraries

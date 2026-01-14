@@ -14,7 +14,7 @@ use conary::packages::traits::{DependencyType, ScriptletPhase};
 use conary::packages::PackageFormat;
 use conary::repository::{self, DownloadOptions, PackageSelector, SelectionOptions};
 use conary::resolver::{DependencyEdge, Resolver};
-use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor};
+use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
 use conary::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -349,6 +349,7 @@ impl ComponentSelection {
 /// * `no_deps` - Skip dependency resolution
 /// * `no_scripts` - Skip scriptlet execution
 /// * `selection_reason` - Human-readable reason for installation (e.g., "Installed via @server")
+/// * `sandbox_mode` - Sandbox mode for scriptlet execution
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
@@ -360,6 +361,7 @@ pub fn cmd_install(
     no_deps: bool,
     no_scripts: bool,
     selection_reason: Option<&str>,
+    sandbox_mode: SandboxMode,
 ) -> Result<()> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
@@ -760,7 +762,7 @@ pub fn cmd_install(
             pkg.name(),
             pkg.version(),
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
 
         // For Arch packages during upgrade, use PreUpgrade; for RPM/DEB always use PreInstall
         // (RPM/DEB distinguish via $1 argument, Arch uses different functions)
@@ -807,7 +809,7 @@ pub fn cmd_install(
             &old_trove.name,
             &old_trove.version,
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
         let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
             new_version: pkg.version().to_string(),
         };
@@ -991,7 +993,7 @@ pub fn cmd_install(
             &old_trove.name,
             &old_trove.version,
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
         let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
             new_version: pkg.version().to_string(),
         };
@@ -1015,7 +1017,7 @@ pub fn cmd_install(
             pkg.name(),
             pkg.version(),
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
 
         // For Arch packages during upgrade, use PostUpgrade; for RPM/DEB always use PostInstall
         let post_phase = if scriptlet_format == ScriptletPackageFormat::Arch
@@ -1114,7 +1116,7 @@ pub fn cmd_install(
 }
 
 /// Remove an installed package
-pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: bool) -> Result<()> {
+pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: bool, sandbox_mode: SandboxMode) -> Result<()> {
     info!("Removing package: {}", package_name);
 
     // Create progress tracker for removal
@@ -1200,7 +1202,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
             &trove.name,
             &trove.version,
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
 
         if let Some(pre) = stored_scriptlets.iter().find(|s| s.phase == "pre-remove") {
             info!("Running pre-remove scriptlet...");
@@ -1344,7 +1346,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, no_scripts: boo
             &trove.name,
             &trove.version,
             scriptlet_format,
-        );
+        ).with_sandbox_mode(sandbox_mode);
 
         if let Some(post) = stored_scriptlets.iter().find(|s| s.phase == "post-remove") {
             info!("Running post-remove scriptlet...");
@@ -1545,7 +1547,7 @@ fn create_state_snapshot(conn: &Connection, changeset_id: i64, summary: &str) ->
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool) -> Result<()> {
+pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool, sandbox_mode: SandboxMode) -> Result<()> {
     info!("Finding orphaned packages...");
 
     let conn = conary::db::open(db_path)
@@ -1581,7 +1583,7 @@ pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool
 
     for trove in &orphans {
         println!("\nRemoving {} {}...", trove.name, trove.version);
-        match cmd_remove(&trove.name, db_path, root, no_scripts) {
+        match cmd_remove(&trove.name, db_path, root, no_scripts, sandbox_mode) {
             Ok(()) => {
                 removed_count += 1;
             }

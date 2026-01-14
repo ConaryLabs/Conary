@@ -14,6 +14,7 @@
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
 pub mod components;
+pub mod container;
 pub mod db;
 pub mod delta;
 pub mod dependencies;
