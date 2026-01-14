@@ -306,7 +306,7 @@ impl FileDeployer {
         let mut content = Vec::new();
         file.read_to_end(&mut content)?;
 
-        let actual_hash = CasStore::compute_hash(&content);
+        let actual_hash = self.cas.compute_hash(&content);
         Ok(actual_hash == expected_hash)
     }
 

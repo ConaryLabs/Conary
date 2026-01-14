@@ -294,7 +294,7 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
 
         // Compute current hash
         let content = std::fs::read(&fs_path)?;
-        let current_hash = CasStore::compute_hash(&content);
+        let current_hash = CasStore::compute_sha256(&content);
 
         if current_hash == config.original_hash {
             if config.status != ConfigStatus::Pristine {

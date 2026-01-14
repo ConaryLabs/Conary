@@ -24,6 +24,7 @@ clap_complete = "4.5"
 
 # Hashing for file integrity
 sha2 = "0.10"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Logging
 tracing = "0.1"

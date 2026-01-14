@@ -321,7 +321,7 @@ pub fn install_package_from_file(
             // Build path-to-hash map from extracted files
             let path_to_hash: HashMap<&str, String> = extracted_files
                 .iter()
-                .map(|f| (f.path.as_str(), conary::filesystem::CasStore::compute_hash(&f.content)))
+                .map(|f| (f.path.as_str(), conary::filesystem::CasStore::compute_sha256(&f.content)))
                 .collect();
 
             // Determine config source from package format
@@ -354,7 +354,7 @@ pub fn install_package_from_file(
 
     info!("Deploying files to filesystem...");
     for file in &extracted_files {
-        let hash = conary::filesystem::CasStore::compute_hash(&file.content);
+        let hash = conary::filesystem::CasStore::compute_sha256(&file.content);
         deployer.deploy_file(&file.path, &hash, file.mode as u32)?;
     }
     info!("Successfully deployed {} files", extracted_files.len());

@@ -2,11 +2,19 @@
 
 //! Content-addressable storage (CAS) for files
 //!
-//! Files are stored by their SHA-256 hash, enabling deduplication
+//! Files are stored by their content hash, enabling deduplication
 //! and efficient rollback support, similar to git's object storage.
+//!
+//! # Hash Algorithm Selection
+//!
+//! The CAS supports multiple hash algorithms:
+//! - **SHA-256** (default): Cryptographic hash for security-critical use
+//! - **XXH128**: Fast non-cryptographic hash for pure deduplication
+//!
+//! Use `CasStore::with_algorithm()` to select the hash algorithm.
 
 use crate::error::Result;
-use sha2::{Digest, Sha256};
+use crate::hash::{self, HashAlgorithm};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -16,29 +24,68 @@ use tracing::debug;
 pub struct CasStore {
     /// Root directory for object storage (e.g., /var/lib/conary/objects)
     objects_dir: PathBuf,
+    /// Hash algorithm to use for content addressing
+    algorithm: HashAlgorithm,
 }
 
 impl CasStore {
     /// Create a new CAS store with the given objects directory
+    ///
+    /// Uses SHA-256 by default. Use `with_algorithm()` for other hash algorithms.
     pub fn new<P: AsRef<Path>>(objects_dir: P) -> Result<Self> {
+        Self::with_algorithm(objects_dir, HashAlgorithm::Sha256)
+    }
+
+    /// Create a new CAS store with a specific hash algorithm
+    ///
+    /// # Arguments
+    ///
+    /// * `objects_dir` - Directory to store content-addressed objects
+    /// * `algorithm` - Hash algorithm to use (SHA-256 or XXH128)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use conary::filesystem::CasStore;
+    /// use conary::hash::HashAlgorithm;
+    ///
+    /// // Fast CAS for local deduplication
+    /// let fast_cas = CasStore::with_algorithm("/var/lib/conary/objects", HashAlgorithm::Xxh128)?;
+    ///
+    /// // Secure CAS for package verification
+    /// let secure_cas = CasStore::with_algorithm("/var/lib/conary/objects", HashAlgorithm::Sha256)?;
+    /// ```
+    pub fn with_algorithm<P: AsRef<Path>>(objects_dir: P, algorithm: HashAlgorithm) -> Result<Self> {
         let objects_dir = objects_dir.as_ref().to_path_buf();
 
         // Create objects directory if it doesn't exist
         if !objects_dir.exists() {
             fs::create_dir_all(&objects_dir)?;
-            debug!("Created CAS objects directory: {:?}", objects_dir);
+            debug!(
+                "Created CAS objects directory: {:?} (algorithm: {})",
+                objects_dir, algorithm
+            );
         }
 
-        Ok(Self { objects_dir })
+        Ok(Self {
+            objects_dir,
+            algorithm,
+        })
     }
 
-    /// Store file content in CAS and return its SHA-256 hash
+    /// Get the hash algorithm used by this CAS
+    #[inline]
+    pub fn algorithm(&self) -> HashAlgorithm {
+        self.algorithm
+    }
+
+    /// Store file content in CAS and return its hash
     ///
     /// The content is stored at: objects/{first2}/{rest_of_hash}
     /// If the content already exists (same hash), this is a no-op (deduplication).
     pub fn store(&self, content: &[u8]) -> Result<String> {
-        // Compute SHA-256 hash
-        let hash = Self::compute_hash(content);
+        // Compute hash using configured algorithm
+        let hash = self.compute_hash(content);
 
         // Get storage path
         let path = self.hash_to_path(&hash);
@@ -83,7 +130,7 @@ impl CasStore {
         file.read_to_end(&mut content)?;
 
         // Verify hash
-        let computed_hash = Self::compute_hash(&content);
+        let computed_hash = self.compute_hash(&content);
         if computed_hash != hash {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -116,11 +163,22 @@ impl CasStore {
         self.objects_dir.join(prefix).join(suffix)
     }
 
-    /// Compute SHA-256 hash of content
-    pub fn compute_hash(content: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(content);
-        format!("{:x}", hasher.finalize())
+    /// Compute hash of content using this store's algorithm
+    pub fn compute_hash(&self, content: &[u8]) -> String {
+        hash::hash_bytes(self.algorithm, content).value
+    }
+
+    /// Compute hash of content using a specific algorithm (static method)
+    ///
+    /// This is useful when you need to compute a hash without a CasStore instance,
+    /// such as when verifying package signatures.
+    pub fn compute_hash_with(algorithm: HashAlgorithm, content: &[u8]) -> String {
+        hash::hash_bytes(algorithm, content).value
+    }
+
+    /// Compute SHA-256 hash (convenience method for backward compatibility)
+    pub fn compute_sha256(content: &[u8]) -> String {
+        hash::sha256(content)
     }
 
     /// Get the objects directory path
@@ -180,7 +238,7 @@ impl CasStore {
         // Read file to compute hash (we need the hash for the CAS path)
         // Note: We still need to read for hashing, but we avoid the write
         let content = fs::read(existing_path)?;
-        let hash = Self::compute_hash(&content);
+        let hash = self.compute_hash(&content);
 
         // Get CAS storage path
         let cas_path = self.hash_to_path(&hash);
@@ -252,7 +310,7 @@ impl CasStore {
         // Optionally verify hash
         if verify_hash {
             let content = fs::read(existing_path)?;
-            let actual_hash = Self::compute_hash(&content);
+            let actual_hash = self.compute_hash(&content);
             if actual_hash != expected_hash {
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -303,11 +361,24 @@ mod tests {
     #[test]
     fn test_compute_hash() {
         let content = b"Hello, World!";
-        let hash = CasStore::compute_hash(content);
+        let hash = CasStore::compute_sha256(content);
         assert_eq!(
             hash,
             "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
         );
+    }
+
+    #[test]
+    fn test_compute_hash_with_algorithm() {
+        let content = b"Hello, World!";
+
+        // SHA-256
+        let sha_hash = CasStore::compute_hash_with(HashAlgorithm::Sha256, content);
+        assert_eq!(sha_hash.len(), 64);
+
+        // XXH128
+        let xxh_hash = CasStore::compute_hash_with(HashAlgorithm::Xxh128, content);
+        assert_eq!(xxh_hash.len(), 32);
     }
 
     #[test]
@@ -317,6 +388,24 @@ mod tests {
 
         let content = b"Test content for CAS";
         let hash = cas.store(content).unwrap();
+
+        // Verify stored content
+        let retrieved = cas.retrieve(&hash).unwrap();
+        assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    fn test_store_and_retrieve_xxh128() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::with_algorithm(temp_dir.path(), HashAlgorithm::Xxh128).unwrap();
+
+        assert_eq!(cas.algorithm(), HashAlgorithm::Xxh128);
+
+        let content = b"Test content for fast CAS";
+        let hash = cas.store(content).unwrap();
+
+        // XXH128 produces 32-char hex (128 bits)
+        assert_eq!(hash.len(), 32);
 
         // Verify stored content
         let retrieved = cas.retrieve(&hash).unwrap();
@@ -452,7 +541,7 @@ mod tests {
         fs::write(&existing_file, content).unwrap();
 
         // Pre-compute hash
-        let expected_hash = CasStore::compute_hash(content);
+        let expected_hash = CasStore::compute_sha256(content);
 
         // Hardlink with known hash (no verification)
         let hash = cas

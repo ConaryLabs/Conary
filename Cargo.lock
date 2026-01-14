@@ -480,6 +480,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wait-timeout",
+ "xxhash-rust",
  "xz2",
  "zstd",
 ]
