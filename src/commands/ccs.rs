@@ -4,7 +4,7 @@
 //! Commands for creating, building, and inspecting CCS packages.
 
 use anyhow::{Context, Result};
-use conary::ccs::{builder, inspector, legacy, CcsBuilder, CcsManifest, InspectedPackage};
+use conary::ccs::{builder, inspector, legacy, verify, CcsBuilder, CcsManifest, InspectedPackage, TrustPolicy};
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory
@@ -320,7 +320,7 @@ pub fn cmd_ccs_inspect(
 /// Verify a CCS package signature and contents
 pub fn cmd_ccs_verify(
     package: &str,
-    policy: Option<String>,
+    policy_path: Option<String>,
     allow_unsigned: bool,
 ) -> Result<()> {
     let path = Path::new(package);
@@ -332,30 +332,31 @@ pub fn cmd_ccs_verify(
     println!("Verifying: {}", path.display());
     println!();
 
-    // TODO: Implement proper verification
-    // - Parse the .ccs tar
-    // - Extract MANIFEST and MANIFEST.sig
-    // - Verify Sigstore signature
-    // - Check trust policy
-    // - Verify content hashes
-
-    println!("[NOT YET IMPLEMENTED]");
-    println!();
-    println!("This command will verify:");
-    println!("  - Sigstore signature on MANIFEST");
-
-    if let Some(p) = policy {
-        println!("  - Trust policy from: {}", p);
+    // Load or create trust policy
+    let policy = if let Some(policy_file) = policy_path {
+        TrustPolicy::from_file(Path::new(&policy_file))
+            .context("Failed to load trust policy")?
+    } else if allow_unsigned {
+        TrustPolicy::permissive()
     } else {
-        println!("  - Default trust policy");
-    }
+        // Default policy: allow unsigned but warn
+        TrustPolicy {
+            allow_unsigned: true,
+            ..Default::default()
+        }
+    };
 
-    if allow_unsigned {
-        println!("  - (allowing unsigned packages)");
-    }
+    // Run verification
+    let result = verify::verify_package(path, &policy)
+        .context("Verification failed")?;
 
-    println!("  - Content hashes match manifest");
-    println!("  - Merkle root integrity");
+    // Print results
+    verify::print_result(&result);
+
+    // Return error if verification failed
+    if !result.valid {
+        anyhow::bail!("Package verification failed");
+    }
 
     Ok(())
 }

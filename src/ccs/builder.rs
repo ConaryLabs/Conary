@@ -284,8 +284,26 @@ impl CcsBuilder {
     }
 }
 
-/// Write a CCS package to disk
+/// Write a CCS package to disk (unsigned)
 pub fn write_ccs_package(result: &BuildResult, output_path: &Path) -> Result<()> {
+    write_ccs_package_internal(result, output_path, None)
+}
+
+/// Write a signed CCS package to disk
+pub fn write_signed_ccs_package(
+    result: &BuildResult,
+    output_path: &Path,
+    signing_key: &super::signing::SigningKeyPair,
+) -> Result<()> {
+    write_ccs_package_internal(result, output_path, Some(signing_key))
+}
+
+/// Internal function to write CCS package with optional signing
+fn write_ccs_package_internal(
+    result: &BuildResult,
+    output_path: &Path,
+    signing_key: Option<&super::signing::SigningKeyPair>,
+) -> Result<()> {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use tar::Builder;
@@ -296,6 +314,13 @@ pub fn write_ccs_package(result: &BuildResult, output_path: &Path) -> Result<()>
     // Write MANIFEST.toml (human-readable)
     let manifest_toml = result.manifest.to_toml()?;
     fs::write(temp_dir.path().join("MANIFEST.toml"), &manifest_toml)?;
+
+    // Sign the manifest if a signing key is provided
+    if let Some(key) = signing_key {
+        let signature = key.sign(manifest_toml.as_bytes());
+        let sig_json = serde_json::to_string_pretty(&signature)?;
+        fs::write(temp_dir.path().join("MANIFEST.sig"), &sig_json)?;
+    }
 
     // Write FILES.json (file listing with hashes)
     let files_json = serde_json::to_string_pretty(&result.files)?;

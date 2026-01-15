@@ -84,6 +84,11 @@ crc32fast = "1.4"                # Fast CRC32 for journal integrity
 nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource"] }
 libc = "0.2"                    # Low-level syscalls for resource limits
 
+# Ed25519 signatures for CCS package signing
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"                     # Random number generation for key generation
+base64 = "0.22"                  # Base64 encoding for signatures
+
 [dev-dependencies]
 
 [build-dependencies]

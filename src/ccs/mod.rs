@@ -10,7 +10,11 @@ pub mod builder;
 pub mod inspector;
 pub mod legacy;
 pub mod manifest;
+pub mod signing;
+pub mod verify;
 
 pub use builder::{BuildResult, CcsBuilder, ComponentData, FileEntry, FileType};
 pub use inspector::InspectedPackage;
 pub use manifest::CcsManifest;
+pub use signing::SigningKeyPair;
+pub use verify::{TrustPolicy, VerificationResult};
