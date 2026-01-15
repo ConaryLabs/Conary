@@ -242,6 +242,15 @@ Inspired by original Conary's label concept for tracking package provenance.
 - [COMPLETE] **Security Metadata** - Track severity, CVE IDs, advisory info on repository packages
 - [COMPLETE] **Update Groups** - `conary update-group <name>` updates collection members atomically
 
+### Developer Experience (Inspired by Nix)
+
+Workflow features that make Nix beloved by developers.
+
+- [ ] **Dev Shells** - `ccs shell --with gcc,cmake,openssl` for temporary environments without permanent install
+- [ ] **Lockfiles** - `ccs.lock` pinning exact versions and hashes of all transitive dependencies
+- [ ] **One-Shot Run** - `ccs run cowsay -- "hello"` to execute without installing
+- [ ] **Shell Integration** - Automatic environment activation when entering project directories
+
 ---
 
 ## Long-Term / Future Consideration
