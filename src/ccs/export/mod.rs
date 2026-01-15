@@ -20,18 +20,26 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    /// Parse format from string
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "oci" | "oci-archive" | "docker" => Some(Self::Oci),
-            _ => None,
-        }
+    /// Parse format from string (convenience method)
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 
     /// Get file extension for format
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Oci => "tar",
+        }
+    }
+}
+
+impl std::str::FromStr for ExportFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "oci" | "oci-archive" | "docker" => Ok(Self::Oci),
+            other => Err(format!("unknown export format: {other}")),
         }
     }
 }

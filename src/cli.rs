@@ -1074,6 +1074,12 @@ pub enum Commands {
         #[arg(long)]
         no_classify: bool,
 
+        /// Enable CDC chunking for delta-efficient updates
+        /// Files >16KB are split into content-defined chunks, enabling
+        /// clients to download only changed portions during updates.
+        #[arg(long)]
+        chunked: bool,
+
         /// Show what would be built without creating packages
         #[arg(long)]
         dry_run: bool,

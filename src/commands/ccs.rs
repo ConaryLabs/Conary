@@ -140,6 +140,7 @@ pub fn cmd_ccs_build(
     target: &str,
     source: Option<String>,
     no_classify: bool,
+    chunked: bool,
     dry_run: bool,
 ) -> Result<()> {
     let path = Path::new(path);
@@ -193,6 +194,10 @@ pub fn cmd_ccs_build(
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir);
         if no_classify {
             builder_instance = builder_instance.no_classify();
+        }
+        if chunked {
+            builder_instance = builder_instance.with_chunking();
+            println!("CDC chunking enabled for delta-efficient updates");
         }
 
         let result = builder_instance.build()
@@ -462,11 +467,10 @@ pub fn cmd_ccs_sign(
 
         // Capture manifest content - prefer CBOR MANIFEST over TOML
         let entry_path_str = entry_path.to_string_lossy();
-        if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
-            manifest_bytes = Some(std::fs::read(temp_dir.path().join(&entry_path))?);
-        } else if manifest_bytes.is_none()
-            && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
-        {
+        let is_cbor = entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST";
+        let is_toml = entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml";
+        // CBOR always takes precedence; TOML only if no CBOR found yet
+        if is_cbor || (is_toml && manifest_bytes.is_none()) {
             manifest_bytes = Some(std::fs::read(temp_dir.path().join(&entry_path))?);
         }
     }
@@ -762,7 +766,7 @@ pub fn cmd_ccs_export(
 ) -> Result<()> {
     use conary::ccs::export::{export, ExportFormat};
 
-    let export_format = ExportFormat::from_str(format)
+    let export_format = ExportFormat::parse(format)
         .ok_or_else(|| anyhow::anyhow!("Unknown export format: {}. Supported: oci", format))?;
 
     let output_path = Path::new(output);

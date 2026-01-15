@@ -502,6 +502,7 @@ mod tests {
             component: "runtime".to_string(),
             file_type: FileType::Regular,
             target: None,
+            chunks: None,
         }
     }
 

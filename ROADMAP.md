@@ -287,10 +287,12 @@ Optional xxhash for non-cryptographic use cases.
 
 Move from file-level to chunk-level for massive efficiency gains. CDC gives "delta compression for free" - no need to pre-compute version-to-version deltas.
 
-**Phase 1: Content-Defined Chunking (CDC)**
-- [ ] **Buzhash/Rabin Chunking** - Variable-size chunks based on content (not fixed offsets)
-- [ ] **Chunk-Level CAS** - Store chunks instead of files, cross-package deduplication
-- [ ] **Implicit Deltas** - Client has 48/50 chunks, downloads only 2 missing
+**Phase 1: Content-Defined Chunking (CDC)** [COMPLETE]
+- [x] **FastCDC Chunking** - Variable-size chunks based on content (16KB min, 64KB avg, 256KB max)
+- [x] **Chunk-Level CAS** - Store chunks instead of files, cross-package deduplication
+- [x] **Implicit Deltas** - Client has 48/50 chunks, downloads only 2 missing
+- [x] **`--chunked` Flag** - Build CDC-enabled packages with `ccs-build --chunked`
+- [x] **Chunk Statistics** - Build summary shows chunked files, dedup savings
 
 **Phase 2: HTTP Chunk Repository**
 - [ ] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`)

@@ -11,6 +11,7 @@
 
 pub mod binary_manifest;
 pub mod builder;
+pub mod chunking;
 pub mod export;
 pub mod hooks;
 pub mod inspector;
@@ -22,7 +23,8 @@ pub mod signing;
 pub mod verify;
 
 pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
-pub use builder::{BuildResult, CcsBuilder, ComponentData, FileEntry, FileType};
+pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry, FileType};
+pub use chunking::{Chunk, ChunkedFile, Chunker, ChunkStore, DeltaStats, StoreStats};
 pub use hooks::{AppliedHook, HookExecutor};
 pub use inspector::InspectedPackage;
 pub use manifest::CcsManifest;

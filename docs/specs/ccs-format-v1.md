@@ -433,12 +433,13 @@ symlink targets) MUST be stored in the component manifest, not derived from the 
 |-------|------|----------|-------------|
 | path | string | yes | Absolute path |
 | type | string | yes | "file", "symlink", "directory" |
-| hash | string | if file | Content hash (sha256:...) |
+| hash | string | if file | Content hash (sha256:...) of full file |
 | size | u64 | if file | File size in bytes |
 | mode | u32 | **yes** | Unix permissions as integer (e.g., 493 = 0o755) |
 | owner | string | yes | Owner username |
 | group | string | yes | Group name |
 | target | string | if symlink | Symlink target (required for symlinks) |
+| chunks | string[] | optional | Ordered list of chunk hashes (if CDC-chunked) |
 
 **Mode field is mandatory** - without it, executables install as non-executable (0644)
 and the package breaks. Installers MUST apply the mode from the manifest, never infer
@@ -446,6 +447,10 @@ from content.
 
 **Symlink target is mandatory for symlinks** - the CAS does not store symlink metadata.
 The target field contains the literal symlink target string.
+
+**Chunks field** - When present, the file content is stored as Content-Defined Chunks
+instead of a single blob. Each chunk is stored by its SHA-256 hash in `objects/`.
+To reassemble the file, concatenate chunks in the order listed.
 
 ### Objects Directory
 
@@ -462,6 +467,51 @@ objects/
 - Filename is the full SHA-256 hash (64 hex characters)
 - Content is stored uncompressed (compression happens at transport layer)
 - Symlinks stored as text file containing target path
+- With CDC chunking, objects may be either whole files OR chunks
+
+### Content-Defined Chunking (CDC)
+
+When packages are built with `--chunked`, large files (>16KB) are split into
+variable-size chunks using the FastCDC algorithm. This enables efficient delta
+updates: when a file changes, only the affected chunks need to be downloaded.
+
+**Algorithm Parameters:**
+- Minimum chunk size: 16 KB
+- Average chunk size: 64 KB
+- Maximum chunk size: 256 KB
+- Hash algorithm: SHA-256
+
+**Key Properties:**
+- Chunk boundaries are determined by content, not position
+- A small change affects only 1-2 chunks, not the entire file
+- Identical content across packages shares the same chunk hash
+
+**Example: CDC-chunked File Entry**
+
+```json
+{
+  "path": "/usr/bin/myapp",
+  "hash": "fac3398b9ed3a3b737bd3a05b2ffa78dcf0ff756ee2cd3afa3dbb2bd695c7bc3",
+  "size": 15646328,
+  "mode": 493,
+  "type": "file",
+  "chunks": [
+    "fe0380ee0b2bfa97d9f42193fcdd5b4312ebf152c46e2b86e42021e4f17c827f",
+    "97cae74371638ddbb2d93fb6a59917c88d4c01662c7e4a8475b606fe48f32084",
+    "1dbaf7668fa3b20f593ff51a80a623a388875a7865635cf3d69650ef78c239f2"
+  ]
+}
+```
+
+**Reassembly:**
+To reconstruct the file, fetch each chunk from `objects/` by its hash and
+concatenate them in order. Verify the result matches the file's `hash` field.
+
+**Delta Update Flow:**
+1. Client has version 1.0.0 with chunks [A, B, C, D, E]
+2. Server publishes version 1.0.1 with chunks [A, B, X, D, E]
+3. Client only downloads chunk X (B and C changed to become X)
+4. Bandwidth savings: ~80% for typical updates
 
 ---
 

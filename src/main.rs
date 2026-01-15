@@ -301,8 +301,8 @@ fn main() -> Result<()> {
             commands::ccs::cmd_ccs_init(&path, name, &version, force)
         }
 
-        Some(Commands::CcsBuild { path, output, target, source, no_classify, dry_run }) => {
-            commands::ccs::cmd_ccs_build(&path, &output, &target, source, no_classify, dry_run)
+        Some(Commands::CcsBuild { path, output, target, source, no_classify, chunked, dry_run }) => {
+            commands::ccs::cmd_ccs_build(&path, &output, &target, source, no_classify, chunked, dry_run)
         }
 
         Some(Commands::CcsInspect { package, files, hooks, deps, format }) => {

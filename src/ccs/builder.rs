@@ -3,7 +3,9 @@
 //!
 //! Builds .ccs packages from a manifest and source directory.
 //! Handles file scanning, component classification, and package creation.
+//! Supports Content-Defined Chunking (CDC) for efficient delta updates.
 
+use crate::ccs::chunking::{Chunker, MIN_CHUNK_SIZE};
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::policy::{PolicyAction, PolicyChain};
 use crate::components::ComponentClassifier;
@@ -20,7 +22,7 @@ use std::path::{Path, PathBuf};
 pub struct FileEntry {
     /// Installation path (absolute)
     pub path: String,
-    /// Content hash (SHA-256)
+    /// Content hash (SHA-256 of full file content)
     pub hash: String,
     /// File size in bytes
     pub size: u64,
@@ -34,6 +36,11 @@ pub struct FileEntry {
     /// Symlink target (if type is symlink)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Chunk hashes for CDC (if file is chunked)
+    /// When present, the file content is stored as chunks instead of a single blob.
+    /// Chunks are stored by their hash in objects/ and must be concatenated in order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<Vec<String>>,
 }
 
 /// File types in CCS packages
@@ -66,9 +73,29 @@ pub struct BuildResult {
     /// All file entries
     pub files: Vec<FileEntry>,
     /// Content blobs (hash -> content)
+    /// With CDC enabled, this contains chunks; without CDC, it contains whole files.
     pub blobs: HashMap<String, Vec<u8>>,
     /// Total package size
     pub total_size: u64,
+    /// Whether CDC chunking was used
+    pub chunked: bool,
+    /// CDC statistics (if chunking was used)
+    pub chunk_stats: Option<ChunkStats>,
+}
+
+/// Statistics about CDC chunking in a build
+#[derive(Debug, Clone, Default)]
+pub struct ChunkStats {
+    /// Number of files that were chunked
+    pub chunked_files: usize,
+    /// Number of files stored as whole blobs (too small to chunk)
+    pub whole_files: usize,
+    /// Total number of chunks created
+    pub total_chunks: usize,
+    /// Number of unique chunks (after dedup within package)
+    pub unique_chunks: usize,
+    /// Bytes saved by intra-package deduplication
+    pub dedup_savings: u64,
 }
 
 /// CCS package builder
@@ -78,6 +105,10 @@ pub struct CcsBuilder {
     install_prefix: PathBuf,
     no_classify: bool,
     policy_chain: Option<PolicyChain>,
+    /// Enable CDC chunking for delta-efficient packages
+    use_chunking: bool,
+    /// Chunker instance (created lazily if chunking is enabled)
+    chunker: Option<Chunker>,
 }
 
 impl CcsBuilder {
@@ -92,6 +123,8 @@ impl CcsBuilder {
             install_prefix: PathBuf::from("/"),
             no_classify: false,
             policy_chain,
+            use_chunking: false,
+            chunker: None,
         }
     }
 
@@ -113,6 +146,17 @@ impl CcsBuilder {
         self
     }
 
+    /// Enable CDC chunking for delta-efficient packages
+    ///
+    /// When enabled, large files are split into content-defined chunks.
+    /// This enables efficient delta updates - clients only download
+    /// changed chunks instead of entire files.
+    pub fn with_chunking(mut self) -> Self {
+        self.use_chunking = true;
+        self.chunker = Some(Chunker::new());
+        self
+    }
+
     /// Build the package
     pub fn build(&self) -> Result<BuildResult> {
         // Scan source directory for files
@@ -126,10 +170,11 @@ impl CcsBuilder {
             raw_files.push((source_path, entry, content));
         }
 
-        // Phase 2: Apply policies
+        // Phase 2: Apply policies and optionally chunk files
         let mut files = Vec::new();
         let mut blobs = HashMap::new();
         let mut components: HashMap<String, Vec<FileEntry>> = HashMap::new();
+        let mut chunk_stats = ChunkStats::default();
 
         for (source_path, mut entry, content) in raw_files {
             // Apply policy chain if configured
@@ -162,8 +207,38 @@ impl CcsBuilder {
                 content
             };
 
-            // Store blob
-            blobs.insert(entry.hash.clone(), final_content);
+            // Phase 3: Store content (chunked or whole)
+            if self.use_chunking && self.should_chunk(&entry, &final_content) {
+                // Chunk the file
+                let chunker = self.chunker.as_ref().unwrap();
+                let chunks = chunker.chunk_bytes(&final_content);
+
+                let mut chunk_hashes = Vec::with_capacity(chunks.len());
+                for chunk in &chunks {
+                    let chunk_hash = hex::encode(chunk.hash);
+                    chunk_hashes.push(chunk_hash.clone());
+                    chunk_stats.total_chunks += 1;
+
+                    // Store chunk (may deduplicate)
+                    use std::collections::hash_map::Entry;
+                    match blobs.entry(chunk_hash) {
+                        Entry::Vacant(e) => {
+                            e.insert(chunk.data.clone());
+                            chunk_stats.unique_chunks += 1;
+                        }
+                        Entry::Occupied(_) => {
+                            chunk_stats.dedup_savings += chunk.length as u64;
+                        }
+                    }
+                }
+
+                entry.chunks = Some(chunk_hashes);
+                chunk_stats.chunked_files += 1;
+            } else {
+                // Store as whole blob
+                blobs.insert(entry.hash.clone(), final_content);
+                chunk_stats.whole_files += 1;
+            }
 
             components
                 .entry(entry.component.clone())
@@ -198,7 +273,29 @@ impl CcsBuilder {
             files,
             blobs,
             total_size,
+            chunked: self.use_chunking,
+            chunk_stats: if self.use_chunking {
+                Some(chunk_stats)
+            } else {
+                None
+            },
         })
+    }
+
+    /// Determine if a file should be chunked
+    ///
+    /// Files are chunked if:
+    /// - They are regular files (not symlinks/directories)
+    /// - They are larger than the minimum chunk size (16KB)
+    fn should_chunk(&self, entry: &FileEntry, content: &[u8]) -> bool {
+        // Only chunk regular files
+        if entry.file_type != FileType::Regular {
+            return false;
+        }
+
+        // Only chunk files larger than minimum chunk size
+        // (smaller files wouldn't benefit from CDC)
+        content.len() >= MIN_CHUNK_SIZE as usize
     }
 
     /// Collect a file's metadata and content without hashing
@@ -241,6 +338,7 @@ impl CcsBuilder {
             component,
             file_type,
             target,
+            chunks: None, // Set during build if chunking is enabled
         };
 
         Ok((entry, content))
@@ -645,6 +743,24 @@ pub fn print_build_summary(result: &BuildResult) {
     println!("Package: {} v{}", result.manifest.package.name, result.manifest.package.version);
     println!("Total files: {}", result.files.len());
     println!("Total size: {} bytes", result.total_size);
+    println!("Blobs: {} objects", result.blobs.len());
+
+    // Print CDC chunk stats if chunking was enabled
+    if let Some(ref stats) = result.chunk_stats {
+        println!();
+        println!("CDC Chunking:");
+        println!("  Chunked files: {} (files >16KB)", stats.chunked_files);
+        println!("  Whole files: {} (files ≤16KB)", stats.whole_files);
+        println!("  Total chunks: {}", stats.total_chunks);
+        println!("  Unique chunks: {}", stats.unique_chunks);
+        if stats.dedup_savings > 0 {
+            println!(
+                "  Intra-package dedup: {} bytes saved",
+                stats.dedup_savings
+            );
+        }
+    }
+
     println!();
     println!("Components:");
 

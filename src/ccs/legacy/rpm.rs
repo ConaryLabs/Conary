@@ -295,6 +295,8 @@ mod tests {
             files: vec![],
             blobs: HashMap::new(),
             total_size: 0,
+            chunked: false,
+            chunk_stats: None,
         }
     }
 

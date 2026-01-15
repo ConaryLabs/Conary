@@ -171,7 +171,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 
 **CCS Package Building:**
 - `ccs-init <directory>` - Initialize a new CCS package project with ccs.toml template
-- `ccs-build <directory>` - Build a CCS package from source directory
+- `ccs-build <directory>` - Build a CCS package from source directory (supports `--chunked` for CDC)
 - `ccs-inspect <package.ccs>` - Display package manifest and file listing
 - `ccs-verify <package.ccs>` - Verify package integrity via Merkle tree
 - `ccs-keygen` - Generate Ed25519 keypair for package signing
@@ -223,7 +223,8 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 
 **Delta Updates:**
 - Binary delta compression using zstd dictionary compression
-- 90%+ space savings on updates
+- Content-Defined Chunking (CDC) for CCS packages - only download changed chunks
+- 90%+ space savings on updates (99%+ with CDC for minor patches)
 - Automatic fallback from delta to full download
 - Bandwidth tracking and statistics
 
@@ -400,6 +401,9 @@ cd myapp
 
 # Build the package
 ccs-build . --output ./dist
+
+# Build with CDC chunking for efficient delta updates
+ccs-build . --output ./dist --chunked
 
 # Inspect the package
 ccs-inspect dist/myapp-1.0.0.ccs
