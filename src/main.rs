@@ -321,6 +321,12 @@ fn main() -> Result<()> {
             commands::ccs::cmd_ccs_keygen(&output, key_id, force)
         }
 
+        Some(Commands::CcsInstall { package, db_path, root, dry_run, allow_unsigned, policy, components, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .expect("Invalid sandbox mode. Use: auto, always, never");
+            commands::ccs::cmd_ccs_install(&package, &db_path, &root, dry_run, allow_unsigned, policy, components, sandbox_mode)
+        }
+
         Some(Commands::CollectionCreate { name, description, members, db_path }) => {
             commands::cmd_collection_create(&name, description.as_deref(), &members, &db_path)
         }

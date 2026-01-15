@@ -1147,4 +1147,39 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Install a native CCS package
+    #[command(name = "ccs-install")]
+    CcsInstall {
+        /// Path to .ccs package file
+        package: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Show what would be installed without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Allow installation of unsigned packages
+        #[arg(long)]
+        allow_unsigned: bool,
+
+        /// Trust policy file for signature verification
+        #[arg(long)]
+        policy: Option<String>,
+
+        /// Specific components to install (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        components: Option<Vec<String>>,
+
+        /// Sandbox mode for hooks: auto, always, never (default: never)
+        #[arg(long, default_value = "never")]
+        sandbox: String,
+    },
 }

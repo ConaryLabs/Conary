@@ -182,6 +182,27 @@ impl CasStore {
         hash::sha256(content)
     }
 
+    /// Compute the hash for a symlink target (static method)
+    ///
+    /// This provides a single source of truth for symlink hashing used by:
+    /// - `store_symlink()` for storing symlinks in CAS
+    /// - `CcsPackage` parser for matching symlink hashes
+    /// - `TransactionPlanner` for symlink operations
+    ///
+    /// The hash is computed from the target path prefixed with "symlink:"
+    /// to distinguish from regular file content.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let hash = CasStore::compute_symlink_hash("/usr/lib/libfoo.so.1");
+    /// // hash is SHA-256 of "symlink:/usr/lib/libfoo.so.1"
+    /// ```
+    pub fn compute_symlink_hash(target: &str) -> String {
+        let content = format!("symlink:{}", target);
+        hash::sha256(content.as_bytes())
+    }
+
     /// Get the objects directory path
     pub fn objects_dir(&self) -> &Path {
         &self.objects_dir
@@ -190,10 +211,10 @@ impl CasStore {
     /// Store a symlink target in CAS
     ///
     /// Symlinks are stored as their target path (the content is the target string).
-    /// The hash is computed from the target path, prefixed with "symlink:" to
-    /// distinguish from regular file content.
+    /// The hash is computed using `compute_symlink_hash()` to ensure consistency
+    /// across all symlink operations.
     pub fn store_symlink(&self, target: &str) -> Result<String> {
-        // Prefix to distinguish symlink content from file content
+        // Use the same format as compute_symlink_hash for consistency
         let content = format!("symlink:{}", target);
         self.store(content.as_bytes())
     }
@@ -366,6 +387,35 @@ mod tests {
         assert_eq!(
             hash,
             "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+        );
+    }
+
+    #[test]
+    fn test_compute_symlink_hash() {
+        let target = "/usr/lib/libfoo.so.1";
+        let hash = CasStore::compute_symlink_hash(target);
+
+        // Should be SHA-256 of "symlink:/usr/lib/libfoo.so.1"
+        let expected = CasStore::compute_sha256(b"symlink:/usr/lib/libfoo.so.1");
+        assert_eq!(hash, expected);
+
+        // Hash should be 64 chars (256 bits hex)
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn test_symlink_hash_consistency() {
+        // Verify that compute_symlink_hash and store_symlink produce the same hash
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        let target = "/usr/bin/python3";
+        let computed_hash = CasStore::compute_symlink_hash(target);
+        let stored_hash = cas.store_symlink(target).unwrap();
+
+        assert_eq!(
+            computed_hash, stored_hash,
+            "compute_symlink_hash and store_symlink must produce identical hashes"
         );
     }
 

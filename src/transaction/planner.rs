@@ -233,7 +233,8 @@ impl<'a> TransactionPlanner<'a> {
                             OperationType::ReplaceFile
                         },
                         new_hash: if file.is_symlink {
-                            None
+                            // Use consistent symlink hash computation
+                            file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
                         } else {
                             Some(self.cas.compute_hash(&file.content))
                         },
@@ -263,7 +264,8 @@ impl<'a> TransactionPlanner<'a> {
                             OperationType::ReplaceFile
                         },
                         new_hash: if file.is_symlink {
-                            None
+                            // Use consistent symlink hash computation
+                            file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
                         } else {
                             Some(self.cas.compute_hash(&file.content))
                         },
@@ -287,7 +289,8 @@ impl<'a> TransactionPlanner<'a> {
                         OperationType::AddFile
                     },
                     new_hash: if file.is_symlink {
-                        None
+                        // Use consistent symlink hash computation
+                        file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
                     } else {
                         Some(self.cas.compute_hash(&file.content))
                     },
@@ -300,7 +303,10 @@ impl<'a> TransactionPlanner<'a> {
             plan.files_to_stage.push(StageInfo {
                 path: path.to_path_buf(),
                 hash: if file.is_symlink {
-                    String::new()
+                    // Use consistent symlink hash computation
+                    file.symlink_target.as_ref()
+                        .map(|t| CasStore::compute_symlink_hash(t))
+                        .unwrap_or_default()
                 } else {
                     self.cas.compute_hash(&file.content)
                 },
