@@ -678,9 +678,35 @@ pub fn cmd_ccs_install(
     {
         let tx = conn.unchecked_transaction()?;
 
+        // Remove old version if upgrading
+        if !existing.is_empty() {
+            let old = &existing[0];
+            if let Some(old_id) = old.id {
+                // Delete old files
+                tx.execute("DELETE FROM files WHERE trove_id = ?1", [old_id])?;
+                // Delete old provides
+                tx.execute("DELETE FROM provides WHERE trove_id = ?1", [old_id])?;
+                // Delete old trove
+                tx.execute("DELETE FROM troves WHERE id = ?1", [old_id])?;
+            }
+        }
+
         // Create trove
         let mut trove = ccs_pkg.to_trove();
         let trove_id = trove.insert(&tx)?;
+
+        // Register files
+        for file in &extracted_files {
+            let hash = file.sha256.clone().unwrap_or_default();
+            let mut file_entry = conary::db::models::FileEntry::new(
+                file.path.clone(),
+                hash,
+                file.size,
+                file.mode,
+                trove_id,
+            );
+            file_entry.insert(&tx)?;
+        }
 
         // Create provides entry for the package itself
         let mut provide = conary::db::models::ProvideEntry::new(
@@ -689,6 +715,18 @@ pub fn cmd_ccs_install(
             Some(ccs_pkg.version().to_string()),
         );
         provide.insert(&tx)?;
+
+        // Register additional provides from manifest
+        for cap in &ccs_pkg.manifest().provides.capabilities {
+            if cap != ccs_pkg.name() {
+                let mut cap_provide = conary::db::models::ProvideEntry::new(
+                    trove_id,
+                    cap.clone(),
+                    None,
+                );
+                cap_provide.insert(&tx)?;
+            }
+        }
 
         tx.commit()?;
     }
