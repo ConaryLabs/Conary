@@ -200,9 +200,61 @@ arch.groups = ["base-devel"]
 | name | string | yes | Package name (alphanumeric, hyphens) |
 | version | string | yes | Semantic version (X.Y.Z) |
 | description | string | yes | Short description |
+| type | string | no | Package type: "package" (default), "group", or "redirect" |
 | license | string | no | SPDX license identifier |
 | homepage | string | no | Project homepage URL |
 | repository | string | no | Source repository URL |
+
+#### Package Types
+
+**package** (default): A normal package containing files.
+
+**group**: A composition package containing only references to other packages. Groups are the building blocks for OS composition (inspired by Foresight Linux's group-* recipes).
+
+```toml
+[package]
+name = "group-server"
+version = "1.0.0"
+type = "group"
+description = "Minimal server installation"
+
+[members]
+required = [
+    { name = "group-base", version = ">=1.0" },
+    { name = "openssh", version = ">=9.0" },
+    { name = "systemd" },
+]
+optional = [
+    { name = "nginx", version = ">=1.24" },
+    { name = "postgresql", version = ">=15" },
+]
+```
+
+**redirect**: A transition package that redirects to another package. Used for package renames, splits, or replacements.
+
+```toml
+[package]
+name = "mysql"
+version = "999.0.0"  # High version ensures upgrade
+type = "redirect"
+description = "Transitional package - mysql has been replaced by mariadb"
+
+[redirect]
+to = "mariadb"
+version = ">=10.11"
+reason = "MySQL replaced by MariaDB in this distribution"
+```
+
+#### [redirects] Section (Optional)
+
+Declare that this package replaces or obsoletes other packages:
+
+```toml
+[redirects]
+replaces = ["old-package-name"]      # This package replaces these
+obsoletes = ["deprecated-package"]   # These should be removed
+splits_from = "monolithic-package"   # This was split from a larger package
+```
 
 #### [package.platform] Section (Optional)
 

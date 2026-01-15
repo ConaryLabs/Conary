@@ -290,11 +290,22 @@ Building on the CCS format with more sophisticated features.
 - [ ] **Commit/Checkout** - Check in/out package sources
 - [ ] **Branch Management** - Create and manage branches
 
+### OS Composition (Inspired by Foresight Linux)
+
+- [ ] **Group Packages** - `type = "group"` packages containing only references to other packages
+- [ ] **Nested Groups** - Groups can include other groups (`group-server` includes `group-base`)
+- [ ] **Optional Members** - Groups can have required and optional members
+- [ ] **Migrate Command** - Migrate system to new group version atomically
+
+### Package Evolution
+
+- [ ] **Redirect Packages** - `type = "redirect"` for package renames/replacements (mysql → mariadb)
+- [ ] **Package Splits** - Track when packages split (`firefox` → `firefox-bin` + `firefox-lib`)
+- [ ] **Obsoletes Handling** - Clean removal of deprecated packages during updates
+
 ### Advanced Features
 
-- [ ] **Migrate Command** - Migrate system to new group version
 - [ ] **Info Packages** - Create system users/groups via packages
-- [ ] **Redirect Packages** - Redirect one package to another
 - [ ] **Capsule Packages** - Encapsulate foreign packages
 
 ### Web Interface
