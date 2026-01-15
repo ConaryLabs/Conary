@@ -1161,3 +1161,26 @@ pub fn migrate_v22(conn: &Connection) -> Result<()> {
     info!("Schema version 22 applied successfully (update improvements)");
     Ok(())
 }
+
+/// Version 23: Transaction engine support
+///
+/// Adds tx_uuid column to changesets for crash recovery correlation.
+/// The transaction engine uses UUIDs to correlate journal records with
+/// database changesets, enabling recovery after crashes.
+pub fn migrate_v23(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 23");
+
+    conn.execute_batch(
+        "
+        -- Add transaction UUID for crash recovery correlation
+        -- NULL for legacy changesets created before transaction engine
+        ALTER TABLE changesets ADD COLUMN tx_uuid TEXT;
+
+        -- Index for fast lookup during recovery
+        CREATE UNIQUE INDEX idx_changesets_tx_uuid ON changesets(tx_uuid) WHERE tx_uuid IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 23 applied successfully (transaction engine support)");
+    Ok(())
+}

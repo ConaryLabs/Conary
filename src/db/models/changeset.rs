@@ -47,6 +47,8 @@ pub struct Changeset {
     pub applied_at: Option<String>,
     pub rolled_back_at: Option<String>,
     pub reversed_by_changeset_id: Option<i64>,
+    /// Transaction UUID for crash recovery correlation
+    pub tx_uuid: Option<String>,
 }
 
 impl Changeset {
@@ -60,14 +62,29 @@ impl Changeset {
             applied_at: None,
             rolled_back_at: None,
             reversed_by_changeset_id: None,
+            tx_uuid: None,
+        }
+    }
+
+    /// Create a new Changeset with transaction UUID for crash recovery
+    pub fn with_tx_uuid(description: String, tx_uuid: String) -> Self {
+        Self {
+            id: None,
+            description,
+            status: ChangesetStatus::Pending,
+            created_at: None,
+            applied_at: None,
+            rolled_back_at: None,
+            reversed_by_changeset_id: None,
+            tx_uuid: Some(tx_uuid),
         }
     }
 
     /// Insert this changeset into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO changesets (description, status) VALUES (?1, ?2)",
-            params![&self.description, self.status.as_str()],
+            "INSERT INTO changesets (description, status, tx_uuid) VALUES (?1, ?2, ?3)",
+            params![&self.description, self.status.as_str(), &self.tx_uuid],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -75,10 +92,22 @@ impl Changeset {
         Ok(id)
     }
 
+    /// Find a changeset by transaction UUID
+    pub fn find_by_tx_uuid(conn: &Connection, tx_uuid: &str) -> Result<Option<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id, tx_uuid
+             FROM changesets WHERE tx_uuid = ?1",
+        )?;
+
+        let changeset = stmt.query_row([tx_uuid], Self::from_row).optional()?;
+
+        Ok(changeset)
+    }
+
     /// Find a changeset by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id
+            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id, tx_uuid
              FROM changesets WHERE id = ?1",
         )?;
 
@@ -90,7 +119,7 @@ impl Changeset {
     /// List all changesets
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id
+            "SELECT id, description, status, created_at, applied_at, rolled_back_at, reversed_by_changeset_id, tx_uuid
              FROM changesets ORDER BY created_at DESC",
         )?;
 
@@ -150,6 +179,7 @@ impl Changeset {
             applied_at: row.get(4)?,
             rolled_back_at: row.get(5)?,
             reversed_by_changeset_id: row.get(6)?,
+            tx_uuid: row.get(7)?,
         })
     }
 }

@@ -78,10 +78,11 @@ cargo clippy -- -D warnings
 | `src/label/` | Package provenance labels |
 | `src/flavor/` | Build variation specs |
 | `src/components/` | Component classification |
+| `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
 
 ## Database Schema
 
-Currently v22. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups.
+Currently v23. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -98,6 +99,7 @@ Key schema additions:
 - v20: `labels`, `label_path` tables, `label_id` on troves - package provenance tracking
 - v21: `config_files`, `config_backups` tables - configuration file tracking and backup
 - v22: security columns on `repository_packages` - security update tracking
+- v23: `tx_uuid` column on changesets - transaction engine crash recovery correlation
 
 ## Testing
 
@@ -107,4 +109,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-358 tests total (333 lib + 3 bin + 22 integration).
+430 tests total (405 lib + 3 bin + 22 integration).

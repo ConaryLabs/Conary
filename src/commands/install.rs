@@ -6,7 +6,7 @@ use super::progress::{InstallPhase, InstallProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
-use conary::db::models::{Component, ProvideEntry, ScriptletEntry};
+use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
@@ -16,6 +16,10 @@ use conary::packages::PackageFormat;
 use conary::repository::{self, DownloadOptions, PackageSelector, SelectionOptions};
 use conary::resolver::{DependencyEdge, Resolver};
 use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
+use conary::transaction::{
+    ExtractedFile as TxExtractedFile, FileToRemove, PackageInfo, TransactionConfig,
+    TransactionEngine, TransactionOperations,
+};
 use conary::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -220,6 +224,10 @@ fn check_upgrade_status(
 /// Deploy files to filesystem with rollback capability
 ///
 /// Returns the list of (path, hash, size, mode) for all deployed files
+///
+/// NOTE: This function is kept for backwards compatibility with other code paths.
+/// The main install flow now uses TransactionEngine for crash-safe operations.
+#[allow(dead_code)]
 fn deploy_files(
     deployer: &conary::filesystem::FileDeployer,
     extracted_files: &[conary::packages::traits::ExtractedFile],
@@ -287,7 +295,8 @@ fn deploy_files(
     Ok(file_hashes)
 }
 
-/// Rollback deployed files on failure
+/// Rollback deployed files on failure (legacy - kept for non-transaction code paths)
+#[allow(dead_code)]
 fn rollback_deployed_files(deployer: &conary::filesystem::FileDeployer, files: &[(String, String, i64, i32)]) {
     warn!("Rolling back {} deployed files", files.len());
     for (path, _, _, _) in files {
@@ -295,6 +304,58 @@ fn rollback_deployed_files(deployer: &conary::filesystem::FileDeployer, files: &
             warn!("Failed to rollback file {}: {}", path, e);
         }
     }
+}
+
+/// Convert package ExtractedFile to transaction ExtractedFile
+fn convert_extracted_files(
+    files: &[conary::packages::traits::ExtractedFile],
+) -> Vec<TxExtractedFile> {
+    files
+        .iter()
+        .map(|f| {
+            // Detect symlinks by checking if content starts with symlink marker
+            // (package parsers store symlink target as content prefixed with special marker)
+            let is_symlink = f.mode & 0o120000 == 0o120000; // S_IFLNK check
+            let symlink_target = if is_symlink {
+                // For symlinks, the content is the target path
+                String::from_utf8(f.content.clone()).ok()
+            } else {
+                None
+            };
+
+            TxExtractedFile {
+                path: f.path.clone(),
+                content: f.content.clone(),
+                mode: f.mode as u32,
+                is_symlink,
+                symlink_target,
+            }
+        })
+        .collect()
+}
+
+/// Get list of files to remove from old trove (for upgrades)
+fn get_files_to_remove(
+    conn: &Connection,
+    old_trove_id: i64,
+    new_file_paths: &std::collections::HashSet<&str>,
+) -> Result<Vec<FileToRemove>> {
+    let old_files = conary::db::models::FileEntry::find_by_trove(conn, old_trove_id)?;
+    let mut to_remove = Vec::new();
+
+    for old_file in old_files {
+        // Only remove files that aren't in the new package
+        if !new_file_paths.contains(old_file.path.as_str()) {
+            to_remove.push(FileToRemove {
+                path: old_file.path,
+                hash: old_file.sha256_hash,
+                size: old_file.size,
+                mode: old_file.permissions as u32,
+            });
+        }
+    }
+
+    Ok(to_remove)
 }
 
 /// Represents which components to install
@@ -813,34 +874,133 @@ pub fn cmd_install(
         }
     }
 
-    // Set up file deployer
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
-    let install_root = PathBuf::from(root);
-    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
-
     // Track if this is an upgrade
     let is_upgrade = old_trove_to_upgrade.is_some();
 
-    // Deploy files with conflict checking and rollback capability
-    progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let file_hashes = deploy_files(&deployer, &extracted_files, is_upgrade, &conn, pkg.name())?;
+    // === TRANSACTION ENGINE INTEGRATION ===
+    // Create transaction engine for crash-safe atomic operations
+    let db_path_buf = PathBuf::from(db_path);
+    let tx_config = TransactionConfig::new(PathBuf::from(root), db_path_buf.clone());
+    let engine = TransactionEngine::new(tx_config)
+        .context("Failed to create transaction engine")?;
 
-    // Phase 3: DB transaction - only runs after files are successfully deployed
+    // Recover any incomplete transactions from previous crashes
+    let recovery_outcomes = engine.recover(&mut conn)
+        .context("Failed to recover incomplete transactions")?;
+    for outcome in &recovery_outcomes {
+        info!("Recovery outcome: {:?}", outcome);
+    }
+
+    // Begin new transaction
+    let tx_description = if let Some(ref old_trove) = old_trove_to_upgrade {
+        format!("Upgrade {} from {} to {}", pkg.name(), old_trove.version, pkg.version())
+    } else {
+        format!("Install {}-{}", pkg.name(), pkg.version())
+    };
+    let mut txn = engine.begin(&tx_description)
+        .context("Failed to begin transaction")?;
+
+    info!("Started transaction {} for {}", txn.uuid(), tx_description);
+
+    // Convert extracted files to transaction format
+    let tx_files = convert_extracted_files(&extracted_files);
+
+    // Get files to remove for upgrades
+    let files_to_remove = if let Some(ref old_trove) = old_trove_to_upgrade
+        && let Some(old_id) = old_trove.id
+    {
+        let new_paths: std::collections::HashSet<&str> =
+            extracted_files.iter().map(|f| f.path.as_str()).collect();
+        get_files_to_remove(&conn, old_id, &new_paths)?
+    } else {
+        Vec::new()
+    };
+
+    // Plan transaction operations
+    progress.set_phase(pkg.name(), InstallPhase::Deploying);
+    let operations = TransactionOperations {
+        package: PackageInfo {
+            name: pkg.name().to_string(),
+            version: pkg.version().to_string(),
+            release: None,
+            arch: pkg.architecture().map(|s| s.to_string()),
+        },
+        files_to_add: tx_files.clone(),
+        files_to_remove,
+        is_upgrade,
+        old_package: old_trove_to_upgrade.as_ref().map(|t| PackageInfo {
+            name: t.name.clone(),
+            version: t.version.clone(),
+            release: None,
+            arch: t.architecture.clone(),
+        }),
+    };
+
+    let plan = txn.plan_operations(operations, &conn)
+        .context("Failed to plan transaction")?;
+
+    // Extract plan data before further mutations (to avoid borrow checker issues)
+    let plan_conflicts = plan.conflicts.clone();
+    let plan_files_to_stage = plan.files_to_stage.clone();
+    let plan_files_to_backup_len = plan.files_to_backup.len();
+    let plan_dirs_to_create_len = plan.dirs_to_create.len();
+
+    // Check for conflicts
+    if !plan_conflicts.is_empty() {
+        let conflict_msgs: Vec<String> = plan_conflicts.iter().map(|c| format!("{:?}", c)).collect();
+        txn.abort().context("Failed to abort transaction after conflicts")?;
+        return Err(anyhow::anyhow!(
+            "File conflicts detected:\n  {}",
+            conflict_msgs.join("\n  ")
+        ));
+    }
+
+    info!("Transaction plan: {} files to stage, {} files to backup, {} dirs to create",
+          plan_files_to_stage.len(), plan_files_to_backup_len, plan_dirs_to_create_len);
+
+    // Prepare: store content in CAS
+    txn.prepare(&tx_files)
+        .context("Failed to prepare transaction (CAS storage)")?;
+
+    // Backup existing files
+    txn.backup_files()
+        .context("Failed to backup existing files")?;
+
+    // Stage new files from CAS
+    txn.stage_files()
+        .context("Failed to stage files")?;
+
+    // Apply filesystem changes (atomic renames)
+    let fs_result = txn.apply_filesystem()
+        .context("Failed to apply filesystem changes")?;
+
+    info!("Filesystem changes: {} added, {} replaced, {} removed",
+          fs_result.files_added, fs_result.files_replaced, fs_result.files_removed);
+
+    // Write DB commit intent for crash recovery correlation
+    txn.write_db_commit_intent()
+        .context("Failed to write DB commit intent")?;
+
+    // Build file hashes from staged files for DB insertion
+    // Create a lookup from path to size using extracted files
+    let size_lookup: HashMap<String, i64> = extracted_files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    let file_hashes: Vec<(String, String, i64, i32)> = plan_files_to_stage
+        .iter()
+        .map(|s| {
+            let path_str = s.path.display().to_string();
+            let size = size_lookup.get(&path_str).copied().unwrap_or(0);
+            (path_str, s.hash.clone(), size, s.mode as i32)
+        })
+        .collect();
+
+    // DB transaction with tx_uuid for crash recovery
+    let tx_uuid = txn.uuid().to_string();
     let db_result = conary::db::transaction(&mut conn, |tx| {
-        let changeset_desc = if let Some(ref old_trove) = old_trove_to_upgrade {
-            format!(
-                "Upgrade {} from {} to {}",
-                pkg.name(),
-                old_trove.version,
-                pkg.version()
-            )
-        } else {
-            format!("Install {}-{}", pkg.name(), pkg.version())
-        };
-        let mut changeset = conary::db::models::Changeset::new(changeset_desc);
+        // Create changeset with tx_uuid for crash recovery
+        let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
         let changeset_id = changeset.insert(tx)?;
 
         if let Some(old_trove) = old_trove_to_upgrade.as_ref()
@@ -899,7 +1059,7 @@ pub fn cmd_install(
             file_entry.component_id = component_id;
             file_entry.insert(tx)?;
 
-            // Record in history (we know files exist since we just deployed them)
+            // Record in history
             let action = if is_upgrade { "modify" } else { "add" };
             tx.execute(
                 "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
@@ -942,18 +1102,16 @@ pub fn cmd_install(
         }
 
         // Store language-specific provides (python, perl, ruby, etc.)
-        // These were detected earlier and enable dependency resolution against language ecosystem packages
         for lang_dep in &language_provides {
             let mut provide = ProvideEntry::new(
                 trove_id,
                 lang_dep.to_dep_string(),
                 lang_dep.version_constraint.clone(),
             );
-            // Use insert_or_ignore to avoid duplicates
             provide.insert_or_ignore(tx)?;
         }
 
-        // Also store the package name itself as a provide (for package-level deps)
+        // Also store the package name itself as a provide
         let mut pkg_provide = ProvideEntry::new(
             trove_id,
             pkg.name().to_string(),
@@ -961,18 +1119,29 @@ pub fn cmd_install(
         );
         pkg_provide.insert_or_ignore(tx)?;
 
-        changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
-        Ok(changeset_id)
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok((changeset_id, trove_id))
     });
 
-    // If DB transaction failed, rollback deployed files
-    let changeset_id = match db_result {
-        Ok(id) => id,
+    // Handle DB transaction result
+    let (changeset_id, trove_id) = match db_result {
+        Ok((cs_id, tr_id)) => {
+            // Record successful DB commit in transaction journal
+            txn.record_db_commit(cs_id, tr_id)
+                .context("Failed to record DB commit")?;
+            (cs_id, tr_id)
+        }
         Err(e) => {
-            rollback_deployed_files(&deployer, &file_hashes);
+            // DB failed - abort transaction (will restore backups)
+            if let Err(abort_err) = txn.abort() {
+                warn!("Failed to abort transaction after DB failure: {}", abort_err);
+            }
             return Err(anyhow::anyhow!("Database transaction failed: {}", e));
         }
     };
+
+    // Suppress unused variable warning
+    let _ = trove_id;
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
     // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
@@ -1033,6 +1202,10 @@ pub fn cmd_install(
             }
         }
     }
+
+    // Mark post-scripts complete in transaction
+    txn.mark_post_scripts_complete()
+        .context("Failed to mark post-scripts complete")?;
 
     // Execute triggers based on installed files
     progress.set_phase(pkg.name(), InstallPhase::Triggers);
@@ -1101,6 +1274,11 @@ pub fn cmd_install(
     if !language_provides.is_empty() {
         println!("  Provides: {} (language-specific capabilities)", language_provides.len());
     }
+
+    // Finish transaction (cleanup working directory, archive journal)
+    let tx_result = txn.finish()
+        .context("Failed to finish transaction")?;
+    info!("Transaction {} completed in {}ms", tx_result.tx_uuid, tx_result.duration_ms);
 
     // Create state snapshot after successful install
     create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;

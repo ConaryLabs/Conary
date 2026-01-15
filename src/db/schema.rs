@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 22;
+pub const SCHEMA_VERSION: i32 = 23;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -98,6 +98,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         20 => migrations::migrate_v20(conn),
         21 => migrations::migrate_v21(conn),
         22 => migrations::migrate_v22(conn),
+        23 => migrations::migrate_v23(conn),
         _ => panic!("Unknown migration version: {}", version),
     }
 }

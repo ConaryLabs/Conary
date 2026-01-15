@@ -41,6 +41,19 @@ impl FileDeployer {
         Ok(Self { cas, install_root })
     }
 
+    /// Create a new file deployer with an existing CAS store
+    pub fn with_cas<P: AsRef<Path>>(cas: CasStore, install_root: P) -> Result<Self> {
+        let install_root = install_root.as_ref().to_path_buf();
+
+        // Create install root if it doesn't exist
+        if !install_root.exists() {
+            fs::create_dir_all(&install_root)?;
+            debug!("Created install root: {:?}", install_root);
+        }
+
+        Ok(Self { cas, install_root })
+    }
+
     /// Validate and compute a safe target path within the install root
     ///
     /// This function prevents path traversal attacks by:

@@ -72,6 +72,22 @@ pub enum Error {
     /// Resource not found (generic)
     #[error("Not found: {0}")]
     NotFound(String),
+
+    /// Transaction error
+    #[error("Transaction error: {0}")]
+    TransactionError(String),
+
+    /// Transaction conflict (file ownership, untracked files, etc.)
+    #[error("Transaction conflict: {0}")]
+    TransactionConflict(String),
+
+    /// Transaction journal corrupted
+    #[error("Journal corrupted: {0}")]
+    JournalCorrupted(String),
+
+    /// Transaction recovery failed
+    #[error("Recovery failed: {0}")]
+    RecoveryFailed(String),
 }
 
 /// Result type alias using Conary's Error type

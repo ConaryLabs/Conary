@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// Content-addressable storage manager
+#[derive(Clone)]
 pub struct CasStore {
     /// Root directory for object storage (e.g., /var/lib/conary/objects)
     objects_dir: PathBuf,

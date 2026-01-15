@@ -143,6 +143,7 @@ impl VfsNode {
 /// // O(1) lookup
 /// let node = tree.get("/usr/bin/bash")?;
 /// ```
+#[derive(Debug)]
 pub struct VfsTree {
     /// Arena storage for nodes
     nodes: Vec<VfsNode>,

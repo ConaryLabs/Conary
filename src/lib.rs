@@ -28,6 +28,7 @@ pub mod progress;
 pub mod repository;
 pub mod resolver;
 pub mod scriptlet;
+pub mod transaction;
 pub mod trigger;
 pub mod version;
 
@@ -40,4 +41,8 @@ pub use label::{Label, LabelParseError, LabelPath};
 pub use progress::{
     CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
     SilentProgress,
+};
+pub use transaction::{
+    RecoveryOutcome, Transaction, TransactionConfig, TransactionEngine, TransactionPlan,
+    TransactionState,
 };
