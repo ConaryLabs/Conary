@@ -7,6 +7,7 @@
 
 use crate::ccs::builder::{ComponentData, FileEntry, FileType as CcsFileType};
 use crate::ccs::manifest::CcsManifest;
+use crate::ccs::policy::BuildPolicyConfig;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
@@ -159,6 +160,7 @@ pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryM
         config: Config::default(),
         build,
         legacy: None,
+        policy: BuildPolicyConfig::default(),
     }
 }
 

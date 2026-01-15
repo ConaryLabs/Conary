@@ -5,6 +5,7 @@
 //! Handles file scanning, component classification, and package creation.
 
 use crate::ccs::manifest::CcsManifest;
+use crate::ccs::policy::{PolicyAction, PolicyChain};
 use crate::components::ComponentClassifier;
 use crate::hash;
 use anyhow::{Context, Result};
@@ -76,16 +77,21 @@ pub struct CcsBuilder {
     source_dir: PathBuf,
     install_prefix: PathBuf,
     no_classify: bool,
+    policy_chain: Option<PolicyChain>,
 }
 
 impl CcsBuilder {
     /// Create a new builder
     pub fn new(manifest: CcsManifest, source_dir: &Path) -> Self {
+        // Create policy chain from manifest configuration
+        let policy_chain = PolicyChain::from_config(&manifest.policy).ok();
+
         Self {
             manifest,
             source_dir: source_dir.to_path_buf(),
             install_prefix: PathBuf::from("/"),
             no_classify: false,
+            policy_chain,
         }
     }
 
@@ -101,18 +107,63 @@ impl CcsBuilder {
         self
     }
 
+    /// Set custom policy chain (overrides manifest config)
+    pub fn with_policies(mut self, chain: PolicyChain) -> Self {
+        self.policy_chain = Some(chain);
+        self
+    }
+
     /// Build the package
     pub fn build(&self) -> Result<BuildResult> {
         // Scan source directory for files
         let source_files = self.scan_source_files()?;
 
-        // Process files: hash, classify, collect
+        // Phase 1: Collect files with content (before policies)
+        let mut raw_files: Vec<(PathBuf, FileEntry, Vec<u8>)> = Vec::new();
+
+        for source_path in source_files {
+            let (entry, content) = self.collect_file(&source_path)?;
+            raw_files.push((source_path, entry, content));
+        }
+
+        // Phase 2: Apply policies
         let mut files = Vec::new();
         let mut blobs = HashMap::new();
         let mut components: HashMap<String, Vec<FileEntry>> = HashMap::new();
 
-        for source_path in source_files {
-            let entry = self.process_file(&source_path, &mut blobs)?;
+        for (source_path, mut entry, content) in raw_files {
+            // Apply policy chain if configured
+            let final_content = if let Some(ref chain) = self.policy_chain {
+                let (action, new_content) =
+                    chain.apply(&mut entry, content, &source_path, &self.manifest.policy)?;
+
+                match action {
+                    PolicyAction::Skip => {
+                        // Policy says skip this file
+                        continue;
+                    }
+                    PolicyAction::Reject(msg) => {
+                        // This shouldn't happen as the chain already returns an error
+                        anyhow::bail!("Policy rejected file {}: {}", entry.path, msg);
+                    }
+                    PolicyAction::Keep | PolicyAction::Replace(_) => {
+                        // Content may have been modified - recompute hash if needed
+                        if new_content != entry.hash.as_bytes() {
+                            let new_hash = hash::sha256(&new_content);
+                            if new_hash != entry.hash {
+                                entry.hash = new_hash;
+                                entry.size = new_content.len() as u64;
+                            }
+                        }
+                        new_content
+                    }
+                }
+            } else {
+                content
+            };
+
+            // Store blob
+            blobs.insert(entry.hash.clone(), final_content);
 
             components
                 .entry(entry.component.clone())
@@ -150,6 +201,51 @@ impl CcsBuilder {
         })
     }
 
+    /// Collect a file's metadata and content without hashing
+    fn collect_file(&self, source_path: &Path) -> Result<(FileEntry, Vec<u8>)> {
+        // Calculate install path
+        let relative = source_path
+            .strip_prefix(&self.source_dir)
+            .context("File not under source directory")?;
+        let install_path = self.install_prefix.join(relative);
+        let install_path_str = install_path.to_string_lossy().to_string();
+
+        // Get metadata
+        let metadata = fs::symlink_metadata(source_path)?;
+        let mode = metadata.permissions().mode();
+        let is_symlink = metadata.file_type().is_symlink();
+
+        // Determine file type and content
+        let (file_type, content, target) = if is_symlink {
+            let target = fs::read_link(source_path)?;
+            let target_str = target.to_string_lossy().to_string();
+            let content = format!("symlink:{}", target_str);
+            (FileType::Symlink, content.into_bytes(), Some(target_str))
+        } else {
+            let content = fs::read(source_path)?;
+            (FileType::Regular, content, None)
+        };
+
+        // Compute initial hash
+        let hash_val = hash::sha256(&content);
+        let size = content.len() as u64;
+
+        // Classify component
+        let component = self.classify_file(&install_path_str);
+
+        let entry = FileEntry {
+            path: install_path_str,
+            hash: hash_val,
+            size,
+            mode,
+            component,
+            file_type,
+            target,
+        };
+
+        Ok((entry, content))
+    }
+
     /// Scan source directory for all files
     fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
@@ -176,54 +272,6 @@ impl CcsBuilder {
         }
 
         Ok(())
-    }
-
-    /// Process a single file
-    fn process_file(
-        &self,
-        source_path: &Path,
-        blobs: &mut HashMap<String, Vec<u8>>,
-    ) -> Result<FileEntry> {
-        // Calculate install path
-        let relative = source_path
-            .strip_prefix(&self.source_dir)
-            .context("File not under source directory")?;
-        let install_path = self.install_prefix.join(relative);
-        let install_path_str = install_path.to_string_lossy().to_string();
-
-        // Get metadata
-        let metadata = fs::symlink_metadata(source_path)?;
-        let mode = metadata.permissions().mode();
-        let is_symlink = metadata.file_type().is_symlink();
-
-        // Determine file type and content
-        let (file_type, hash, size, target) = if is_symlink {
-            let target = fs::read_link(source_path)?;
-            let target_str = target.to_string_lossy().to_string();
-            let content = format!("symlink:{}", target_str);
-            let hash = hash::sha256(content.as_bytes());
-            blobs.insert(hash.clone(), content.into_bytes());
-            (FileType::Symlink, hash, 0, Some(target_str))
-        } else {
-            let content = fs::read(source_path)?;
-            let size = content.len() as u64;
-            let hash = hash::sha256(&content);
-            blobs.insert(hash.clone(), content);
-            (FileType::Regular, hash, size, None)
-        };
-
-        // Classify component
-        let component = self.classify_file(&install_path_str);
-
-        Ok(FileEntry {
-            path: install_path_str,
-            hash,
-            size,
-            mode,
-            component,
-            file_type,
-            target,
-        })
     }
 
     /// Classify a file into a component
@@ -379,11 +427,84 @@ fn write_ccs_package_internal(
     let encoder = GzEncoder::new(output_file, Compression::default());
     let mut archive = Builder::new(encoder);
 
-    // Add all files from temp directory
-    archive.append_dir_all(".", temp_dir.path())?;
+    // Check if we should normalize timestamps
+    if result.manifest.policy.normalize_timestamps {
+        // Get timestamp from SOURCE_DATE_EPOCH or use default
+        let timestamp = std::env::var("SOURCE_DATE_EPOCH")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1704067200); // 2024-01-01 00:00:00 UTC
+
+        // Add files with normalized timestamps
+        append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
+    } else {
+        // Add all files from temp directory (preserves original timestamps)
+        archive.append_dir_all(".", temp_dir.path())?;
+    }
 
     let encoder = archive.into_inner()?;
     encoder.finish()?;
+
+    Ok(())
+}
+
+/// Recursively append directory contents with a fixed mtime
+fn append_dir_with_mtime<W: std::io::Write>(
+    archive: &mut tar::Builder<W>,
+    base_path: &Path,
+    archive_path: &str,
+    mtime: u64,
+) -> Result<()> {
+    for entry in fs::read_dir(base_path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+
+        let entry_archive_path = if archive_path.is_empty() {
+            file_name_str.to_string()
+        } else {
+            format!("{}/{}", archive_path, file_name_str)
+        };
+
+        if file_type.is_dir() {
+            // Create directory entry
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_mode(0o755);
+            header.set_size(0);
+            header.set_mtime(mtime);
+            header.set_cksum();
+
+            archive.append_data(&mut header, &entry_archive_path, std::io::empty())?;
+
+            // Recurse into directory
+            append_dir_with_mtime(archive, &entry.path(), &entry_archive_path, mtime)?;
+        } else if file_type.is_file() {
+            let content = fs::read(entry.path())?;
+            let metadata = entry.metadata()?;
+
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(metadata.permissions().mode());
+            header.set_size(content.len() as u64);
+            header.set_mtime(mtime);
+            header.set_cksum();
+
+            archive.append_data(&mut header, &entry_archive_path, content.as_slice())?;
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(entry.path())?;
+
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            header.set_mtime(mtime);
+            header.set_cksum();
+
+            archive.append_link(&mut header, &entry_archive_path, &target)?;
+        }
+    }
 
     Ok(())
 }

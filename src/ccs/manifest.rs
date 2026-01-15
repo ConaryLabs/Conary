@@ -4,6 +4,7 @@
 //! This module defines the structure of a CCS package manifest and provides
 //! parsing from TOML format.
 
+use crate::ccs::policy::BuildPolicyConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,6 +53,10 @@ pub struct CcsManifest {
 
     #[serde(default)]
     pub legacy: Option<Legacy>,
+
+    /// Build policy configuration
+    #[serde(default)]
+    pub policy: BuildPolicyConfig,
 }
 
 impl CcsManifest {
@@ -100,6 +105,7 @@ impl CcsManifest {
             config: Config::default(),
             build: None,
             legacy: None,
+            policy: BuildPolicyConfig::default(),
         }
     }
 

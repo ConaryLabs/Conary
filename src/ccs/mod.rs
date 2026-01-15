@@ -16,6 +16,7 @@ pub mod inspector;
 pub mod legacy;
 pub mod manifest;
 pub mod package;
+pub mod policy;
 pub mod signing;
 pub mod verify;
 
@@ -26,4 +27,5 @@ pub use inspector::InspectedPackage;
 pub use manifest::CcsManifest;
 pub use package::CcsPackage;
 pub use signing::SigningKeyPair;
+pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
 pub use verify::{TrustPolicy, VerificationResult};
