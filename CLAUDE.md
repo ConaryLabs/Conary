@@ -79,6 +79,7 @@ cargo clippy -- -D warnings
 | `src/flavor/` | Build variation specs |
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
+| `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
 
 ## Database Schema
 
@@ -109,4 +110,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-430 tests total (405 lib + 3 bin + 22 integration).
+477 tests total (452 lib + 3 bin + 22 integration).

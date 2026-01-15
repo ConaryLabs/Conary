@@ -163,10 +163,18 @@ files = [
 [build]
 source = "https://github.com/example/myapp.git"
 commit = "abc123def456"
-timestamp = "2025-01-15T10:30:00Z"
+timestamp = "2026-01-15T10:30:00Z"
 # For reproducible builds:
 # environment = { CC = "gcc", CFLAGS = "-O2" }
 # commands = ["cargo build --release"]
+
+# Build policies for quality enforcement
+[policy]
+reject_paths = ["/home/*", "/tmp/*", "*.pyc"]  # Reject these paths
+strip_binaries = true                           # Strip debug symbols from ELF binaries
+normalize_timestamps = true                     # Set mtimes to SOURCE_DATE_EPOCH or fixed value
+compress_manpages = true                        # Gzip man pages
+fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
 
 # Metadata for legacy format generation
 [legacy]
@@ -262,12 +270,12 @@ arch.groups = ["base-devel"]
 
 ## Part 2: .ccs Binary Package Layout
 
-A `.ccs` file is a **tar archive** (uncompressed, since content is already deduplicated) with the following structure:
+A `.ccs` file is a **gzip-compressed tar archive** with the following structure:
 
 ```
-myapp-1.2.3.ccs.tar
+myapp-1.2.3.ccs (gzipped tar)
 ├── MANIFEST              # Binary manifest (CBOR-encoded)
-├── MANIFEST.sig          # Sigstore signature bundle
+├── MANIFEST.sig          # Ed25519 signature (optional, created by ccs-sign)
 ├── MANIFEST.toml         # Human-readable manifest (for debugging)
 ├── components/
 │   ├── runtime.json      # File list for :runtime component
@@ -409,9 +417,11 @@ objects/
 
 ### Signature Verification
 
-1. `MANIFEST.sig` contains a Sigstore bundle (JSON)
-2. Verify signature over `MANIFEST` file bytes
-3. Check identity against trust policy
+1. `MANIFEST.sig` contains an Ed25519 signature (raw bytes or base64)
+2. Verify signature over `MANIFEST` file bytes using the public key
+3. Public keys are managed via `ccs-keygen` (generates Ed25519 keypair)
+4. Sign packages with `ccs-sign --key <private.pem>`
+5. Verify with `ccs-verify <package.ccs>` (checks Merkle tree and optional signature)
 
 ### Content Verification
 
