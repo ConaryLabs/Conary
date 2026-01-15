@@ -4,7 +4,7 @@
 //! Provides signature verification and content integrity checking for CCS packages.
 //! Uses Ed25519 signatures for manifest authentication.
 
-use crate::ccs::builder::FileEntry;
+use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::hash;
 use anyhow::{Context, Result};
@@ -181,10 +181,10 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     let mut archive = Archive::new(decoder);
 
     let mut manifest: Option<CcsManifest> = None;
-    let mut manifest_raw: Option<String> = None;
-    let mut files: Option<Vec<FileEntry>> = None;
+    let mut manifest_raw: Option<Vec<u8>> = None;
     let mut signature: Option<PackageSignature> = None;
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut components: HashMap<String, ComponentData> = HashMap::new();
 
     // First pass: extract metadata and signature
     for entry in archive.entries()? {
@@ -192,19 +192,32 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
         let entry_path = entry.path()?;
         let entry_path_str = entry_path.to_string_lossy().to_string();
 
-        if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
+        // Prefer CBOR MANIFEST over TOML
+        if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            manifest_raw = Some(content.clone());
+            // Convert CBOR to CcsManifest for compatibility
+            if let Ok(bin_manifest) = crate::ccs::binary_manifest::BinaryManifest::from_cbor(&content) {
+                manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(&bin_manifest));
+            }
+        } else if manifest.is_none() && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml") {
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
-            manifest_raw = Some(content.clone());
+            manifest_raw = Some(content.as_bytes().to_vec());
             manifest = Some(CcsManifest::parse(&content)?);
         } else if entry_path_str == "MANIFEST.sig" || entry_path_str == "./MANIFEST.sig" {
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
             signature = Some(serde_json::from_str(&content)?);
-        } else if entry_path_str == "FILES.json" || entry_path_str == "./FILES.json" {
+        } else if (entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/"))
+            && entry_path_str.ends_with(".json")
+        {
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
-            files = Some(serde_json::from_str(&content)?);
+            if let Ok(comp) = serde_json::from_str::<ComponentData>(&content) {
+                components.insert(comp.name.clone(), comp);
+            }
         } else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
         {
             // Extract blob hash from path: objects/{prefix}/{suffix} -> {prefix}{suffix}
@@ -222,14 +235,19 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
         }
     }
 
-    let manifest = manifest.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST.toml".into()))?;
+    let manifest = manifest.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST".into()))?;
     let manifest_raw =
-        manifest_raw.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST.toml".into()))?;
-    let files = files.unwrap_or_default();
+        manifest_raw.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST".into()))?;
+
+    // Collect files from components
+    let files: Vec<FileEntry> = components
+        .values()
+        .flat_map(|c| c.files.clone())
+        .collect();
 
     let mut warnings = Vec::new();
 
-    // Verify signature
+    // Verify signature (over raw manifest bytes - CBOR or TOML)
     let signature_status = verify_signature(&manifest_raw, signature.as_ref(), policy, &mut warnings)?;
 
     // Verify content hashes
@@ -252,7 +270,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
 
 /// Verify the package signature
 fn verify_signature(
-    manifest_raw: &str,
+    manifest_raw: &[u8],
     signature: Option<&PackageSignature>,
     policy: &TrustPolicy,
     warnings: &mut Vec<String>,
@@ -293,7 +311,7 @@ fn verify_signature(
 
     // Verify signature
     verifying_key
-        .verify(manifest_raw.as_bytes(), &signature)
+        .verify(manifest_raw, &signature)
         .map_err(|e| VerifyError::SignatureInvalid(format!("Signature verification failed: {}", e)))?;
 
     // Check if key is trusted

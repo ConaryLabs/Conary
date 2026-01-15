@@ -35,7 +35,6 @@ impl InspectedPackage {
         let mut archive = Archive::new(decoder);
 
         let mut manifest: Option<CcsManifest> = None;
-        let mut files: Option<Vec<FileEntry>> = None;
         let mut components: HashMap<String, ComponentData> = HashMap::new();
 
         for entry in archive.entries()? {
@@ -49,13 +48,7 @@ impl InspectedPackage {
                 entry.read_to_string(&mut content)?;
                 manifest = Some(CcsManifest::parse(&content)?);
             }
-            // Read FILES.json
-            else if entry_path_str == "FILES.json" || entry_path_str == "./FILES.json" {
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                files = Some(serde_json::from_str(&content)?);
-            }
-            // Read component files
+            // Read component files (files are stored in components/*.json per spec)
             else if (entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/"))
                 && entry_path_str.ends_with(".json")
             {
@@ -67,7 +60,12 @@ impl InspectedPackage {
         }
 
         let manifest = manifest.ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST.toml"))?;
-        let files = files.unwrap_or_default();
+
+        // Collect files from components (spec says files live in components/*.json)
+        let files: Vec<FileEntry> = components
+            .values()
+            .flat_map(|c| c.files.clone())
+            .collect();
 
         Ok(InspectedPackage {
             manifest,

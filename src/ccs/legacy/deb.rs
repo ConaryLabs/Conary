@@ -371,11 +371,9 @@ fn set_executable(path: &Path) -> Result<()> {
 
 /// Compute MD5 hash of content (for md5sums file)
 fn compute_md5(content: &[u8]) -> String {
-    // Note: DEB uses MD5 but we use SHA256 truncated as a stand-in
-    // For proper implementation, add md5 crate
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(content);
-    format!("{:x}", hash)[..32].to_string()
+    use md5::{Digest, Md5};
+    let hash = Md5::digest(content);
+    format!("{:x}", hash)
 }
 
 #[cfg(test)]
@@ -423,5 +421,17 @@ mod tests {
         assert!(script.contains("useradd"));
         assert!(script.contains("myapp"));
         assert!(script.contains("--system"));
+    }
+
+    #[test]
+    fn test_compute_md5() {
+        // Known MD5 hash of "hello world\n"
+        let content = b"hello world\n";
+        let hash = compute_md5(content);
+        assert_eq!(hash, "6f5902ac237024bdd0c176cb93063dc4");
+
+        // Empty content
+        let empty_hash = compute_md5(b"");
+        assert_eq!(empty_hash, "d41d8cd98f00b204e9800998ecf8427e");
     }
 }

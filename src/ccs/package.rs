@@ -39,6 +39,129 @@ pub struct CcsPackage {
     dependencies: Vec<Dependency>,
 }
 
+/// Convert a BinaryManifest to CcsManifest for internal compatibility
+/// This is also exposed publicly for use by the verify module.
+pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryManifest) -> CcsManifest {
+    use crate::ccs::manifest::{
+        AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook,
+        GroupHook, Hooks, Package, PackageDep, Platform, Provides, Requires, Suggests,
+        SysctlHook, SystemdHook, TmpfilesHook, UserHook,
+    };
+
+    let platform = bin.platform.as_ref().map(|p| Platform {
+        os: p.os.clone(),
+        arch: p.arch.clone(),
+        libc: p.libc.clone(),
+        abi: p.abi.clone(),
+    });
+
+    let provides = Provides {
+        capabilities: bin.provides.iter().map(|c| c.name.clone()).collect(),
+        sonames: Vec::new(),
+        binaries: Vec::new(),
+        pkgconfig: Vec::new(),
+    };
+
+    let requires = Requires {
+        capabilities: bin
+            .requires
+            .iter()
+            .filter(|r| r.kind == "capability")
+            .map(|r| {
+                if let Some(ver) = &r.version {
+                    Capability::Versioned {
+                        name: r.name.clone(),
+                        version: ver.clone(),
+                    }
+                } else {
+                    Capability::Simple(r.name.clone())
+                }
+            })
+            .collect(),
+        packages: bin
+            .requires
+            .iter()
+            .filter(|r| r.kind == "package")
+            .map(|r| PackageDep {
+                name: r.name.clone(),
+                version: r.version.clone(),
+            })
+            .collect(),
+    };
+
+    let hooks = bin.hooks.as_ref().map(|h| Hooks {
+        users: h.users.iter().map(|u| UserHook {
+            name: u.name.clone(),
+            system: u.system,
+            home: u.home.clone(),
+            shell: u.shell.clone(),
+            group: u.group.clone(),
+        }).collect(),
+        groups: h.groups.iter().map(|g| GroupHook {
+            name: g.name.clone(),
+            system: g.system,
+        }).collect(),
+        directories: h.directories.iter().map(|d| DirectoryHook {
+            path: d.path.clone(),
+            mode: format!("{:04o}", d.mode),
+            owner: d.owner.clone(),
+            group: d.group.clone(),
+            cleanup: None,
+        }).collect(),
+        systemd: h.systemd.iter().map(|s| SystemdHook {
+            unit: s.unit.clone(),
+            enable: s.enable,
+        }).collect(),
+        tmpfiles: h.tmpfiles.iter().map(|t| TmpfilesHook {
+            entry_type: t.entry_type.clone(),
+            path: t.path.clone(),
+            mode: format!("{:04o}", t.mode),
+            owner: t.owner.clone(),
+            group: t.group.clone(),
+        }).collect(),
+        sysctl: h.sysctl.iter().map(|s| SysctlHook {
+            key: s.key.clone(),
+            value: s.value.clone(),
+            only_if_lower: s.only_if_lower,
+        }).collect(),
+        alternatives: h.alternatives.iter().map(|a| AlternativeHook {
+            name: a.name.clone(),
+            path: a.path.clone(),
+            priority: a.priority,
+        }).collect(),
+    }).unwrap_or_default();
+
+    let build = bin.build.as_ref().map(|b| BuildInfo {
+        source: b.source.clone(),
+        commit: b.commit.clone(),
+        timestamp: b.timestamp.clone(),
+        environment: std::collections::HashMap::new(),
+        commands: Vec::new(),
+        reproducible: b.reproducible,
+    });
+
+    CcsManifest {
+        package: Package {
+            name: bin.name.clone(),
+            version: bin.version.clone(),
+            description: bin.description.clone(),
+            license: bin.license.clone(),
+            homepage: None,
+            repository: None,
+            platform,
+            authors: None,
+        },
+        provides,
+        requires,
+        suggests: Suggests::default(),
+        components: Components::default(),
+        hooks,
+        config: Config::default(),
+        build,
+        legacy: None,
+    }
+}
+
 impl CcsPackage {
     /// Get the manifest
     pub fn manifest(&self) -> &CcsManifest {
@@ -154,13 +277,15 @@ impl PackageFormat for CcsPackage {
     where
         Self: Sized,
     {
+        use crate::ccs::binary_manifest::BinaryManifest;
+
         let package_path = PathBuf::from(path);
         let file = File::open(&package_path)?;
         let decoder = GzDecoder::new(file);
         let mut archive = Archive::new(decoder);
 
-        let mut manifest: Option<CcsManifest> = None;
-        let mut files: Option<Vec<FileEntry>> = None;
+        let mut binary_manifest: Option<BinaryManifest> = None;
+        let mut toml_manifest: Option<CcsManifest> = None;
         let mut components: HashMap<String, ComponentData> = HashMap::new();
 
         for entry in archive.entries()? {
@@ -168,25 +293,25 @@ impl PackageFormat for CcsPackage {
             let entry_path = entry.path()?;
             let entry_path_str = entry_path.to_string_lossy();
 
-            // Read MANIFEST.toml
-            if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
+            // Read MANIFEST (CBOR binary manifest) - preferred
+            if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
+                let mut content = Vec::new();
+                entry.read_to_end(&mut content)?;
+                binary_manifest = Some(
+                    BinaryManifest::from_cbor(&content)
+                        .map_err(|e| Error::ParseError(format!("Invalid CBOR MANIFEST: {}", e)))?,
+                );
+            }
+            // Read MANIFEST.toml - fallback for legacy packages
+            else if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
                 let mut content = String::new();
                 entry.read_to_string(&mut content)?;
-                manifest = Some(
+                toml_manifest = Some(
                     CcsManifest::parse(&content)
                         .map_err(|e| Error::ParseError(format!("Invalid MANIFEST.toml: {}", e)))?,
                 );
             }
-            // Read FILES.json
-            else if entry_path_str == "FILES.json" || entry_path_str == "./FILES.json" {
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                files = Some(
-                    serde_json::from_str(&content)
-                        .map_err(|e| Error::ParseError(format!("Invalid FILES.json: {}", e)))?,
-                );
-            }
-            // Read component files
+            // Read component files (files are stored here per spec)
             else if (entry_path_str.starts_with("components/")
                 || entry_path_str.starts_with("./components/"))
                 && entry_path_str.ends_with(".json")
@@ -199,23 +324,41 @@ impl PackageFormat for CcsPackage {
             }
         }
 
-        let manifest =
-            manifest.ok_or_else(|| crate::Error::Io(std::io::Error::new(
+        // Prefer CBOR binary manifest, fall back to TOML
+        let manifest = if let Some(bin_manifest) = &binary_manifest {
+            // Convert BinaryManifest to CcsManifest for compatibility
+            debug!(
+                "Using CBOR manifest v{} for {} v{}",
+                bin_manifest.format_version, bin_manifest.name, bin_manifest.version
+            );
+            convert_binary_to_ccs_manifest(bin_manifest)
+        } else if let Some(toml) = toml_manifest {
+            debug!("Using TOML manifest (legacy) for {} v{}", toml.package.name, toml.package.version);
+            toml
+        } else {
+            return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "CCS package missing MANIFEST.toml",
-            )))?;
-        let files = files.unwrap_or_default();
+                "CCS package missing both MANIFEST and MANIFEST.toml",
+            )));
+        };
+
+        // Collect files from components (spec says files live in components/*.json)
+        let files: Vec<FileEntry> = components
+            .values()
+            .flat_map(|c| c.files.clone())
+            .collect();
 
         // Pre-compute trait data
         let package_files = Self::convert_files(&files);
         let dependencies = Self::convert_dependencies(&manifest);
 
         debug!(
-            "Parsed CCS package: {} v{} ({} files, {} deps)",
+            "Parsed CCS package: {} v{} ({} files, {} deps, {} components)",
             manifest.package.name,
             manifest.package.version,
             files.len(),
-            dependencies.len()
+            dependencies.len(),
+            components.len()
         );
 
         Ok(Self {

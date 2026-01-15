@@ -3,11 +3,13 @@
 //!
 //! This module implements the CCS native package format, including:
 //! - Manifest parsing (ccs.toml)
+//! - Binary manifest (CBOR-encoded with Merkle root)
 //! - Package building
 //! - Package inspection and verification
 //! - Package installation (via PackageFormat trait)
 //! - Declarative hook execution
 
+pub mod binary_manifest;
 pub mod builder;
 pub mod hooks;
 pub mod inspector;
@@ -17,6 +19,7 @@ pub mod package;
 pub mod signing;
 pub mod verify;
 
+pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
 pub use builder::{BuildResult, CcsBuilder, ComponentData, FileEntry, FileType};
 pub use hooks::{AppliedHook, HookExecutor};
 pub use inspector::InspectedPackage;

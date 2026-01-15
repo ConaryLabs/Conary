@@ -304,35 +304,62 @@ fn write_ccs_package_internal(
     output_path: &Path,
     signing_key: Option<&super::signing::SigningKeyPair>,
 ) -> Result<()> {
+    use crate::ccs::binary_manifest::{ComponentRef, Hash, MerkleTree};
     use flate2::write::GzEncoder;
     use flate2::Compression;
+    use std::collections::BTreeMap;
     use tar::Builder;
 
     // Create temp directory for package contents
     let temp_dir = tempfile::tempdir()?;
 
-    // Write MANIFEST.toml (human-readable)
-    let manifest_toml = result.manifest.to_toml()?;
-    fs::write(temp_dir.path().join("MANIFEST.toml"), &manifest_toml)?;
-
-    // Sign the manifest if a signing key is provided
-    if let Some(key) = signing_key {
-        let signature = key.sign(manifest_toml.as_bytes());
-        let sig_json = serde_json::to_string_pretty(&signature)?;
-        fs::write(temp_dir.path().join("MANIFEST.sig"), &sig_json)?;
-    }
-
-    // Write FILES.json (file listing with hashes)
-    let files_json = serde_json::to_string_pretty(&result.files)?;
-    fs::write(temp_dir.path().join("FILES.json"), &files_json)?;
-
-    // Write component metadata
+    // Write component metadata and collect component refs
     let components_dir = temp_dir.path().join("components");
     fs::create_dir_all(&components_dir)?;
 
+    let mut component_refs: BTreeMap<String, ComponentRef> = BTreeMap::new();
+    let default_components = &result.manifest.components.default;
+
     for (name, component) in &result.components {
         let component_json = serde_json::to_string_pretty(component)?;
-        fs::write(components_dir.join(format!("{}.json", name)), &component_json)?;
+        let component_path = components_dir.join(format!("{}.json", name));
+        fs::write(&component_path, &component_json)?;
+
+        // Calculate hash of component JSON file
+        let hash = Hash::sha256(component_json.as_bytes());
+
+        component_refs.insert(
+            name.clone(),
+            ComponentRef {
+                hash,
+                file_count: component.files.len() as u32,
+                total_size: component.size,
+                default: default_components.contains(name),
+            },
+        );
+    }
+
+    // Calculate Merkle root
+    let content_root = MerkleTree::calculate_root(&component_refs);
+
+    // Build binary manifest
+    let binary_manifest = build_binary_manifest(result, component_refs, content_root)?;
+
+    // Write MANIFEST (CBOR-encoded binary manifest)
+    let manifest_cbor = binary_manifest
+        .to_cbor()
+        .context("Failed to encode binary manifest as CBOR")?;
+    fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
+
+    // Write MANIFEST.toml (human-readable, for debugging)
+    let manifest_toml = result.manifest.to_toml()?;
+    fs::write(temp_dir.path().join("MANIFEST.toml"), &manifest_toml)?;
+
+    // Sign the CBOR manifest if a signing key is provided
+    if let Some(key) = signing_key {
+        let signature = key.sign(&manifest_cbor);
+        let sig_json = serde_json::to_string_pretty(&signature)?;
+        fs::write(temp_dir.path().join("MANIFEST.sig"), &sig_json)?;
     }
 
     // Write content blobs
@@ -359,6 +386,133 @@ fn write_ccs_package_internal(
     encoder.finish()?;
 
     Ok(())
+}
+
+/// Build a BinaryManifest from BuildResult
+fn build_binary_manifest(
+    result: &BuildResult,
+    components: std::collections::BTreeMap<String, super::binary_manifest::ComponentRef>,
+    content_root: super::binary_manifest::Hash,
+) -> Result<super::binary_manifest::BinaryManifest> {
+    use crate::ccs::binary_manifest::{
+        BinaryBuildInfo, BinaryManifest, BinaryCapability, BinaryHooks, BinaryPlatform,
+        BinaryRequirement, FORMAT_VERSION,
+        BinaryUserHook, BinaryGroupHook, BinaryDirectoryHook, BinarySystemdHook,
+        BinaryTmpfilesHook, BinarySysctlHook, BinaryAlternativeHook,
+    };
+
+    let manifest = &result.manifest;
+
+    // Convert platform
+    let platform = manifest.package.platform.as_ref().map(|p| BinaryPlatform {
+        os: p.os.clone(),
+        arch: p.arch.clone(),
+        libc: p.libc.clone(),
+        abi: p.abi.clone(),
+    });
+
+    // Convert provides
+    let mut provides = Vec::new();
+    for cap in &manifest.provides.capabilities {
+        provides.push(BinaryCapability {
+            name: cap.clone(),
+            version: None,
+        });
+    }
+
+    // Convert requires
+    let mut requires = Vec::new();
+    for cap in &manifest.requires.capabilities {
+        requires.push(BinaryRequirement {
+            name: cap.name().to_string(),
+            version: cap.version().map(String::from),
+            kind: "capability".to_string(),
+        });
+    }
+    for pkg in &manifest.requires.packages {
+        requires.push(BinaryRequirement {
+            name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            kind: "package".to_string(),
+        });
+    }
+
+    // Convert hooks
+    let hooks = &manifest.hooks;
+    let binary_hooks = if hooks.users.is_empty()
+        && hooks.groups.is_empty()
+        && hooks.directories.is_empty()
+        && hooks.systemd.is_empty()
+        && hooks.tmpfiles.is_empty()
+        && hooks.sysctl.is_empty()
+        && hooks.alternatives.is_empty()
+    {
+        None
+    } else {
+        Some(BinaryHooks {
+            users: hooks.users.iter().map(|u| BinaryUserHook {
+                name: u.name.clone(),
+                system: u.system,
+                home: u.home.clone(),
+                shell: u.shell.clone(),
+                group: u.group.clone(),
+            }).collect(),
+            groups: hooks.groups.iter().map(|g| BinaryGroupHook {
+                name: g.name.clone(),
+                system: g.system,
+            }).collect(),
+            directories: hooks.directories.iter().map(|d| BinaryDirectoryHook {
+                path: d.path.clone(),
+                mode: u32::from_str_radix(d.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
+                owner: d.owner.clone(),
+                group: d.group.clone(),
+            }).collect(),
+            systemd: hooks.systemd.iter().map(|s| BinarySystemdHook {
+                unit: s.unit.clone(),
+                enable: s.enable,
+            }).collect(),
+            tmpfiles: hooks.tmpfiles.iter().map(|t| BinaryTmpfilesHook {
+                entry_type: t.entry_type.clone(),
+                path: t.path.clone(),
+                mode: u32::from_str_radix(t.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
+                owner: t.owner.clone(),
+                group: t.group.clone(),
+            }).collect(),
+            sysctl: hooks.sysctl.iter().map(|s| BinarySysctlHook {
+                key: s.key.clone(),
+                value: s.value.clone(),
+                only_if_lower: s.only_if_lower,
+            }).collect(),
+            alternatives: hooks.alternatives.iter().map(|a| BinaryAlternativeHook {
+                name: a.name.clone(),
+                path: a.path.clone(),
+                priority: a.priority,
+            }).collect(),
+        })
+    };
+
+    // Convert build info
+    let build = manifest.build.as_ref().map(|b| BinaryBuildInfo {
+        source: b.source.clone(),
+        commit: b.commit.clone(),
+        timestamp: b.timestamp.clone(),
+        reproducible: b.reproducible,
+    });
+
+    Ok(BinaryManifest {
+        format_version: FORMAT_VERSION,
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        description: manifest.package.description.clone(),
+        license: manifest.package.license.clone(),
+        platform,
+        provides,
+        requires,
+        components,
+        hooks: binary_hooks,
+        build,
+        content_root,
+    })
 }
 
 /// Print build summary

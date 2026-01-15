@@ -450,8 +450,8 @@ pub fn cmd_ccs_sign(
     // Create temp directory for extraction
     let temp_dir = tempfile::tempdir()?;
 
-    // Extract all files and find MANIFEST.toml
-    let mut manifest_content: Option<String> = None;
+    // Extract all files and find MANIFEST (CBOR preferred, TOML fallback)
+    let mut manifest_bytes: Option<Vec<u8>> = None;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -460,19 +460,23 @@ pub fn cmd_ccs_sign(
         // Extract to temp dir
         entry.unpack(temp_dir.path().join(&entry_path))?;
 
-        // Capture manifest content
+        // Capture manifest content - prefer CBOR MANIFEST over TOML
         let entry_path_str = entry_path.to_string_lossy();
-        if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
-            manifest_content = Some(std::fs::read_to_string(temp_dir.path().join(&entry_path))?);
+        if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
+            manifest_bytes = Some(std::fs::read(temp_dir.path().join(&entry_path))?);
+        } else if manifest_bytes.is_none()
+            && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
+        {
+            manifest_bytes = Some(std::fs::read(temp_dir.path().join(&entry_path))?);
         }
     }
 
-    let manifest_content = manifest_content
-        .ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST.toml"))?;
+    let manifest_bytes = manifest_bytes
+        .ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST"))?;
 
-    // Sign the manifest
+    // Sign the manifest (CBOR or TOML bytes)
     println!("Creating signature...");
-    let signature = signing_key.sign(manifest_content.as_bytes());
+    let signature = signing_key.sign(&manifest_bytes);
     let sig_json = serde_json::to_string_pretty(&signature)?;
 
     // Write signature file

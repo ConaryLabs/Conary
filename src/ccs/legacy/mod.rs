@@ -206,30 +206,154 @@ impl CommonHookGenerator {
 /// This is a best-effort mapping and may not be accurate for all cases
 pub fn map_capability_to_package(capability: &str, format: &str) -> Option<String> {
     // Common mappings for well-known capabilities
+    // Format: (capability_name, [(format, package_name), ...])
     let mappings: HashMap<&str, HashMap<&str, &str>> = HashMap::from([
+        // Core system libraries
         (
             "glibc",
             HashMap::from([("deb", "libc6"), ("rpm", "glibc"), ("arch", "glibc")]),
         ),
         (
-            "openssl",
-            HashMap::from([
-                ("deb", "libssl3"),
-                ("rpm", "openssl-libs"),
-                ("arch", "openssl"),
-            ]),
+            "libgcc",
+            HashMap::from([("deb", "libgcc-s1"), ("rpm", "libgcc"), ("arch", "gcc-libs")]),
         ),
+        (
+            "libstdc++",
+            HashMap::from([("deb", "libstdc++6"), ("rpm", "libstdc++"), ("arch", "gcc-libs")]),
+        ),
+        // Cryptography and security
+        (
+            "openssl",
+            HashMap::from([("deb", "libssl3"), ("rpm", "openssl-libs"), ("arch", "openssl")]),
+        ),
+        (
+            "libcrypto",
+            HashMap::from([("deb", "libssl3"), ("rpm", "openssl-libs"), ("arch", "openssl")]),
+        ),
+        (
+            "gnutls",
+            HashMap::from([("deb", "libgnutls30"), ("rpm", "gnutls"), ("arch", "gnutls")]),
+        ),
+        // Compression
         (
             "zlib",
             HashMap::from([("deb", "zlib1g"), ("rpm", "zlib"), ("arch", "zlib")]),
         ),
         (
+            "bzip2",
+            HashMap::from([("deb", "libbz2-1.0"), ("rpm", "bzip2-libs"), ("arch", "bzip2")]),
+        ),
+        (
+            "xz",
+            HashMap::from([("deb", "liblzma5"), ("rpm", "xz-libs"), ("arch", "xz")]),
+        ),
+        (
+            "lz4",
+            HashMap::from([("deb", "liblz4-1"), ("rpm", "lz4-libs"), ("arch", "lz4")]),
+        ),
+        (
+            "zstd",
+            HashMap::from([("deb", "libzstd1"), ("rpm", "libzstd"), ("arch", "zstd")]),
+        ),
+        // Networking
+        (
             "libcurl",
-            HashMap::from([
-                ("deb", "libcurl4"),
-                ("rpm", "libcurl"),
-                ("arch", "curl"),
-            ]),
+            HashMap::from([("deb", "libcurl4"), ("rpm", "libcurl"), ("arch", "curl")]),
+        ),
+        (
+            "libssh2",
+            HashMap::from([("deb", "libssh2-1"), ("rpm", "libssh2"), ("arch", "libssh2")]),
+        ),
+        (
+            "nghttp2",
+            HashMap::from([("deb", "libnghttp2-14"), ("rpm", "libnghttp2"), ("arch", "libnghttp2")]),
+        ),
+        // XML/JSON/YAML parsing
+        (
+            "libxml2",
+            HashMap::from([("deb", "libxml2"), ("rpm", "libxml2"), ("arch", "libxml2")]),
+        ),
+        (
+            "libxslt",
+            HashMap::from([("deb", "libxslt1.1"), ("rpm", "libxslt"), ("arch", "libxslt")]),
+        ),
+        (
+            "libyaml",
+            HashMap::from([("deb", "libyaml-0-2"), ("rpm", "libyaml"), ("arch", "libyaml")]),
+        ),
+        // Database
+        (
+            "sqlite3",
+            HashMap::from([("deb", "libsqlite3-0"), ("rpm", "sqlite-libs"), ("arch", "sqlite")]),
+        ),
+        (
+            "libpq",
+            HashMap::from([("deb", "libpq5"), ("rpm", "postgresql-libs"), ("arch", "postgresql-libs")]),
+        ),
+        (
+            "libmysqlclient",
+            HashMap::from([("deb", "libmysqlclient21"), ("rpm", "mysql-libs"), ("arch", "mariadb-libs")]),
+        ),
+        // Math/science
+        (
+            "fftw",
+            HashMap::from([("deb", "libfftw3-3"), ("rpm", "fftw-libs"), ("arch", "fftw")]),
+        ),
+        (
+            "lapack",
+            HashMap::from([("deb", "liblapack3"), ("rpm", "lapack"), ("arch", "lapack")]),
+        ),
+        // Image formats
+        (
+            "libpng",
+            HashMap::from([("deb", "libpng16-16"), ("rpm", "libpng"), ("arch", "libpng")]),
+        ),
+        (
+            "libjpeg",
+            HashMap::from([("deb", "libjpeg62-turbo"), ("rpm", "libjpeg-turbo"), ("arch", "libjpeg-turbo")]),
+        ),
+        (
+            "libwebp",
+            HashMap::from([("deb", "libwebp7"), ("rpm", "libwebp"), ("arch", "libwebp")]),
+        ),
+        // Text/fonts
+        (
+            "freetype",
+            HashMap::from([("deb", "libfreetype6"), ("rpm", "freetype"), ("arch", "freetype2")]),
+        ),
+        (
+            "fontconfig",
+            HashMap::from([("deb", "libfontconfig1"), ("rpm", "fontconfig"), ("arch", "fontconfig")]),
+        ),
+        (
+            "pcre2",
+            HashMap::from([("deb", "libpcre2-8-0"), ("rpm", "pcre2"), ("arch", "pcre2")]),
+        ),
+        // System utilities
+        (
+            "systemd",
+            HashMap::from([("deb", "libsystemd0"), ("rpm", "systemd-libs"), ("arch", "systemd-libs")]),
+        ),
+        (
+            "dbus",
+            HashMap::from([("deb", "libdbus-1-3"), ("rpm", "dbus-libs"), ("arch", "dbus")]),
+        ),
+        (
+            "udev",
+            HashMap::from([("deb", "libudev1"), ("rpm", "systemd-libs"), ("arch", "systemd-libs")]),
+        ),
+        // Python/Perl/Ruby runtimes (for extensions)
+        (
+            "python3",
+            HashMap::from([("deb", "libpython3.11"), ("rpm", "python3-libs"), ("arch", "python")]),
+        ),
+        (
+            "perl",
+            HashMap::from([("deb", "libperl5.36"), ("rpm", "perl-libs"), ("arch", "perl")]),
+        ),
+        (
+            "ruby",
+            HashMap::from([("deb", "libruby3.1"), ("rpm", "ruby-libs"), ("arch", "ruby")]),
         ),
     ]);
 
