@@ -283,6 +283,27 @@ Optional xxhash for non-cryptographic use cases.
 - [ ] **Dedup with xxhash** - Faster deduplication checks
 - [ ] **Verify with SHA-256** - Keep SHA-256 for security verification
 
+### Repository 2026: Chunk-Level Distribution
+
+Move from file-level to chunk-level for massive efficiency gains. CDC gives "delta compression for free" - no need to pre-compute version-to-version deltas.
+
+**Phase 1: Content-Defined Chunking (CDC)**
+- [ ] **Buzhash/Rabin Chunking** - Variable-size chunks based on content (not fixed offsets)
+- [ ] **Chunk-Level CAS** - Store chunks instead of files, cross-package deduplication
+- [ ] **Implicit Deltas** - Client has 48/50 chunks, downloads only 2 missing
+
+**Phase 2: HTTP Chunk Repository**
+- [ ] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`)
+- [ ] **HTTP/2 Multiplexed Client** - Parallel chunk fetching from CDN/S3/nginx
+- [ ] **Manifest with Merkle Root** - Cryptographically sealed repo state (supply chain security)
+
+**Phase 3: P2P Plugin (Future)**
+- [ ] **IPFS Fetcher Plugin** - Check local IPFS node before CDN fallback
+- [ ] **BitTorrent DHT Plugin** - Peer discovery for popular chunks
+- [ ] **Transport Priority** - P2P → CDN → Mirror fallback chain
+
+Design principle: Don't embed P2P in core. Build clean fetch API, let plugins add P2P later. Enterprise blocks P2P anyway.
+
 ### Advanced Package Building
 
 Building on the CCS format with more sophisticated features.
