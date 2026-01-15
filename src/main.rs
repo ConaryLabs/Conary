@@ -313,6 +313,14 @@ fn main() -> Result<()> {
             commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned)
         }
 
+        Some(Commands::CcsSign { package, key, output }) => {
+            commands::ccs::cmd_ccs_sign(&package, &key, output)
+        }
+
+        Some(Commands::CcsKeygen { output, key_id, force }) => {
+            commands::ccs::cmd_ccs_keygen(&output, key_id, force)
+        }
+
         Some(Commands::CollectionCreate { name, description, members, db_path }) => {
             commands::cmd_collection_create(&name, description.as_deref(), &members, &db_path)
         }

@@ -1116,4 +1116,35 @@ pub enum Commands {
         #[arg(long)]
         allow_unsigned: bool,
     },
+
+    /// Sign a CCS package with an Ed25519 key
+    #[command(name = "ccs-sign")]
+    CcsSign {
+        /// Path to .ccs package file to sign
+        package: String,
+
+        /// Path to private signing key file
+        #[arg(short, long)]
+        key: String,
+
+        /// Output path (default: overwrites input)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+
+    /// Generate an Ed25519 signing key pair
+    #[command(name = "ccs-keygen")]
+    CcsKeygen {
+        /// Output path for key files (without extension)
+        #[arg(short, long, default_value = "ccs-signing-key")]
+        output: String,
+
+        /// Key identifier (e.g., name or email)
+        #[arg(long)]
+        key_id: Option<String>,
+
+        /// Overwrite existing key files
+        #[arg(long)]
+        force: bool,
+    },
 }
