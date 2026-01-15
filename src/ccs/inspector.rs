@@ -47,7 +47,7 @@ impl InspectedPackage {
             if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
                 let mut content = String::new();
                 entry.read_to_string(&mut content)?;
-                manifest = Some(CcsManifest::from_str(&content)?);
+                manifest = Some(CcsManifest::parse(&content)?);
             }
             // Read FILES.json
             else if entry_path_str == "FILES.json" || entry_path_str == "./FILES.json" {
@@ -56,13 +56,13 @@ impl InspectedPackage {
                 files = Some(serde_json::from_str(&content)?);
             }
             // Read component files
-            else if entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/") {
-                if entry_path_str.ends_with(".json") {
-                    let mut content = String::new();
-                    entry.read_to_string(&mut content)?;
-                    let comp: ComponentData = serde_json::from_str(&content)?;
-                    components.insert(comp.name.clone(), comp);
-                }
+            else if (entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/"))
+                && entry_path_str.ends_with(".json")
+            {
+                let mut content = String::new();
+                entry.read_to_string(&mut content)?;
+                let comp: ComponentData = serde_json::from_str(&content)?;
+                components.insert(comp.name.clone(), comp);
             }
         }
 

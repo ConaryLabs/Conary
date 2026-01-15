@@ -8,6 +8,7 @@
 
 pub mod builder;
 pub mod inspector;
+pub mod legacy;
 pub mod manifest;
 
 pub use builder::{BuildResult, CcsBuilder, ComponentData, FileEntry, FileType};

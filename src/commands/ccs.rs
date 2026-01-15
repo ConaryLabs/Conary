@@ -4,7 +4,7 @@
 //! Commands for creating, building, and inspecting CCS packages.
 
 use anyhow::{Context, Result};
-use conary::ccs::{builder, inspector, CcsBuilder, CcsManifest, InspectedPackage};
+use conary::ccs::{builder, inspector, legacy, CcsBuilder, CcsManifest, InspectedPackage};
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory
@@ -62,28 +62,27 @@ fn detect_project_and_create_manifest(
     // Check for Cargo.toml (Rust project)
     let cargo_toml = dir.join("Cargo.toml");
     if cargo_toml.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-            if let Ok(cargo) = content.parse::<toml::Table>() {
-                if let Some(package) = cargo.get("package").and_then(|p| p.as_table()) {
-                    if let Some(n) = package.get("name").and_then(|v| v.as_str()) {
-                        manifest.package.name = n.to_string();
-                    }
-                    if let Some(v) = package.get("version").and_then(|v| v.as_str()) {
-                        manifest.package.version = v.to_string();
-                    }
-                    if let Some(d) = package.get("description").and_then(|v| v.as_str()) {
-                        manifest.package.description = d.to_string();
-                    }
-                    if let Some(l) = package.get("license").and_then(|v| v.as_str()) {
-                        manifest.package.license = Some(l.to_string());
-                    }
-                    if let Some(h) = package.get("homepage").and_then(|v| v.as_str()) {
-                        manifest.package.homepage = Some(h.to_string());
-                    }
-                    if let Some(r) = package.get("repository").and_then(|v| v.as_str()) {
-                        manifest.package.repository = Some(r.to_string());
-                    }
-                }
+        if let Ok(content) = std::fs::read_to_string(&cargo_toml)
+            && let Ok(cargo) = content.parse::<toml::Table>()
+            && let Some(package) = cargo.get("package").and_then(|p| p.as_table())
+        {
+            if let Some(n) = package.get("name").and_then(|v| v.as_str()) {
+                manifest.package.name = n.to_string();
+            }
+            if let Some(v) = package.get("version").and_then(|v| v.as_str()) {
+                manifest.package.version = v.to_string();
+            }
+            if let Some(d) = package.get("description").and_then(|v| v.as_str()) {
+                manifest.package.description = d.to_string();
+            }
+            if let Some(l) = package.get("license").and_then(|v| v.as_str()) {
+                manifest.package.license = Some(l.to_string());
+            }
+            if let Some(h) = package.get("homepage").and_then(|v| v.as_str()) {
+                manifest.package.homepage = Some(h.to_string());
+            }
+            if let Some(r) = package.get("repository").and_then(|v| v.as_str()) {
+                manifest.package.repository = Some(r.to_string());
             }
         }
         println!("Detected Rust project (Cargo.toml)");
@@ -92,20 +91,20 @@ fn detect_project_and_create_manifest(
     // Check for package.json (Node.js project)
     let package_json = dir.join("package.json");
     if package_json.exists() {
-        if let Ok(content) = std::fs::read_to_string(&package_json) {
-            if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(n) = pkg.get("name").and_then(|v| v.as_str()) {
-                    manifest.package.name = n.to_string();
-                }
-                if let Some(v) = pkg.get("version").and_then(|v| v.as_str()) {
-                    manifest.package.version = v.to_string();
-                }
-                if let Some(d) = pkg.get("description").and_then(|v| v.as_str()) {
-                    manifest.package.description = d.to_string();
-                }
-                if let Some(l) = pkg.get("license").and_then(|v| v.as_str()) {
-                    manifest.package.license = Some(l.to_string());
-                }
+        if let Ok(content) = std::fs::read_to_string(&package_json)
+            && let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content)
+        {
+            if let Some(n) = pkg.get("name").and_then(|v| v.as_str()) {
+                manifest.package.name = n.to_string();
+            }
+            if let Some(v) = pkg.get("version").and_then(|v| v.as_str()) {
+                manifest.package.version = v.to_string();
+            }
+            if let Some(d) = pkg.get("description").and_then(|v| v.as_str()) {
+                manifest.package.description = d.to_string();
+            }
+            if let Some(l) = pkg.get("license").and_then(|v| v.as_str()) {
+                manifest.package.license = Some(l.to_string());
             }
         }
         println!("Detected Node.js project (package.json)");
@@ -114,19 +113,18 @@ fn detect_project_and_create_manifest(
     // Check for pyproject.toml (Python project)
     let pyproject = dir.join("pyproject.toml");
     if pyproject.exists() {
-        if let Ok(content) = std::fs::read_to_string(&pyproject) {
-            if let Ok(py) = content.parse::<toml::Table>() {
-                if let Some(project) = py.get("project").and_then(|p| p.as_table()) {
-                    if let Some(n) = project.get("name").and_then(|v| v.as_str()) {
-                        manifest.package.name = n.to_string();
-                    }
-                    if let Some(v) = project.get("version").and_then(|v| v.as_str()) {
-                        manifest.package.version = v.to_string();
-                    }
-                    if let Some(d) = project.get("description").and_then(|v| v.as_str()) {
-                        manifest.package.description = d.to_string();
-                    }
-                }
+        if let Ok(content) = std::fs::read_to_string(&pyproject)
+            && let Ok(py) = content.parse::<toml::Table>()
+            && let Some(project) = py.get("project").and_then(|p| p.as_table())
+        {
+            if let Some(n) = project.get("name").and_then(|v| v.as_str()) {
+                manifest.package.name = n.to_string();
+            }
+            if let Some(v) = project.get("version").and_then(|v| v.as_str()) {
+                manifest.package.version = v.to_string();
+            }
+            if let Some(d) = project.get("description").and_then(|v| v.as_str()) {
+                manifest.package.description = d.to_string();
             }
         }
         println!("Detected Python project (pyproject.toml)");
@@ -241,20 +239,26 @@ pub fn cmd_ccs_build(
                 "deb" => {
                     println!();
                     println!("Generating DEB package...");
-                    // TODO: Implement DEB generation
-                    println!("  [NOT YET IMPLEMENTED] deb format");
+                    let gen_result = legacy::deb::generate(result, &output_path)
+                        .context("Failed to generate DEB package")?;
+                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    gen_result.loss_report.print_summary("DEB");
                 }
                 "rpm" => {
                     println!();
                     println!("Generating RPM package...");
-                    // TODO: Implement RPM generation
-                    println!("  [NOT YET IMPLEMENTED] rpm format");
+                    let gen_result = legacy::rpm::generate(result, &output_path)
+                        .context("Failed to generate RPM package")?;
+                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    gen_result.loss_report.print_summary("RPM");
                 }
                 "arch" => {
                     println!();
                     println!("Generating Arch package...");
-                    // TODO: Implement Arch generation
-                    println!("  [NOT YET IMPLEMENTED] arch format");
+                    let gen_result = legacy::arch::generate(result, &output_path)
+                        .context("Failed to generate Arch package")?;
+                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    gen_result.loss_report.print_summary("Arch");
                 }
                 _ => {}
             }

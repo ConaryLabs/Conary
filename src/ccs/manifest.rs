@@ -58,11 +58,11 @@ impl CcsManifest {
     /// Load manifest from a file path
     pub fn from_file(path: &Path) -> Result<Self, ManifestError> {
         let content = std::fs::read_to_string(path)?;
-        Self::from_str(&content)
+        Self::parse(&content)
     }
 
     /// Parse manifest from a TOML string
-    pub fn from_str(content: &str) -> Result<Self, ManifestError> {
+    pub fn parse(content: &str) -> Result<Self, ManifestError> {
         let manifest: CcsManifest = toml::from_str(content)?;
         manifest.validate()?;
         Ok(manifest)
@@ -494,7 +494,7 @@ name = "test"
 version = "1.0.0"
 description = "A test package"
 "#;
-        let manifest = CcsManifest::from_str(toml).unwrap();
+        let manifest = CcsManifest::parse(toml).unwrap();
         assert_eq!(manifest.package.name, "test");
         assert_eq!(manifest.package.version, "1.0.0");
     }
@@ -548,7 +548,7 @@ enable = false
 [config]
 files = ["/etc/myapp/config.toml"]
 "#;
-        let manifest = CcsManifest::from_str(toml).unwrap();
+        let manifest = CcsManifest::parse(toml).unwrap();
         assert_eq!(manifest.package.name, "myapp");
         assert_eq!(manifest.provides.capabilities.len(), 2);
         assert_eq!(manifest.requires.capabilities.len(), 2);
