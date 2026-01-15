@@ -197,7 +197,8 @@ pub fn cmd_ccs_build(
         }
         if chunked {
             builder_instance = builder_instance.with_chunking();
-            println!("CDC chunking enabled for delta-efficient updates");
+        } else {
+            println!("CDC chunking disabled (use default for delta-efficient updates)");
         }
 
         let result = builder_instance.build()

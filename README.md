@@ -171,7 +171,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 
 **CCS Package Building:**
 - `ccs-init <directory>` - Initialize a new CCS package project with ccs.toml template
-- `ccs-build <directory>` - Build a CCS package from source directory (supports `--chunked` for CDC)
+- `ccs-build <directory>` - Build a CCS package from source directory (CDC enabled by default, `--no-chunked` to disable)
 - `ccs-inspect <package.ccs>` - Display package manifest and file listing
 - `ccs-verify <package.ccs>` - Verify package integrity via Merkle tree
 - `ccs-keygen` - Generate Ed25519 keypair for package signing
@@ -399,11 +399,11 @@ ccs-init myapp
 cd myapp
 # Edit ccs.toml with package metadata
 
-# Build the package
+# Build the package (CDC chunking enabled by default)
 ccs-build . --output ./dist
 
-# Build with CDC chunking for efficient delta updates
-ccs-build . --output ./dist --chunked
+# Build without CDC chunking (not recommended)
+ccs-build . --output ./dist --no-chunked
 
 # Inspect the package
 ccs-inspect dist/myapp-1.0.0.ccs
