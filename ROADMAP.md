@@ -8,16 +8,17 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v22)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v23)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
-- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v13)
+- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v23)
 
 ### Package Formats
 
 - [COMPLETE] **RPM Support** - Full parsing including scriptlets, dependencies, rich metadata
 - [COMPLETE] **DEB Support** - Debian/Ubuntu package format
 - [COMPLETE] **Arch Support** - pkg.tar.zst and pkg.tar.xz formats
+- [COMPLETE] **CCS Support** - Native Conary package format with CBOR manifest, Merkle tree, Ed25519 signatures
 - [COMPLETE] **Format Detection** - Automatic detection via magic bytes or extension
 
 ### Component Model
@@ -101,6 +102,29 @@ This document tracks the implementation status of Conary features, both complete
 - [COMPLETE] **Man Pages** - Auto-generated documentation
 - [COMPLETE] **Dry Run Mode** - Preview operations without executing
 - [COMPLETE] **Scriptlet Display** - View package scriptlets before install
+
+### CCS Package Building
+
+Native package format (CCS - Conary Component Specification) with build policies and container export.
+
+- [COMPLETE] **CCS Package Format** - Gzipped tar with CBOR manifest and Merkle tree verification
+- [COMPLETE] **Ed25519 Signatures** - Package signing and verification
+- [COMPLETE] **Build Policies** - Trait-based policy engine (DenyPaths, NormalizeTimestamps, StripBinaries, FixShebangs, CompressManpages)
+- [COMPLETE] **SOURCE_DATE_EPOCH** - Reproducible build support with timestamp normalization
+- [COMPLETE] **OCI Export** - Export packages to OCI container images (podman/docker compatible)
+- [COMPLETE] **CLI Commands** - ccs-init, ccs-build, ccs-inspect, ccs-verify, ccs-sign, ccs-keygen, ccs-install, ccs-export
+
+### Container-Isolated Scriptlets
+
+Run package scripts in lightweight Linux containers for safety.
+
+- [COMPLETE] **Namespace Isolation** - Mount, PID, IPC, UTS namespaces for scriptlets
+- [COMPLETE] **Chroot Isolation** - Isolate scriptlet filesystem from host via chroot
+- [COMPLETE] **Bind Mounts** - Controlled access to required host paths (read-only by default)
+- [COMPLETE] **Rootless Fallback** - Falls back to resource-limited execution when not root
+- [COMPLETE] **Resource Limits** - CPU, memory, file size, process limits for scriptlets
+- [COMPLETE] **Dangerous Script Detection** - Automatic risk analysis with pattern matching
+- [COMPLETE] **CLI Integration** - `--sandbox` flag (auto, always, never) for install/remove commands
 
 ---
 
@@ -222,18 +246,6 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 ## Long-Term / Future Consideration
 
-### Container-Isolated Scriptlets (Inspired by Aeryn OS)
-
-Run package scripts in lightweight Linux containers for safety.
-
-- [COMPLETE] **Namespace Isolation** - Mount, PID, IPC, UTS namespaces for scriptlets
-- [COMPLETE] **Chroot Isolation** - Isolate scriptlet filesystem from host via chroot
-- [COMPLETE] **Bind Mounts** - Controlled access to required host paths (read-only by default)
-- [COMPLETE] **Rootless Fallback** - Falls back to resource-limited execution when not root
-- [COMPLETE] **Resource Limits** - CPU, memory, file size, process limits for scriptlets
-- [COMPLETE] **Dangerous Script Detection** - Automatic risk analysis with pattern matching
-- [COMPLETE] **CLI Integration** - `--sandbox` flag (auto, always, never) for install/remove commands
-
 ### Atomic Filesystem Updates (Inspired by Aeryn OS)
 
 Use atomic operations to swap entire filesystem trees.
@@ -262,17 +274,14 @@ Optional xxhash for non-cryptographic use cases.
 - [ ] **Dedup with xxhash** - Faster deduplication checks
 - [ ] **Verify with SHA-256** - Keep SHA-256 for security verification
 
-### Package Building
+### Advanced Package Building
 
-The original Conary had a full recipe system for building packages. This would be a major undertaking.
+Building on the CCS format with more sophisticated features.
 
-- [ ] **Recipe Parser** - Parse Conary recipe files
+- [ ] **Recipe Parser** - Parse Conary-style recipe files
 - [ ] **Source Components** - Store :source troves in repository
-- [ ] **Build Actions** - addArchive, addPatch, Make, MakeInstall, etc.
-- [ ] **Policy Actions** - ComponentSpec, Config, Ownership, etc.
 - [ ] **Factory System** - Templates for common package types
 - [ ] **Derived Packages** - Create packages based on existing ones
-- [ ] **Shadowing** - Branch packages for customization
 
 ### Repository Server
 
@@ -334,15 +343,19 @@ These features from original Conary are not planned for implementation:
 | v20 | Labels system for package provenance tracking (labels, label_path tables, label commands) |
 | v21 | Configuration file management (config_files, config_backups tables, noreplace support) |
 | v22 | Update improvements (security metadata on repository_packages, update-group command) |
-| v23 | Container-isolated scriptlets (namespace isolation, resource limits, script analysis, --sandbox CLI) |
+| v23 | Transaction engine crash recovery (tx_uuid column on changesets) |
+| - | CCS Native Package Format (CBOR manifest, Merkle tree, Ed25519 signatures) |
+| - | Build Policy System (trait-based policies, SOURCE_DATE_EPOCH, reproducible builds) |
+| - | OCI Container Export (podman/docker compatible image generation) |
 
 ---
 
 ## Contributing
 
 Contributions welcome. Priority areas:
-1. Atomic filesystem updates
+1. Atomic filesystem updates (renameat2 RENAME_EXCHANGE)
 2. VFS tree with reparenting
 3. Fast hashing option (xxhash)
+4. Web interface for system state visualization
 
 See README.md for development setup and CLAUDE.md for coding conventions.

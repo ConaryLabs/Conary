@@ -46,13 +46,24 @@ SQLite backend means you can actually query your system: "What installed this de
 
 The goal isn't to replace distros - it's to decouple package management from distro politics and give users the reliability and flexibility they deserve.
 
+### Native CCS Package Format
+Beyond consuming RPM/DEB/Arch, Conary has its own **native package format** (CCS - Conary Component Specification). Build reproducible, signed packages with automatic quality enforcement. Export to OCI container images. No more lowest-common-denominator packaging.
+
+### Build Policies
+Automated quality gates during package builds. Reject forbidden paths, normalize timestamps for reproducibility, strip binaries, fix shebangs, compress man pages. Trait-based design means you can add custom policies. `SOURCE_DATE_EPOCH` support for bit-for-bit reproducible builds.
+
+### Container Image Export
+Turn any CCS package into an OCI container image with one command. No Dockerfile required. Compatible with podman, docker, and skopeo. The "capsule" concept from original Conary, reborn for 2026.
+
 ## Technical Foundation
 
 - **Rust 1.91.1** (stable) with **Edition 2024**
 - **SQLite** via **rusqlite** - synchronous, battle-tested, perfect for changeset operations
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
-- **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2025
-- **Database schema v22** with automatic migrations
+- **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2026
+- **Database schema v23** with automatic migrations
+- **Ed25519 signatures** for package authentication
+- **CBOR binary manifests** with Merkle tree content verification
 
 ## Status
 
@@ -158,6 +169,16 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - `conary delta-stats` - Show delta update statistics and bandwidth savings
 - `conary completions <shell>` - Generate shell completion scripts
 
+**CCS Package Building:**
+- `ccs-init <directory>` - Initialize a new CCS package project with ccs.toml template
+- `ccs-build <directory>` - Build a CCS package from source directory
+- `ccs-inspect <package.ccs>` - Display package manifest and file listing
+- `ccs-verify <package.ccs>` - Verify package integrity via Merkle tree
+- `ccs-keygen` - Generate Ed25519 keypair for package signing
+- `ccs-sign <package.ccs>` - Sign a package with Ed25519 private key
+- `ccs-install <package.ccs>` - Install a CCS package into the system
+- `ccs-export <packages...>` - Export packages to OCI container image format
+
 ### Core Features
 
 **Multi-Format Support:**
@@ -262,6 +283,26 @@ The goal isn't to replace distros - it's to decouple package management from dis
 - Unified management of distro and Conary packages
 - Conflict detection and resolution
 
+**CCS Native Package Format:**
+- CBOR binary manifest with Merkle tree content verification
+- Ed25519 digital signatures for package authentication
+- Automatic component classification (`:runtime`, `:lib`, `:devel`, `:doc`, etc.)
+- Gzipped tar archive format for universal compatibility
+- TOML-based `ccs.toml` specification
+
+**Build Policy System:**
+- Trait-based policy engine for custom quality gates
+- Built-in policies: DenyPaths, NormalizeTimestamps, StripBinaries, FixShebangs, CompressManpages
+- `SOURCE_DATE_EPOCH` support for reproducible builds
+- Per-project policy configuration in `ccs.toml`
+- Policy actions: Keep, Replace, Skip, Reject
+
+**OCI Container Export:**
+- Export packages directly to OCI image format
+- Compatible with podman, docker, and skopeo
+- Deterministic layer generation for reproducibility
+- Standard OCI image layout (oci-layout, index.json, blobs/)
+
 ### Shell Completions
 
 Generate completions for your shell:
@@ -349,12 +390,68 @@ conary collection-remove web-stack --members memcached
 conary collection-delete web-stack
 ```
 
+### CCS Package Building
+
+```bash
+# Initialize a new package project
+ccs-init myapp
+cd myapp
+# Edit ccs.toml with package metadata
+
+# Build the package
+ccs-build . --output ./dist
+
+# Inspect the package
+ccs-inspect dist/myapp-1.0.0.ccs
+
+# Verify package integrity
+ccs-verify dist/myapp-1.0.0.ccs
+
+# Generate signing keys
+ccs-keygen --output ~/.config/conary/keys
+
+# Sign the package
+ccs-sign dist/myapp-1.0.0.ccs --key ~/.config/conary/keys/private.pem
+
+# Install the package
+ccs-install dist/myapp-1.0.0.ccs
+
+# Export to OCI container image
+ccs-export myapp --output myapp.tar --format oci
+
+# Load into podman/docker
+podman load < myapp.tar
+podman run --rm myapp:latest
+```
+
+### ccs.toml Example
+
+```toml
+[package]
+name = "myapp"
+version = "1.0.0"
+summary = "My Application"
+description = "A sample application"
+license = "MIT"
+url = "https://example.com/myapp"
+
+[dependencies]
+requires = ["libc.so.6", "libssl.so.3"]
+
+[policy]
+reject_paths = ["/home/*", "/tmp/*", "*.pyc"]
+strip_binaries = true
+normalize_timestamps = true
+compress_manpages = true
+fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
+```
+
 ### Testing
 
-- **358 tests passing** (333 lib + 3 bin + 22 integration)
-- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, and core operations
+- **477 tests passing** (452 lib + 3 bin + 22 integration)
+- Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, CCS building, policy engine, OCI export, and core operations
 - Integration tests for full install/remove/rollback workflows
 
 ### What's Next
 
-Atomic filesystem updates (renameat2 RENAME_EXCHANGE), VFS tree with reparenting, fast hashing (xxhash), web UI for system state visualization, and package building tools. See ROADMAP.md for details.
+Atomic filesystem updates (renameat2 RENAME_EXCHANGE), VFS tree with reparenting, fast hashing (xxhash), web UI for system state visualization. See ROADMAP.md for details.
