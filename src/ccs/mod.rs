@@ -11,6 +11,7 @@
 
 pub mod binary_manifest;
 pub mod builder;
+pub mod export;
 pub mod hooks;
 pub mod inspector;
 pub mod legacy;

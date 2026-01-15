@@ -327,6 +327,10 @@ fn main() -> Result<()> {
             commands::ccs::cmd_ccs_install(&package, &db_path, &root, dry_run, allow_unsigned, policy, components, sandbox_mode)
         }
 
+        Some(Commands::CcsExport { packages, output, format, db_path }) => {
+            commands::ccs::cmd_ccs_export(&packages, &output, &format, &db_path)
+        }
+
         Some(Commands::CollectionCreate { name, description, members, db_path }) => {
             commands::cmd_collection_create(&name, description.as_deref(), &members, &db_path)
         }

@@ -1182,4 +1182,24 @@ pub enum Commands {
         #[arg(long, default_value = "never")]
         sandbox: String,
     },
+
+    /// Export CCS packages to container image format
+    #[command(name = "ccs-export")]
+    CcsExport {
+        /// CCS package file(s) to export
+        #[arg(required = true)]
+        packages: Vec<String>,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+
+        /// Export format: oci (default)
+        #[arg(short, long, default_value = "oci")]
+        format: String,
+
+        /// Path to the database file (for dependency resolution)
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
 }

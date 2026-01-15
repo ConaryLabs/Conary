@@ -752,3 +752,25 @@ pub fn cmd_ccs_install(
 
     Ok(())
 }
+
+/// Export CCS packages to container image format
+pub fn cmd_ccs_export(
+    packages: &[String],
+    output: &str,
+    format: &str,
+    db_path: &str,
+) -> Result<()> {
+    use conary::ccs::export::{export, ExportFormat};
+
+    let export_format = ExportFormat::from_str(format)
+        .ok_or_else(|| anyhow::anyhow!("Unknown export format: {}. Supported: oci", format))?;
+
+    let output_path = Path::new(output);
+    let db_path_opt = if Path::new(db_path).exists() {
+        Some(Path::new(db_path))
+    } else {
+        None
+    };
+
+    export(export_format, packages, output_path, db_path_opt)
+}
