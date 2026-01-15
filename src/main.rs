@@ -296,6 +296,23 @@ fn main() -> Result<()> {
             commands::cmd_scripts(&package_path)
         }
 
+        // CCS Package Format Commands
+        Some(Commands::CcsInit { path, name, version, force }) => {
+            commands::ccs::cmd_ccs_init(&path, name, &version, force)
+        }
+
+        Some(Commands::CcsBuild { path, output, target, source, no_classify, dry_run }) => {
+            commands::ccs::cmd_ccs_build(&path, &output, &target, source, no_classify, dry_run)
+        }
+
+        Some(Commands::CcsInspect { package, files, hooks, deps, format }) => {
+            commands::ccs::cmd_ccs_inspect(&package, files, hooks, deps, &format)
+        }
+
+        Some(Commands::CcsVerify { package, policy, allow_unsigned }) => {
+            commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned)
+        }
+
         Some(Commands::CollectionCreate { name, description, members, db_path }) => {
             commands::cmd_collection_create(&name, description.as_deref(), &members, &db_path)
         }

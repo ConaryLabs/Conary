@@ -13,6 +13,7 @@
 //! - Flavors: Build-time variations tracked in metadata
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
+pub mod ccs;
 pub mod components;
 pub mod container;
 pub mod db;

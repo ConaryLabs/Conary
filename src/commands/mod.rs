@@ -2,6 +2,7 @@
 //! Command handlers for the Conary CLI
 
 mod adopt;
+pub mod ccs;
 mod collection;
 mod config;
 mod install;

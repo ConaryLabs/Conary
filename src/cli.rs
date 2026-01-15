@@ -1026,4 +1026,94 @@ pub enum Commands {
         #[arg(long, default_value = "never")]
         sandbox: String,
     },
+
+    // =========================================================================
+    // CCS Package Format Commands
+    // =========================================================================
+
+    /// Initialize a new CCS package manifest (ccs.toml)
+    #[command(name = "ccs-init")]
+    CcsInit {
+        /// Directory to initialize (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Package name (defaults to directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Package version
+        #[arg(short, long, default_value = "0.1.0")]
+        version: String,
+
+        /// Overwrite existing ccs.toml
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Build a CCS package from the current project
+    #[command(name = "ccs-build")]
+    CcsBuild {
+        /// Path to ccs.toml or directory containing it
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Output directory for built packages
+        #[arg(short, long, default_value = "./target/ccs")]
+        output: String,
+
+        /// Target format(s): ccs, deb, rpm, arch, all
+        #[arg(short, long, default_value = "ccs")]
+        target: String,
+
+        /// Source directory containing files to package
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Don't auto-classify files into components
+        #[arg(long)]
+        no_classify: bool,
+
+        /// Show what would be built without creating packages
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Inspect a CCS package file
+    #[command(name = "ccs-inspect")]
+    CcsInspect {
+        /// Path to .ccs package file
+        package: String,
+
+        /// Show file listing
+        #[arg(short, long)]
+        files: bool,
+
+        /// Show hook definitions
+        #[arg(long)]
+        hooks: bool,
+
+        /// Show dependencies and provides
+        #[arg(long)]
+        deps: bool,
+
+        /// Output format: text, json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Verify a CCS package signature and contents
+    #[command(name = "ccs-verify")]
+    CcsVerify {
+        /// Path to .ccs package file
+        package: String,
+
+        /// Trust policy file (optional)
+        #[arg(long)]
+        policy: Option<String>,
+
+        /// Allow packages without signatures
+        #[arg(long)]
+        allow_unsigned: bool,
+    },
 }
