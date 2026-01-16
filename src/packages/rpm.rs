@@ -533,20 +533,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rpm_package_structure() {
-        // Verify the struct is properly defined
-        assert!(std::mem::size_of::<RpmPackage>() > 0);
-    }
-
-    #[test]
-    fn test_package_format_trait_implemented() {
-        // Verify RpmPackage implements PackageFormat trait
-        // This test ensures the trait is correctly implemented at compile time
-        fn assert_implements_package_format<T: PackageFormat>() {}
-        assert_implements_package_format::<RpmPackage>();
-    }
-
-    #[test]
     fn test_to_trove_conversion() {
         // Create a minimal RpmPackage for testing
         let rpm = RpmPackage {
@@ -595,18 +581,6 @@ mod tests {
         // Test that parsing a nonexistent file returns an error
         let result = RpmPackage::parse("/nonexistent/file.rpm");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_dependency_type_variants() {
-        // Ensure all DependencyType variants are accessible
-        let runtime = DependencyType::Runtime;
-        let build = DependencyType::Build;
-        let optional = DependencyType::Optional;
-
-        assert_eq!(runtime, DependencyType::Runtime);
-        assert_eq!(build, DependencyType::Build);
-        assert_eq!(optional, DependencyType::Optional);
     }
 
     #[test]

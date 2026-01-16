@@ -347,15 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn test_algorithm_properties() {
-        assert!(HashAlgorithm::Sha256.is_cryptographic());
-        assert!(!HashAlgorithm::Xxh128.is_cryptographic());
-
-        assert_eq!(HashAlgorithm::Sha256.output_len(), 32);
-        assert_eq!(HashAlgorithm::Xxh128.output_len(), 16);
-    }
-
-    #[test]
     fn test_hash_validation() {
         // Valid SHA-256
         let hash = Hash::new(

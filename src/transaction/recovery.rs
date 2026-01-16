@@ -556,35 +556,4 @@ mod tests {
         assert!(!new_file.exists());
     }
 
-    #[test]
-    fn test_recovery_outcome_variants() {
-        // Just verify the enum variants exist and can be constructed
-        let rolled_back = RecoveryOutcome::RolledBack {
-            tx_uuid: "test".to_string(),
-            reason: "test reason".to_string(),
-        };
-        assert!(matches!(rolled_back, RecoveryOutcome::RolledBack { .. }));
-
-        let rolled_forward = RecoveryOutcome::RolledForward {
-            tx_uuid: "test".to_string(),
-            changeset_id: 1,
-        };
-        assert!(matches!(rolled_forward, RecoveryOutcome::RolledForward { .. }));
-
-        let completed = RecoveryOutcome::CompletedPending {
-            tx_uuid: "test".to_string(),
-        };
-        assert!(matches!(completed, RecoveryOutcome::CompletedPending { .. }));
-
-        let corrupted = RecoveryOutcome::Corrupted {
-            tx_uuid: "test".to_string(),
-            error: "test error".to_string(),
-        };
-        assert!(matches!(corrupted, RecoveryOutcome::Corrupted { .. }));
-
-        let clean = RecoveryOutcome::Clean {
-            tx_uuid: "test".to_string(),
-        };
-        assert!(matches!(clean, RecoveryOutcome::Clean { .. }));
-    }
 }

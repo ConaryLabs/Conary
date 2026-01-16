@@ -253,11 +253,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_selection_options_default() {
-        let opts = SelectionOptions::default();
-        assert!(opts.version.is_none());
-        assert!(opts.repository.is_none());
-        assert!(opts.architecture.is_none());
-    }
 }

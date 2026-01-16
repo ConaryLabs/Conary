@@ -588,29 +588,4 @@ mod tests {
         assert!(executor.applied_hooks.is_empty());
     }
 
-    #[test]
-    fn test_applied_hook_variants() {
-        let user = AppliedHook::User("testuser".to_string());
-        let group = AppliedHook::Group("testgroup".to_string());
-        let dir = AppliedHook::Directory(PathBuf::from("/var/test"), true);
-
-        // Just verify they can be created
-        match user {
-            AppliedHook::User(name) => assert_eq!(name, "testuser"),
-            _ => panic!("Wrong variant"),
-        }
-
-        match group {
-            AppliedHook::Group(name) => assert_eq!(name, "testgroup"),
-            _ => panic!("Wrong variant"),
-        }
-
-        match dir {
-            AppliedHook::Directory(path, created) => {
-                assert_eq!(path, PathBuf::from("/var/test"));
-                assert!(created);
-            }
-            _ => panic!("Wrong variant"),
-        }
-    }
 }

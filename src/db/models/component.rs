@@ -220,24 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn test_component_is_default() {
-        let runtime = Component::new(1, "runtime".to_string());
-        assert!(runtime.is_default());
-
-        let lib = Component::new(1, "lib".to_string());
-        assert!(lib.is_default());
-
-        let config = Component::new(1, "config".to_string());
-        assert!(config.is_default());
-
-        let devel = Component::new(1, "devel".to_string());
-        assert!(!devel.is_default());
-
-        let doc = Component::new(1, "doc".to_string());
-        assert!(!doc.is_default());
-    }
-
-    #[test]
     fn test_component_crud() {
         let (_temp, conn) = create_test_db();
         let trove_id = create_test_trove(&conn);

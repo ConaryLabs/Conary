@@ -574,19 +574,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deb_package_structure() {
-        // Verify the struct is properly defined
-        assert!(std::mem::size_of::<DebPackage>() > 0);
-    }
-
-    #[test]
-    fn test_package_format_trait_implemented() {
-        // Verify DebPackage implements PackageFormat trait
-        fn assert_implements_package_format<T: PackageFormat>() {}
-        assert_implements_package_format::<DebPackage>();
-    }
-
-    #[test]
     fn test_control_parsing() {
         let content = r#"Package: test-package
 Version: 1.0.0-1

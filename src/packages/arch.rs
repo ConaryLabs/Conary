@@ -540,19 +540,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_arch_package_structure() {
-        // Verify the struct is properly defined
-        assert!(std::mem::size_of::<ArchPackage>() > 0);
-    }
-
-    #[test]
-    fn test_package_format_trait_implemented() {
-        // Verify ArchPackage implements PackageFormat trait
-        fn assert_implements_package_format<T: PackageFormat>() {}
-        assert_implements_package_format::<ArchPackage>();
-    }
-
-    #[test]
     fn test_compression_detection() {
         assert!(matches!(
             ArchPackage::detect_compression("test.pkg.tar.zst"),
