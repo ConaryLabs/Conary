@@ -5,6 +5,7 @@
 //! Provides a wrapper around reqwest with retry support for
 //! fetching metadata and downloading files.
 
+use crate::compression::{decompress_auto, CompressionFormat};
 use crate::error::{Error, Result};
 use indicatif::ProgressBar;
 use reqwest::blocking::Client;
@@ -12,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::metadata::RepositoryMetadata;
 
@@ -168,6 +169,69 @@ impl RepositoryClient {
             .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
 
         Ok(bytes.to_vec())
+    }
+
+    /// Fetch and decompress data from a URL
+    ///
+    /// Downloads the data and auto-detects the compression format from magic bytes.
+    /// Supports gzip, xz, and zstd. Returns decompressed bytes.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let client = RepositoryClient::new()?;
+    /// let data = client.fetch_and_decompress("https://repo.example.com/Packages.gz")?;
+    /// let content = String::from_utf8(data)?;
+    /// ```
+    pub fn fetch_and_decompress(&self, url: &str) -> Result<Vec<u8>> {
+        debug!("Fetching and decompressing: {}", url);
+        let bytes = self.download_to_bytes(url)?;
+
+        // Auto-detect and decompress
+        let decompressed = decompress_auto(&bytes).map_err(|e| {
+            Error::ParseError(format!("Failed to decompress data from {}: {}", url, e))
+        })?;
+
+        debug!(
+            "Decompressed {} bytes -> {} bytes",
+            bytes.len(),
+            decompressed.len()
+        );
+        Ok(decompressed)
+    }
+
+    /// Fetch and decompress data as a UTF-8 string
+    ///
+    /// Convenience method that decompresses and converts to String.
+    pub fn fetch_and_decompress_string(&self, url: &str) -> Result<String> {
+        let bytes = self.fetch_and_decompress(url)?;
+        String::from_utf8(bytes).map_err(|e| {
+            Error::ParseError(format!("Invalid UTF-8 in response from {}: {}", url, e))
+        })
+    }
+
+    /// Fetch data, optionally decompressing based on URL extension
+    ///
+    /// Uses the URL extension to determine if decompression is needed.
+    /// Use this when the URL clearly indicates the compression format.
+    pub fn fetch_with_extension_hint(&self, url: &str) -> Result<Vec<u8>> {
+        let bytes = self.download_to_bytes(url)?;
+
+        let format = CompressionFormat::from_extension(url);
+        if format == CompressionFormat::None {
+            // No compression indicated, check magic bytes anyway
+            let detected = CompressionFormat::from_magic_bytes(&bytes);
+            if detected != CompressionFormat::None {
+                debug!("URL {} has no extension but detected {} compression", url, detected);
+                return decompress_auto(&bytes).map_err(|e| {
+                    Error::ParseError(format!("Failed to decompress: {}", e))
+                });
+            }
+            return Ok(bytes);
+        }
+
+        decompress_auto(&bytes).map_err(|e| {
+            Error::ParseError(format!("Failed to decompress {} data: {}", format, e))
+        })
     }
 
     /// Download a file to the specified path with retry support

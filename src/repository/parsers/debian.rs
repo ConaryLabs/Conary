@@ -7,9 +7,8 @@
 
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
-use flate2::read::GzDecoder;
+use crate::repository::client::RepositoryClient;
 use serde::Deserialize;
-use std::io::Read;
 use tracing::{debug, info};
 
 /// Debian/Ubuntu repository parser
@@ -33,6 +32,8 @@ impl DebianParser {
     }
 
     /// Download and decompress the Packages file
+    ///
+    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
     fn download_packages_file(&self, repo_url: &str) -> Result<String> {
         let packages_url = format!(
             "{}/dists/{}/{}/binary-{}/Packages.gz",
@@ -44,30 +45,11 @@ impl DebianParser {
 
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
-        let response = reqwest::blocking::get(&packages_url).map_err(|e| {
-            Error::DownloadError(format!("Failed to download {}: {}", packages_url, e))
-        })?;
+        let client = RepositoryClient::new()?;
+        let content = client.fetch_and_decompress_string(&packages_url)?;
 
-        if !response.status().is_success() {
-            return Err(Error::DownloadError(format!(
-                "Failed to download {}: HTTP {}",
-                packages_url,
-                response.status()
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
-
-        // Decompress gzip
-        let mut gz = GzDecoder::new(bytes.as_ref());
-        let mut decompressed = String::new();
-        gz.read_to_string(&mut decompressed)
-            .map_err(|e| Error::ParseError(format!("Failed to decompress Packages.gz: {}", e)))?;
-
-        debug!("Decompressed Packages file: {} bytes", decompressed.len());
-        Ok(decompressed)
+        debug!("Decompressed Packages file: {} bytes", content.len());
+        Ok(content)
     }
 
     /// Parse dependencies from Depends field

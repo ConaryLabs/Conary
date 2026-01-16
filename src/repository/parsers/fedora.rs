@@ -7,10 +7,9 @@
 
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
-use flate2::read::GzDecoder;
+use crate::repository::client::RepositoryClient;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::io::Read;
 use tracing::{debug, info};
 
 /// Fedora/RPM repository parser
@@ -26,24 +25,16 @@ impl FedoraParser {
     }
 
     /// Download repomd.xml and find primary.xml location
+    ///
+    /// Uses RepositoryClient for HTTP.
     fn get_primary_xml_location(&self, repo_url: &str) -> Result<String> {
         let repomd_url = format!("{}/repodata/repomd.xml", repo_url.trim_end_matches('/'));
         debug!("Downloading repomd.xml from: {}", repomd_url);
 
-        let response = reqwest::blocking::get(&repomd_url)
-            .map_err(|e| Error::DownloadError(format!("Failed to download {}: {}", repomd_url, e)))?;
-
-        if !response.status().is_success() {
-            return Err(Error::DownloadError(format!(
-                "Failed to download {}: HTTP {}",
-                repomd_url,
-                response.status()
-            )));
-        }
-
-        let xml_content = response
-            .text()
-            .map_err(|e| Error::DownloadError(format!("Failed to read repomd.xml: {}", e)))?;
+        let client = RepositoryClient::new()?;
+        let xml_bytes = client.download_to_bytes(&repomd_url)?;
+        let xml_content = String::from_utf8(xml_bytes)
+            .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {}", e)))?;
 
         // Parse repomd.xml to find primary location
         let mut reader = Reader::from_str(&xml_content);
@@ -100,46 +91,17 @@ impl FedoraParser {
     }
 
     /// Download and decompress primary.xml
+    ///
+    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
     fn download_primary_xml(&self, repo_url: &str, location: &str) -> Result<String> {
         let primary_url = format!("{}/{}", repo_url.trim_end_matches('/'), location);
         debug!("Downloading primary.xml from: {}", primary_url);
 
-        let response = reqwest::blocking::get(&primary_url).map_err(|e| {
-            Error::DownloadError(format!("Failed to download {}: {}", primary_url, e))
-        })?;
+        let client = RepositoryClient::new()?;
+        let content = client.fetch_and_decompress_string(&primary_url)?;
 
-        if !response.status().is_success() {
-            return Err(Error::DownloadError(format!(
-                "Failed to download {}: HTTP {}",
-                primary_url,
-                response.status()
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
-
-        // Detect compression format from location extension
-        let decompressed = if location.ends_with(".zst") {
-            // Decompress zstd
-            debug!("Decompressing zstd-compressed primary.xml");
-            let decompressed_bytes = zstd::decode_all(bytes.as_ref())
-                .map_err(|e| Error::ParseError(format!("Failed to decompress primary.xml.zst: {}", e)))?;
-            String::from_utf8(decompressed_bytes)
-                .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", e)))?
-        } else {
-            // Try gzip decompression (default)
-            debug!("Decompressing gzip-compressed primary.xml");
-            let mut gz = GzDecoder::new(bytes.as_ref());
-            let mut decompressed = String::new();
-            gz.read_to_string(&mut decompressed)
-                .map_err(|e| Error::ParseError(format!("Failed to decompress primary.xml.gz: {}", e)))?;
-            decompressed
-        };
-
-        debug!("Decompressed primary.xml: {} bytes", decompressed.len());
-        Ok(decompressed)
+        debug!("Decompressed primary.xml: {} bytes", content.len());
+        Ok(content)
     }
 
     /// Parse primary.xml and extract package metadata

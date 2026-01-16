@@ -7,12 +7,11 @@
 
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
-use flate2::read::GzDecoder;
+use crate::repository::client::RepositoryClient;
 use std::collections::HashMap;
 use std::io::Read;
 use tar::Archive;
 use tracing::{debug, info};
-use xz2::read::XzDecoder;
 
 /// Arch Linux repository parser
 pub struct ArchParser {
@@ -27,57 +26,14 @@ impl ArchParser {
     }
 
     /// Download and decompress the repository database
+    ///
+    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
     fn download_database(&self, repo_url: &str) -> Result<Vec<u8>> {
         let db_url = format!("{}/{}.db", repo_url.trim_end_matches('/'), self.repo_name);
         debug!("Downloading Arch database from: {}", db_url);
 
-        let response = reqwest::blocking::get(&db_url)
-            .map_err(|e| Error::DownloadError(format!("Failed to download {}: {}", db_url, e)))?;
-
-        if !response.status().is_success() {
-            return Err(Error::DownloadError(format!(
-                "Failed to download {}: HTTP {}",
-                db_url,
-                response.status()
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
-
-        Ok(bytes.to_vec())
-    }
-
-    /// Decompress the database (handles .gz, .xz, or .zst)
-    fn decompress_database(&self, data: &[u8]) -> Result<Vec<u8>> {
-        // Try gzip first
-        let mut gz = GzDecoder::new(data);
-        let mut decompressed = Vec::new();
-        if gz.read_to_end(&mut decompressed).is_ok() && !decompressed.is_empty() {
-            debug!("Decompressed gzip database");
-            return Ok(decompressed);
-        }
-
-        // Try xz
-        let mut xz = XzDecoder::new(data);
-        let mut decompressed = Vec::new();
-        if xz.read_to_end(&mut decompressed).is_ok() && !decompressed.is_empty() {
-            debug!("Decompressed xz database");
-            return Ok(decompressed);
-        }
-
-        // If neither worked, try zstd
-        match zstd::decode_all(data) {
-            Ok(decompressed) => {
-                debug!("Decompressed zstd database");
-                Ok(decompressed)
-            }
-            Err(e) => Err(Error::ParseError(format!(
-                "Failed to decompress database (tried gz, xz, zstd): {}",
-                e
-            ))),
-        }
+        let client = RepositoryClient::new()?;
+        client.fetch_and_decompress(&db_url)
     }
 
     /// Parse a desc file from the tarball
@@ -162,11 +118,8 @@ impl RepositoryParser for ArchParser {
     fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
-        // Download database
-        let db_data = self.download_database(repo_url)?;
-
-        // Decompress
-        let decompressed = self.decompress_database(&db_data)?;
+        // Download and decompress database (handled by RepositoryClient)
+        let decompressed = self.download_database(repo_url)?;
 
         // Extract tarball
         let mut archive = Archive::new(decompressed.as_slice());
