@@ -5,13 +5,16 @@
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::common::PackageMetadata;
+use crate::packages::cpio::CpioReader;
+use crate::compression::{self, CompressionFormat};
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
 };
 use rpm::Package;
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -258,80 +261,71 @@ impl PackageFormat for RpmPackage {
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        use std::process::Command;
-        use tempfile::TempDir;
-
         debug!(
             "Extracting file contents from RPM: {:?}",
             self.meta.package_path()
         );
 
-        // Create temp directory for extraction
-        let temp_dir = TempDir::new()
-            .map_err(|e| Error::InitError(format!("Failed to create temp dir: {}", e)))?;
+        let file = File::open(self.meta.package_path())
+            .map_err(|e| Error::InitError(format!("Failed to open RPM file: {}", e)))?;
+        let mut reader = BufReader::new(file);
 
-        // Extract RPM to temp directory using rpm2cpio | cpio
-        // rpm2cpio package.rpm | cpio -idmv -D /tmp/extract
-        let rpm2cpio_output = Command::new("rpm2cpio")
-            .arg(self.meta.package_path())
-            .output()
-            .map_err(|e| {
-                Error::InitError(format!(
-                    "Failed to run rpm2cpio: {}. Is rpm2cpio installed?",
-                    e
-                ))
-            })?;
+        // Skip the RPM header by parsing it
+        let _ = Package::parse(&mut reader)
+            .map_err(|e| Error::InitError(format!("Failed to parse RPM header: {}", e)))?;
 
-        if !rpm2cpio_output.status.success() {
-            return Err(Error::InitError(format!(
-                "rpm2cpio failed: {}",
-                String::from_utf8_lossy(&rpm2cpio_output.stderr)
-            )));
+        // Read first few bytes to detect compression
+        let mut magic = [0u8; 6];
+        let n = reader.read(&mut magic).map_err(|e| Error::InitError(format!("Failed to read payload magic: {}", e)))?;
+
+        if n == 0 {
+            return Ok(Vec::new());
         }
 
-        // Extract cpio archive
-        let cpio_status = Command::new("cpio")
-            .args(["-idm", "--quiet"])
-            .current_dir(temp_dir.path())
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                if let Some(stdin) = child.stdin.as_mut() {
-                    stdin.write_all(&rpm2cpio_output.stdout)?;
-                }
-                child.wait()
-            })
-            .map_err(|e| {
-                Error::InitError(format!("Failed to run cpio: {}. Is cpio installed?", e))
-            })?;
+        let format = CompressionFormat::from_magic_bytes(&magic[..n]);
+        debug!("Detected payload compression: {}", format);
 
-        if !cpio_status.success() {
-            return Err(Error::InitError("cpio extraction failed".to_string()));
-        }
+        // Reconstruct reader
+        let prefix = std::io::Cursor::new(magic[..n].to_vec());
+        let chain = prefix.chain(reader);
 
-        // Read extracted files
+        // Create decompressor
+        let decoder = compression::create_decoder(chain, format)
+            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
+
+        // Map paths to metadata for O(1) lookup
+        let file_map: HashMap<&str, &PackageFile> = self.meta.files.iter()
+            .map(|f| (f.path.as_str(), f))
+            .collect();
+
+        // Extract CPIO archive
+        let mut cpio = CpioReader::new(decoder);
         let mut extracted_files = Vec::new();
 
-        for file_meta in self.meta.files() {
-            let full_path = temp_dir.path().join(file_meta.path.trim_start_matches('/'));
-
-            // Skip if not a regular file (directory, symlink, etc.)
-            if !full_path.is_file() {
+        while let Some((entry, content)) = cpio.next_entry().map_err(|e| Error::InitError(format!("CPIO error: {}", e)))? {
+            // Check if regular file (S_IFREG = 0o100000)
+            if (entry.mode & 0o170000) != 0o100000 {
                 continue;
             }
 
-            // Read file content
-            let content = std::fs::read(&full_path)
-                .map_err(|e| Error::InitError(format!("Failed to read {}: {}", file_meta.path, e)))?;
+            // Normalize path: CPIO paths are relative (e.g. "./usr/bin"), RPM metadata is absolute ("/usr/bin")
+            let rel_path = entry.name.trim_start_matches('.');
+            let abs_path = if rel_path.starts_with('/') {
+                rel_path.to_string()
+            } else {
+                format!("/{}", rel_path)
+            };
 
-            extracted_files.push(ExtractedFile {
-                path: file_meta.path.clone(),
-                content,
-                size: file_meta.size,
-                mode: file_meta.mode,
-                sha256: file_meta.sha256.clone(),
-            });
+            // Match with metadata to get SHA256 and confirm it's a tracked file
+            if let Some(meta) = file_map.get(abs_path.as_str()) {
+                extracted_files.push(ExtractedFile {
+                    path: abs_path,
+                    content,
+                    size: entry.size as i64,
+                    mode: entry.mode as i32,
+                    sha256: meta.sha256.clone(),
+                });
+            }
         }
 
         debug!("Extracted {} files from RPM", extracted_files.len());

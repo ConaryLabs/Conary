@@ -7,6 +7,7 @@
 
 pub mod arch;
 pub mod common;
+pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
 pub mod pacman_query;
