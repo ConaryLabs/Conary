@@ -111,4 +111,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-495 tests total (470 lib + 3 bin + 22 integration).
+483 tests total (458 lib + 3 bin + 22 integration).
