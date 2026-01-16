@@ -31,6 +31,10 @@ pub struct DownloadOptions {
 }
 
 /// Download a package from a repository
+///
+/// Downloads the package and verifies its checksum against the trusted metadata.
+/// If verification fails, the corrupted/invalid file is removed before returning
+/// the error to prevent cache pollution.
 pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
     let client = RepositoryClient::new()?;
 
@@ -47,8 +51,12 @@ pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result
     // Download the file
     client.download_file(&repo_pkg.download_url, &dest_path)?;
 
-    // Verify checksum
-    verify_checksum(&dest_path, &repo_pkg.checksum)?;
+    // Verify checksum - clean up invalid file on failure
+    if let Err(e) = verify_checksum(&dest_path, &repo_pkg.checksum) {
+        // Remove the corrupted/invalid file to prevent cache pollution
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(e);
+    }
 
     Ok(dest_path)
 }
@@ -284,6 +292,8 @@ fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
 /// Download a package with progress bar display
 ///
 /// Shows download progress including bytes downloaded, speed, and package name.
+/// If checksum verification fails, the invalid file is removed before returning
+/// the error to prevent cache pollution.
 pub fn download_package_with_progress(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
@@ -309,8 +319,12 @@ pub fn download_package_with_progress(
         progress_bar,
     )?;
 
-    // Verify checksum
-    verify_checksum(&dest_path, &repo_pkg.checksum)?;
+    // Verify checksum - clean up invalid file on failure
+    if let Err(e) = verify_checksum(&dest_path, &repo_pkg.checksum) {
+        // Remove the corrupted/invalid file to prevent cache pollution
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(e);
+    }
 
     Ok(dest_path)
 }
