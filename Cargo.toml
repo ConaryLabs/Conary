@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio", "dep:tokio-util", "dep:tower-http", "dep:tower"]
+server = ["dep:axum", "dep:tokio", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime"]
 
 [dependencies]
 # Database
@@ -109,6 +109,7 @@ tokio = { version = "1", features = ["full"], optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"], optional = true }
 tower = { version = "0.5", optional = true }
+filetime = { version = "0.2", optional = true }  # For LRU cache access time tracking
 
 [dev-dependencies]
 

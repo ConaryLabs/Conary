@@ -36,6 +36,7 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/jobs/:job_id", get(jobs::get_job_status))
         // Admin endpoints
         .route("/v1/admin/convert", post(packages::trigger_conversion))
+        .route("/v1/admin/cache/stats", get(chunks::cache_stats))
         .route("/v1/admin/evict", post(chunks::trigger_eviction))
         // Layers
         .layer(CompressionLayer::new())

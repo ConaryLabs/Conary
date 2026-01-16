@@ -13,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::Serialize;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::RwLock;
@@ -83,10 +82,21 @@ pub async fn get_chunk(
         .unwrap()
 }
 
-#[derive(Serialize)]
-struct EvictionResult {
-    chunks_evicted: usize,
-    bytes_freed: u64,
+/// GET /v1/admin/cache/stats
+///
+/// Get cache statistics
+pub async fn cache_stats(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> impl IntoResponse {
+    let state = state.read().await;
+
+    match state.chunk_cache.stats().await {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get cache stats: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get stats: {}", e)).into_response()
+        }
+    }
 }
 
 /// POST /v1/admin/evict
@@ -98,13 +108,13 @@ pub async fn trigger_eviction(
     let state = state.read().await;
 
     match state.chunk_cache.run_eviction().await {
-        Ok((chunks_evicted, bytes_freed)) => {
-            tracing::info!("Manual eviction: {} chunks, {} bytes freed", chunks_evicted, bytes_freed);
-            Json(EvictionResult {
-                chunks_evicted,
-                bytes_freed,
-            })
-            .into_response()
+        Ok(result) => {
+            tracing::info!(
+                "Manual eviction: {} chunks, {} freed",
+                result.chunks_evicted,
+                result.bytes_freed_human
+            );
+            Json(result).into_response()
         }
         Err(e) => {
             tracing::error!("Eviction failed: {}", e);

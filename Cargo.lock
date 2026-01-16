@@ -599,6 +599,7 @@ dependencies = [
  "crc32fast",
  "ed25519-dalek",
  "fastcdc",
+ "filetime",
  "flate2",
  "fs2",
  "glob",
