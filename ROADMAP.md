@@ -8,10 +8,10 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v23)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v24)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
-- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v23)
+- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v24)
 
 ### Package Formats
 
@@ -65,6 +65,18 @@ This document tracks the implementation status of Conary features, both complete
 - [COMPLETE] **Priority-Based Selection** - Higher priority repos preferred
 - [COMPLETE] **HTTP Downloads** - Retry with exponential backoff
 - [COMPLETE] **Metadata Caching** - Configurable expiry time
+- [COMPLETE] **Reference Mirrors** - Split metadata (trusted) from content (CDN) sources via `--content-url`
+
+### System Model (Declarative OS)
+
+Inspired by original Conary's CML (Conary Model Language), declare desired system state in TOML.
+
+- [COMPLETE] **Model File Format** - TOML schema with install/exclude/pin/search/optional sections
+- [COMPLETE] **State Capture** - Snapshot current system to model file (`model-snapshot`)
+- [COMPLETE] **State Diff** - Compare model against current state (`model-diff`)
+- [COMPLETE] **Drift Detection** - CI/CD-friendly check with exit codes (`model-check`)
+- [COMPLETE] **State Sync** - Apply model to reach desired state (`model-apply`)
+- [COMPLETE] **Version Pinning** - Pin packages to version patterns in model
 
 ### Delta Updates
 
@@ -387,6 +399,7 @@ These features from original Conary are not planned for implementation:
 | v21 | Configuration file management (config_files, config_backups tables, noreplace support) |
 | v22 | Update improvements (security metadata on repository_packages, update-group command) |
 | v23 | Transaction engine crash recovery (tx_uuid column on changesets) |
+| v24 | Reference mirrors (content_url on repositories), System Model (declarative OS state) |
 | - | CCS Native Package Format (CBOR manifest, Merkle tree, Ed25519 signatures) |
 | - | Build Policy System (trait-based policies, SOURCE_DATE_EPOCH, reproducible builds) |
 | - | OCI Container Export (podman/docker compatible image generation) |
