@@ -7,6 +7,7 @@ mod collection;
 mod config;
 mod install;
 mod label;
+mod model;
 mod remove;
 pub mod progress;
 mod query;
@@ -28,6 +29,7 @@ pub use config::{
     cmd_config_restore,
 };
 pub use install::cmd_install;
+pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_snapshot};
 pub use remove::{cmd_autoremove, cmd_remove};
 pub use conary::scriptlet::SandboxMode;
 pub use label::{cmd_label_add, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};

@@ -361,6 +361,23 @@ fn main() -> Result<()> {
             commands::cmd_collection_install(&name, &db_path, &root, dry_run, skip_optional, sandbox_mode)
         }
 
+        // System Model Commands
+        Some(Commands::ModelDiff { model, db_path }) => {
+            commands::cmd_model_diff(&model, &db_path)
+        }
+
+        Some(Commands::ModelApply { model, db_path, root, dry_run, skip_optional, strict, no_autoremove }) => {
+            commands::cmd_model_apply(&model, &db_path, &root, dry_run, skip_optional, strict, !no_autoremove)
+        }
+
+        Some(Commands::ModelCheck { model, db_path, verbose }) => {
+            commands::cmd_model_check(&model, &db_path, verbose)
+        }
+
+        Some(Commands::ModelSnapshot { output, db_path, description }) => {
+            commands::cmd_model_snapshot(&output, &db_path, description.as_deref())
+        }
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

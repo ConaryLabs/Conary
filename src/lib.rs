@@ -25,6 +25,7 @@ pub mod filesystem;
 pub mod flavor;
 pub mod hash;
 pub mod label;
+pub mod model;
 pub mod packages;
 pub mod progress;
 pub mod repository;
@@ -40,6 +41,10 @@ pub use error::{Error, Result};
 pub use flavor::{ArchSpec, FlavorItem, FlavorOp, FlavorSpec, SystemFlavor};
 pub use hash::{Hash, HashAlgorithm, Hasher};
 pub use label::{Label, LabelParseError, LabelPath};
+pub use model::{
+    compute_diff, load_model, model_exists, snapshot_to_model, ApplyOptions, DiffAction,
+    ModelConfig, ModelDiff, ModelError, SystemModel, SystemState, DEFAULT_MODEL_PATH,
+};
 pub use progress::{
     CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
     SilentProgress,
