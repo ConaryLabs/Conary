@@ -452,7 +452,7 @@ fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
 
 ### Testing
 
-- **477 tests passing** (452 lib + 3 bin + 22 integration)
+- **495 tests passing** (470 lib + 3 bin + 22 integration)
 - Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, CCS building, policy engine, OCI export, and core operations
 - Integration tests for full install/remove/rollback workflows
 

@@ -66,7 +66,8 @@ cargo clippy -- -D warnings
 | Module | Purpose |
 |--------|---------|
 | `src/db/` | SQLite schema, models, migrations |
-| `src/packages/` | RPM/DEB/Arch parsers |
+| `src/packages/` | RPM/DEB/Arch parsers (unified via `common.rs` PackageMetadata) |
+| `src/compression/` | Unified decompression (Gzip, Xz, Zstd) with format detection |
 | `src/repository/` | Remote repos, metadata sync |
 | `src/resolver/` | Dependency graph, topological sort |
 | `src/filesystem/` | CAS, file deployment |
@@ -110,4 +111,4 @@ cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
 ```
 
-477 tests total (452 lib + 3 bin + 22 integration).
+495 tests total (470 lib + 3 bin + 22 integration).
