@@ -66,6 +66,14 @@ pub enum Commands {
         /// Allow downgrading to an older version
         #[arg(long)]
         allow_downgrade: bool,
+
+        /// Convert legacy packages (RPM/DEB/Arch) to CCS format during install
+        ///
+        /// Enables CAS deduplication, component selection, and atomic transactions.
+        /// Extracted hooks (users, groups, directories, systemd units) are run
+        /// declaratively before the original scriptlet.
+        #[arg(long)]
+        convert_to_ccs: bool,
     },
 
     /// Remove an installed package
@@ -1286,6 +1294,10 @@ pub enum Commands {
         /// Sandbox mode for hooks: auto, always, never (default: never)
         #[arg(long, default_value = "never")]
         sandbox: String,
+
+        /// Skip dependency checking
+        #[arg(long)]
+        no_deps: bool,
     },
 
     /// Export CCS packages to container image format
@@ -1431,5 +1443,44 @@ pub enum Commands {
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+    },
+
+    // =========================================================================
+    // Server Commands (feature-gated)
+    // =========================================================================
+
+    /// Start the Refinery server (CCS conversion proxy)
+    ///
+    /// The Refinery converts upstream packages to CCS format on-demand,
+    /// serving them with chunk deduplication. Requires --features server.
+    #[cfg(feature = "server")]
+    Server {
+        /// Address to bind to (host:port)
+        #[arg(short, long, default_value = "0.0.0.0:8080")]
+        bind: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Path to chunk storage directory
+        #[arg(long, default_value = "/var/lib/conary/data/chunks")]
+        chunk_dir: String,
+
+        /// Path to cache/scratch directory
+        #[arg(long, default_value = "/var/lib/conary/data/cache")]
+        cache_dir: String,
+
+        /// Maximum concurrent conversions
+        #[arg(long, default_value = "4")]
+        max_concurrent: usize,
+
+        /// Maximum cache size in GB (triggers LRU eviction)
+        #[arg(long, default_value = "700")]
+        max_cache_gb: u64,
+
+        /// Chunk TTL in days before LRU eviction
+        #[arg(long, default_value = "30")]
+        chunk_ttl_days: u32,
     },
 }

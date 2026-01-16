@@ -15,6 +15,7 @@ mod dependencies;
 mod download;
 mod management;
 mod metadata;
+pub mod refinery;
 mod sync;
 
 pub mod gpg;
@@ -38,6 +39,7 @@ pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
     RepositoryFormat,
 };
+pub use refinery::{RefineryClient, PackageManifest};
 
 #[cfg(test)]
 mod tests {

@@ -306,12 +306,21 @@ Move from file-level to chunk-level for massive efficiency gains. CDC gives "del
 - [x] **`--chunked` Flag** - Build CDC-enabled packages with `ccs-build --chunked`
 - [x] **Chunk Statistics** - Build summary shows chunked files, dedup savings
 
-**Phase 2: HTTP Chunk Repository**
+**Phase 2: Refinery (On-Demand Conversion Proxy)** [COMPLETE]
+- [x] **Server Module** - Feature-gated (`--features server`) Axum HTTP server
+- [x] **On-Demand Conversion** - Convert legacy packages (RPM/DEB/Arch) to CCS when requested
+- [x] **202 Accepted Pattern** - Async conversion with job polling for long-running operations
+- [x] **Chunk CAS Storage** - Store converted chunks in content-addressed storage
+- [x] **Client Integration** - RefineryClient with automatic polling and chunk assembly
+- [x] **LRU Cache Design** - Evict old chunks to manage disk space (implementation pending)
+- [x] **Deployed** - Running on crucible.conary.io (Hetzner i7-8700, 64GB, 2x1TB NVMe ZFS mirror)
+
+**Phase 3: HTTP Chunk Repository**
 - [ ] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`)
 - [ ] **HTTP/2 Multiplexed Client** - Parallel chunk fetching from CDN/S3/nginx
 - [ ] **Manifest with Merkle Root** - Cryptographically sealed repo state (supply chain security)
 
-**Phase 3: P2P Plugin (Future)**
+**Phase 4: P2P Plugin (Future)**
 - [ ] **IPFS Fetcher Plugin** - Check local IPFS node before CDN fallback
 - [ ] **BitTorrent DHT Plugin** - Peer discovery for popular chunks
 - [ ] **Transport Priority** - P2P → CDN → Mirror fallback chain

@@ -28,10 +28,10 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
-        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts, sandbox, allow_downgrade }) => {
+        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts, sandbox, allow_downgrade, convert_to_ccs }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .expect("Invalid sandbox mode. Use: auto, always, never");
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade)
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs)
         }
 
         Some(Commands::Remove { package_name, db_path, root, version, no_scripts, sandbox }) => {
@@ -321,10 +321,10 @@ fn main() -> Result<()> {
             commands::ccs::cmd_ccs_keygen(&output, key_id, force)
         }
 
-        Some(Commands::CcsInstall { package, db_path, root, dry_run, allow_unsigned, policy, components, sandbox }) => {
+        Some(Commands::CcsInstall { package, db_path, root, dry_run, allow_unsigned, policy, components, sandbox, no_deps }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .expect("Invalid sandbox mode. Use: auto, always, never");
-            commands::ccs::cmd_ccs_install(&package, &db_path, &root, dry_run, allow_unsigned, policy, components, sandbox_mode)
+            commands::ccs::cmd_ccs_install(&package, &db_path, &root, dry_run, allow_unsigned, policy, components, sandbox_mode, no_deps)
         }
 
         Some(Commands::CcsExport { packages, output, format, db_path }) => {
@@ -409,6 +409,35 @@ fn main() -> Result<()> {
 
         Some(Commands::DeriveStale { db_path }) => {
             commands::cmd_derive_stale(&db_path)
+        }
+
+        #[cfg(feature = "server")]
+        Some(Commands::Server {
+            bind,
+            db_path,
+            chunk_dir,
+            cache_dir,
+            max_concurrent,
+            max_cache_gb,
+            chunk_ttl_days,
+        }) => {
+            use conary::server::{run_server, ServerConfig};
+            use std::path::PathBuf;
+
+            let config = ServerConfig {
+                bind_addr: bind.parse().expect("Invalid bind address"),
+                db_path: PathBuf::from(db_path),
+                chunk_dir: PathBuf::from(chunk_dir),
+                cache_dir: PathBuf::from(cache_dir),
+                max_concurrent_conversions: max_concurrent,
+                cache_max_bytes: max_cache_gb * 1024 * 1024 * 1024,
+                chunk_ttl_days,
+            };
+
+            // Run the async server
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(run_server(config))
         }
 
         None => {

@@ -1302,3 +1302,51 @@ pub fn migrate_v25(conn: &Connection) -> Result<()> {
     info!("Schema version 25 applied successfully (derived packages)");
     Ok(())
 }
+
+/// Version 26: Converted packages tracking
+///
+/// Tracks packages converted from legacy formats (RPM/DEB/Arch) to CCS format.
+/// This enables:
+/// - Skip re-conversion of same package artifact (checksum-based dedup)
+/// - Track conversion fidelity for debugging and user warnings
+/// - Store detected hooks extracted from scriptlets
+/// - Re-convert when conversion algorithm is upgraded
+///
+/// Creates:
+/// - converted_packages: Track conversion metadata and fidelity
+pub fn migrate_v26(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 26");
+
+    conn.execute_batch(
+        "
+        -- Converted packages: Track packages converted from legacy formats to CCS
+        CREATE TABLE converted_packages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Reference to the converted trove (CCS package that was installed)
+            trove_id INTEGER REFERENCES troves(id) ON DELETE CASCADE,
+            -- Original package format (rpm, deb, arch)
+            original_format TEXT NOT NULL,
+            -- Checksum of original package file (skip if already converted)
+            original_checksum TEXT NOT NULL,
+            -- Conversion algorithm version (re-convert if upgraded)
+            conversion_version INTEGER NOT NULL DEFAULT 1,
+            -- Fidelity level achieved (full, high, partial, low)
+            conversion_fidelity TEXT NOT NULL,
+            -- JSON of extracted hooks and fidelity details
+            detected_hooks TEXT,
+            -- When the conversion occurred
+            converted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- Unique on checksum to prevent duplicate conversions
+            UNIQUE(original_checksum)
+        );
+
+        CREATE INDEX idx_converted_packages_trove ON converted_packages(trove_id);
+        CREATE INDEX idx_converted_packages_format ON converted_packages(original_format);
+        CREATE INDEX idx_converted_packages_checksum ON converted_packages(original_checksum);
+        CREATE INDEX idx_converted_packages_fidelity ON converted_packages(conversion_fidelity);
+        ",
+    )?;
+
+    info!("Schema version 26 applied successfully (converted packages)");
+    Ok(())
+}

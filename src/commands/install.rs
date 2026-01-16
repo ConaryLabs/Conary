@@ -5,7 +5,9 @@ use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
+use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
+use sha2::Digest;
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::arch::ArchPackage;
@@ -403,6 +405,7 @@ impl ComponentSelection {
 /// * `selection_reason` - Human-readable reason for installation (e.g., "Installed via @server")
 /// * `sandbox_mode` - Sandbox mode for scriptlet execution
 /// * `allow_downgrade` - Allow installing older versions
+/// * `convert_to_ccs` - Convert legacy packages to CCS format during install
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
@@ -416,6 +419,7 @@ pub fn cmd_install(
     selection_reason: Option<&str>,
     sandbox_mode: SandboxMode,
     allow_downgrade: bool,
+    convert_to_ccs: bool,
 ) -> Result<()> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
@@ -460,6 +464,147 @@ pub fn cmd_install(
 
     progress.set_phase(package, InstallPhase::Parsing);
     let pkg = parse_package(&resolved.path, format)?;
+
+    // Convert to CCS format if requested (only for legacy packages)
+    if convert_to_ccs {
+        info!("Converting {} to CCS format...", pkg.name());
+        progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
+
+        // Compute checksum of original package for deduplication
+        let package_bytes = std::fs::read(&resolved.path)
+            .with_context(|| format!("Failed to read package file for checksum: {}", resolved.path.display()))?;
+        use sha2::Sha256;
+        let mut hasher = Sha256::new();
+        hasher.update(&package_bytes);
+        let hash_result = hasher.finalize();
+        let original_checksum = format!("sha256:{:x}", hash_result);
+
+        // Determine format string
+        let format_str = match format {
+            PackageFormatType::Rpm => "rpm",
+            PackageFormatType::Deb => "deb",
+            PackageFormatType::Arch => "arch",
+        };
+
+        // Open database early to check for existing conversion
+        let conn = conary::db::open(db_path)
+            .context("Failed to open package database")?;
+
+        // Check if already converted (skip re-conversion)
+        let needs_conversion = if let Some(existing) = conary::db::models::ConvertedPackage::find_by_checksum(
+            &conn,
+            &original_checksum,
+        )? {
+            if existing.needs_reconversion() {
+                info!("Re-converting {} (algorithm upgraded)", pkg.name());
+                conary::db::models::ConvertedPackage::delete_by_checksum(
+                    &conn,
+                    &original_checksum,
+                )?;
+                true
+            } else {
+                // Already converted and up to date - skip CCS path, use regular install
+                // (CCS file from previous run is in temp dir that's gone)
+                info!("Package {} already converted, using regular install path", pkg.name());
+                println!("Note: {} was previously converted - using standard install", pkg.name());
+                false
+            }
+        } else {
+            true // No existing conversion, proceed
+        };
+
+        if !needs_conversion {
+            // Fall through to regular install path (below the convert_to_ccs block)
+        } else {
+
+        // Extract files for conversion
+        let extracted = pkg.extract_file_contents()
+            .with_context(|| format!("Failed to extract files for conversion: {}", pkg.name()))?;
+
+        // Build PackageMetadata from the package
+        use conary::packages::common::PackageMetadata;
+        let metadata = PackageMetadata {
+            package_path: resolved.path.clone(),
+            name: pkg.name().to_string(),
+            version: pkg.version().to_string(),
+            architecture: pkg.architecture().map(|s| s.to_string()),
+            description: pkg.description().map(|s| s.to_string()),
+            files: pkg.files().to_vec(),
+            dependencies: pkg.dependencies().to_vec(),
+            scriptlets: pkg.scriptlets().to_vec(),
+            config_files: Vec::new(), // Not all formats provide this
+        };
+
+        // Create temp directory for CCS output
+        let ccs_temp = TempDir::new()
+            .context("Failed to create temp directory for CCS conversion")?;
+
+        let options = ConversionOptions {
+            enable_chunking: true,
+            output_dir: ccs_temp.path().to_path_buf(),
+            auto_classify: true,
+            min_fidelity: FidelityLevel::Partial,
+        };
+
+        let converter = LegacyConverter::new(options);
+        let conversion_result = converter.convert(&metadata, &extracted, format_str, &original_checksum)
+            .with_context(|| format!("Failed to convert {} to CCS format", pkg.name()))?;
+
+        // Warn if fidelity is below High
+        if conversion_result.fidelity.level < FidelityLevel::High {
+            warn!(
+                "Conversion fidelity is {}: complex scripts may not be fully analyzed",
+                conversion_result.fidelity.level
+            );
+            eprintln!(
+                "WARNING: Conversion fidelity is {} - complex legacy scripts may not be fully analyzed",
+                conversion_result.fidelity.level
+            );
+        }
+
+        // Get the package path (should always be Some after successful conversion)
+        let ccs_package_path = conversion_result.package_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Conversion succeeded but no package path returned"))?;
+
+        info!(
+            "Converted {} to CCS format: {} (fidelity: {})",
+            pkg.name(),
+            ccs_package_path.display(),
+            conversion_result.fidelity.level
+        );
+
+        // Serialize hooks to JSON for storage
+        let hooks_json = serde_json::to_string(&conversion_result.detected_hooks)
+            .unwrap_or_else(|_| "{}".to_string());
+
+        // Create conversion record (will be linked to trove after install)
+        let mut converted_pkg = conary::db::models::ConvertedPackage::new(
+            conversion_result.original_format.clone(),
+            conversion_result.original_checksum.clone(),
+            conversion_result.fidelity.level.to_string(),
+        );
+        converted_pkg.detected_hooks = Some(hooks_json);
+        converted_pkg.insert(&conn)?;
+
+        // Redirect to CCS install
+        println!("Installing converted CCS package...");
+        let ccs_path = ccs_package_path.to_string_lossy().to_string();
+
+        // Use the CCS installer with the converted package
+        return super::ccs::cmd_ccs_install(
+            &ccs_path,
+            db_path,
+            root,
+            dry_run,
+            true, // allow_unsigned - converted packages aren't signed yet
+            None, // policy
+            None, // components - install all
+            sandbox_mode,
+            no_deps, // pass through dependency check flag
+        );
+        } // end of needs_conversion else block
+    } // end of convert_to_ccs block
 
     let mut conn = conary::db::open(db_path)
         .context("Failed to open package database")?;

@@ -529,6 +529,7 @@ pub fn cmd_ccs_install(
     policy: Option<String>,
     _components: Option<Vec<String>>,
     _sandbox: super::SandboxMode,
+    no_deps: bool,
 ) -> Result<()> {
     use conary::ccs::{CcsPackage, HookExecutor};
     use conary::packages::traits::PackageFormat;
@@ -599,28 +600,32 @@ pub fn cmd_ccs_install(
     }
 
     // Step 4: Check dependencies
-    println!("Checking dependencies...");
-    for dep in ccs_pkg.dependencies() {
-        let satisfied = conary::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
-        if !satisfied {
-            let pkg_exists = conary::db::models::Trove::find_by_name(&conn, &dep.name)?;
-            if pkg_exists.is_empty() {
-                if dry_run {
-                    println!("  Missing dependency: {} (would fail)", dep.name);
-                } else {
-                    anyhow::bail!(
-                        "Missing dependency: {}{}",
-                        dep.name,
-                        dep.version
-                            .as_ref()
-                            .map(|v| format!(" {}", v))
-                            .unwrap_or_default()
-                    );
+    if no_deps {
+        println!("Skipping dependency check (--no-deps)");
+    } else {
+        println!("Checking dependencies...");
+        for dep in ccs_pkg.dependencies() {
+            let satisfied = conary::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
+            if !satisfied {
+                let pkg_exists = conary::db::models::Trove::find_by_name(&conn, &dep.name)?;
+                if pkg_exists.is_empty() {
+                    if dry_run {
+                        println!("  Missing dependency: {} (would fail)", dep.name);
+                    } else {
+                        anyhow::bail!(
+                            "Missing dependency: {}{}",
+                            dep.name,
+                            dep.version
+                                .as_ref()
+                                .map(|v| format!(" {}", v))
+                                .unwrap_or_default()
+                        );
+                    }
                 }
             }
         }
+        println!("Dependencies satisfied.");
     }
-    println!("Dependencies satisfied.");
 
     if dry_run {
         println!();

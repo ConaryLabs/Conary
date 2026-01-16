@@ -29,7 +29,8 @@ Then `recall("architecture")` and `recall("progress")` before making changes.
 ## Build & Test
 
 ```bash
-cargo build --release
+cargo build --release                    # Client-only (default)
+cargo build --release --features server  # With Refinery server
 cargo test
 cargo clippy -- -D warnings
 ```
@@ -82,10 +83,11 @@ cargo clippy -- -D warnings
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
 | `src/model/` | System Model - declarative OS state (parser, diff, state capture) |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
+| `src/server/` | Refinery server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
 
 ## Database Schema
 
-Currently v24. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups.
+Currently v26. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -104,6 +106,8 @@ Key schema additions:
 - v22: security columns on `repository_packages` - security update tracking
 - v23: `tx_uuid` column on changesets - transaction engine crash recovery correlation
 - v24: `content_url` column on repositories - reference mirrors for split metadata/content
+- v25: `converted_packages` table - track legacy→CCS conversions with fidelity
+- v26: `derived_packages` table - packages derived from base packages via model-apply
 
 ## Testing
 

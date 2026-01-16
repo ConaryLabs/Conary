@@ -307,6 +307,7 @@ pub fn cmd_collection_install(
             Some(&reason),
             sandbox_mode,
             false,  // allow_downgrade
+            false,  // convert_to_ccs
         ) {
             Ok(()) => {
                 installed_count += 1;

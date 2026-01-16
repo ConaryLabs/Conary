@@ -36,6 +36,9 @@ pub mod transaction;
 pub mod trigger;
 pub mod version;
 
+#[cfg(feature = "server")]
+pub mod server;
+
 pub use components::{ComponentClassifier, ComponentType};
 pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 pub use error::{Error, Result};

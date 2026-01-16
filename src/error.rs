@@ -88,6 +88,10 @@ pub enum Error {
     /// Transaction recovery failed
     #[error("Recovery failed: {0}")]
     RecoveryFailed(String),
+
+    /// Operation timed out
+    #[error("Timeout: {0}")]
+    TimeoutError(String),
 }
 
 /// Result type alias using Conary's Error type

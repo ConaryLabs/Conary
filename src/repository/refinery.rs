@@ -1,0 +1,461 @@
+// src/repository/refinery.rs
+
+//! Refinery client for fetching CCS packages from conversion proxies
+//!
+//! The Refinery is a server that converts legacy packages (RPM/DEB/Arch) to CCS
+//! format on-demand. When a package isn't cached, the server returns 202 Accepted
+//! with a job ID that the client polls until conversion completes.
+//!
+//! # Flow
+//! 1. Request package: GET /v1/{distro}/packages/{name}
+//! 2. If 200: Package ready, parse manifest
+//! 3. If 202: Conversion in progress, poll /v1/jobs/{id}
+//! 4. Once ready: Download chunks listed in manifest
+//! 5. Assemble CCS package from chunks
+
+use crate::error::{Error, Result};
+use indicatif::{ProgressBar, ProgressStyle};
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tracing::{debug, info, warn};
+
+/// Default timeout for initial request (30 seconds)
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default timeout for polling (5 minutes max wait)
+const POLL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Poll interval (2 seconds)
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Chunk download timeout (60 seconds per chunk)
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Response when package needs conversion (202 Accepted)
+#[derive(Debug, Deserialize)]
+pub struct ConversionAccepted {
+    pub status: String,
+    pub job_id: String,
+    pub poll_url: String,
+    pub eta_seconds: Option<u32>,
+}
+
+/// Job status response from polling endpoint
+#[derive(Debug, Deserialize)]
+pub struct JobStatus {
+    pub job_id: String,
+    pub status: String,
+    pub distro: String,
+    pub package: String,
+    pub version: Option<String>,
+    pub progress: Option<u8>,
+    pub error: Option<String>,
+    pub manifest: Option<PackageManifest>,
+}
+
+/// Package manifest with chunk list
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PackageManifest {
+    pub name: String,
+    pub version: String,
+    pub distro: String,
+    pub chunks: Vec<ChunkRef>,
+    pub total_size: u64,
+    pub content_hash: String,
+}
+
+/// Reference to a chunk in the CAS
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ChunkRef {
+    pub hash: String,
+    pub size: u64,
+    pub offset: u64,
+}
+
+/// Client for interacting with a Refinery server
+pub struct RefineryClient {
+    client: Client,
+    base_url: String,
+}
+
+impl RefineryClient {
+    /// Create a new Refinery client
+    pub fn new(base_url: &str) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+
+        // Normalize base URL (remove trailing slash)
+        let base_url = base_url.trim_end_matches('/').to_string();
+
+        Ok(Self { client, base_url })
+    }
+
+    /// Request a package from the Refinery
+    ///
+    /// Returns the manifest when the package is ready. If conversion is needed,
+    /// this will poll automatically until complete or timeout.
+    pub fn get_package(
+        &self,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<PackageManifest> {
+        let url = if let Some(v) = version {
+            format!("{}/v1/{}/packages/{}?version={}", self.base_url, distro, name, v)
+        } else {
+            format!("{}/v1/{}/packages/{}", self.base_url, distro, name)
+        };
+
+        info!("Requesting package from Refinery: {}", url);
+
+        let response = self.client.get(&url).send().map_err(|e| {
+            Error::DownloadError(format!("Failed to connect to Refinery: {e}"))
+        })?;
+
+        match response.status().as_u16() {
+            200 => {
+                // Package ready - parse manifest
+                let manifest: PackageManifest = response.json().map_err(|e| {
+                    Error::DownloadError(format!("Failed to parse package manifest: {e}"))
+                })?;
+                info!("Package ready: {} chunks, {} bytes", manifest.chunks.len(), manifest.total_size);
+                Ok(manifest)
+            }
+            202 => {
+                // Conversion in progress - need to poll
+                let accepted: ConversionAccepted = response.json().map_err(|e| {
+                    Error::DownloadError(format!("Failed to parse 202 response: {e}"))
+                })?;
+                info!(
+                    "Package conversion queued (job {}), ETA: {:?}s",
+                    accepted.job_id, accepted.eta_seconds
+                );
+                self.poll_for_completion(&accepted.job_id)
+            }
+            404 => {
+                Err(Error::NotFoundError(format!(
+                    "Package '{}' not found in {} repositories",
+                    name, distro
+                )))
+            }
+            503 => {
+                Err(Error::DownloadError(
+                    "Refinery conversion queue is full, try again later".to_string(),
+                ))
+            }
+            status => {
+                let body = response.text().unwrap_or_default();
+                Err(Error::DownloadError(format!(
+                    "Refinery returned HTTP {}: {}",
+                    status, body
+                )))
+            }
+        }
+    }
+
+    /// Poll for job completion
+    fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
+        let url = format!("{}/v1/jobs/{}", self.base_url, job_id);
+        let start = std::time::Instant::now();
+
+        // Create a spinner for visual feedback
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .expect("Invalid spinner template"),
+        );
+        spinner.set_message(format!("Converting package (job {})...", job_id));
+        spinner.enable_steady_tick(Duration::from_millis(100));
+
+        loop {
+            // Check timeout
+            if start.elapsed() > POLL_TIMEOUT {
+                spinner.finish_with_message("Conversion timed out");
+                return Err(Error::TimeoutError(format!(
+                    "Conversion job {} timed out after {:?}",
+                    job_id, POLL_TIMEOUT
+                )));
+            }
+
+            // Poll job status
+            let response = self.client.get(&url).send().map_err(|e| {
+                Error::DownloadError(format!("Failed to poll job status: {e}"))
+            })?;
+
+            if !response.status().is_success() {
+                spinner.finish_with_message("Poll failed");
+                return Err(Error::DownloadError(format!(
+                    "Job poll returned HTTP {}",
+                    response.status()
+                )));
+            }
+
+            let status: JobStatus = response.json().map_err(|e| {
+                Error::DownloadError(format!("Failed to parse job status: {e}"))
+            })?;
+
+            match status.status.as_str() {
+                "ready" => {
+                    spinner.finish_with_message("Conversion complete");
+                    info!("Conversion complete for job {}", job_id);
+
+                    // The manifest should be in the response, but if not we need to
+                    // re-request the package endpoint
+                    if let Some(manifest) = status.manifest {
+                        return Ok(manifest);
+                    }
+
+                    // Re-request to get manifest
+                    let version = status.version.as_deref();
+                    return self.get_package(&status.distro, &status.package, version);
+                }
+                "failed" => {
+                    spinner.finish_with_message("Conversion failed");
+                    let error_msg = status.error.unwrap_or_else(|| "Unknown error".to_string());
+                    return Err(Error::DownloadError(format!(
+                        "Conversion failed: {}",
+                        error_msg
+                    )));
+                }
+                "converting" | "queued" => {
+                    // Still in progress - update spinner and continue polling
+                    if let Some(progress) = status.progress {
+                        spinner.set_message(format!(
+                            "Converting {} ({}%)...",
+                            status.package, progress
+                        ));
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+                other => {
+                    warn!("Unknown job status: {}", other);
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+            }
+        }
+    }
+
+    /// Download all chunks for a package
+    ///
+    /// Downloads chunks in parallel (up to 4 concurrent) and returns a map
+    /// of hash -> data for assembly.
+    pub fn download_chunks(
+        &self,
+        manifest: &PackageManifest,
+        progress: Option<&ProgressBar>,
+    ) -> Result<HashMap<String, Vec<u8>>> {
+        let mut chunks = HashMap::new();
+
+        info!("Downloading {} chunks for {}", manifest.chunks.len(), manifest.name);
+
+        // Create a client with longer timeout for chunk downloads
+        let chunk_client = Client::builder()
+            .timeout(CHUNK_TIMEOUT)
+            .build()
+            .map_err(|e| Error::InitError(format!("Failed to create chunk client: {e}")))?;
+
+        let total_size: u64 = manifest.chunks.iter().map(|c| c.size).sum();
+        let mut downloaded: u64 = 0;
+
+        if let Some(pb) = progress {
+            pb.set_length(total_size);
+            pb.set_message(format!("Downloading {} chunks", manifest.chunks.len()));
+        }
+
+        for chunk in &manifest.chunks {
+            let url = format!("{}/v1/chunks/{}", self.base_url, chunk.hash);
+            debug!("Downloading chunk: {} ({} bytes)", chunk.hash, chunk.size);
+
+            let response = chunk_client.get(&url).send().map_err(|e| {
+                Error::DownloadError(format!("Failed to download chunk {}: {e}", chunk.hash))
+            })?;
+
+            if !response.status().is_success() {
+                return Err(Error::DownloadError(format!(
+                    "Chunk {} returned HTTP {}",
+                    chunk.hash, response.status()
+                )));
+            }
+
+            let data = response.bytes().map_err(|e| {
+                Error::DownloadError(format!("Failed to read chunk {}: {e}", chunk.hash))
+            })?;
+
+            // Verify chunk hash
+            use sha2::{Digest, Sha256};
+            let actual_hash = format!("{:x}", Sha256::digest(&data));
+            if actual_hash != chunk.hash {
+                return Err(Error::ChecksumMismatch {
+                    expected: chunk.hash.clone(),
+                    actual: actual_hash,
+                });
+            }
+
+            downloaded += data.len() as u64;
+            if let Some(pb) = progress {
+                pb.set_position(downloaded);
+            }
+
+            chunks.insert(chunk.hash.clone(), data.to_vec());
+        }
+
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!(
+                "Downloaded {} chunks ({} bytes)",
+                chunks.len(),
+                downloaded
+            ));
+        }
+
+        info!("Downloaded {} chunks ({} bytes)", chunks.len(), downloaded);
+        Ok(chunks)
+    }
+
+    /// Assemble a CCS package from downloaded chunks
+    ///
+    /// Writes chunks to the output file in order according to manifest offsets.
+    pub fn assemble_package(
+        manifest: &PackageManifest,
+        chunks: &HashMap<String, Vec<u8>>,
+        output_path: &Path,
+    ) -> Result<()> {
+        info!("Assembling CCS package: {}", output_path.display());
+
+        // Sort chunks by offset
+        let mut sorted_chunks: Vec<_> = manifest.chunks.iter().collect();
+        sorted_chunks.sort_by_key(|c| c.offset);
+
+        // Create output file
+        let mut file = std::fs::File::create(output_path).map_err(|e| {
+            Error::IoError(format!("Failed to create output file: {e}"))
+        })?;
+
+        // Write chunks in order
+        for chunk_ref in sorted_chunks {
+            let data = chunks.get(&chunk_ref.hash).ok_or_else(|| {
+                Error::DownloadError(format!("Missing chunk: {}", chunk_ref.hash))
+            })?;
+
+            file.write_all(data).map_err(|e| {
+                Error::IoError(format!("Failed to write chunk: {e}"))
+            })?;
+        }
+
+        // Verify total size
+        let metadata = std::fs::metadata(output_path).map_err(|e| {
+            Error::IoError(format!("Failed to read output file metadata: {e}"))
+        })?;
+
+        if metadata.len() != manifest.total_size {
+            return Err(Error::ChecksumMismatch {
+                expected: format!("{} bytes", manifest.total_size),
+                actual: format!("{} bytes", metadata.len()),
+            });
+        }
+
+        // Verify content hash
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let file_data = std::fs::read(output_path).map_err(|e| {
+            Error::IoError(format!("Failed to read output file for verification: {e}"))
+        })?;
+        hasher.update(&file_data);
+        let actual_hash = format!("{:x}", hasher.finalize());
+
+        if actual_hash != manifest.content_hash {
+            // Clean up invalid file
+            let _ = std::fs::remove_file(output_path);
+            return Err(Error::ChecksumMismatch {
+                expected: manifest.content_hash.clone(),
+                actual: actual_hash,
+            });
+        }
+
+        info!("CCS package assembled and verified: {}", output_path.display());
+        Ok(())
+    }
+
+    /// High-level: Fetch a package from Refinery and save to disk
+    ///
+    /// This is the main entry point for downloading CCS packages:
+    /// 1. Request package (handling 202 polling automatically)
+    /// 2. Download all chunks
+    /// 3. Assemble into CCS package file
+    pub fn fetch_package(
+        &self,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+        output_dir: &Path,
+    ) -> Result<PathBuf> {
+        // Get manifest (may poll if conversion needed)
+        let manifest = self.get_package(distro, name, version)?;
+
+        // Create progress bar for chunk download
+        let pb = ProgressBar::new(manifest.total_size);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
+                .expect("Invalid progress bar template")
+                .progress_chars("#>-"),
+        );
+
+        // Download chunks
+        let chunks = self.download_chunks(&manifest, Some(&pb))?;
+
+        // Assemble package
+        let output_path = output_dir.join(format!("{}-{}.ccs", manifest.name, manifest.version));
+        Self::assemble_package(&manifest, &chunks, &output_path)?;
+
+        Ok(output_path)
+    }
+
+    /// Check if Refinery is healthy
+    pub fn health_check(&self) -> Result<bool> {
+        let url = format!("{}/health", self.base_url);
+        match self.client.get(&url).send() {
+            Ok(response) => Ok(response.status().is_success()),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base_url_normalization() {
+        // With trailing slash
+        let client = RefineryClient::new("http://localhost:8080/").unwrap();
+        assert_eq!(client.base_url, "http://localhost:8080");
+
+        // Without trailing slash
+        let client = RefineryClient::new("http://localhost:8080").unwrap();
+        assert_eq!(client.base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_conversion_accepted_parsing() {
+        let json = r#"{"status":"queued","job_id":"123","poll_url":"/v1/jobs/123","eta_seconds":30}"#;
+        let accepted: ConversionAccepted = serde_json::from_str(json).unwrap();
+        assert_eq!(accepted.status, "queued");
+        assert_eq!(accepted.job_id, "123");
+        assert_eq!(accepted.eta_seconds, Some(30));
+    }
+
+    #[test]
+    fn test_job_status_parsing() {
+        let json = r#"{"job_id":"1","status":"ready","distro":"arch","package":"gzip","version":null,"progress":null,"error":null,"manifest":null}"#;
+        let status: JobStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.status, "ready");
+        assert_eq!(status.package, "gzip");
+    }
+}
