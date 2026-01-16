@@ -25,6 +25,57 @@ const MAX_RETRIES: u32 = 3;
 /// Retry delay in milliseconds
 const RETRY_DELAY_MS: u64 = 1000;
 
+/// Buffer size for streaming downloads (8 KB)
+const STREAM_BUFFER_SIZE: usize = 8192;
+
+/// Stream HTTP response to file with optional progress tracking
+///
+/// Always streams data in chunks, never buffering the entire response in memory.
+/// This is safe for files of any size.
+fn stream_response_to_file(
+    mut response: reqwest::blocking::Response,
+    file: &mut File,
+    total_size: u64,
+    progress_bar: Option<&ProgressBar>,
+    display_name: &str,
+) -> Result<u64> {
+    // Set up progress bar if provided
+    if let Some(pb) = progress_bar {
+        if total_size > 0 {
+            pb.set_length(total_size);
+            pb.set_message(display_name.to_string());
+        } else {
+            // Unknown size - show bytes downloaded without percentage
+            pb.set_message(format!("{} (unknown size)", display_name));
+        }
+    }
+
+    let mut downloaded: u64 = 0;
+    let mut buffer = [0u8; STREAM_BUFFER_SIZE];
+
+    loop {
+        let bytes_read = response.read(&mut buffer).map_err(|e| {
+            Error::IoError(format!("Failed to read response: {e}"))
+        })?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        file.write_all(&buffer[..bytes_read]).map_err(|e| {
+            Error::IoError(format!("Failed to write data: {e}"))
+        })?;
+
+        downloaded += bytes_read as u64;
+
+        if let Some(pb) = progress_bar {
+            pb.set_position(downloaded);
+        }
+    }
+
+    Ok(downloaded)
+}
+
 /// HTTP client wrapper with retry support
 pub struct RepositoryClient {
     client: Client,
@@ -221,52 +272,20 @@ impl RepositoryClient {
                         Error::IoError(format!("Failed to create file {}: {e}", temp_path.display()))
                     })?;
 
-                    // If we have a progress bar and know the size, use chunked download
+                    // Stream response to file, optionally updating progress bar
+                    let downloaded = stream_response_to_file(
+                        response,
+                        &mut file,
+                        total_size,
+                        progress_bar,
+                        display_name,
+                    )?;
+
                     if let Some(pb) = progress_bar {
-                        if total_size > 0 {
-                            pb.set_length(total_size);
-                            pb.set_message(display_name.to_string());
-
-                            let mut downloaded: u64 = 0;
-                            let mut reader = response;
-                            let mut buffer = [0u8; 8192];
-
-                            loop {
-                                let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                                    Error::IoError(format!("Failed to read response: {e}"))
-                                })?;
-
-                                if bytes_read == 0 {
-                                    break;
-                                }
-
-                                file.write_all(&buffer[..bytes_read]).map_err(|e| {
-                                    Error::IoError(format!("Failed to write data: {e}"))
-                                })?;
-
-                                downloaded += bytes_read as u64;
-                                pb.set_position(downloaded);
-                            }
-
-                            pb.finish_with_message(format!("{} [done]", display_name));
-                        } else {
-                            // Unknown size - use spinner mode
-                            pb.set_message(format!("{} (unknown size)", display_name));
-                            io::copy(&mut response.bytes().map_err(|e| {
-                                Error::IoError(format!("Failed to read response: {e}"))
-                            })?.as_ref(), &mut file).map_err(|e| {
-                                Error::IoError(format!("Failed to write data: {e}"))
-                            })?;
-                            pb.finish_with_message(format!("{} [done]", display_name));
-                        }
-                    } else {
-                        // No progress bar - use simple copy
-                        io::copy(&mut response.bytes().map_err(|e| {
-                            Error::IoError(format!("Failed to read response: {e}"))
-                        })?.as_ref(), &mut file).map_err(|e| {
-                            Error::IoError(format!("Failed to write data: {e}"))
-                        })?;
+                        pb.finish_with_message(format!("{} [done]", display_name));
                     }
+
+                    info!("Downloaded {} bytes", downloaded);
 
                     // Atomic rename from temp to final destination
                     fs::rename(&temp_path, dest_path).map_err(|e| {

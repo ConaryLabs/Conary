@@ -4,6 +4,16 @@
 //!
 //! Functions for downloading packages and delta updates from repositories,
 //! with checksum and GPG signature verification.
+//!
+//! # Architecture
+//!
+//! All public download functions delegate to [`download_package_inner`], which handles:
+//! - Filename construction from URL
+//! - Download (with optional progress tracking)
+//! - Checksum verification with cleanup on failure
+//! - Optional GPG signature verification
+//!
+//! The public functions are thin wrappers providing ergonomic APIs.
 
 use crate::db::models::RepositoryPackage;
 use crate::error::{Error, Result};
@@ -30,35 +40,114 @@ pub struct DownloadOptions {
     pub repository_name: String,
 }
 
-/// Download a package from a repository
+// =============================================================================
+// Core download implementation
+// =============================================================================
+
+/// Internal unified download function
 ///
-/// Downloads the package and verifies its checksum against the trusted metadata.
-/// If verification fails, the corrupted/invalid file is removed before returning
-/// the error to prevent cache pollution.
-pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
+/// All public download functions delegate to this implementation.
+/// Handles filename construction, download, checksum verification, and GPG verification.
+fn download_package_inner(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    options: Option<&DownloadOptions>,
+    progress: Option<&ProgressBar>,
+) -> Result<PathBuf> {
     let client = RepositoryClient::new()?;
 
-    // Construct destination path
+    // Construct destination path from URL filename or generate default
+    let dest_path = construct_dest_path(repo_pkg, dest_dir);
+
+    // Download the file (with or without progress)
+    if let Some(pb) = progress {
+        client.download_file_with_progress(
+            &repo_pkg.download_url,
+            &dest_path,
+            &repo_pkg.name,
+            Some(pb),
+        )?;
+    } else {
+        client.download_file(&repo_pkg.download_url, &dest_path)?;
+    }
+
+    // Verify checksum - clean up invalid file on failure
+    if let Err(e) = verify_checksum(&dest_path, &repo_pkg.checksum) {
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(e);
+    }
+
+    // GPG verification if enabled
+    if let Some(opts) = options {
+        verify_gpg_signature(repo_pkg, &dest_path, opts)?;
+    }
+
+    Ok(dest_path)
+}
+
+/// Construct destination path from package info
+fn construct_dest_path(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> PathBuf {
     let default_filename = format!("{}-{}.rpm", repo_pkg.name, repo_pkg.version);
     let filename = repo_pkg
         .download_url
         .split('/')
         .next_back()
         .unwrap_or(&default_filename);
+    dest_dir.join(filename)
+}
 
-    let dest_path = dest_dir.join(filename);
-
-    // Download the file
-    client.download_file(&repo_pkg.download_url, &dest_path)?;
-
-    // Verify checksum - clean up invalid file on failure
-    if let Err(e) = verify_checksum(&dest_path, &repo_pkg.checksum) {
-        // Remove the corrupted/invalid file to prevent cache pollution
-        let _ = std::fs::remove_file(&dest_path);
-        return Err(e);
+/// Verify GPG signature with appropriate error handling
+fn verify_gpg_signature(
+    repo_pkg: &RepositoryPackage,
+    dest_path: &Path,
+    opts: &DownloadOptions,
+) -> Result<()> {
+    if !opts.gpg_check {
+        return Ok(());
     }
 
-    Ok(dest_path)
+    match verify_package_signature(dest_path, &repo_pkg.download_url, opts) {
+        Ok(()) => {
+            info!("GPG signature verified for {}", repo_pkg.name);
+            Ok(())
+        }
+        Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
+            if opts.gpg_strict {
+                Err(Error::GpgVerificationFailed(format!(
+                    "GPG signature required but not found for '{}' (strict mode enabled).\n\
+                     The repository '{}' requires all packages to have valid GPG signatures.\n\
+                     Either provide a signed package or disable strict mode.",
+                    repo_pkg.name, opts.repository_name
+                )))
+            } else {
+                warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
+                Ok(())
+            }
+        }
+        Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
+            Err(Error::GpgVerificationFailed(format!(
+                "GPG verification failed for '{}': {}.\n\
+                 To fix this, run:\n  \
+                 conary key-import {} <key-url-or-file>\n\
+                 Or disable GPG checking for this repository.",
+                repo_pkg.name, msg, opts.repository_name
+            )))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+// =============================================================================
+// Public API (thin wrappers around download_package_inner)
+// =============================================================================
+
+/// Download a package from a repository
+///
+/// Downloads the package and verifies its checksum against the trusted metadata.
+/// If verification fails, the corrupted/invalid file is removed before returning
+/// the error to prevent cache pollution.
+pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, None, None)
 }
 
 /// Download a package with optional GPG signature verification
@@ -81,47 +170,7 @@ pub fn download_package_verified(
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
 ) -> Result<PathBuf> {
-    // First, download and verify checksum
-    let dest_path = download_package(repo_pkg, dest_dir)?;
-
-    // If GPG options provided and gpg_check enabled, verify signature
-    if let Some(opts) = options
-        && opts.gpg_check
-    {
-        match verify_package_signature(&dest_path, &repo_pkg.download_url, opts) {
-            Ok(()) => {
-                info!("GPG signature verified for {}", repo_pkg.name);
-            }
-            Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
-                // Signature not found - strict mode fails, otherwise warn
-                if opts.gpg_strict {
-                    return Err(Error::GpgVerificationFailed(format!(
-                        "GPG signature required but not found for '{}' (strict mode enabled).\n\
-                         The repository '{}' requires all packages to have valid GPG signatures.\n\
-                         Either provide a signed package or disable strict mode.",
-                        repo_pkg.name, opts.repository_name
-                    )));
-                }
-                warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
-            }
-            Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
-                // Key not imported - fail with helpful message
-                return Err(Error::GpgVerificationFailed(format!(
-                    "GPG verification failed for '{}': {}.\n\
-                     To fix this, run:\n  \
-                     conary key-import {} <key-url-or-file>\n\
-                     Or disable GPG checking for this repository.",
-                    repo_pkg.name, msg, opts.repository_name
-                )));
-            }
-            Err(e) => {
-                // Other errors (invalid signature, etc.) - fail
-                return Err(e);
-            }
-        }
-    }
-
-    Ok(dest_path)
+    download_package_inner(repo_pkg, dest_dir, options, None)
 }
 
 /// Verify GPG signature for a downloaded package
@@ -299,34 +348,7 @@ pub fn download_package_with_progress(
     dest_dir: &Path,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    let client = RepositoryClient::new()?;
-
-    // Construct destination path
-    let default_filename = format!("{}-{}.rpm", repo_pkg.name, repo_pkg.version);
-    let filename = repo_pkg
-        .download_url
-        .split('/')
-        .next_back()
-        .unwrap_or(&default_filename);
-
-    let dest_path = dest_dir.join(filename);
-
-    // Download the file with progress
-    client.download_file_with_progress(
-        &repo_pkg.download_url,
-        &dest_path,
-        &repo_pkg.name,
-        progress_bar,
-    )?;
-
-    // Verify checksum - clean up invalid file on failure
-    if let Err(e) = verify_checksum(&dest_path, &repo_pkg.checksum) {
-        // Remove the corrupted/invalid file to prevent cache pollution
-        let _ = std::fs::remove_file(&dest_path);
-        return Err(e);
-    }
-
-    Ok(dest_path)
+    download_package_inner(repo_pkg, dest_dir, None, progress_bar)
 }
 
 /// Download a package with progress and optional GPG verification
@@ -339,45 +361,7 @@ pub fn download_package_verified_with_progress(
     options: Option<&DownloadOptions>,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    // Download with progress
-    let dest_path = download_package_with_progress(repo_pkg, dest_dir, progress_bar)?;
-
-    // If GPG options provided and gpg_check enabled, verify signature
-    if let Some(opts) = options
-        && opts.gpg_check
-    {
-        match verify_package_signature(&dest_path, &repo_pkg.download_url, opts) {
-            Ok(()) => {
-                info!("GPG signature verified for {}", repo_pkg.name);
-            }
-            Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
-                // Signature not found - strict mode fails, otherwise warn
-                if opts.gpg_strict {
-                    return Err(Error::GpgVerificationFailed(format!(
-                        "GPG signature required but not found for '{}' (strict mode enabled).\n\
-                         The repository '{}' requires all packages to have valid GPG signatures.\n\
-                         Either provide a signed package or disable strict mode.",
-                        repo_pkg.name, opts.repository_name
-                    )));
-                }
-                warn!("No GPG signature found for {} ({})", repo_pkg.name, msg);
-            }
-            Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
-                return Err(Error::GpgVerificationFailed(format!(
-                    "GPG verification failed for '{}': {}.\n\
-                     To fix this, run:\n  \
-                     conary key-import {} <key-url-or-file>\n\
-                     Or disable GPG checking for this repository.",
-                    repo_pkg.name, msg, opts.repository_name
-                )));
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        }
-    }
-
-    Ok(dest_path)
+    download_package_inner(repo_pkg, dest_dir, options, progress_bar)
 }
 
 /// Multi-progress manager for parallel downloads
