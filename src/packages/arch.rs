@@ -5,8 +5,9 @@
 //! Parses .pkg.tar.zst and .pkg.tar.xz packages, extracting metadata from .PKGINFO
 
 use crate::compression::{self, CompressionFormat};
-use crate::db::models::{Trove, TroveType};
+use crate::db::models::Trove;
 use crate::error::{Error, Result};
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -19,16 +20,9 @@ use tracing::debug;
 
 /// Arch Linux package representation
 pub struct ArchPackage {
-    package_path: PathBuf,
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    description: Option<String>,
-    files: Vec<PackageFile>,
-    dependencies: Vec<Dependency>,
-    scriptlets: Vec<Scriptlet>,
-    config_files: Vec<ConfigFileInfo>,
-    // Additional Arch-specific metadata
+    /// Common package metadata
+    meta: PackageMetadata,
+    // Arch-specific metadata
     url: Option<String>,
     licenses: Vec<String>,
     groups: Vec<String>,
@@ -393,7 +387,7 @@ impl PackageFormat for ArchPackage {
             config_files.len()
         );
 
-        Ok(Self {
+        let meta = PackageMetadata {
             package_path: PathBuf::from(path),
             name,
             version,
@@ -403,6 +397,10 @@ impl PackageFormat for ArchPackage {
             dependencies,
             scriptlets,
             config_files,
+        };
+
+        Ok(Self {
+            meta,
             url: pkginfo.url,
             licenses: pkginfo.licenses,
             groups: pkginfo.groups,
@@ -412,33 +410,33 @@ impl PackageFormat for ArchPackage {
     }
 
     fn name(&self) -> &str {
-        &self.name
+        self.meta.name()
     }
 
     fn version(&self) -> &str {
-        &self.version
+        self.meta.version()
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.architecture.as_deref()
+        self.meta.architecture()
     }
 
     fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+        self.meta.description()
     }
 
     fn files(&self) -> &[PackageFile] {
-        &self.files
+        self.meta.files()
     }
 
     fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
+        self.meta.dependencies()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        debug!("Extracting file contents from Arch package: {:?}", self.package_path);
+        debug!("Extracting file contents from Arch package: {:?}", self.meta.package_path());
 
-        let path_str = self.package_path.to_str()
+        let path_str = self.meta.package_path().to_str()
             .ok_or_else(|| Error::InitError("Package path contains invalid UTF-8".to_string()))?;
         let mut archive = Self::open_archive(path_str)?;
         let mut extracted_files = Vec::new();
@@ -498,24 +496,15 @@ impl PackageFormat for ArchPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        let mut trove = Trove::new(
-            self.name().to_string(),
-            self.version().to_string(),
-            TroveType::Package,
-        );
-
-        trove.architecture = self.architecture().map(|s| s.to_string());
-        trove.description = self.description().map(|s| s.to_string());
-
-        trove
+        self.meta.to_trove()
     }
 
     fn scriptlets(&self) -> Vec<Scriptlet> {
-        self.scriptlets.clone()
+        self.meta.scriptlets()
     }
 
     fn config_files(&self) -> Vec<ConfigFileInfo> {
-        self.config_files.clone()
+        self.meta.config_files()
     }
 }
 

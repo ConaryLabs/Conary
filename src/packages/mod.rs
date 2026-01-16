@@ -6,12 +6,15 @@
 //! (RPM, DEB, Arch). Each format implements the `PackageFormat` trait.
 
 pub mod arch;
+pub mod common;
 pub mod deb;
 pub mod dpkg_query;
 pub mod pacman_query;
 pub mod rpm;
 pub mod rpm_query;
 pub mod traits;
+
+pub use common::{PackageMetadata, PackageMetadataBuilder};
 
 use crate::error::Result;
 use rayon::prelude::*;

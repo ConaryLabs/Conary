@@ -5,8 +5,9 @@
 //! Parses .deb packages, which are AR archives containing control and data tarballs
 
 use crate::compression::{self, CompressionFormat};
-use crate::db::models::{Trove, TroveType};
+use crate::db::models::Trove;
 use crate::error::{Error, Result};
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -19,16 +20,9 @@ use tracing::debug;
 
 /// Debian package representation
 pub struct DebPackage {
-    package_path: PathBuf,
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    description: Option<String>,
-    files: Vec<PackageFile>,
-    dependencies: Vec<Dependency>,
-    scriptlets: Vec<Scriptlet>,
-    config_files: Vec<ConfigFileInfo>,
-    // Additional Debian-specific metadata
+    /// Common package metadata
+    meta: PackageMetadata,
+    // Debian-specific metadata
     maintainer: Option<String>,
     section: Option<String>,
     priority: Option<String>,
@@ -422,7 +416,7 @@ impl PackageFormat for DebPackage {
             config_files.len()
         );
 
-        Ok(Self {
+        let meta = PackageMetadata {
             package_path: PathBuf::from(path),
             name,
             version,
@@ -432,6 +426,10 @@ impl PackageFormat for DebPackage {
             dependencies,
             scriptlets,
             config_files,
+        };
+
+        Ok(Self {
+            meta,
             maintainer: control.maintainer,
             section: control.section,
             priority: control.priority,
@@ -441,35 +439,35 @@ impl PackageFormat for DebPackage {
     }
 
     fn name(&self) -> &str {
-        &self.name
+        self.meta.name()
     }
 
     fn version(&self) -> &str {
-        &self.version
+        self.meta.version()
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.architecture.as_deref()
+        self.meta.architecture()
     }
 
     fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+        self.meta.description()
     }
 
     fn files(&self) -> &[PackageFile] {
-        &self.files
+        self.meta.files()
     }
 
     fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
+        self.meta.dependencies()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        debug!("Extracting file contents from Debian package: {:?}", self.package_path);
+        debug!("Extracting file contents from Debian package: {:?}", self.meta.package_path());
 
         // Try different compression formats
         for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
-            let path_str = match self.package_path.to_str() {
+            let path_str = match self.meta.package_path().to_str() {
                 Some(s) => s,
                 None => return Err(Error::InitError("Package path contains invalid UTF-8".to_string())),
             };
@@ -532,24 +530,15 @@ impl PackageFormat for DebPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        let mut trove = Trove::new(
-            self.name().to_string(),
-            self.version().to_string(),
-            TroveType::Package,
-        );
-
-        trove.architecture = self.architecture().map(|s| s.to_string());
-        trove.description = self.description().map(|s| s.to_string());
-
-        trove
+        self.meta.to_trove()
     }
 
     fn scriptlets(&self) -> Vec<Scriptlet> {
-        self.scriptlets.clone()
+        self.meta.scriptlets()
     }
 
     fn config_files(&self) -> Vec<ConfigFileInfo> {
-        self.config_files.clone()
+        self.meta.config_files()
     }
 }
 

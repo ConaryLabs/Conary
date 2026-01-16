@@ -2,8 +2,9 @@
 
 //! RPM package format parser
 
-use crate::db::models::{Trove, TroveType};
+use crate::db::models::Trove;
 use crate::error::{Error, Result};
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -16,16 +17,9 @@ use tracing::debug;
 
 /// RPM package representation
 pub struct RpmPackage {
-    package_path: PathBuf,
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    description: Option<String>,
-    files: Vec<PackageFile>,
-    dependencies: Vec<Dependency>,
-    scriptlets: Vec<Scriptlet>,
-    config_files: Vec<ConfigFileInfo>,
-    // Provenance information
+    /// Common package metadata
+    meta: PackageMetadata,
+    // RPM-specific provenance information
     source_rpm: Option<String>,
     build_host: Option<String>,
     vendor: Option<String>,
@@ -367,7 +361,7 @@ impl PackageFormat for RpmPackage {
             config_files.len()
         );
 
-        Ok(Self {
+        let meta = PackageMetadata {
             package_path: PathBuf::from(path),
             name,
             version,
@@ -377,6 +371,10 @@ impl PackageFormat for RpmPackage {
             dependencies,
             scriptlets,
             config_files,
+        };
+
+        Ok(Self {
+            meta,
             source_rpm,
             build_host,
             vendor,
@@ -386,34 +384,37 @@ impl PackageFormat for RpmPackage {
     }
 
     fn name(&self) -> &str {
-        &self.name
+        self.meta.name()
     }
 
     fn version(&self) -> &str {
-        &self.version
+        self.meta.version()
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.architecture.as_deref()
+        self.meta.architecture()
     }
 
     fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+        self.meta.description()
     }
 
     fn files(&self) -> &[PackageFile] {
-        &self.files
+        self.meta.files()
     }
 
     fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
+        self.meta.dependencies()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
         use std::process::Command;
         use tempfile::TempDir;
 
-        debug!("Extracting file contents from RPM: {:?}", self.package_path);
+        debug!(
+            "Extracting file contents from RPM: {:?}",
+            self.meta.package_path()
+        );
 
         // Create temp directory for extraction
         let temp_dir = TempDir::new()
@@ -422,9 +423,14 @@ impl PackageFormat for RpmPackage {
         // Extract RPM to temp directory using rpm2cpio | cpio
         // rpm2cpio package.rpm | cpio -idmv -D /tmp/extract
         let rpm2cpio_output = Command::new("rpm2cpio")
-            .arg(&self.package_path)
+            .arg(self.meta.package_path())
             .output()
-            .map_err(|e| Error::InitError(format!("Failed to run rpm2cpio: {}. Is rpm2cpio installed?", e)))?;
+            .map_err(|e| {
+                Error::InitError(format!(
+                    "Failed to run rpm2cpio: {}. Is rpm2cpio installed?",
+                    e
+                ))
+            })?;
 
         if !rpm2cpio_output.status.success() {
             return Err(Error::InitError(format!(
@@ -446,7 +452,9 @@ impl PackageFormat for RpmPackage {
                 }
                 child.wait()
             })
-            .map_err(|e| Error::InitError(format!("Failed to run cpio: {}. Is cpio installed?", e)))?;
+            .map_err(|e| {
+                Error::InitError(format!("Failed to run cpio: {}. Is cpio installed?", e))
+            })?;
 
         if !cpio_status.success() {
             return Err(Error::InitError("cpio extraction failed".to_string()));
@@ -455,7 +463,7 @@ impl PackageFormat for RpmPackage {
         // Read extracted files
         let mut extracted_files = Vec::new();
 
-        for file_meta in &self.files {
+        for file_meta in self.meta.files() {
             let full_path = temp_dir.path().join(file_meta.path.trim_start_matches('/'));
 
             // Skip if not a regular file (directory, symlink, etc.)
@@ -481,24 +489,15 @@ impl PackageFormat for RpmPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        let mut trove = Trove::new(
-            self.name().to_string(),
-            self.version().to_string(),
-            TroveType::Package,
-        );
-
-        trove.architecture = self.architecture().map(|s| s.to_string());
-        trove.description = self.description().map(|s| s.to_string());
-
-        trove
+        self.meta.to_trove()
     }
 
     fn scriptlets(&self) -> Vec<Scriptlet> {
-        self.scriptlets.clone()
+        self.meta.scriptlets()
     }
 
     fn config_files(&self) -> Vec<ConfigFileInfo> {
-        self.config_files.clone()
+        self.meta.config_files()
     }
 }
 
@@ -551,15 +550,11 @@ mod tests {
     fn test_to_trove_conversion() {
         // Create a minimal RpmPackage for testing
         let rpm = RpmPackage {
-            package_path: PathBuf::from("/fake/path.rpm"),
-            name: "test-package".to_string(),
-            version: "1.0.0".to_string(),
-            architecture: Some("x86_64".to_string()),
-            description: Some("Test package".to_string()),
-            files: vec![],
-            dependencies: vec![],
-            scriptlets: vec![],
-            config_files: vec![],
+            meta: PackageMetadata::new(
+                PathBuf::from("/fake/path.rpm"),
+                "test-package".to_string(),
+                "1.0.0".to_string(),
+            ),
             source_rpm: Some("test-package-1.0.0.src.rpm".to_string()),
             build_host: Some("buildhost.example.com".to_string()),
             vendor: Some("Test Vendor".to_string()),
@@ -571,22 +566,16 @@ mod tests {
 
         assert_eq!(trove.name, "test-package");
         assert_eq!(trove.version, "1.0.0");
-        assert_eq!(trove.architecture, Some("x86_64".to_string()));
-        assert_eq!(trove.description, Some("Test package".to_string()));
     }
 
     #[test]
     fn test_provenance_accessors() {
         let rpm = RpmPackage {
-            package_path: PathBuf::from("/fake/test.rpm"),
-            name: "test".to_string(),
-            version: "1.0".to_string(),
-            architecture: None,
-            description: None,
-            files: vec![],
-            dependencies: vec![],
-            scriptlets: vec![],
-            config_files: vec![],
+            meta: PackageMetadata::new(
+                PathBuf::from("/fake/test.rpm"),
+                "test".to_string(),
+                "1.0".to_string(),
+            ),
             source_rpm: Some("test-1.0.src.rpm".to_string()),
             build_host: Some("builder".to_string()),
             vendor: Some("Vendor".to_string()),
