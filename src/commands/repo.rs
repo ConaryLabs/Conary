@@ -23,6 +23,7 @@ pub fn cmd_repo_add(
     name: &str,
     url: &str,
     db_path: &str,
+    content_url: Option<String>,
     priority: i32,
     disabled: bool,
     gpg_key: Option<String>,
@@ -34,6 +35,7 @@ pub fn cmd_repo_add(
 
     // Create the repository with GPG settings
     let mut repo = conary::db::models::Repository::new(name.to_string(), url.to_string());
+    repo.content_url = content_url;
     repo.enabled = !disabled;
     repo.priority = priority;
     repo.gpg_check = !no_gpg_check;
@@ -43,7 +45,10 @@ pub fn cmd_repo_add(
     repo.insert(&conn)?;
 
     println!("Added repository: {}", repo.name);
-    println!("  URL: {}", repo.url);
+    println!("  Metadata URL: {}", repo.url);
+    if let Some(ref content) = repo.content_url {
+        println!("  Content URL: {} (reference mirror)", content);
+    }
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
     println!("  GPG Check: {}", repo.gpg_check);
@@ -88,7 +93,10 @@ pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
                 "  {} {} (priority: {}, {})",
                 enabled_mark, repo.name, repo.priority, sync_status
             );
-            println!("      {}", repo.url);
+            println!("      metadata: {}", repo.url);
+            if let Some(ref content) = repo.content_url {
+                println!("      content:  {} (reference mirror)", content);
+            }
         }
     }
     Ok(())

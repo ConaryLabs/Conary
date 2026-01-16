@@ -353,12 +353,21 @@ pub enum Commands {
         /// Repository name
         name: String,
 
-        /// Repository URL
+        /// Repository URL (for metadata)
         url: String,
 
         /// Path to the database file
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
+
+        /// Content mirror URL for package downloads (reference mirror pattern)
+        ///
+        /// If set, metadata is fetched from --url but packages are downloaded
+        /// from --content-url. This enables scenarios like:
+        /// - Trusted metadata server with local content mirrors
+        /// - Hosting custom metadata pointing to upstream content
+        #[arg(long)]
+        content_url: Option<String>,
 
         /// Repository priority (higher = preferred)
         #[arg(short, long, default_value = "50")]

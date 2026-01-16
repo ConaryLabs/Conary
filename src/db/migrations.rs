@@ -1184,3 +1184,28 @@ pub fn migrate_v23(conn: &Connection) -> Result<()> {
     info!("Schema version 23 applied successfully (transaction engine support)");
     Ok(())
 }
+
+/// Version 24: Reference mirrors for split metadata/content sources
+///
+/// Adds content_url column to repositories table to support "reference mirrors":
+/// - url: Metadata source (trusted, signed repository metadata)
+/// - content_url: Content source (local cache, peer CDN, cheaper bandwidth)
+///
+/// This enables scenarios like:
+/// - Central metadata server with local content mirrors
+/// - Peer-to-peer content distribution while maintaining trusted metadata
+/// - Different content sources for different network zones
+pub fn migrate_v24(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 24");
+
+    conn.execute_batch(
+        "
+        -- Add content_url for reference mirrors
+        -- NULL means use the same URL for both metadata and content
+        ALTER TABLE repositories ADD COLUMN content_url TEXT;
+        ",
+    )?;
+
+    info!("Schema version 24 applied successfully (reference mirrors)");
+    Ok(())
+}

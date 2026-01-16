@@ -124,8 +124,8 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Some(Commands::RepoAdd { name, url, db_path, priority, disabled, gpg_key, no_gpg_check, gpg_strict }) => {
-            commands::cmd_repo_add(&name, &url, &db_path, priority, disabled, gpg_key, no_gpg_check, gpg_strict)
+        Some(Commands::RepoAdd { name, url, db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict }) => {
+            commands::cmd_repo_add(&name, &url, &db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict)
         }
 
         Some(Commands::RepoList { db_path, all }) => commands::cmd_repo_list(&db_path, all),

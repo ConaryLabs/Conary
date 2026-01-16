@@ -78,6 +78,47 @@ pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
     Ok(dt.timestamp() as u64)
 }
 
+/// Rebase a download URL from metadata source to content source
+///
+/// If the repository has a content_url configured, this function rebases
+/// the download URL from the metadata URL to the content URL.
+///
+/// For example:
+/// - metadata_url: "https://your-server.com/fedora/39/metadata"
+/// - content_url: "https://mirror.local/fedora"
+/// - download_url: "https://your-server.com/fedora/39/metadata/Packages/foo.rpm"
+/// - Result: "https://mirror.local/fedora/Packages/foo.rpm"
+///
+/// Security note: The checksum from trusted metadata is verified after download,
+/// so even if content_url points to an untrusted source, the downloaded content
+/// is validated against the hash from the signed metadata.
+fn rebase_download_url(download_url: &str, metadata_url: &str, content_url: Option<&str>) -> String {
+    match content_url {
+        Some(content_base) => {
+            // Normalize URLs by removing trailing slashes for consistent matching
+            let metadata_base = metadata_url.trim_end_matches('/');
+            let content_base = content_base.trim_end_matches('/');
+
+            if download_url.starts_with(metadata_base) {
+                // Extract relative path after the metadata base
+                let relative = &download_url[metadata_base.len()..];
+
+                // Ensure proper path joining - relative should start with /
+                // This handles cases like:
+                //   metadata_base: "http://foo.com/repo"
+                //   relative: "/Packages/foo.rpm" or "Packages/foo.rpm"
+                let relative = relative.trim_start_matches('/');
+                format!("{}/{}", content_base, relative)
+            } else {
+                // URL doesn't match metadata base - return as-is
+                // This handles absolute URLs in metadata that point elsewhere
+                download_url.to_string()
+            }
+        }
+        None => download_url.to_string(),
+    }
+}
+
 /// Synchronize repository using native metadata format parsers
 fn sync_repository_native(
     conn: &Connection,
@@ -87,6 +128,7 @@ fn sync_repository_native(
     info!("Syncing repository {} using native {:?} format", repo.name, format);
 
     // Parse metadata using appropriate parser
+    // Metadata is always fetched from repo.url
     let packages = match format {
         RepositoryFormat::Arch => {
             // Extract repository name from repo.name (e.g., "arch-core" -> "core")
@@ -135,6 +177,16 @@ fn sync_repository_native(
     // Delete old package entries for this repository
     RepositoryPackage::delete_by_repository(conn, repo_id)?;
 
+    // Check if we need to rebase download URLs (reference mirror pattern)
+    let needs_rebase = repo.content_url.is_some();
+    if needs_rebase {
+        info!(
+            "Repository {} uses reference mirror - rebasing download URLs to {}",
+            repo.name,
+            repo.content_url.as_deref().unwrap_or("")
+        );
+    }
+
     // Convert and insert package metadata
     let mut count = 0;
     for pkg_meta in packages {
@@ -156,13 +208,20 @@ fn sync_repository_native(
             None
         };
 
+        // Rebase download URL if content_url is configured (reference mirror)
+        let download_url = rebase_download_url(
+            &pkg_meta.download_url,
+            &repo.url,
+            repo.content_url.as_deref(),
+        );
+
         let mut repo_pkg = RepositoryPackage::new(
             repo_id,
             pkg_meta.name,
             pkg_meta.version,
             pkg_meta.checksum,
             pkg_meta.size as i64,
-            pkg_meta.download_url,
+            download_url,
         );
 
         repo_pkg.architecture = pkg_meta.architecture;
@@ -222,13 +281,20 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
             .as_ref()
             .map(|deps| serde_json::to_string(deps).unwrap_or_default());
 
+        // Rebase download URL if content_url is configured (reference mirror)
+        let download_url = rebase_download_url(
+            &pkg_meta.download_url,
+            &repo.url,
+            repo.content_url.as_deref(),
+        );
+
         let mut repo_pkg = RepositoryPackage::new(
             repo_id,
             pkg_meta.name.clone(),
             pkg_meta.version.clone(),
             pkg_meta.checksum.clone(),
             pkg_meta.size,
-            pkg_meta.download_url,
+            download_url,
         );
 
         repo_pkg.architecture = pkg_meta.architecture;
@@ -353,4 +419,77 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
     );
 
     Ok(Some(fingerprint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rebase_download_url_no_content_url() {
+        // When no content_url, the download_url should be unchanged
+        let download_url = "https://example.com/fedora/Packages/foo-1.0.rpm";
+        let metadata_url = "https://example.com/fedora";
+
+        let result = rebase_download_url(download_url, metadata_url, None);
+        assert_eq!(result, download_url);
+    }
+
+    #[test]
+    fn test_rebase_download_url_with_content_url() {
+        // Rebase from metadata URL to content URL
+        let download_url = "https://metadata.example.com/fedora/Packages/foo-1.0.rpm";
+        let metadata_url = "https://metadata.example.com/fedora";
+        let content_url = "https://mirror.local/fedora";
+
+        let result = rebase_download_url(download_url, metadata_url, Some(content_url));
+        assert_eq!(result, "https://mirror.local/fedora/Packages/foo-1.0.rpm");
+    }
+
+    #[test]
+    fn test_rebase_download_url_trailing_slashes() {
+        // Handle trailing slashes correctly - no double slashes in output
+        let download_url = "https://metadata.example.com/fedora/Packages/foo-1.0.rpm";
+        let metadata_url = "https://metadata.example.com/fedora/";
+        let content_url = "https://mirror.local/fedora/";
+
+        let result = rebase_download_url(download_url, metadata_url, Some(content_url));
+        assert_eq!(result, "https://mirror.local/fedora/Packages/foo-1.0.rpm");
+        // Verify no double slashes
+        assert!(!result.contains("//P"), "Should not have double slashes before path");
+    }
+
+    #[test]
+    fn test_rebase_download_url_no_leading_slash() {
+        // Handle case where relative path has no leading slash
+        let download_url = "https://metadata.example.com/fedora/Packages/foo-1.0.rpm";
+        let metadata_url = "https://metadata.example.com/fedora";
+        let content_url = "https://mirror.local/content";
+
+        let result = rebase_download_url(download_url, metadata_url, Some(content_url));
+        assert_eq!(result, "https://mirror.local/content/Packages/foo-1.0.rpm");
+    }
+
+    #[test]
+    fn test_rebase_download_url_ubuntu_example() {
+        // Real-world example: Ubuntu with local metadata but archive.ubuntu.com content
+        let download_url = "https://your-server.com/ubuntu/pool/main/n/nginx/nginx_1.24.0.deb";
+        let metadata_url = "https://your-server.com/ubuntu";
+        let content_url = "https://archive.ubuntu.com/ubuntu";
+
+        let result = rebase_download_url(download_url, metadata_url, Some(content_url));
+        assert_eq!(result, "https://archive.ubuntu.com/ubuntu/pool/main/n/nginx/nginx_1.24.0.deb");
+    }
+
+    #[test]
+    fn test_rebase_download_url_different_base() {
+        // When download_url doesn't match metadata_url prefix, return as-is
+        let download_url = "https://other-server.com/packages/foo.rpm";
+        let metadata_url = "https://metadata.example.com/fedora";
+        let content_url = "https://mirror.local/fedora";
+
+        let result = rebase_download_url(download_url, metadata_url, Some(content_url));
+        // Can't rebase - different base, return as-is
+        assert_eq!(result, "https://other-server.com/packages/foo.rpm");
+    }
 }

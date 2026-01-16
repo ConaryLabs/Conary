@@ -10,7 +10,11 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 pub struct Repository {
     pub id: Option<i64>,
     pub name: String,
+    /// Metadata URL (for repomd.xml, package lists, signatures)
     pub url: String,
+    /// Content URL for package downloads (reference mirror)
+    /// If None, uses the same URL as metadata
+    pub content_url: Option<String>,
     pub enabled: bool,
     pub priority: i32,
     pub gpg_check: bool,
@@ -29,6 +33,7 @@ impl Repository {
             id: None,
             name,
             url,
+            content_url: None,
             enabled: true,
             priority: 0,
             gpg_check: true,
@@ -40,14 +45,39 @@ impl Repository {
         }
     }
 
+    /// Create a new Repository with a content mirror (reference mirror pattern)
+    pub fn with_content_mirror(name: String, metadata_url: String, content_url: String) -> Self {
+        Self {
+            id: None,
+            name,
+            url: metadata_url,
+            content_url: Some(content_url),
+            enabled: true,
+            priority: 0,
+            gpg_check: true,
+            gpg_strict: false,
+            gpg_key_url: None,
+            metadata_expire: 3600,
+            last_sync: None,
+            created_at: None,
+        }
+    }
+
+    /// Get the effective URL for downloading content
+    /// Returns content_url if set, otherwise falls back to url
+    pub fn effective_content_url(&self) -> &str {
+        self.content_url.as_deref().unwrap_or(&self.url)
+    }
+
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.name,
                 &self.url,
+                &self.content_url,
                 self.enabled as i32,
                 &self.priority,
                 self.gpg_check as i32,
@@ -65,7 +95,7 @@ impl Repository {
     /// Find a repository by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE id = ?1",
         )?;
 
@@ -77,7 +107,7 @@ impl Repository {
     /// Find a repository by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE name = ?1",
         )?;
 
@@ -89,7 +119,7 @@ impl Repository {
     /// List all repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories ORDER BY priority DESC, name",
         )?;
 
@@ -103,7 +133,7 @@ impl Repository {
     /// List enabled repositories
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
              FROM repositories WHERE enabled = 1 ORDER BY priority DESC, name",
         )?;
 
@@ -121,11 +151,12 @@ impl Repository {
         })?;
 
         conn.execute(
-            "UPDATE repositories SET name = ?1, url = ?2, enabled = ?3, priority = ?4,
-             gpg_check = ?5, gpg_strict = ?6, gpg_key_url = ?7, metadata_expire = ?8, last_sync = ?9 WHERE id = ?10",
+            "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
+             gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10 WHERE id = ?11",
             params![
                 &self.name,
                 &self.url,
+                &self.content_url,
                 self.enabled as i32,
                 &self.priority,
                 self.gpg_check as i32,
@@ -152,14 +183,15 @@ impl Repository {
             id: Some(row.get(0)?),
             name: row.get(1)?,
             url: row.get(2)?,
-            enabled: row.get::<_, i32>(3)? != 0,
-            priority: row.get(4)?,
-            gpg_check: row.get::<_, i32>(5)? != 0,
-            gpg_strict: row.get::<_, i32>(6)? != 0,
-            gpg_key_url: row.get(7)?,
-            metadata_expire: row.get(8)?,
-            last_sync: row.get(9)?,
-            created_at: row.get(10)?,
+            content_url: row.get(3)?,
+            enabled: row.get::<_, i32>(4)? != 0,
+            priority: row.get(5)?,
+            gpg_check: row.get::<_, i32>(6)? != 0,
+            gpg_strict: row.get::<_, i32>(7)? != 0,
+            gpg_key_url: row.get(8)?,
+            metadata_expire: row.get(9)?,
+            last_sync: row.get(10)?,
+            created_at: row.get(11)?,
         })
     }
 }
