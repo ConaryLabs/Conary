@@ -89,14 +89,16 @@ impl ConversionService {
         // Calculate checksum of original package
         let original_checksum = Self::calculate_checksum(&pkg_path)?;
 
-        // Check if already converted
+        // Check if already converted AND the CCS file still exists
         if let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)? {
-            if !existing.needs_reconversion() {
+            let ccs_path = self.cache_dir.join("packages").join(format!("{}-{}.ccs", repo_pkg.name, repo_pkg.version));
+            if !existing.needs_reconversion() && ccs_path.exists() {
                 info!("Package already converted (checksum: {})", original_checksum);
                 // Return cached result
                 return self.build_result_from_existing(&existing, distro, &repo_pkg);
             }
-            // Delete old conversion record for re-conversion
+            // Delete stale conversion record and proceed with fresh conversion
+            info!("Stale conversion record (CCS file missing or needs reconversion), re-converting");
             ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
         }
 

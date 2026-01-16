@@ -28,6 +28,8 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/:distro/metadata.sig", get(index::get_metadata_sig))
         // Package metadata endpoints (Cloudflare-cached, triggers conversion)
         .route("/v1/:distro/packages/:name", get(packages::get_package))
+        // CCS package download (after conversion complete)
+        .route("/v1/:distro/packages/:name/download", get(packages::download_package))
         // Chunk serving endpoints (direct, immutable)
         .route("/v1/chunks/:hash", get(chunks::get_chunk))
         // Conversion job status (for 202 Accepted polling)

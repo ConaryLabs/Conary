@@ -417,8 +417,24 @@ impl PackageFormat for CcsPackage {
                     .as_ref()
                     .map(|t| t.as_bytes().to_vec())
                     .unwrap_or_default()
+            } else if let Some(chunk_hashes) = &file.chunks {
+                // File is chunked - reassemble from chunks
+                let mut reassembled = Vec::with_capacity(file.size as usize);
+                for chunk_hash in chunk_hashes {
+                    let chunk_data = blobs.get(chunk_hash).ok_or_else(|| {
+                        crate::Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!(
+                                "Chunk {} not found for file {}",
+                                chunk_hash, file.path
+                            ),
+                        ))
+                    })?;
+                    reassembled.extend_from_slice(chunk_data);
+                }
+                reassembled
             } else {
-                // For regular files, look up by hash
+                // Non-chunked file - look up by file hash
                 blobs
                     .get(&file.hash)
                     .cloned()

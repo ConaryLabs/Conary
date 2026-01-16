@@ -227,6 +227,140 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
     }
 }
 
+/// GET /v1/:distro/packages/:name/download
+///
+/// Download the complete CCS package file. Returns:
+/// - 200 OK with CCS package data
+/// - 202 Accepted if conversion still in progress
+/// - 404 Not Found if package doesn't exist or hasn't been converted
+pub async fn download_package(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path((distro, name)): Path<(String, String)>,
+    Query(query): Query<PackageQuery>,
+) -> Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use tokio::fs::File;
+    use tokio_util::io::ReaderStream;
+
+    let state_guard = state.read().await;
+
+    // Validate distro
+    if !["arch", "fedora", "ubuntu", "debian"].contains(&distro.as_str()) {
+        return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
+    }
+
+    // Check for in-progress conversion
+    let job_key = format!("{}:{}:{}", distro, name, query.version.as_deref().unwrap_or("latest"));
+    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
+        // Check if job is still in progress
+        if let Some(job) = state_guard.job_manager.get_job(&existing_job) {
+            if !matches!(job.status, crate::server::jobs::JobStatus::Ready) {
+                return (
+                    StatusCode::ACCEPTED,
+                    Json(ConversionAccepted {
+                        status: "converting",
+                        job_id: existing_job.to_string(),
+                        poll_url: format!("/v1/jobs/{}", existing_job),
+                        eta_seconds: None,
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Look for the CCS package file
+    // The conversion service stores it at: {cache_dir}/packages/{name}-{version}.ccs
+    let packages_dir = state_guard.config.cache_dir.join("packages");
+
+    // If version specified, look for exact match
+    // Otherwise, find the latest version
+    let ccs_path = if let Some(version) = &query.version {
+        packages_dir.join(format!("{}-{}.ccs", name, version))
+    } else {
+        // Find any matching package (glob for {name}-*.ccs)
+        match find_latest_package(&packages_dir, &name) {
+            Some(path) => path,
+            None => {
+                // No converted package found - trigger conversion
+                drop(state_guard);
+                return get_package(
+                    State(state),
+                    Path((distro, name)),
+                    Query(query),
+                )
+                .await;
+            }
+        }
+    };
+
+    if !ccs_path.exists() {
+        // No converted package found - trigger conversion
+        drop(state_guard);
+        return get_package(
+            State(state),
+            Path((distro, name)),
+            Query(query),
+        )
+        .await;
+    }
+
+    // Open file for streaming
+    let file = match File::open(&ccs_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Failed to open CCS package {}: {}", ccs_path.display(), e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
+        }
+    };
+
+    // Get file size for Content-Length
+    let metadata = match file.metadata().await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("Failed to get CCS package metadata {}: {}", ccs_path.display(), e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
+        }
+    };
+
+    let filename = ccs_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("package.ccs");
+
+    tracing::info!("Serving CCS package: {} ({} bytes)", filename, metadata.len());
+
+    // Stream the file
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename))
+        // CCS packages are versioned but can be re-converted, so moderate caching
+        .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .body(body)
+        .unwrap()
+}
+
+/// Find the latest version of a package in the packages directory
+fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let prefix = format!("{}-", name);
+
+    std::fs::read_dir(packages_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_name().to_str()
+                .map(|n| n.starts_with(&prefix) && n.ends_with(".ccs"))
+                .unwrap_or(false)
+        })
+        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
+        .map(|entry| entry.path())
+}
+
 /// POST /v1/admin/convert
 ///
 /// Manually trigger conversion of a package (admin endpoint)

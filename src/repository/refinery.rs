@@ -384,11 +384,176 @@ impl RefineryClient {
 
     /// High-level: Fetch a package from Refinery and save to disk
     ///
-    /// This is the main entry point for downloading CCS packages:
-    /// 1. Request package (handling 202 polling automatically)
-    /// 2. Download all chunks
-    /// 3. Assemble into CCS package file
+    /// This is the main entry point for downloading CCS packages.
+    /// Uses the direct download endpoint to get the pre-built CCS package.
+    ///
+    /// If conversion is needed, the download endpoint triggers it and returns
+    /// 202 Accepted with a job ID for polling.
     pub fn fetch_package(
+        &self,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+        output_dir: &Path,
+    ) -> Result<PathBuf> {
+        // Use the direct download endpoint
+        let url = if let Some(v) = version {
+            format!("{}/v1/{}/packages/{}/download?version={}", self.base_url, distro, name, v)
+        } else {
+            format!("{}/v1/{}/packages/{}/download", self.base_url, distro, name)
+        };
+
+        info!("Downloading CCS package from Refinery: {}", url);
+
+        let response = self.client.get(&url).send().map_err(|e| {
+            Error::DownloadError(format!("Failed to connect to Refinery: {e}"))
+        })?;
+
+        match response.status().as_u16() {
+            200 => {
+                // Package ready - download it
+                self.download_ccs_response(response, name, output_dir)
+            }
+            202 => {
+                // Conversion in progress - poll then retry download
+                let accepted: ConversionAccepted = response.json().map_err(|e| {
+                    Error::DownloadError(format!("Failed to parse 202 response: {e}"))
+                })?;
+                info!(
+                    "Package conversion queued (job {}), ETA: {:?}s",
+                    accepted.job_id, accepted.eta_seconds
+                );
+                let _manifest = self.poll_for_completion(&accepted.job_id)?;
+
+                // Retry download after conversion completes
+                info!("Conversion complete, downloading CCS package");
+                let retry_response = self.client.get(&url).send().map_err(|e| {
+                    Error::DownloadError(format!("Failed to retry download: {e}"))
+                })?;
+
+                if retry_response.status().as_u16() != 200 {
+                    return Err(Error::DownloadError(format!(
+                        "Download after conversion returned HTTP {}",
+                        retry_response.status()
+                    )));
+                }
+
+                self.download_ccs_response(retry_response, name, output_dir)
+            }
+            404 => {
+                Err(Error::NotFoundError(format!(
+                    "Package '{}' not found in {} repositories",
+                    name, distro
+                )))
+            }
+            503 => {
+                Err(Error::DownloadError(
+                    "Refinery conversion queue is full, try again later".to_string(),
+                ))
+            }
+            status => {
+                let body = response.text().unwrap_or_default();
+                Err(Error::DownloadError(format!(
+                    "Refinery returned HTTP {}: {}",
+                    status, body
+                )))
+            }
+        }
+    }
+
+    /// Download the CCS file from a successful response
+    fn download_ccs_response(
+        &self,
+        response: reqwest::blocking::Response,
+        name: &str,
+        output_dir: &Path,
+    ) -> Result<PathBuf> {
+        // Get content length for progress bar
+        let content_length = response.content_length().unwrap_or(0);
+
+        // Extract filename from Content-Disposition header or generate one
+        let filename = response
+            .headers()
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                // Parse filename="something.ccs"
+                v.split("filename=").nth(1).map(|s| s.trim_matches('"').to_string())
+            })
+            .unwrap_or_else(|| format!("{}.ccs", name));
+
+        let output_path = output_dir.join(&filename);
+
+        // Create progress bar
+        let pb = ProgressBar::new(content_length);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
+                .expect("Invalid progress bar template")
+                .progress_chars("#>-"),
+        );
+        pb.set_message(format!("Downloading {}", filename));
+
+        // Download to file with progress
+        let mut file = std::fs::File::create(&output_path).map_err(|e| {
+            Error::IoError(format!("Failed to create output file: {e}"))
+        })?;
+
+        let mut downloaded: u64 = 0;
+        let mut reader = response;
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let bytes_read = std::io::Read::read(&mut reader, &mut buffer).map_err(|e| {
+                Error::DownloadError(format!("Failed to read response: {e}"))
+            })?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            file.write_all(&buffer[..bytes_read]).map_err(|e| {
+                Error::IoError(format!("Failed to write to output file: {e}"))
+            })?;
+
+            downloaded += bytes_read as u64;
+            pb.set_position(downloaded);
+        }
+
+        pb.finish_with_message(format!("Downloaded {} ({} bytes)", filename, downloaded));
+        info!("CCS package downloaded: {}", output_path.display());
+
+        // Verify the file is a valid CCS package (gzip-compressed tar)
+        // CCS packages are gzipped tar archives, so check for gzip magic bytes
+        let mut magic = [0u8; 2];
+        {
+            use std::io::Read;
+            let mut file = std::fs::File::open(&output_path).map_err(|e| {
+                Error::IoError(format!("Failed to read downloaded file: {e}"))
+            })?;
+            file.read_exact(&mut magic).map_err(|e| {
+                Error::IoError(format!("Failed to read magic bytes: {e}"))
+            })?;
+        }
+
+        // Gzip magic: 0x1f 0x8b
+        if magic != [0x1f, 0x8b] {
+            // Clean up invalid file
+            let _ = std::fs::remove_file(&output_path);
+            return Err(Error::DownloadError(
+                "Downloaded file is not a valid CCS package (expected gzip)".to_string()
+            ));
+        }
+
+        Ok(output_path)
+    }
+
+    /// Fetch package by downloading chunks and assembling (legacy method)
+    ///
+    /// This method is kept for compatibility but the direct download endpoint
+    /// is preferred as it's simpler and more reliable.
+    #[allow(dead_code)]
+    pub fn fetch_package_via_chunks(
         &self,
         distro: &str,
         name: &str,

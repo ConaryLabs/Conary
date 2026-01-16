@@ -435,6 +435,7 @@ pub fn cmd_install(
             db_path,
             root,
             dry_run,
+            no_deps,
             no_scripts,
             sandbox_mode,
         );
@@ -1463,6 +1464,7 @@ fn cmd_install_from_refinery(
     db_path: &str,
     root: &str,
     dry_run: bool,
+    no_deps: bool,
     _no_scripts: bool,
     sandbox_mode: SandboxMode,
 ) -> Result<()> {
@@ -1513,7 +1515,7 @@ fn cmd_install_from_refinery(
         None, // policy
         None, // components
         sandbox_mode,
-        false, // no_deps
+        no_deps,
     )
 }
 
