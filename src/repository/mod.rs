@@ -43,6 +43,8 @@ pub use sync::{
     RepositoryFormat,
 };
 pub use refinery::{RefineryClient, PackageManifest};
+#[cfg(feature = "server")]
+pub use refinery::AsyncRefineryClient;
 
 #[cfg(feature = "server")]
 pub use chunk_fetcher::{
