@@ -180,24 +180,18 @@ impl HookExecutor {
 
     /// Check if a user exists
     fn user_exists(&self, name: &str) -> bool {
-        Command::new("id")
-            .arg(name)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        nix::unistd::User::from_name(name)
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// Check if a group exists
     fn group_exists(&self, name: &str) -> bool {
-        Command::new("getent")
-            .args(["group", name])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        nix::unistd::Group::from_name(name)
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// Create a user. Returns true if created, false if already exists.
@@ -362,26 +356,30 @@ impl HookExecutor {
         owner: &str,
         group: &str,
     ) -> Result<()> {
-        // Apply mode using chmod
-        let status = Command::new("chmod")
-            .args([mode, &path.to_string_lossy()])
-            .status()
-            .context("Failed to run chmod")?;
+        use std::os::unix::fs::{chown, PermissionsExt};
 
-        if !status.success() {
-            warn!("chmod failed for {}", path.display());
-        }
+        // Parse mode string (e.g., "0755" or "755") as octal
+        let mode_val = u32::from_str_radix(mode.trim_start_matches('0'), 8)
+            .with_context(|| format!("Invalid mode string: {}", mode))?;
 
-        // Apply ownership using chown
-        let ownership = format!("{}:{}", owner, group);
-        let status = Command::new("chown")
-            .args([&ownership, &path.to_string_lossy().to_string()])
-            .status()
-            .context("Failed to run chown")?;
+        // Apply mode using std::fs
+        let permissions = std::fs::Permissions::from_mode(mode_val);
+        std::fs::set_permissions(path, permissions)
+            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
 
-        if !status.success() {
-            warn!("chown failed for {}", path.display());
-        }
+        // Look up uid from owner name
+        let uid = nix::unistd::User::from_name(owner)
+            .with_context(|| format!("Failed to look up user: {}", owner))?
+            .map(|u| u.uid.as_raw());
+
+        // Look up gid from group name
+        let gid = nix::unistd::Group::from_name(group)
+            .with_context(|| format!("Failed to look up group: {}", group))?
+            .map(|g| g.gid.as_raw());
+
+        // Apply ownership using std::os::unix::fs::chown
+        chown(path, uid, gid)
+            .with_context(|| format!("Failed to set ownership on {}", path.display()))?;
 
         Ok(())
     }
