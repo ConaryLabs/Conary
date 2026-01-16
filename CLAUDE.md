@@ -90,7 +90,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v26. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages.
+Currently v27. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -111,6 +111,7 @@ Key schema additions:
 - v24: `content_url` column on repositories - reference mirrors for split metadata/content
 - v25: `converted_packages` table - track legacy→CCS conversions with fidelity
 - v26: `derived_packages` table - packages derived from base packages via model-apply
+- v27: `chunk_access` table - LRU cache tracking for Refinery chunk store
 
 ## Testing
 
@@ -121,7 +122,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-520 tests total (481 lib + 3 bin + 36 integration).
+539 tests total (with --features server).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
