@@ -9,8 +9,8 @@
 //! Fetchers can be composed into chains with fallback behavior.
 
 use crate::error::{Error, Result};
+use crate::hash::verify_sha256;
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -98,15 +98,13 @@ impl HttpChunkFetcher {
     }
 
     /// Verify a chunk's hash matches its content
+    ///
+    /// Uses the shared hash module for consistent SHA-256 verification.
     fn verify_hash(hash: &str, data: &[u8]) -> Result<()> {
-        let actual = format!("{:x}", Sha256::digest(data));
-        if actual != hash {
-            return Err(Error::ChecksumMismatch {
-                expected: hash.to_string(),
-                actual,
-            });
-        }
-        Ok(())
+        verify_sha256(data, hash).map_err(|e| Error::ChecksumMismatch {
+            expected: e.expected,
+            actual: e.actual,
+        })
     }
 }
 
@@ -480,6 +478,7 @@ impl Default for ChunkFetcherBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::sha256;
 
     #[test]
     fn test_local_cache_path() {
@@ -491,7 +490,7 @@ mod tests {
     #[test]
     fn test_hash_verification() {
         let data = b"hello world";
-        let hash = format!("{:x}", Sha256::digest(data));
+        let hash = sha256(data);
 
         // Valid hash should pass
         assert!(HttpChunkFetcher::verify_hash(&hash, data).is_ok());
@@ -516,7 +515,7 @@ mod tests {
         let cache = LocalCacheFetcher::new(temp_dir.path());
 
         let data = b"test chunk data";
-        let hash = format!("{:x}", Sha256::digest(data));
+        let hash = sha256(data);
 
         // Store
         cache.store(&hash, data).await.unwrap();
@@ -537,7 +536,7 @@ mod tests {
         // Create cache with one chunk
         let cache = LocalCacheFetcher::new(temp_dir.path());
         let data = b"cached chunk";
-        let hash = format!("{:x}", Sha256::digest(data));
+        let hash = sha256(data);
         cache.store(&hash, data).await.unwrap();
 
         // Create composite with just cache (no network)

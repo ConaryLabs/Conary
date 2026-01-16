@@ -293,15 +293,11 @@ impl RefineryClient {
                 Error::DownloadError(format!("Failed to read chunk {}: {e}", chunk.hash))
             })?;
 
-            // Verify chunk hash
-            use sha2::{Digest, Sha256};
-            let actual_hash = format!("{:x}", Sha256::digest(&data));
-            if actual_hash != chunk.hash {
-                return Err(Error::ChecksumMismatch {
-                    expected: chunk.hash.clone(),
-                    actual: actual_hash,
-                });
-            }
+            // Verify chunk hash using shared hash module
+            crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| Error::ChecksumMismatch {
+                expected: e.expected,
+                actual: e.actual,
+            })?;
 
             downloaded += data.len() as u64;
             if let Some(pb) = progress {
@@ -365,21 +361,13 @@ impl RefineryClient {
             });
         }
 
-        // Verify content hash
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        let file_data = std::fs::read(output_path).map_err(|e| {
-            Error::IoError(format!("Failed to read output file for verification: {e}"))
-        })?;
-        hasher.update(&file_data);
-        let actual_hash = format!("{:x}", hasher.finalize());
-
-        if actual_hash != manifest.content_hash {
+        // Verify content hash using shared hash module
+        if let Err(e) = crate::hash::verify_file_sha256(output_path, &manifest.content_hash) {
             // Clean up invalid file
             let _ = std::fs::remove_file(output_path);
             return Err(Error::ChecksumMismatch {
-                expected: manifest.content_hash.clone(),
-                actual: actual_hash,
+                expected: e.expected,
+                actual: e.actual,
             });
         }
 

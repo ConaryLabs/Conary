@@ -276,6 +276,102 @@ pub fn xxh128(data: &[u8]) -> String {
     hash_bytes(HashAlgorithm::Xxh128, data).value
 }
 
+// =============================================================================
+// Verification functions
+// =============================================================================
+
+/// Verification result error
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyError {
+    pub expected: String,
+    pub actual: String,
+    pub algorithm: HashAlgorithm,
+}
+
+impl fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} mismatch: expected {}, got {}",
+            self.algorithm, self.expected, self.actual
+        )
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
+/// Verify bytes match an expected hash
+///
+/// # Example
+/// ```
+/// use conary::hash::{verify_bytes, HashAlgorithm};
+///
+/// let data = b"hello world";
+/// let hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+/// assert!(verify_bytes(data, hash, HashAlgorithm::Sha256).is_ok());
+/// ```
+pub fn verify_bytes(data: &[u8], expected: &str, algorithm: HashAlgorithm) -> Result<(), VerifyError> {
+    let actual = hash_bytes(algorithm, data);
+    if actual.value == expected.to_lowercase() {
+        Ok(())
+    } else {
+        Err(VerifyError {
+            expected: expected.to_string(),
+            actual: actual.value,
+            algorithm,
+        })
+    }
+}
+
+/// Verify a file matches an expected hash
+///
+/// Streams the file content to avoid loading it entirely into memory.
+pub fn verify_file(
+    path: &std::path::Path,
+    expected: &str,
+    algorithm: HashAlgorithm,
+) -> Result<(), VerifyError> {
+    let mut file = std::fs::File::open(path).map_err(|_| VerifyError {
+        expected: expected.to_string(),
+        actual: "<file read error>".to_string(),
+        algorithm,
+    })?;
+
+    let actual = hash_reader(algorithm, &mut file).map_err(|_| VerifyError {
+        expected: expected.to_string(),
+        actual: "<hash read error>".to_string(),
+        algorithm,
+    })?;
+
+    if actual.value == expected.to_lowercase() {
+        Ok(())
+    } else {
+        Err(VerifyError {
+            expected: expected.to_string(),
+            actual: actual.value,
+            algorithm,
+        })
+    }
+}
+
+/// Verify bytes match expected SHA-256 hash (convenience function)
+#[inline]
+pub fn verify_sha256(data: &[u8], expected: &str) -> Result<(), VerifyError> {
+    verify_bytes(data, expected, HashAlgorithm::Sha256)
+}
+
+/// Verify bytes match expected XXH128 hash (convenience function)
+#[inline]
+pub fn verify_xxh128(data: &[u8], expected: &str) -> Result<(), VerifyError> {
+    verify_bytes(data, expected, HashAlgorithm::Xxh128)
+}
+
+/// Verify file matches expected SHA-256 hash (convenience function)
+#[inline]
+pub fn verify_file_sha256(path: &std::path::Path, expected: &str) -> Result<(), VerifyError> {
+    verify_file(path, expected, HashAlgorithm::Sha256)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +519,53 @@ mod tests {
     fn test_default_algorithm() {
         let algo = HashAlgorithm::default();
         assert_eq!(algo, HashAlgorithm::Sha256);
+    }
+
+    #[test]
+    fn test_verify_bytes_sha256() {
+        let data = b"hello world";
+        let hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+
+        assert!(verify_bytes(data, hash, HashAlgorithm::Sha256).is_ok());
+        assert!(verify_sha256(data, hash).is_ok());
+
+        // Wrong hash should fail
+        let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(verify_bytes(data, wrong, HashAlgorithm::Sha256).is_err());
+    }
+
+    #[test]
+    fn test_verify_bytes_xxh128() {
+        let data = b"hello world";
+        let hash = xxh128(data);
+
+        assert!(verify_bytes(data.as_slice(), &hash, HashAlgorithm::Xxh128).is_ok());
+        assert!(verify_xxh128(data, &hash).is_ok());
+
+        // Wrong hash should fail
+        let wrong = "00000000000000000000000000000000";
+        assert!(verify_bytes(data, wrong, HashAlgorithm::Xxh128).is_err());
+    }
+
+    #[test]
+    fn test_verify_case_insensitive() {
+        let data = b"test";
+        let hash_lower = sha256(data);
+        let hash_upper = hash_lower.to_uppercase();
+
+        // Should work with either case
+        assert!(verify_sha256(data, &hash_lower).is_ok());
+        assert!(verify_sha256(data, &hash_upper).is_ok());
+    }
+
+    #[test]
+    fn test_verify_error_contains_actual() {
+        let data = b"hello";
+        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let err = verify_sha256(data, wrong_hash).unwrap_err();
+        assert_eq!(err.expected, wrong_hash);
+        assert_eq!(err.actual, sha256(data));
+        assert_eq!(err.algorithm, HashAlgorithm::Sha256);
     }
 }

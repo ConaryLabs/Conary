@@ -18,8 +18,6 @@
 use crate::db::models::RepositoryPackage;
 use crate::error::{Error, Result};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -296,26 +294,15 @@ pub fn download_delta(
 }
 
 /// Verify file checksum matches expected value
+///
+/// Uses the shared hash module for consistent SHA-256 verification.
 pub fn verify_checksum(path: &Path, expected: &str) -> Result<()> {
-    use sha2::{Digest, Sha256};
-
     debug!("Verifying checksum for {}", path.display());
 
-    let mut file = File::open(path)
-        .map_err(|e| Error::IoError(format!("Failed to open file for checksum: {e}")))?;
-
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)
-        .map_err(|e| Error::IoError(format!("Failed to read file for checksum: {e}")))?;
-
-    let actual = format!("{:x}", hasher.finalize());
-
-    if actual != expected {
-        return Err(Error::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
-        });
-    }
+    crate::hash::verify_file_sha256(path, expected).map_err(|e| Error::ChecksumMismatch {
+        expected: e.expected,
+        actual: e.actual,
+    })?;
 
     debug!("Checksum verified: {}", expected);
     Ok(())
