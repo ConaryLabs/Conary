@@ -19,6 +19,8 @@ pub struct ChunkCache {
     /// Maximum cache size in bytes
     max_bytes: u64,
     /// Chunk TTL in days (chunks not accessed in this period are candidates for eviction)
+    /// Reserved for future LRU eviction implementation
+    #[allow(dead_code)]
     ttl_days: u32,
 }
 

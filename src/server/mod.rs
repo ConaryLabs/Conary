@@ -7,8 +7,6 @@
 //! - Converts legacy packages (RPM/DEB/Arch) to CCS on-demand
 //! - Uses LRU cache eviction to manage disk space
 
-#![cfg(feature = "server")]
-
 mod cache;
 mod conversion;
 mod handlers;

@@ -84,6 +84,9 @@ cargo clippy -- -D warnings
 | `src/model/` | System Model - declarative OS state (parser, diff, state capture) |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
 | `src/server/` | Refinery server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
+| `src/cli/` | CLI subcommand definitions (nested structure: package, query, repo, etc.) |
+| `src/commands/` | Command implementations |
+| `src/commands/install/` | Package installation (resolve, prepare, execute, refinery submodules) |
 
 ## Database Schema
 

@@ -62,7 +62,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
 - **Dual hashing** - SHA-256 for cryptographic verification, XXH128 (~30 GB/s) for CAS content addressing
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2026
-- **Database schema v24** with automatic migrations
+- **Database schema v26** with automatic migrations
 - **Ed25519 signatures** for package authentication
 - **CBOR binary manifests** with Merkle tree content verification
 - **VFS tree** with in-memory filesystem operations and efficient path lookups
@@ -73,119 +73,122 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 
 ### Commands Available
 
-**Package Management:**
-- `conary init` - Initialize database and storage
-- `conary install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts, --sandbox)
-- `conary remove <package>` - Remove installed packages (checks dependencies, supports --sandbox)
-- `conary update [package]` - Update packages with delta-first logic (supports --security for security-only updates)
-- `conary update-group <name>` - Update all packages in a collection atomically
-- `conary autoremove` - Remove orphaned dependencies no longer needed (supports --sandbox)
-- `conary verify [package]` - Verify file integrity with SHA-256
-- `conary restore <package>` - Restore modified/deleted files from CAS
-- `conary restore-all` - Restore all modified files across all packages
-- `conary pin <package>` - Pin package to prevent updates
-- `conary unpin <package>` - Unpin package to allow updates
-- `conary list-pinned` - List all pinned packages
+Commands are organized into logical subcommand groups for easier discovery and use.
 
-**Query & Information:**
-- `conary query [pattern]` - List installed packages (supports --path, --info, --files, --lsl)
-- `conary repquery [pattern]` - Query packages available in repositories
-- `conary depends <package>` - Show package dependencies
-- `conary rdepends <package>` - Show reverse dependencies (what depends on this)
-- `conary deptree <package>` - Show full dependency tree visualization
-- `conary whatbreaks <package>` - Show what would break if package removed
-- `conary whatprovides <capability>` - Find what package provides a capability
-- `conary query-reason [pattern]` - Show installation reasons for packages
-- `conary history` - Show all changeset operations
-- `conary scripts <package.rpm>` - Display scriptlets from a package file
+**Package Management (`conary package`):**
+- `conary package install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts, --sandbox)
+- `conary package remove <package>` - Remove installed packages (checks dependencies, supports --sandbox)
+- `conary package update [package]` - Update packages with delta-first logic (supports --security for security-only updates)
+- `conary package update-group <name>` - Update all packages in a collection atomically
+- `conary package autoremove` - Remove orphaned dependencies no longer needed (supports --sandbox)
+- `conary package verify [package]` - Verify file integrity with SHA-256
+- `conary package restore <package>` - Restore modified/deleted files from CAS
+- `conary package pin <package>` - Pin package to prevent updates
+- `conary package unpin <package>` - Unpin package to allow updates
+- `conary package list-pinned` - List all pinned packages
+- `conary package scripts <package.rpm>` - Display scriptlets from a package file
+- `conary package delta-stats` - Show delta update statistics and bandwidth savings
 
-**Component Commands:**
-- `conary list-components <package>` - Show components of an installed package
-- `conary query-component <pkg:comp>` - Query files in a specific component
+**Query & Information (`conary query`):**
+- `conary query list [pattern]` - List installed packages (supports --path, --info, --files, --lsl)
+- `conary query repquery [pattern]` - Query packages available in repositories
+- `conary query reason [pattern]` - Show installation reasons for packages
+- `conary query depends <package>` - Show package dependencies
+- `conary query rdepends <package>` - Show reverse dependencies (what depends on this)
+- `conary query deptree <package>` - Show full dependency tree visualization
+- `conary query whatbreaks <package>` - Show what would break if package removed
+- `conary query whatprovides <capability>` - Find what package provides a capability
+- `conary query list-components <package>` - Show components of an installed package
+- `conary query component <pkg:comp>` - Query files in a specific component
+- `conary query search <pattern>` - Search for packages in repositories
+- `conary query history` - Show all changeset operations
 
-**Collection Commands:**
-- `conary collection-create <name>` - Create a new package collection
-- `conary collection-list` - List all collections
-- `conary collection-show <name>` - Show collection details and members
-- `conary collection-add <name> --members <pkg1,pkg2>` - Add packages to collection
-- `conary collection-remove <name> --members <pkg1,pkg2>` - Remove packages from collection
-- `conary collection-delete <name>` - Delete a collection
-- `conary collection-install <name>` - Install all packages in a collection
+**Repository Management (`conary repo`):**
+- `conary repo add <name> <url>` - Add a new package repository (supports `--content-url` for reference mirrors)
+- `conary repo list` - List configured repositories
+- `conary repo remove <name>` - Remove a repository
+- `conary repo enable <name>` - Enable a repository
+- `conary repo disable <name>` - Disable a repository
+- `conary repo sync [name]` - Synchronize repository metadata
+- `conary repo key-import <path>` - Import a GPG public key
+- `conary repo key-list` - List imported GPG keys
+- `conary repo key-remove <fingerprint>` - Remove a GPG key
 
-**Trigger Commands:**
-- `conary trigger-list` - List all registered triggers
-- `conary trigger-show <name>` - Show trigger details
-- `conary trigger-enable <name>` - Enable a trigger
-- `conary trigger-disable <name>` - Disable a trigger
-- `conary trigger-add` - Register a new trigger
-- `conary trigger-remove <name>` - Remove a trigger
-- `conary trigger-run <name>` - Manually run a trigger
+**Config File Management (`conary config`):**
+- `conary config list [package]` - List tracked config files
+- `conary config diff <file>` - Show config file differences
+- `conary config backup <file>` - Backup a config file
+- `conary config restore <file>` - Restore config from backup
+- `conary config check` - Check config file status (pristine/modified/missing)
+- `conary config backups` - List available config backups
 
-**State Snapshot Commands:**
-- `conary state-list` - List all system state snapshots
-- `conary state-show <id>` - Show state details
-- `conary state-diff <id1> <id2>` - Compare two states
-- `conary state-restore <id>` - Show restore plan to rollback to a state
-- `conary state-prune` - Remove old state snapshots
-- `conary state-create` - Create a manual state snapshot
+**State Snapshots (`conary state`):**
+- `conary state list` - List all system state snapshots
+- `conary state show <id>` - Show state details
+- `conary state diff <id1> <id2>` - Compare two states
+- `conary state restore <id>` - Show restore plan to rollback to a state
+- `conary state prune` - Remove old state snapshots
+- `conary state create` - Create a manual state snapshot
+- `conary state rollback <id>` - Rollback any changeset, including filesystem changes
 
-**System Model Commands (Declarative OS):**
-- `conary model-snapshot` - Capture current system state to a model file
-- `conary model-diff` - Show changes needed to reach declared model state
-- `conary model-check` - Check if system matches model (CI/CD drift detection)
-- `conary model-apply` - Sync system to declared model state
+**Trigger Management (`conary trigger`):**
+- `conary trigger list` - List all registered triggers
+- `conary trigger show <name>` - Show trigger details
+- `conary trigger enable <name>` - Enable a trigger
+- `conary trigger disable <name>` - Disable a trigger
+- `conary trigger add` - Register a new trigger
+- `conary trigger remove <name>` - Remove a trigger
+- `conary trigger run <name>` - Manually run a trigger
 
-**Label Commands:**
-- `conary label-list` - List all labels
-- `conary label-add <label>` - Add a new label
-- `conary label-remove <label>` - Remove a label
-- `conary label-show <label>` - Show label details
-- `conary label-set <package> <label>` - Set package label
-- `conary label-query <label>` - Query packages by label
-- `conary label-path` - Show label search path
+**Label & Provenance (`conary label`):**
+- `conary label list` - List all labels
+- `conary label add <label>` - Add a new label
+- `conary label remove <label>` - Remove a label
+- `conary label show <label>` - Show label details
+- `conary label set <package> <label>` - Set package label
+- `conary label query <label>` - Query packages by label
+- `conary label path` - Show label search path
 
-**Config File Commands:**
-- `conary config-list [package]` - List tracked config files
-- `conary config-diff <file>` - Show config file differences
-- `conary config-backup <file>` - Backup a config file
-- `conary config-restore <file>` - Restore config from backup
-- `conary config-check` - Check config file status (pristine/modified/missing)
-- `conary config-backups` - List available config backups
+**Collection Management (`conary collection`):**
+- `conary collection create <name>` - Create a new package collection
+- `conary collection list` - List all collections
+- `conary collection show <name>` - Show collection details and members
+- `conary collection add <name> --members <pkg1,pkg2>` - Add packages to collection
+- `conary collection remove <name> --members <pkg1,pkg2>` - Remove packages from collection
+- `conary collection delete <name>` - Delete a collection
+- `conary collection install <name>` - Install all packages in a collection
 
-**System Adoption:**
-- `conary adopt <package>` - Adopt a single system package into Conary
-- `conary adopt-system` - Scan and adopt all system packages
-- `conary adopt-status` - Show adoption status summary
-- `conary conflicts` - Show file conflicts between packages
+**System Adoption (`conary package`):**
+- `conary package adopt <package>` - Adopt a single system package into Conary
+- `conary package adopt-system` - Scan and adopt all system packages
+- `conary package adopt-status` - Show adoption status summary
+- `conary package conflicts` - Show file conflicts between packages
 
-**Repository Management:**
-- `conary repo-add <name> <url>` - Add a new package repository (supports `--content-url` for reference mirrors)
-- `conary repo-list` - List configured repositories
-- `conary repo-remove <name>` - Remove a repository
-- `conary repo-enable <name>` - Enable a repository
-- `conary repo-disable <name>` - Disable a repository
-- `conary repo-sync [name]` - Synchronize repository metadata
-- `conary search <pattern>` - Search for packages in repositories
+**System Model (`conary model`) - Declarative OS:**
+- `conary model snapshot` - Capture current system state to a model file
+- `conary model diff` - Show changes needed to reach declared model state
+- `conary model check` - Check if system matches model (CI/CD drift detection)
+- `conary model apply` - Sync system to declared model state
 
-**GPG Key Management:**
-- `conary key-import <path>` - Import a GPG public key
-- `conary key-list` - List imported GPG keys
-- `conary key-remove <fingerprint>` - Remove a GPG key
+**CCS Native Format (`conary ccs`):**
+- `conary ccs init <directory>` - Initialize a new CCS package project with ccs.toml template
+- `conary ccs build <directory>` - Build a CCS package from source directory (CDC enabled by default, `--no-chunked` to disable)
+- `conary ccs inspect <package.ccs>` - Display package manifest and file listing
+- `conary ccs verify <package.ccs>` - Verify package integrity via Merkle tree
+- `conary ccs keygen` - Generate Ed25519 keypair for package signing
+- `conary ccs sign <package.ccs>` - Sign a package with Ed25519 private key
+- `conary ccs install <package.ccs>` - Install a CCS package into the system
+- `conary ccs export <packages...>` - Export packages to OCI container image format
 
-**System Operations:**
-- `conary rollback <id>` - Rollback any changeset, including filesystem changes
-- `conary delta-stats` - Show delta update statistics and bandwidth savings
-- `conary completions <shell>` - Generate shell completion scripts
+**Derived Packages (`conary derive`):**
+- `conary derive create <name>` - Create a derived package from base
+- `conary derive build <name>` - Build a derived package
+- `conary derive list` - List derived packages
+- `conary derive show <name>` - Show derived package details
 
-**CCS Package Building:**
-- `ccs-init <directory>` - Initialize a new CCS package project with ccs.toml template
-- `ccs-build <directory>` - Build a CCS package from source directory (CDC enabled by default, `--no-chunked` to disable)
-- `ccs-inspect <package.ccs>` - Display package manifest and file listing
-- `ccs-verify <package.ccs>` - Verify package integrity via Merkle tree
-- `ccs-keygen` - Generate Ed25519 keypair for package signing
-- `ccs-sign <package.ccs>` - Sign a package with Ed25519 private key
-- `ccs-install <package.ccs>` - Install a CCS package into the system
-- `ccs-export <packages...>` - Export packages to OCI container image format
+**System Commands (`conary system`):**
+- `conary system init` - Initialize database and storage
+- `conary system completions <shell>` - Generate shell completion scripts
 
 ### Core Features
 
@@ -326,16 +329,16 @@ Generate completions for your shell:
 
 ```bash
 # Bash
-conary completions bash > /etc/bash_completion.d/conary
+conary system completions bash > /etc/bash_completion.d/conary
 
 # Zsh
-conary completions zsh > /usr/share/zsh/site-functions/_conary
+conary system completions zsh > /usr/share/zsh/site-functions/_conary
 
 # Fish
-conary completions fish > ~/.config/fish/completions/conary.fish
+conary system completions fish > ~/.config/fish/completions/conary.fish
 
 # PowerShell
-conary completions powershell > conary.ps1
+conary system completions powershell > conary.ps1
 ```
 
 ### Man Pages
@@ -358,40 +361,40 @@ man conary
 
 ```bash
 # Add a repository
-conary repo-add myrepo https://example.com/packages
+conary repo add myrepo https://example.com/packages
 
 # Add a reference mirror (trusted metadata, untrusted CDN for content)
-conary repo-add ubuntu-noble \
+conary repo add ubuntu-noble \
   --url="https://your-server.com/ubuntu/metadata" \
   --content-url="https://archive.ubuntu.com/ubuntu"
 
 # List repositories
-conary repo-list
+conary repo list
 
 # Synchronize package metadata
-conary repo-sync
+conary repo sync
 
 # Search for packages
-conary search nginx
+conary query search nginx
 
 # Install from repository by name
-conary install nginx
+conary package install nginx
 
 # Install specific version
-conary install nginx --version=1.20.1
+conary package install nginx --version=1.20.1
 
 # Install from specific repository
-conary install nginx --repo=myrepo
+conary package install nginx --repo=myrepo
 
 # Preview installation without installing
-conary install nginx --dry-run
+conary package install nginx --dry-run
 ```
 
 ### System Model Usage (Declarative OS)
 
 ```bash
 # Capture current system state to a model file
-conary model-snapshot --output /etc/conary/system.toml --description "Production baseline"
+conary model snapshot --output /etc/conary/system.toml --description "Production baseline"
 
 # Edit the model to declare desired state
 cat /etc/conary/system.toml
@@ -414,73 +417,73 @@ packages = ["nginx-module-geoip"]
 
 ```bash
 # Show what changes are needed to reach model state
-conary model-diff
+conary model diff
 
 # Check if system matches model (useful for CI/CD drift detection)
-conary model-check --verbose
+conary model check --verbose
 # Exit code 0 = in sync, 1 = drift detected
 
 # Sync system to model state
-conary model-apply --dry-run  # Preview first
-conary model-apply            # Apply changes
+conary model apply --dry-run  # Preview first
+conary model apply            # Apply changes
 ```
 
 ### Collection Usage
 
 ```bash
 # Create a collection
-conary collection-create web-stack --description "Web server stack" --members nginx,postgresql,redis
+conary collection create web-stack --description "Web server stack" --members nginx,postgresql,redis
 
 # List collections
-conary collection-list
+conary collection list
 
 # Show collection details
-conary collection-show web-stack
+conary collection show web-stack
 
 # Add more packages
-conary collection-add web-stack --members memcached,nodejs
+conary collection add web-stack --members memcached,nodejs
 
 # Install all packages in a collection
-conary collection-install web-stack
+conary collection install web-stack
 
 # Remove packages from collection
-conary collection-remove web-stack --members memcached
+conary collection remove web-stack --members memcached
 
 # Delete collection (doesn't uninstall packages)
-conary collection-delete web-stack
+conary collection delete web-stack
 ```
 
 ### CCS Package Building
 
 ```bash
 # Initialize a new package project
-ccs-init myapp
+conary ccs init myapp
 cd myapp
 # Edit ccs.toml with package metadata
 
 # Build the package (CDC chunking enabled by default)
-ccs-build . --output ./dist
+conary ccs build . --output ./dist
 
 # Build without CDC chunking (not recommended)
-ccs-build . --output ./dist --no-chunked
+conary ccs build . --output ./dist --no-chunked
 
 # Inspect the package
-ccs-inspect dist/myapp-1.0.0.ccs
+conary ccs inspect dist/myapp-1.0.0.ccs
 
 # Verify package integrity
-ccs-verify dist/myapp-1.0.0.ccs
+conary ccs verify dist/myapp-1.0.0.ccs
 
 # Generate signing keys
-ccs-keygen --output ~/.config/conary/keys
+conary ccs keygen --output ~/.config/conary/keys
 
 # Sign the package
-ccs-sign dist/myapp-1.0.0.ccs --key ~/.config/conary/keys/private.pem
+conary ccs sign dist/myapp-1.0.0.ccs --key ~/.config/conary/keys/private.pem
 
 # Install the package
-ccs-install dist/myapp-1.0.0.ccs
+conary ccs install dist/myapp-1.0.0.ccs
 
 # Export to OCI container image
-ccs-export myapp --output myapp.tar --format oci
+conary ccs export myapp --output myapp.tar --format oci
 
 # Load into podman/docker
 podman load < myapp.tar

@@ -116,9 +116,8 @@ pub async fn get_package(
         Ok(job_id) => {
             // Spawn conversion task
             let state_clone = state.clone();
-            let job_id_clone = job_id.clone();
             tokio::spawn(async move {
-                run_conversion(state_clone, job_id_clone).await;
+                run_conversion(state_clone, job_id).await;
             });
 
             (
@@ -252,22 +251,20 @@ pub async fn download_package(
 
     // Check for in-progress conversion
     let job_key = format!("{}:{}:{}", distro, name, query.version.as_deref().unwrap_or("latest"));
-    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
-        // Check if job is still in progress
-        if let Some(job) = state_guard.job_manager.get_job(&existing_job) {
-            if !matches!(job.status, crate::server::jobs::JobStatus::Ready) {
-                return (
-                    StatusCode::ACCEPTED,
-                    Json(ConversionAccepted {
-                        status: "converting",
-                        job_id: existing_job.to_string(),
-                        poll_url: format!("/v1/jobs/{}", existing_job),
-                        eta_seconds: None,
-                    }),
-                )
-                    .into_response();
-            }
-        }
+    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key)
+        && let Some(job) = state_guard.job_manager.get_job(&existing_job)
+        && !matches!(job.status, crate::server::jobs::JobStatus::Ready)
+    {
+        return (
+            StatusCode::ACCEPTED,
+            Json(ConversionAccepted {
+                status: "converting",
+                job_id: existing_job.to_string(),
+                poll_url: format!("/v1/jobs/{}", existing_job),
+                eta_seconds: None,
+            }),
+        )
+            .into_response();
     }
 
     // Look for the CCS package file

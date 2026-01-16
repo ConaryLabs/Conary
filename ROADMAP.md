@@ -8,10 +8,10 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v24)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v26)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
-- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v24)
+- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v26)
 
 ### Package Formats
 
@@ -281,8 +281,8 @@ Use atomic operations to swap entire filesystem trees.
 
 Virtual filesystem tree for efficient file operations.
 
-- [ ] **Arena Allocator** - Efficient node storage for large trees
-- [ ] **O(1) Path Lookup** - HashMap for instant path-to-node resolution
+- [COMPLETE] **Arena Allocator** - Efficient node storage for large trees (`src/filesystem/vfs/mod.rs`)
+- [COMPLETE] **O(1) Path Lookup** - HashMap for instant path-to-node resolution
 - [ ] **Subtree Reparenting** - Efficiently move entire subtrees
 - [ ] **Component Merging** - Merge component trees for installation
 
