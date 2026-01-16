@@ -1299,3 +1299,550 @@ fn test_whatprovides_query() {
 
     println!("whatprovides query test passed");
 }
+
+// =============================================================================
+// COMMAND-LEVEL INTEGRATION TESTS
+// =============================================================================
+// These tests verify command-equivalent functionality through the library API.
+// Commands in src/commands/ are thin wrappers around these operations.
+
+/// Helper to create a test database with packages for command tests
+fn setup_command_test_db() -> (tempfile::TempDir, String) {
+    use conary::db;
+    use conary::db::models::{
+        Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, ProvideEntry, Trove,
+        TroveType,
+    };
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.db").to_str().unwrap().to_string();
+
+    db::init(&db_path).unwrap();
+    let mut conn = db::open(&db_path).unwrap();
+
+    db::transaction(&mut conn, |tx| {
+        // Create nginx package with files
+        let mut changeset1 = Changeset::new("Install nginx-1.24.0".to_string());
+        let changeset1_id = changeset1.insert(tx)?;
+
+        let mut nginx = Trove::new("nginx".to_string(), "1.24.0".to_string(), TroveType::Package);
+        nginx.architecture = Some("x86_64".to_string());
+        nginx.description = Some("High performance web server".to_string());
+        nginx.installed_by_changeset_id = Some(changeset1_id);
+        let nginx_id = nginx.insert(tx)?;
+
+        // Add nginx components
+        let mut nginx_runtime = Component::new(nginx_id, "runtime".to_string());
+        let runtime_id = nginx_runtime.insert(tx)?;
+
+        let mut nginx_config = Component::new(nginx_id, "config".to_string());
+        let config_id = nginx_config.insert(tx)?;
+
+        // Add nginx files
+        let mut f1 = FileEntry::new(
+            "/usr/sbin/nginx".to_string(),
+            "abc123def456789012345678901234567890123456789012345678901234".to_string(),
+            1024000,
+            0o755,
+            nginx_id,
+        );
+        f1.component_id = Some(runtime_id);
+        f1.insert(tx)?;
+
+        let mut f2 = FileEntry::new(
+            "/etc/nginx/nginx.conf".to_string(),
+            "def456abc123789012345678901234567890123456789012345678901234".to_string(),
+            2048,
+            0o644,
+            nginx_id,
+        );
+        f2.component_id = Some(config_id);
+        f2.insert(tx)?;
+
+        // Add nginx provides
+        let mut p1 = ProvideEntry::new(nginx_id, "nginx".to_string(), Some("1.24.0".to_string()));
+        p1.insert(tx)?;
+        let mut p2 = ProvideEntry::new(nginx_id, "webserver".to_string(), None);
+        p2.insert(tx)?;
+
+        // Add nginx dependency
+        let mut dep = DependencyEntry::new(
+            nginx_id,
+            "openssl".to_string(),
+            Some(">= 3.0".to_string()),
+            "runtime".to_string(),
+            None,
+        );
+        dep.insert(tx)?;
+
+        changeset1.update_status(tx, ChangesetStatus::Applied)?;
+
+        // Create openssl package
+        let mut changeset2 = Changeset::new("Install openssl-3.0.0".to_string());
+        let changeset2_id = changeset2.insert(tx)?;
+
+        let mut openssl = Trove::new("openssl".to_string(), "3.0.0".to_string(), TroveType::Package);
+        openssl.architecture = Some("x86_64".to_string());
+        openssl.description = Some("Cryptography and SSL/TLS toolkit".to_string());
+        openssl.installed_by_changeset_id = Some(changeset2_id);
+        let openssl_id = openssl.insert(tx)?;
+
+        let mut openssl_runtime = Component::new(openssl_id, "runtime".to_string());
+        openssl_runtime.insert(tx)?;
+
+        let mut p3 = ProvideEntry::new(openssl_id, "openssl".to_string(), Some("3.0.0".to_string()));
+        p3.insert(tx)?;
+        let mut p4 =
+            ProvideEntry::new(openssl_id, "soname(libssl.so.3)".to_string(), None);
+        p4.insert(tx)?;
+
+        changeset2.update_status(tx, ChangesetStatus::Applied)?;
+
+        Ok(())
+    })
+    .unwrap();
+
+    (temp_dir, db_path)
+}
+
+/// Test package query operations (equivalent to cmd_query)
+#[test]
+fn test_query_operations() {
+    use conary::db;
+    use conary::db::models::{FileEntry, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Test listing all packages
+    let all_troves = Trove::list_all(&conn).unwrap();
+    assert_eq!(all_troves.len(), 2, "Should have 2 packages");
+
+    // Test pattern matching
+    let nginx_troves = Trove::find_by_name(&conn, "nginx").unwrap();
+    assert_eq!(nginx_troves.len(), 1, "Should find nginx");
+    assert_eq!(nginx_troves[0].version, "1.24.0");
+    assert_eq!(nginx_troves[0].description, Some("High performance web server".to_string()));
+
+    // Test file path query
+    let file = FileEntry::find_by_path(&conn, "/usr/sbin/nginx").unwrap();
+    assert!(file.is_some(), "Should find file by path");
+    let file = file.unwrap();
+    assert_eq!(file.size, 1024000);
+    assert_eq!(file.permissions, 0o755 as i32);
+
+    // Test finding files by package
+    let nginx_id = nginx_troves[0].id.unwrap();
+    let files = FileEntry::find_by_trove(&conn, nginx_id).unwrap();
+    assert_eq!(files.len(), 2, "nginx should have 2 files");
+
+    // Test non-existent package
+    let nonexistent = Trove::find_by_name(&conn, "nonexistent").unwrap();
+    assert!(nonexistent.is_empty(), "Should not find nonexistent package");
+}
+
+/// Test dependency query operations (equivalent to cmd_depends/cmd_rdepends)
+#[test]
+fn test_dependency_queries() {
+    use conary::db;
+    use conary::db::models::{DependencyEntry, ProvideEntry, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Get nginx's dependencies
+    let nginx = Trove::find_by_name(&conn, "nginx").unwrap();
+    let nginx_id = nginx[0].id.unwrap();
+    let deps = DependencyEntry::find_by_trove(&conn, nginx_id).unwrap();
+    assert_eq!(deps.len(), 1, "nginx should have 1 dependency");
+    assert_eq!(deps[0].depends_on_name, "openssl");
+    assert_eq!(deps[0].depends_on_version, Some(">= 3.0".to_string()));
+
+    // Test reverse dependency lookup via provides
+    let openssl_providers = ProvideEntry::find_all_by_capability(&conn, "openssl").unwrap();
+    assert!(!openssl_providers.is_empty(), "Should find openssl provider");
+
+    // Verify soname provides
+    let libssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    assert_eq!(libssl_providers.len(), 1, "Should find libssl.so.3 provider");
+}
+
+/// Test changeset history (equivalent to cmd_history)
+#[test]
+fn test_changeset_history() {
+    use conary::db;
+    use conary::db::models::{Changeset, ChangesetStatus};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // List all changesets
+    let changesets = Changeset::list_all(&conn).unwrap();
+    assert_eq!(changesets.len(), 2, "Should have 2 changesets");
+
+    // Verify changeset details
+    let nginx_cs = changesets.iter().find(|c| c.description.contains("nginx")).unwrap();
+    assert_eq!(nginx_cs.status, ChangesetStatus::Applied);
+
+    let openssl_cs = changesets.iter().find(|c| c.description.contains("openssl")).unwrap();
+    assert_eq!(openssl_cs.status, ChangesetStatus::Applied);
+
+    // Test finding by ID
+    let cs_by_id = Changeset::find_by_id(&conn, nginx_cs.id.unwrap()).unwrap();
+    assert!(cs_by_id.is_some());
+    assert_eq!(cs_by_id.unwrap().description, nginx_cs.description);
+}
+
+/// Test whatprovides functionality
+#[test]
+fn test_whatprovides_operations() {
+    use conary::db;
+    use conary::db::models::ProvideEntry;
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Test finding provider by capability
+    let webserver_providers = ProvideEntry::find_all_by_capability(&conn, "webserver").unwrap();
+    assert_eq!(webserver_providers.len(), 1);
+
+    // Test soname lookup
+    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    assert_eq!(ssl_providers.len(), 1);
+
+    // Test pattern search
+    let soname_results = ProvideEntry::search_capability(&conn, "soname%").unwrap();
+    assert_eq!(soname_results.len(), 1, "Should find 1 soname provide");
+
+    // Test satisfying provider
+    let (name, _version) = ProvideEntry::find_satisfying_provider(&conn, "openssl")
+        .unwrap()
+        .expect("Should find openssl provider");
+    assert_eq!(name, "openssl");
+
+    // Test non-existent capability
+    let nonexistent = ProvideEntry::find_all_by_capability(&conn, "nonexistent").unwrap();
+    assert!(nonexistent.is_empty());
+}
+
+/// Test component listing (equivalent to cmd_list_components)
+#[test]
+fn test_component_listing() {
+    use conary::db;
+    use conary::db::models::{Component, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Get nginx components
+    let nginx = Trove::find_by_name(&conn, "nginx").unwrap();
+    let nginx_id = nginx[0].id.unwrap();
+    let components = Component::find_by_trove(&conn, nginx_id).unwrap();
+
+    assert_eq!(components.len(), 2, "nginx should have 2 components");
+    let comp_names: Vec<&str> = components.iter().map(|c| c.name.as_str()).collect();
+    assert!(comp_names.contains(&"runtime"));
+    assert!(comp_names.contains(&"config"));
+}
+
+/// Test state snapshot operations (equivalent to cmd_state_*)
+#[test]
+fn test_state_snapshot_operations() {
+    use conary::db;
+    use conary::db::models::{StateEngine, SystemState};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    let engine = StateEngine::new(&conn);
+
+    // Create a snapshot
+    let state = engine.create_snapshot("Test snapshot", None, None).unwrap();
+    assert!(state.id.is_some());
+    assert_eq!(state.summary, "Test snapshot");
+    // First state is numbered 0 (state_number starts at 0, not 1)
+    assert_eq!(state.state_number, 0);
+
+    // List snapshots using SystemState::list_all
+    let states = SystemState::list_all(&conn).unwrap();
+    assert!(!states.is_empty(), "Should have at least one state");
+
+    // Create another snapshot
+    let state2 = engine.create_snapshot("Second snapshot", None, None).unwrap();
+    assert!(state2.state_number > state.state_number);
+
+    // Get latest state (highest state_number from list)
+    let states = SystemState::list_all(&conn).unwrap();
+    assert!(states.len() >= 2);
+    // list_all returns DESC order, so first is latest
+    assert_eq!(states[0].summary, "Second snapshot");
+}
+
+/// Test collection operations (equivalent to cmd_collection_*)
+#[test]
+fn test_collection_operations() {
+    use conary::db;
+    use conary::db::models::{CollectionMember, Trove, TroveType};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let mut conn = db::open(&db_path).unwrap();
+
+    // Create a collection
+    db::transaction(&mut conn, |tx| {
+        let mut collection = Trove::new(
+            "webstack".to_string(),
+            "1.0".to_string(),
+            TroveType::Collection,
+        );
+        collection.description = Some("Web server stack".to_string());
+        let coll_id = collection.insert(tx)?;
+
+        // Add members
+        let mut m1 = CollectionMember::new(coll_id, "nginx".to_string());
+        m1.insert(tx)?;
+
+        let mut m2 = CollectionMember::new(coll_id, "openssl".to_string());
+        m2.insert(tx)?;
+
+        Ok(())
+    })
+    .unwrap();
+
+    // Verify collection
+    let collections = Trove::find_by_name(&conn, "webstack").unwrap();
+    assert_eq!(collections.len(), 1);
+    assert_eq!(collections[0].trove_type, TroveType::Collection);
+
+    let coll_id = collections[0].id.unwrap();
+    let members = CollectionMember::find_by_collection(&conn, coll_id).unwrap();
+    assert_eq!(members.len(), 2);
+
+    // Test membership check
+    assert!(CollectionMember::is_member(&conn, coll_id, "nginx").unwrap());
+    assert!(CollectionMember::is_member(&conn, coll_id, "openssl").unwrap());
+    assert!(!CollectionMember::is_member(&conn, coll_id, "postgresql").unwrap());
+
+    // Test find_collections_containing
+    let nginx_collections = CollectionMember::find_collections_containing(&conn, "nginx").unwrap();
+    assert_eq!(nginx_collections.len(), 1);
+    assert_eq!(nginx_collections[0], coll_id);
+}
+
+/// Test changeset rollback tracking
+#[test]
+fn test_rollback_tracking() {
+    use conary::db;
+    use conary::db::models::{Changeset, ChangesetStatus, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let mut conn = db::open(&db_path).unwrap();
+
+    // Get nginx changeset
+    let changesets = Changeset::list_all(&conn).unwrap();
+    let nginx_cs = changesets
+        .iter()
+        .find(|c| c.description.contains("nginx"))
+        .unwrap();
+    let nginx_cs_id = nginx_cs.id.unwrap();
+
+    // Verify nginx exists
+    let nginx_before = Trove::find_by_name(&conn, "nginx").unwrap();
+    assert_eq!(nginx_before.len(), 1);
+
+    // Simulate rollback by updating changeset status and removing trove
+    db::transaction(&mut conn, |tx| {
+        // Mark changeset as rolled back
+        let mut cs = Changeset::find_by_id(tx, nginx_cs_id)?.unwrap();
+        cs.update_status(tx, ChangesetStatus::RolledBack)?;
+
+        // Remove the trove (simulating rollback)
+        Trove::delete(tx, nginx_before[0].id.unwrap())?;
+
+        Ok(())
+    })
+    .unwrap();
+
+    // Verify rollback
+    let nginx_after = Trove::find_by_name(&conn, "nginx").unwrap();
+    assert!(nginx_after.is_empty(), "nginx should be removed after rollback");
+
+    let cs_after = Changeset::find_by_id(&conn, nginx_cs_id).unwrap().unwrap();
+    assert_eq!(cs_after.status, ChangesetStatus::RolledBack);
+}
+
+/// Test install reason queries (equivalent to cmd_query_reason)
+#[test]
+fn test_install_reason_queries() {
+    use conary::db;
+    use conary::db::models::{InstallReason, InstallSource, Trove, TroveType};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let mut conn = db::open(&db_path).unwrap();
+
+    // Set install reasons
+    db::transaction(&mut conn, |tx| {
+        let nginx = Trove::find_by_name(tx, "nginx")?.pop().unwrap();
+        tx.execute(
+            "UPDATE troves SET install_reason = ?1 WHERE id = ?2",
+            rusqlite::params![InstallReason::Explicit.as_str(), nginx.id],
+        )?;
+
+        let openssl = Trove::find_by_name(tx, "openssl")?.pop().unwrap();
+        tx.execute(
+            "UPDATE troves SET install_reason = ?1 WHERE id = ?2",
+            rusqlite::params![InstallReason::Dependency.as_str(), openssl.id],
+        )?;
+
+        Ok(())
+    })
+    .unwrap();
+
+    // Query by install reason
+    let explicit: Vec<Trove> = conn
+        .prepare("SELECT * FROM troves WHERE install_reason = ?1")
+        .unwrap()
+        .query_map([InstallReason::Explicit.as_str()], |row| {
+            Ok(Trove {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                version: row.get("version")?,
+                trove_type: TroveType::Package,
+                architecture: row.get("architecture").ok(),
+                description: row.get("description").ok(),
+                installed_at: row.get("installed_at").ok(),
+                installed_by_changeset_id: row.get("installed_by_changeset_id").ok(),
+                install_source: InstallSource::Repository,
+                install_reason: InstallReason::Explicit,
+                selection_reason: None,
+                pinned: false,
+                flavor_spec: None,
+                label_id: None,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    assert_eq!(explicit.len(), 1);
+    assert_eq!(explicit[0].name, "nginx");
+}
+
+/// Test dependency tree building
+#[test]
+fn test_dependency_tree() {
+    use conary::db;
+    use conary::db::models::{DependencyEntry, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Build dependency tree for nginx
+    let nginx = Trove::find_by_name(&conn, "nginx").unwrap().pop().unwrap();
+    let nginx_deps = DependencyEntry::find_by_trove(&conn, nginx.id.unwrap()).unwrap();
+
+    // nginx depends on openssl
+    assert_eq!(nginx_deps.len(), 1);
+    assert_eq!(nginx_deps[0].depends_on_name, "openssl");
+
+    // openssl has no dependencies in our test setup
+    let openssl = Trove::find_by_name(&conn, "openssl").unwrap().pop().unwrap();
+    let openssl_deps = DependencyEntry::find_by_trove(&conn, openssl.id.unwrap()).unwrap();
+    assert!(openssl_deps.is_empty(), "openssl should have no deps in test");
+
+    // This verifies the structure needed for deptree command
+}
+
+/// Test what-breaks analysis (reverse dependency check)
+#[test]
+fn test_what_breaks_analysis() {
+    use conary::db;
+    use conary::db::models::{DependencyEntry, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Find what depends on openssl
+    // This requires checking all packages' dependencies
+    let all_troves = Trove::list_all(&conn).unwrap();
+    let mut dependents = Vec::new();
+
+    for trove in &all_troves {
+        if let Some(id) = trove.id {
+            let deps = DependencyEntry::find_by_trove(&conn, id).unwrap();
+            for dep in deps {
+                if dep.depends_on_name == "openssl" {
+                    dependents.push(trove.name.clone());
+                }
+            }
+        }
+    }
+
+    assert_eq!(dependents.len(), 1);
+    assert_eq!(dependents[0], "nginx");
+
+    // This verifies: removing openssl would break nginx
+}
+
+/// Test config file tracking (equivalent to config management commands)
+#[test]
+fn test_config_file_tracking() {
+    use conary::db;
+    use conary::db::models::{ConfigFile, ConfigSource, ConfigStatus, Trove};
+
+    let (_temp_dir, db_path) = setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    // Get nginx trove id
+    let nginx = Trove::find_by_name(&conn, "nginx").unwrap().pop().unwrap();
+    let nginx_id = nginx.id.unwrap();
+
+    // Create config file entries
+    let mut config1 = ConfigFile::new(
+        "/etc/nginx/nginx.conf".to_string(),
+        nginx_id,
+        "abc123hash".to_string(),
+    );
+    config1.source = ConfigSource::Auto;
+    config1.insert(&conn).unwrap();
+
+    let mut config2 = ConfigFile::new_noreplace(
+        "/etc/nginx/sites-enabled/default".to_string(),
+        nginx_id,
+        "def456hash".to_string(),
+    );
+    config2.source = ConfigSource::Rpm;
+    config2.insert(&conn).unwrap();
+
+    // List all configs for nginx
+    let configs = ConfigFile::find_by_trove(&conn, nginx_id).unwrap();
+    assert_eq!(configs.len(), 2);
+
+    // Find by path
+    let found = ConfigFile::find_by_path(&conn, "/etc/nginx/nginx.conf")
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.original_hash, "abc123hash");
+    assert_eq!(found.status, ConfigStatus::Pristine);
+
+    // Mark as modified (simulating user edit)
+    found
+        .mark_modified(&conn, "modified_hash_123")
+        .unwrap();
+
+    // Find modified configs
+    let modified = ConfigFile::find_modified(&conn).unwrap();
+    assert_eq!(modified.len(), 1);
+    assert_eq!(modified[0].path, "/etc/nginx/nginx.conf");
+
+    // Verify noreplace flag
+    let sites_config = ConfigFile::find_by_path(&conn, "/etc/nginx/sites-enabled/default")
+        .unwrap()
+        .unwrap();
+    assert!(sites_config.noreplace);
+    assert_eq!(sites_config.source, ConfigSource::Rpm);
+
+    // Mark as missing
+    sites_config.mark_missing(&conn).unwrap();
+    let missing = ConfigFile::find_by_status(&conn, ConfigStatus::Missing).unwrap();
+    assert_eq!(missing.len(), 1);
+}
