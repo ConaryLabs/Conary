@@ -10,11 +10,13 @@
 mod cache;
 mod conversion;
 mod handlers;
+mod index_gen;
 mod jobs;
 mod routes;
 
 pub use cache::ChunkCache;
 pub use conversion::{ConversionService, ServerConversionResult};
+pub use index_gen::{generate_indices, IndexGenConfig, IndexGenResult};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use routes::create_router;
 

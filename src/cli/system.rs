@@ -20,6 +20,34 @@ pub enum SystemCommands {
         shell: Shell,
     },
 
+    /// Generate repository index for the Refinery server
+    ///
+    /// Scans the database and chunk store to generate a repository index
+    /// listing all converted packages and their metadata.
+    #[cfg(feature = "server")]
+    IndexGen {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Path to chunk storage directory
+        #[arg(long, default_value = "/var/lib/conary/data/chunks")]
+        chunk_dir: String,
+
+        /// Output directory for generated index files
+        #[arg(short, long, default_value = "/var/lib/conary/data/repo")]
+        output_dir: String,
+
+        /// Distribution to generate index for (arch, fedora, ubuntu, debian)
+        /// If not specified, generates for all distributions.
+        #[arg(long)]
+        distro: Option<String>,
+
+        /// Sign the index with the specified key file
+        #[arg(long)]
+        sign_key: Option<String>,
+    },
+
     /// Start the Refinery server (CCS conversion proxy)
     ///
     /// The Refinery converts upstream packages to CCS format on-demand,

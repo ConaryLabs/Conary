@@ -483,6 +483,46 @@ fn main() -> Result<()> {
             }
 
             #[cfg(feature = "server")]
+            cli::SystemCommands::IndexGen {
+                db_path,
+                chunk_dir,
+                output_dir,
+                distro,
+                sign_key,
+            } => {
+                use conary::server::{generate_indices, IndexGenConfig};
+
+                let config = IndexGenConfig {
+                    db_path,
+                    chunk_dir,
+                    output_dir,
+                    distro,
+                    sign_key,
+                };
+
+                match generate_indices(&config) {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            println!("No indices generated.");
+                        } else {
+                            for result in results {
+                                println!(
+                                    "{}: {} packages ({} versions) -> {}{}",
+                                    result.distro,
+                                    result.package_count,
+                                    result.version_count,
+                                    result.index_path,
+                                    if result.signed { " [signed]" } else { "" }
+                                );
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+
+            #[cfg(feature = "server")]
             cli::SystemCommands::Server {
                 bind,
                 db_path,
