@@ -29,17 +29,18 @@ use tracing::{debug, info};
 /// # Returns
 ///
 /// * `Result<()>` - Ok if successful, Error otherwise
-pub fn init(db_path: &str) -> Result<()> {
-    debug!("Initializing database at: {}", db_path);
+pub fn init(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    debug!("Initializing database at: {}", path.display());
 
     // Create parent directories if they don't exist
-    if let Some(parent) = Path::new(db_path).parent() {
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::InitError(format!("Failed to create database directory: {}", e)))?;
     }
 
     // Open/create the database
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open(path)?;
 
     // Set pragmas for better performance and reliability
     conn.execute_batch(
@@ -67,12 +68,13 @@ pub fn init(db_path: &str) -> Result<()> {
 /// # Returns
 ///
 /// * `Result<Connection>` - Database connection if successful
-pub fn open(db_path: &str) -> Result<Connection> {
-    if !Path::new(db_path).exists() {
-        return Err(Error::DatabaseNotFound(db_path.to_string()));
+pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
     }
 
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open(path)?;
 
     // Set pragmas
     conn.execute_batch(

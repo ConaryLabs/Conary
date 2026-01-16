@@ -73,7 +73,7 @@ impl ConversionService {
         info!("Converting package: {}:{} (version: {:?})", distro, package_name, version);
 
         // Step 1: Find package in repository
-        let conn = crate::db::open(self.db_path.to_str().unwrap())?;
+        let conn = crate::db::open(&self.db_path)?;
 
         let repo_pkg = self.find_package(&conn, distro, package_name, version)?;
         info!("Found package: {} {} from repo {}", repo_pkg.name, repo_pkg.version, repo_pkg.repository_id);

@@ -11,11 +11,13 @@ pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
 pub mod pacman_query;
+pub mod registry;
 pub mod rpm;
 pub mod rpm_query;
 pub mod traits;
 
 pub use common::{PackageMetadata, PackageMetadataBuilder};
+pub use registry::{detect_format, parse_package, PackageFormatType};
 
 use crate::error::Result;
 use rayon::prelude::*;
@@ -104,28 +106,16 @@ pub fn extract_packages_parallel(
     package_paths
         .par_iter()
         .map(|(name, path)| {
-            let path_str = path.to_string_lossy();
-            info!("Extracting package: {} from {}", name, path_str);
+            info!("Extracting package: {} from {}", name, path.display());
 
-            // Detect format and parse
-            let package: Box<dyn PackageFormat + Send> = if path_str.ends_with(".rpm") {
-                Box::new(rpm::RpmPackage::parse(&path_str)?)
-            } else if path_str.ends_with(".deb") {
-                Box::new(deb::DebPackage::parse(&path_str)?)
-            } else if path_str.ends_with(".pkg.tar.zst") || path_str.ends_with(".pkg.tar.xz") {
-                Box::new(arch::ArchPackage::parse(&path_str)?)
-            } else {
-                return Err(crate::error::Error::InitError(format!(
-                    "Unknown package format: {}",
-                    path_str
-                )));
-            };
+            // Detect format and parse using registry
+            let package = parse_package(path)?;
 
             // Extract contents
             let files = package.extract_file_contents()?;
 
             Ok(ExtractedPackage {
-                path: path_str.to_string(),
+                path: path.to_string_lossy().to_string(),
                 name: package.name().to_string(),
                 version: package.version().to_string(),
                 files,

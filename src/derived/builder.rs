@@ -157,7 +157,8 @@ impl<'a> DerivedBuilder<'a> {
         info!("Derived version: {}", derived_version);
 
         // Get parent files
-        let parent_files = FileEntry::find_by_trove(self.conn, parent.id.unwrap())?;
+        let parent_id = parent.id.ok_or_else(|| Error::InitError("Parent trove missing ID".to_string()))?;
+        let parent_files = FileEntry::find_by_trove(self.conn, parent_id)?;
         debug!("Parent has {} files", parent_files.len());
 
         // Create working directory for patch application

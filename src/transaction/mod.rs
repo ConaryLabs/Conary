@@ -389,7 +389,9 @@ impl<'a> Transaction<'a> {
         self.plan = Some(plan);
         self.state = TransactionState::Planned;
 
-        Ok(self.plan.as_ref().unwrap())
+        self.plan.as_ref().ok_or_else(|| {
+            crate::Error::TransactionError("Failed to store plan in transaction".to_string())
+        })
     }
 
     /// Prepare content in CAS (store all new file content)

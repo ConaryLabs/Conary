@@ -14,53 +14,7 @@ use tracing::{debug, info, warn};
 
 use super::client::RepositoryClient;
 use super::gpg::GpgVerifier;
-use super::parsers;
-use super::parsers::RepositoryParser;
-
-/// Detected repository format
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepositoryFormat {
-    Arch,
-    Debian,
-    Fedora,
-    Json,
-}
-
-/// Detect repository format based on repository name and URL
-pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
-    let name_lower = name.to_lowercase();
-    let url_lower = url.to_lowercase();
-
-    // Check for Arch Linux indicators
-    if name_lower.contains("arch")
-        || url_lower.contains("archlinux")
-        || url_lower.contains("pkgbuild")
-        || url_lower.contains(".db.tar")
-    {
-        return RepositoryFormat::Arch;
-    }
-
-    // Check for Fedora indicators
-    if name_lower.contains("fedora")
-        || url_lower.contains("fedora")
-        || url_lower.contains("/repodata/")
-    {
-        return RepositoryFormat::Fedora;
-    }
-
-    // Check for Debian/Ubuntu indicators
-    if name_lower.contains("debian")
-        || name_lower.contains("ubuntu")
-        || url_lower.contains("debian")
-        || url_lower.contains("ubuntu")
-        || url_lower.contains("/dists/")
-    {
-        return RepositoryFormat::Debian;
-    }
-
-    // Default to JSON format
-    RepositoryFormat::Json
-}
+use super::registry::{self, RepositoryFormat};
 
 /// Get current timestamp as ISO 8601 string
 pub fn current_timestamp() -> String {
@@ -124,48 +78,9 @@ fn sync_repository_native(
 ) -> Result<usize> {
     info!("Syncing repository {} using native {:?} format", repo.name, format);
 
-    // Parse metadata using appropriate parser
-    // Metadata is always fetched from repo.url
-    let packages = match format {
-        RepositoryFormat::Arch => {
-            // Extract repository name from repo.name (e.g., "arch-core" -> "core")
-            let repo_name = if let Some(suffix) = repo.name.strip_prefix("arch-") {
-                suffix.to_string()
-            } else {
-                "core".to_string()
-            };
-
-            let parser = parsers::arch::ArchParser::new(repo_name);
-            parser.sync_metadata(&repo.url)?
-        }
-        RepositoryFormat::Debian => {
-            // For Ubuntu/Debian, we need distribution, component, and architecture
-            // Extract from repository name: "ubuntu-noble" -> noble
-            let distribution = if let Some(suffix) = repo.name.strip_prefix("ubuntu-") {
-                suffix.to_string()
-            } else if let Some(suffix) = repo.name.strip_prefix("debian-") {
-                suffix.to_string()
-            } else {
-                "noble".to_string()
-            };
-
-            let parser = parsers::debian::DebianParser::new(
-                distribution,
-                "main".to_string(),
-                "amd64".to_string(),
-            );
-            parser.sync_metadata(&repo.url)?
-        }
-        RepositoryFormat::Fedora => {
-            let parser = parsers::fedora::FedoraParser::new("x86_64".to_string());
-            parser.sync_metadata(&repo.url)?
-        }
-        RepositoryFormat::Json => {
-            return Err(Error::ParseError(
-                "JSON format should use sync_repository".to_string(),
-            ));
-        }
-    };
+    // Create and use parser from registry
+    let parser = registry::create_parser(format, &repo.name, &repo.url)?;
+    let packages = parser.sync_metadata(&repo.url)?;
 
     let repo_id = repo
         .id
@@ -244,8 +159,8 @@ fn sync_repository_native(
 pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     info!("Synchronizing repository: {}", repo.name);
 
-    // Detect repository format
-    let format = detect_repository_format(&repo.name, &repo.url);
+    // Detect repository format using registry
+    let format = registry::detect_repository_format(&repo.name, &repo.url);
 
     // Try native format first if detected
     if format != RepositoryFormat::Json {

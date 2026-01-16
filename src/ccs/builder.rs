@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// A file entry in a CCS package
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,7 +211,8 @@ impl CcsBuilder {
             // Phase 3: Store content (chunked or whole)
             if self.use_chunking && self.should_chunk(&entry, &final_content) {
                 // Chunk the file
-                let chunker = self.chunker.as_ref().unwrap();
+                let chunker = self.chunker.as_ref()
+                    .context("Chunker not initialized even though chunking is enabled")?;
                 let chunks = chunker.chunk_bytes(&final_content);
 
                 let mut chunk_hashes = Vec::with_capacity(chunks.len());
@@ -347,29 +349,27 @@ impl CcsBuilder {
     /// Scan source directory for all files
     fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
-        self.scan_dir_recursive(&self.source_dir, &mut files)?;
-        files.sort();
-        Ok(files)
-    }
 
-    fn scan_dir_recursive(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        if !dir.exists() {
-            return Ok(());
-        }
-
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+        for entry in WalkDir::new(&self.source_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             let metadata = entry.metadata()?;
 
-            if metadata.is_dir() {
-                self.scan_dir_recursive(&path, files)?;
-            } else if metadata.is_file() || metadata.file_type().is_symlink() {
-                files.push(path);
+            // Skip the source directory itself
+            if path == self.source_dir {
+                continue;
+            }
+
+            // We only collect files and symlinks (directories are handled by their children)
+            if metadata.is_file() || metadata.file_type().is_symlink() {
+                files.push(path.to_path_buf());
             }
         }
 
-        Ok(())
+        files.sort();
+        Ok(files)
     }
 
     /// Classify a file into a component

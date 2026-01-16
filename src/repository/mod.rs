@@ -16,6 +16,7 @@ mod download;
 mod management;
 mod metadata;
 pub mod refinery;
+pub mod registry;
 mod sync;
 
 pub mod gpg;
@@ -37,10 +38,10 @@ pub use gpg::GpgVerifier;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
+pub use registry::{create_parser, detect_repository_format, RepositoryFormat};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
-    RepositoryFormat,
 };
 pub use refinery::{RefineryClient, PackageManifest};
 #[cfg(feature = "server")]

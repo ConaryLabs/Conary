@@ -11,7 +11,7 @@ use crate::filesystem::{CasStore, VfsTree};
 use crate::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::{ExtractedFile, FileToRemove, FileType, OperationType};
@@ -176,8 +176,10 @@ impl<'a> TransactionPlanner<'a> {
     ) -> Result<TransactionPlan> {
         let mut plan = TransactionPlan::new();
 
-        // Build set of old file paths for quick lookup
-        let old_paths: HashSet<&str> = old_files.iter().map(|f| f.path.as_str()).collect();
+        // Build map of old file paths for quick lookup
+        let old_file_map: HashMap<&str, &FileToRemove> = old_files.iter()
+            .map(|f| (f.path.as_str(), f))
+            .collect();
 
         // Phase 1: Analyze new files, detect conflicts, plan directories
         for file in new_files {
@@ -241,9 +243,8 @@ impl<'a> TransactionPlanner<'a> {
                         new_mode: Some(file.mode),
                         symlink_target: file.symlink_target.as_ref().map(PathBuf::from),
                     });
-                } else if is_upgrade && old_paths.contains(file.path.as_str()) {
+                } else if is_upgrade && let Some(old_file) = old_file_map.get(file.path.as_str()) {
                     // File from old version being replaced
-                    let old_file = old_files.iter().find(|f| f.path == file.path).unwrap();
                     plan.files_to_backup.push(BackupInfo {
                         path: path.to_path_buf(),
                         file_type: if file.is_symlink {
