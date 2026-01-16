@@ -12,9 +12,7 @@ use crate::filesystem::CasStore;
 use crate::hash;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
@@ -312,35 +310,60 @@ impl<'a> DerivedBuilder<'a> {
         Ok(troves.into_iter().next().unwrap())
     }
 
-    /// Apply a patch using the system `patch` command
+    /// Apply a patch using native Rust (diffy crate)
     fn apply_patch(&self, work_dir: &Path, patch_content: &[u8], strip_level: i32) -> Result<()> {
-        let mut cmd = Command::new("patch")
-            .arg("-p")
-            .arg(strip_level.to_string())
-            .arg("--no-backup-if-mismatch")
-            .arg("-d")
-            .arg(work_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::InitError(format!("Failed to run patch command: {}", e)))?;
+        let patch_str = std::str::from_utf8(patch_content)
+            .map_err(|e| Error::InitError(format!("Patch is not valid UTF-8: {}", e)))?;
 
-        // Write patch content to stdin
-        if let Some(mut stdin) = cmd.stdin.take() {
-            stdin
-                .write_all(patch_content)
-                .map_err(|e| Error::InitError(format!("Failed to write patch: {}", e)))?;
+        // Split multi-file patches and apply each one
+        for file_patch in split_unified_patch(patch_str) {
+            self.apply_single_file_patch(work_dir, &file_patch, strip_level)?;
         }
 
-        let output = cmd
-            .wait_with_output()
-            .map_err(|e| Error::InitError(format!("Failed to wait for patch: {}", e)))?;
+        Ok(())
+    }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::InitError(format!("Patch failed: {}", stderr)));
-        }
+    /// Apply a patch to a single file
+    fn apply_single_file_patch(
+        &self,
+        work_dir: &Path,
+        patch_str: &str,
+        strip_level: i32,
+    ) -> Result<()> {
+        // Parse the patch
+        let patch = diffy::Patch::from_str(patch_str)
+            .map_err(|e| Error::InitError(format!("Failed to parse patch: {}", e)))?;
+
+        // Get the file path from the patch header and apply strip level
+        let file_path = patch
+            .modified()
+            .ok_or_else(|| Error::InitError("Patch has no target file".to_string()))?;
+
+        let stripped_path = strip_path_prefix(file_path, strip_level);
+        let full_path = work_dir.join(&stripped_path);
+
+        debug!("Applying patch to: {}", full_path.display());
+
+        // Read original file content (or empty if new file)
+        let original = if full_path.exists() {
+            std::fs::read_to_string(&full_path)
+                .map_err(|e| Error::InitError(format!("Failed to read {}: {}", full_path.display(), e)))?
+        } else {
+            // Ensure parent directory exists for new files
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| Error::InitError(format!("Failed to create directory: {}", e)))?;
+            }
+            String::new()
+        };
+
+        // Apply the patch
+        let patched = diffy::apply(&original, &patch)
+            .map_err(|e| Error::InitError(format!("Failed to apply patch to {}: {}", stripped_path, e)))?;
+
+        // Write the result
+        std::fs::write(&full_path, patched)
+            .map_err(|e| Error::InitError(format!("Failed to write {}: {}", full_path.display(), e)))?;
 
         Ok(())
     }
@@ -474,6 +497,77 @@ pub fn store_in_cas(result: &DerivedResult, cas: &mut CasStore) -> Result<()> {
     Ok(())
 }
 
+/// Split a multi-file unified diff into individual file patches
+///
+/// Unified diff format starts each file's patch with:
+/// - `diff --git ...` (for git diffs)
+/// - `--- ` followed by `+++ ` (for traditional diffs)
+fn split_unified_patch(patch: &str) -> Vec<String> {
+    let mut patches = Vec::new();
+    let mut current = String::new();
+    let mut in_patch = false;
+    let mut is_git_format = false;
+
+    for line in patch.lines() {
+        // Detect start of a new file patch
+        let is_git_header = line.starts_with("diff --git ");
+        let is_traditional_header = line.starts_with("--- ")
+            && !line.starts_with("--- a/dev/null")
+            && !line.starts_with("--- /dev/null");
+
+        // For git format, only split on "diff --git" lines
+        // For traditional format, split on "--- " lines
+        let is_new_patch = if is_git_format {
+            is_git_header
+        } else if is_git_header {
+            is_git_format = true;
+            true
+        } else {
+            // New traditional patch if: header found AND (not in patch yet OR already saw a hunk)
+            is_traditional_header && (!in_patch || current.contains("\n@@ "))
+        };
+
+        if is_new_patch && in_patch && !current.is_empty() {
+            // Save the previous patch and start a new one
+            patches.push(std::mem::take(&mut current));
+        }
+
+        if is_new_patch || in_patch {
+            in_patch = true;
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+
+    // Don't forget the last patch
+    if !current.is_empty() {
+        patches.push(current);
+    }
+
+    patches
+}
+
+/// Strip path prefix components (like `patch -p`)
+///
+/// E.g., with strip_level=1: "a/src/main.rs" -> "src/main.rs"
+fn strip_path_prefix(path: &str, strip_level: i32) -> String {
+    let mut components: Vec<&str> = path.split('/').collect();
+
+    // Remove leading empty component from absolute paths
+    if components.first() == Some(&"") {
+        components.remove(0);
+    }
+
+    // Strip the specified number of leading components
+    let skip = strip_level as usize;
+    if skip < components.len() {
+        components[skip..].join("/")
+    } else {
+        // If strip level exceeds components, return the last component
+        components.last().unwrap_or(&"").to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +601,78 @@ mod tests {
 
         let version = spec.version_policy.compute_version("1.0.0");
         assert_eq!(version, "1.0.0+custom");
+    }
+
+    #[test]
+    fn test_strip_path_prefix() {
+        // Standard git-style paths with -p1
+        assert_eq!(strip_path_prefix("a/src/main.rs", 1), "src/main.rs");
+        assert_eq!(strip_path_prefix("b/src/main.rs", 1), "src/main.rs");
+
+        // Multiple levels
+        assert_eq!(strip_path_prefix("a/b/c/file.txt", 2), "c/file.txt");
+        assert_eq!(strip_path_prefix("a/b/c/file.txt", 0), "a/b/c/file.txt");
+
+        // Edge cases
+        assert_eq!(strip_path_prefix("file.txt", 1), "file.txt");
+        assert_eq!(strip_path_prefix("/absolute/path.txt", 1), "path.txt");
+    }
+
+    #[test]
+    fn test_split_unified_patch_single() {
+        let patch = "\
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new
+";
+        let patches = split_unified_patch(patch);
+        assert_eq!(patches.len(), 1);
+        assert!(patches[0].contains("--- a/file.txt"));
+    }
+
+    #[test]
+    fn test_split_unified_patch_multi() {
+        let patch = "\
+--- a/file1.txt
++++ b/file1.txt
+@@ -1 +1 @@
+-old1
++new1
+--- a/file2.txt
++++ b/file2.txt
+@@ -1 +1 @@
+-old2
++new2
+";
+        let patches = split_unified_patch(patch);
+        assert_eq!(patches.len(), 2);
+        assert!(patches[0].contains("file1.txt"));
+        assert!(patches[1].contains("file2.txt"));
+    }
+
+    #[test]
+    fn test_split_unified_patch_git_format() {
+        let patch = "\
+diff --git a/src/main.rs b/src/main.rs
+index abc123..def456 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1 +1 @@
+-old
++new
+diff --git a/src/lib.rs b/src/lib.rs
+index 111222..333444 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-old
++new
+";
+        let patches = split_unified_patch(patch);
+        assert_eq!(patches.len(), 2);
+        assert!(patches[0].contains("src/main.rs"));
+        assert!(patches[1].contains("src/lib.rs"));
     }
 }
