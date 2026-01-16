@@ -60,14 +60,16 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - **Rust 1.91.1** (stable) with **Edition 2024**
 - **SQLite** via **rusqlite** - synchronous, battle-tested, perfect for changeset operations
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
+- **Dual hashing** - SHA-256 for cryptographic verification, XXH128 (~30 GB/s) for CAS content addressing
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2026
 - **Database schema v23** with automatic migrations
 - **Ed25519 signatures** for package authentication
 - **CBOR binary manifests** with Merkle tree content verification
+- **VFS tree** with in-memory filesystem operations and efficient path lookups
 
 ## Status
 
-**Core Architecture Complete** - All major features implemented and tested. Component model, collections, system adoption, multi-format support, and dependency resolution all working.
+**Core Architecture Complete** - All major features implemented and tested. Component model, collections, system adoption, multi-format support, dependency resolution, and the full CCS pipeline (build, sign, verify, install, export) are all working.
 
 ### Commands Available
 
@@ -452,10 +454,23 @@ fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
 
 ### Testing
 
-- **508 tests passing** (459 lib + 3 bin + 35 integration + 11 doctests)
+- **508 tests** (459 lib + 3 bin + 35 integration + 11 doctests)
 - Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, CCS building, policy engine, OCI export, and core operations
-- Integration tests for full install/remove/rollback workflows
+
+**Integration tests** are organized in `tests/`:
+- `database.rs` - Database init, transactions, pragmas (6 tests)
+- `workflow.rs` - Install/remove/rollback workflows (4 tests)
+- `query.rs` - Package queries, dependencies, provides (9 tests)
+- `component.rs` - Component classification and selective installation (7 tests)
+- `features.rs` - Language deps, collections, state snapshots, config files (9 tests)
+- `common/mod.rs` - Shared test helpers
+
+```bash
+cargo test                     # All tests
+cargo test --lib              # Library tests only
+cargo test --test database    # Run specific test module
+```
 
 ### What's Next
 
-Atomic filesystem updates (renameat2 RENAME_EXCHANGE), VFS tree with reparenting, fast hashing (xxhash), web UI for system state visualization. See ROADMAP.md for details.
+Atomic filesystem updates (renameat2 RENAME_EXCHANGE), web UI for system state visualization. See ROADMAP.md for details.
