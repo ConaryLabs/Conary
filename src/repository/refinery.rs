@@ -144,7 +144,7 @@ impl RefineryClient {
                 self.poll_for_completion(&accepted.job_id)
             }
             404 => {
-                Err(Error::NotFoundError(format!(
+                Err(Error::NotFound(format!(
                     "Package '{}' not found in {} repositories",
                     name, distro
                 )))
@@ -434,7 +434,7 @@ impl RefineryClient {
                 self.download_ccs_response(retry_response, name, output_dir)
             }
             404 => {
-                Err(Error::NotFoundError(format!(
+                Err(Error::NotFound(format!(
                     "Package '{}' not found in {} repositories",
                     name, distro
                 )))
@@ -694,7 +694,7 @@ impl AsyncRefineryClient {
                 );
                 self.poll_for_completion_async(&accepted.job_id).await
             }
-            404 => Err(Error::NotFoundError(format!(
+            404 => Err(Error::NotFound(format!(
                 "Package '{}' not found in {} repositories",
                 name, distro
             ))),

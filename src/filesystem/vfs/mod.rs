@@ -271,7 +271,8 @@ impl VfsTree {
 
     /// Get the full path of a node by traversing up to root
     pub fn get_path(&self, id: NodeId) -> PathBuf {
-        let mut components = Vec::new();
+        // Collect references (no String cloning) and use rev() instead of reverse()
+        let mut components: Vec<&str> = Vec::new();
         let mut current = id;
 
         loop {
@@ -279,13 +280,12 @@ impl VfsTree {
             if node.parent.is_none() {
                 break;
             }
-            components.push(node.name.clone());
+            components.push(&node.name);
             current = node.parent.unwrap();
         }
 
-        components.reverse();
         let mut path = PathBuf::from("/");
-        for component in components {
+        for component in components.into_iter().rev() {
             path.push(component);
         }
         path

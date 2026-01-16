@@ -117,6 +117,14 @@ impl CasStore {
 
     /// Retrieve file content from CAS by hash
     pub fn retrieve(&self, hash: &str) -> Result<Vec<u8>> {
+        self.retrieve_with_algorithm(hash, self.algorithm)
+    }
+
+    /// Retrieve file content from CAS with explicit hash algorithm
+    ///
+    /// This is useful when the stored content uses a different algorithm
+    /// than the CAS's default (e.g., symlinks always use SHA-256).
+    fn retrieve_with_algorithm(&self, hash: &str, algorithm: HashAlgorithm) -> Result<Vec<u8>> {
         let path = self.hash_to_path(hash);
 
         if !path.exists() {
@@ -130,8 +138,8 @@ impl CasStore {
         let mut content = Vec::new();
         file.read_to_end(&mut content)?;
 
-        // Verify hash
-        let computed_hash = self.compute_hash(&content);
+        // Verify hash with specified algorithm
+        let computed_hash = hash::hash_bytes(algorithm, &content).value;
         if computed_hash != hash {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -211,19 +219,50 @@ impl CasStore {
     /// Store a symlink target in CAS
     ///
     /// Symlinks are stored as their target path (the content is the target string).
-    /// The hash is computed using `compute_symlink_hash()` to ensure consistency
-    /// across all symlink operations.
+    /// The hash is computed using SHA-256 to match `compute_symlink_hash()`,
+    /// regardless of the CAS's configured algorithm. This ensures symlink identity
+    /// is consistent across systems.
     pub fn store_symlink(&self, target: &str) -> Result<String> {
         // Use the same format as compute_symlink_hash for consistency
         let content = format!("symlink:{}", target);
-        self.store(content.as_bytes())
+        // Always use SHA-256 for symlinks to match compute_symlink_hash()
+        // This is critical: symlink hashes are used as identities across systems
+        let hash = hash::sha256(content.as_bytes());
+
+        // Get storage path
+        let path = self.hash_to_path(&hash);
+
+        // If already exists, skip (deduplication)
+        if path.exists() {
+            debug!("Symlink already in CAS: {}", hash);
+            return Ok(hash);
+        }
+
+        // Create parent directory
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Write content atomically (write to temp, then rename)
+        let temp_path = path.with_extension("tmp");
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+
+        // Atomic rename
+        fs::rename(&temp_path, &path)?;
+
+        debug!("Stored symlink in CAS: {} -> {}", target, hash);
+        Ok(hash)
     }
 
     /// Retrieve a symlink target from CAS
     ///
     /// Returns the symlink target path if the hash represents a symlink.
+    /// Uses SHA-256 for verification since symlinks are always stored with SHA-256.
     pub fn retrieve_symlink(&self, hash: &str) -> Result<Option<String>> {
-        let content = self.retrieve(hash)?;
+        // Symlinks are always stored with SHA-256, so use that for verification
+        let content = self.retrieve_with_algorithm(hash, HashAlgorithm::Sha256)?;
         let content_str = String::from_utf8_lossy(&content);
 
         if let Some(target) = content_str.strip_prefix("symlink:") {
@@ -235,7 +274,8 @@ impl CasStore {
 
     /// Check if a hash represents a symlink
     pub fn is_symlink_hash(&self, hash: &str) -> bool {
-        if let Ok(content) = self.retrieve(hash) {
+        // Symlinks are always stored with SHA-256, so use that for verification
+        if let Ok(content) = self.retrieve_with_algorithm(hash, HashAlgorithm::Sha256) {
             let content_str = String::from_utf8_lossy(&content);
             content_str.starts_with("symlink:")
         } else {
@@ -417,6 +457,35 @@ mod tests {
             computed_hash, stored_hash,
             "compute_symlink_hash and store_symlink must produce identical hashes"
         );
+    }
+
+    #[test]
+    fn test_symlink_hash_consistency_with_xxh128() {
+        // Verify symlink hashes are consistent even when CAS uses Xxh128
+        // This tests that store_symlink always uses SHA-256 for symlinks,
+        // regardless of the CAS's configured algorithm.
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::with_algorithm(temp_dir.path(), HashAlgorithm::Xxh128).unwrap();
+
+        // CAS is configured for Xxh128
+        assert_eq!(cas.algorithm(), HashAlgorithm::Xxh128);
+
+        let target = "/usr/lib64/libssl.so.3";
+        let computed_hash = CasStore::compute_symlink_hash(target);
+        let stored_hash = cas.store_symlink(target).unwrap();
+
+        // Symlink hashes must match compute_symlink_hash (always SHA-256)
+        assert_eq!(
+            computed_hash, stored_hash,
+            "Symlink hash must use SHA-256 even when CAS uses Xxh128"
+        );
+
+        // Hash should be 64 chars (SHA-256), not 32 (XXH128)
+        assert_eq!(stored_hash.len(), 64, "Symlink hash must be SHA-256 (64 chars)");
+
+        // Verify the symlink can be retrieved
+        let retrieved = cas.retrieve_symlink(&stored_hash).unwrap();
+        assert_eq!(retrieved, Some(target.to_string()));
     }
 
     #[test]

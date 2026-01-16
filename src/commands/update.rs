@@ -408,7 +408,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
         stats.insert(tx)?;
 
         let mut changeset = conary::db::models::Changeset::find_by_id(tx, changeset_id)?
-            .ok_or_else(|| conary::Error::NotFoundError("Changeset not found".to_string()))?;
+            .ok_or_else(|| conary::Error::NotFound("Changeset not found".to_string()))?;
         changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
 
         Ok(())

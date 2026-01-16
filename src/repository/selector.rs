@@ -99,7 +99,7 @@ impl PackageSelector {
             // Get repository information
             let repo = Repository::find_by_id(conn, pkg.repository_id)?
                 .ok_or_else(|| {
-                    Error::NotFoundError(format!(
+                    Error::NotFound(format!(
                         "Repository {} not found for package {}",
                         pkg.repository_id, pkg.name
                     ))
@@ -138,7 +138,7 @@ impl PackageSelector {
     /// 3. First match (stable tie-breaker)
     pub fn select_best(candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
         if candidates.is_empty() {
-            return Err(Error::NotFoundError(
+            return Err(Error::NotFound(
                 "No matching packages found".to_string(),
             ));
         }
@@ -146,7 +146,7 @@ impl PackageSelector {
         if candidates.len() == 1 {
             // Safe: we just verified len() == 1
             return candidates.into_iter().next()
-                .ok_or_else(|| Error::NotFoundError("Unexpected empty candidates".to_string()));
+                .ok_or_else(|| Error::NotFound("Unexpected empty candidates".to_string()));
         }
 
         // Sort by priority (descending) and version (descending)
@@ -171,7 +171,7 @@ impl PackageSelector {
 
         // Safe: we verified candidates is non-empty above
         let selected = sorted.into_iter().next()
-            .ok_or_else(|| Error::NotFoundError("Unexpected empty sorted candidates".to_string()))?;
+            .ok_or_else(|| Error::NotFound("Unexpected empty sorted candidates".to_string()))?;
         info!(
             "Selected package {} {} from repository {} (priority {})",
             selected.package.name,
@@ -204,7 +204,7 @@ impl PackageSelector {
                 msg.push_str(&format!(" (version: {})", version));
             }
 
-            return Err(Error::NotFoundError(msg));
+            return Err(Error::NotFound(msg));
         }
 
         Self::select_best(candidates)

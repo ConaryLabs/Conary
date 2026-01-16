@@ -38,7 +38,7 @@ pub fn add_repository(
 /// Remove a repository from the database
 pub fn remove_repository(conn: &Connection, name: &str) -> Result<()> {
     let repo = Repository::find_by_name(conn, name)?
-        .ok_or_else(|| Error::NotFoundError(format!("Repository '{name}' not found")))?;
+        .ok_or_else(|| Error::NotFound(format!("Repository '{name}' not found")))?;
 
     let repo_id = repo
         .id
@@ -51,7 +51,7 @@ pub fn remove_repository(conn: &Connection, name: &str) -> Result<()> {
 /// Enable or disable a repository
 pub fn set_repository_enabled(conn: &Connection, name: &str, enabled: bool) -> Result<()> {
     let mut repo = Repository::find_by_name(conn, name)?
-        .ok_or_else(|| Error::NotFoundError(format!("Repository '{name}' not found")))?;
+        .ok_or_else(|| Error::NotFound(format!("Repository '{name}' not found")))?;
 
     repo.enabled = enabled;
     repo.update(conn)?;

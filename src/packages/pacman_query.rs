@@ -84,7 +84,7 @@ pub fn query_package(name: &str) -> Result<InstalledPacmanInfo> {
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::NotFoundError(format!(
+        return Err(Error::NotFound(format!(
             "Package '{}' not found in pacman database",
             name
         )));
@@ -160,7 +160,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::NotFoundError(format!(
+        return Err(Error::NotFound(format!(
             "Package '{}' not found in pacman database",
             name
         )));
@@ -238,7 +238,7 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::NotFoundError(format!(
+        return Err(Error::NotFound(format!(
             "Package '{}' not found in pacman database",
             name
         )));
@@ -281,7 +281,7 @@ pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::NotFoundError(format!(
+        return Err(Error::NotFound(format!(
             "Package '{}' not found in pacman database",
             name
         )));

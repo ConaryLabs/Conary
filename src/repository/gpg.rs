@@ -94,7 +94,7 @@ impl GpgVerifier {
         // Load the repository's GPG key
         let key_path = self.get_key_path(repository_name);
         if !key_path.exists() {
-            return Err(Error::NotFoundError(format!(
+            return Err(Error::NotFound(format!(
                 "GPG key not found for repository '{}'. Run repo-sync to import keys.",
                 repository_name
             )));

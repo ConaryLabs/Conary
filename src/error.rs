@@ -33,10 +33,6 @@ pub enum Error {
     #[error("Conflict: {0}")]
     ConflictError(String),
 
-    /// Resource not found
-    #[error("Not found: {0}")]
-    NotFoundError(String),
-
     /// Checksum mismatch
     #[error("Checksum mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },

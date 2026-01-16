@@ -56,7 +56,7 @@ pub fn resolve_dependencies(
             }
             Err(e) => {
                 // Dependency not found - this is a critical error
-                return Err(Error::NotFoundError(format!(
+                return Err(Error::NotFound(format!(
                     "Required dependency '{dep_name}' not found in any repository: {e}"
                 )));
             }
@@ -123,7 +123,7 @@ pub fn resolve_dependencies_transitive(
         let options = SelectionOptions::default();
         let pkg_with_repo = PackageSelector::find_best_package(conn, &dep_name, &options)
             .map_err(|e| {
-                Error::NotFoundError(format!(
+                Error::NotFound(format!(
                     "Required dependency '{dep_name}' not found in any repository: {e}"
                 ))
             })?;

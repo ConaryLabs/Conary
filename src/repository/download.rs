@@ -109,7 +109,7 @@ fn verify_gpg_signature(
             info!("GPG signature verified for {}", repo_pkg.name);
             Ok(())
         }
-        Err(Error::NotFoundError(msg)) if msg.contains("No signature file") => {
+        Err(Error::NotFound(msg)) if msg.contains("No signature file") => {
             if opts.gpg_strict {
                 Err(Error::GpgVerificationFailed(format!(
                     "GPG signature required but not found for '{}' (strict mode enabled).\n\
@@ -122,7 +122,7 @@ fn verify_gpg_signature(
                 Ok(())
             }
         }
-        Err(Error::NotFoundError(msg)) if msg.contains("GPG key not found") => {
+        Err(Error::NotFound(msg)) if msg.contains("GPG key not found") => {
             Err(Error::GpgVerificationFailed(format!(
                 "GPG verification failed for '{}': {}.\n\
                  To fix this, run:\n  \
@@ -190,7 +190,7 @@ fn verify_package_signature(
 
     // Check if we have a key for this repository
     if !verifier.has_key(&options.repository_name) {
-        return Err(Error::NotFoundError(format!(
+        return Err(Error::NotFound(format!(
             "GPG key not found for repository '{}'",
             options.repository_name
         )));
@@ -237,7 +237,7 @@ fn verify_package_signature(
     }
 
     // No signature file found
-    Err(Error::NotFoundError(
+    Err(Error::NotFound(
         "No signature file found (.sig or .asc)".to_string(),
     ))
 }

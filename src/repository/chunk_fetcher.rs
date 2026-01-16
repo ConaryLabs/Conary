@@ -257,7 +257,7 @@ impl ChunkFetcher for LocalCacheFetcher {
         let path = self.chunk_path(hash);
 
         if !path.exists() {
-            return Err(Error::NotFoundError(format!("Chunk {} not in cache", hash)));
+            return Err(Error::NotFound(format!("Chunk {} not in cache", hash)));
         }
 
         let data = tokio::fs::read(&path).await.map_err(|e| {
@@ -334,7 +334,7 @@ impl ChunkFetcher for CompositeChunkFetcher {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            Error::NotFoundError(format!("No fetchers available for chunk {}", hash))
+            Error::NotFound(format!("No fetchers available for chunk {}", hash))
         }))
     }
 
