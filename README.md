@@ -62,7 +62,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
 - **Dual hashing** - SHA-256 for cryptographic verification, XXH128 (~30 GB/s) for CAS content addressing
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2026
-- **Database schema v23** with automatic migrations
+- **Database schema v24** with automatic migrations
 - **Ed25519 signatures** for package authentication
 - **CBOR binary manifests** with Merkle tree content verification
 - **VFS tree** with in-memory filesystem operations and efficient path lookups
@@ -129,6 +129,12 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - `conary state-prune` - Remove old state snapshots
 - `conary state-create` - Create a manual state snapshot
 
+**System Model Commands (Declarative OS):**
+- `conary model-snapshot` - Capture current system state to a model file
+- `conary model-diff` - Show changes needed to reach declared model state
+- `conary model-check` - Check if system matches model (CI/CD drift detection)
+- `conary model-apply` - Sync system to declared model state
+
 **Label Commands:**
 - `conary label-list` - List all labels
 - `conary label-add <label>` - Add a new label
@@ -153,7 +159,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - `conary conflicts` - Show file conflicts between packages
 
 **Repository Management:**
-- `conary repo-add <name> <url>` - Add a new package repository
+- `conary repo-add <name> <url>` - Add a new package repository (supports `--content-url` for reference mirrors)
 - `conary repo-list` - List configured repositories
 - `conary repo-remove <name>` - Remove a repository
 - `conary repo-enable <name>` - Enable a repository
@@ -235,6 +241,14 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - JSON-based repository index format
 - Metadata caching with configurable expiry
 - Priority-based repository selection
+- **Reference mirrors** - separate metadata (trusted) from content (CDN) sources
+
+**System Model (Declarative OS):**
+- Declare desired system state in TOML file
+- Diff current state against declared model
+- CI/CD drift detection with `model-check`
+- Automatic sync with `model-apply`
+- Package pinning, exclusions, and search paths
 
 **GPG Signature Verification:**
 - Import and manage trusted GPG keys
@@ -346,6 +360,11 @@ man conary
 # Add a repository
 conary repo-add myrepo https://example.com/packages
 
+# Add a reference mirror (trusted metadata, untrusted CDN for content)
+conary repo-add ubuntu-noble \
+  --url="https://your-server.com/ubuntu/metadata" \
+  --content-url="https://archive.ubuntu.com/ubuntu"
+
 # List repositories
 conary repo-list
 
@@ -366,6 +385,44 @@ conary install nginx --repo=myrepo
 
 # Preview installation without installing
 conary install nginx --dry-run
+```
+
+### System Model Usage (Declarative OS)
+
+```bash
+# Capture current system state to a model file
+conary model-snapshot --output /etc/conary/system.toml --description "Production baseline"
+
+# Edit the model to declare desired state
+cat /etc/conary/system.toml
+```
+
+```toml
+# /etc/conary/system.toml - Declare your desired system state
+[model]
+version = 1
+search = ["fedora@f43:stable", "myrepo@internal:prod"]
+install = ["nginx", "postgresql", "redis"]
+exclude = ["sendmail", "telnet"]
+
+[pin]
+openssl = "3.0.*"
+
+[optional]
+packages = ["nginx-module-geoip"]
+```
+
+```bash
+# Show what changes are needed to reach model state
+conary model-diff
+
+# Check if system matches model (useful for CI/CD drift detection)
+conary model-check --verbose
+# Exit code 0 = in sync, 1 = drift detected
+
+# Sync system to model state
+conary model-apply --dry-run  # Preview first
+conary model-apply            # Apply changes
 ```
 
 ### Collection Usage
@@ -454,7 +511,7 @@ fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
 
 ### Testing
 
-- **508 tests** (459 lib + 3 bin + 35 integration + 11 doctests)
+- **520 tests** (481 lib + 3 bin + 36 integration)
 - Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, CCS building, policy engine, OCI export, and core operations
 
 **Integration tests** are organized in `tests/`:

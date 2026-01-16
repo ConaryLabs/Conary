@@ -80,11 +80,12 @@ cargo clippy -- -D warnings
 | `src/flavor/` | Build variation specs |
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
+| `src/model/` | System Model - declarative OS state (parser, diff, state capture) |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
 
 ## Database Schema
 
-Currently v23. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups.
+Currently v24. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -102,6 +103,7 @@ Key schema additions:
 - v21: `config_files`, `config_backups` tables - configuration file tracking and backup
 - v22: security columns on `repository_packages` - security update tracking
 - v23: `tx_uuid` column on changesets - transaction engine crash recovery correlation
+- v24: `content_url` column on repositories - reference mirrors for split metadata/content
 
 ## Testing
 
@@ -112,7 +114,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-508 tests total (459 lib + 3 bin + 35 integration + 11 doctests).
+520 tests total (481 lib + 3 bin + 36 integration).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
