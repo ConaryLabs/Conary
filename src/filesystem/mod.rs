@@ -12,8 +12,10 @@
 
 mod cas;
 mod deployer;
+pub mod path;
 pub mod vfs;
 
 pub use cas::CasStore;
 pub use deployer::FileDeployer;
+pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};

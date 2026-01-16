@@ -28,6 +28,7 @@ pub use planner::{
 };
 pub use recovery::RecoveryOutcome;
 
+use crate::filesystem::path::safe_join;
 use crate::filesystem::{CasStore, FileDeployer};
 use crate::hash::HashAlgorithm;
 use crate::Result;
@@ -38,16 +39,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-
-/// Helper to join a root path with a potentially absolute path
-///
-/// If the path is absolute (starts with /), strips the leading / before joining.
-/// This ensures paths like "/usr/bin/tree" work correctly with non-root install roots.
-fn safe_join(root: &Path, path: &Path) -> PathBuf {
-    let path_str = path.to_string_lossy();
-    let relative = path_str.strip_prefix('/').unwrap_or(&path_str);
-    root.join(relative)
-}
 
 /// Transaction engine configuration
 #[derive(Debug, Clone)]
@@ -429,7 +420,7 @@ impl<'a> Transaction<'a> {
         let backup_dir = self.engine.txn_work_dir(&self.uuid).join("backup");
 
         for backup_info in &plan.files_to_backup {
-            let source = safe_join(&self.engine.config.root, &backup_info.path);
+            let source = safe_join(&self.engine.config.root, &backup_info.path)?;
             let backup_path = backup_dir.join(backup_info.path.strip_prefix("/").unwrap_or(&backup_info.path));
 
             // Create parent directories in backup area
@@ -545,7 +536,7 @@ impl<'a> Transaction<'a> {
 
         // Create directories first (parent to child order)
         for dir in &plan.dirs_to_create {
-            let target = safe_join(&self.engine.config.root, dir);
+            let target = safe_join(&self.engine.config.root, dir)?;
             fs::create_dir_all(&target)?;
             result.dirs_created += 1;
         }
@@ -554,7 +545,7 @@ impl<'a> Transaction<'a> {
         for stage_info in &plan.files_to_stage {
             let relative_path = stage_info.path.strip_prefix("/").unwrap_or(&stage_info.path);
             let stage_path = stage_dir.join(relative_path);
-            let target = safe_join(&self.engine.config.root, &stage_info.path);
+            let target = safe_join(&self.engine.config.root, &stage_info.path)?;
 
             // Ensure parent exists
             if let Some(parent) = target.parent() {
@@ -582,7 +573,7 @@ impl<'a> Transaction<'a> {
                 op.op_type,
                 OperationType::RemoveFile | OperationType::RemoveSymlink
             ) {
-                let target = safe_join(&self.engine.config.root, &op.path);
+                let target = safe_join(&self.engine.config.root, &op.path)?;
                 if target.exists() || target.symlink_metadata().is_ok() {
                     fs::remove_file(&target)?;
                     result.files_removed += 1;
@@ -592,7 +583,7 @@ impl<'a> Transaction<'a> {
 
         // Remove empty directories (child to parent order)
         for dir in plan.dirs_to_remove.iter().rev() {
-            let target = safe_join(&self.engine.config.root, dir);
+            let target = safe_join(&self.engine.config.root, dir)?;
             if target.is_dir() && fs::read_dir(&target)?.next().is_none() {
                 fs::remove_dir(&target)?;
                 result.dirs_removed += 1;

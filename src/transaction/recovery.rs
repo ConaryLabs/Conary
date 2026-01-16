@@ -12,20 +12,14 @@
 //! since a crash can occur after SQLite commits but before the journal record
 //! is written.
 
+use crate::filesystem::path::safe_join;
 use crate::Result;
 use rusqlite::Connection;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::journal::{find_incomplete_journals, JournalRecord, TransactionJournal};
 use super::{FileType, TransactionEngine, TransactionState};
-
-/// Helper to join a root path with a potentially absolute path
-fn safe_join(root: &Path, path: &Path) -> PathBuf {
-    let path_str = path.to_string_lossy();
-    let relative = path_str.strip_prefix('/').unwrap_or(&path_str);
-    root.join(relative)
-}
 
 /// Outcome of recovering a transaction
 #[derive(Debug, Clone)]
@@ -202,7 +196,7 @@ pub fn rollback_transaction(
                 }
 
                 // If file was already renamed to final location, check if we need to remove it
-                let final_path = safe_join(root, Path::new(path));
+                let final_path = safe_join(root, Path::new(path))?;
                 if final_path.exists() {
                     // Check if there's a corresponding backup - if not, this was a new file
                     let has_backup = records.iter().any(|r| {
@@ -226,7 +220,7 @@ pub fn rollback_transaction(
             } => {
                 // Restore backup to original location
                 if backup_path.exists() {
-                    let final_path = safe_join(root, Path::new(path));
+                    let final_path = safe_join(root, Path::new(path))?;
 
                     // Remove any new file at the target location first
                     if final_path.exists() || final_path.symlink_metadata().is_ok() {
@@ -318,7 +312,7 @@ pub fn rollback_transaction(
     });
 
     for dir in dirs_to_check {
-        let full_path = safe_join(root, &dir);
+        let full_path = safe_join(root, &dir)?;
         if full_path.is_dir()
             && let Ok(mut entries) = fs::read_dir(&full_path)
             && entries.next().is_none()

@@ -65,6 +65,10 @@ pub enum Error {
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    /// Path traversal attempt (security violation)
+    #[error("Path traversal detected: {0}")]
+    PathTraversal(String),
+
     /// Resource not found (generic)
     #[error("Not found: {0}")]
     NotFound(String),

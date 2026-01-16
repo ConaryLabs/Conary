@@ -6,6 +6,7 @@
 
 use crate::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
 use crate::db::models::{ConvertedPackage, RepositoryPackage};
+use crate::filesystem::path::sanitize_filename;
 use crate::packages::arch::ArchPackage;
 use crate::packages::common::PackageMetadata;
 use crate::packages::deb::DebPackage;
@@ -56,6 +57,18 @@ impl ConversionService {
         }
     }
 
+    /// Create a safe CCS filename from package name and version
+    ///
+    /// Sanitizes both name and version to prevent path traversal attacks
+    /// where malicious package metadata could escape the packages directory.
+    fn safe_ccs_filename(name: &str, version: &str) -> Result<String> {
+        let safe_name = sanitize_filename(name)
+            .map_err(|e| anyhow!("Invalid package name '{}': {}", name, e))?;
+        let safe_version = sanitize_filename(version)
+            .map_err(|e| anyhow!("Invalid package version '{}': {}", version, e))?;
+        Ok(format!("{}-{}.ccs", safe_name, safe_version))
+    }
+
     /// Convert a package from a repository
     ///
     /// 1. Find package in repository metadata
@@ -91,7 +104,8 @@ impl ConversionService {
 
         // Check if already converted AND the CCS file still exists
         if let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)? {
-            let ccs_path = self.cache_dir.join("packages").join(format!("{}-{}.ccs", repo_pkg.name, repo_pkg.version));
+            let ccs_filename = Self::safe_ccs_filename(&repo_pkg.name, &repo_pkg.version)?;
+            let ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
             if !existing.needs_reconversion() && ccs_path.exists() {
                 info!("Package already converted (checksum: {})", original_checksum);
                 // Return cached result
@@ -146,9 +160,10 @@ impl ConversionService {
         info!("Recorded conversion in database");
 
         // Copy CCS package to persistent location
+        let ccs_filename = Self::safe_ccs_filename(&metadata.name, &metadata.version)?;
         let final_ccs_path = self.cache_dir
             .join("packages")
-            .join(format!("{}-{}.ccs", metadata.name, metadata.version));
+            .join(&ccs_filename);
 
         if let Some(parent) = final_ccs_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -345,6 +360,7 @@ impl ConversionService {
         repo_pkg: &RepositoryPackage,
     ) -> Result<ServerConversionResult> {
         // Use repo package info since ConvertedPackage doesn't store name/version
+        let ccs_filename = Self::safe_ccs_filename(&repo_pkg.name, &repo_pkg.version)?;
         Ok(ServerConversionResult {
             name: repo_pkg.name.clone(),
             version: repo_pkg.version.clone(),
@@ -352,7 +368,7 @@ impl ConversionService {
             chunk_hashes: vec![], // Would need to read from CCS package
             total_size: repo_pkg.size as u64,
             content_hash: existing.original_checksum.clone(),
-            ccs_path: self.cache_dir.join("packages").join(format!("{}-{}.ccs", repo_pkg.name, repo_pkg.version)),
+            ccs_path: self.cache_dir.join("packages").join(&ccs_filename),
         })
     }
 }
