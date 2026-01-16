@@ -22,6 +22,9 @@ pub mod gpg;
 pub mod parsers;
 pub mod selector;
 
+#[cfg(feature = "server")]
+pub mod chunk_fetcher;
+
 // Re-export main types and functions
 pub use client::RepositoryClient;
 pub use dependencies::{download_dependencies, resolve_dependencies, resolve_dependencies_transitive};
@@ -40,6 +43,12 @@ pub use sync::{
     RepositoryFormat,
 };
 pub use refinery::{RefineryClient, PackageManifest};
+
+#[cfg(feature = "server")]
+pub use chunk_fetcher::{
+    ChunkData, ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher, HttpChunkFetcher,
+    LocalCacheFetcher,
+};
 
 #[cfg(test)]
 mod tests {

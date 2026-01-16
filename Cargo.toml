@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime"]
+server = ["dep:axum", "dep:tokio", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime", "dep:async-trait", "dep:futures"]
 
 [dependencies]
 # Database
@@ -110,6 +110,8 @@ tokio-util = { version = "0.7", features = ["io"], optional = true }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"], optional = true }
 tower = { version = "0.5", optional = true }
 filetime = { version = "0.2", optional = true }  # For LRU cache access time tracking
+async-trait = { version = "0.1", optional = true }  # For async traits in chunk fetcher
+futures = { version = "0.3", optional = true }  # For stream operations in chunk fetcher
 
 [dev-dependencies]
 
