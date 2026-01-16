@@ -48,9 +48,9 @@ mod parser;
 mod diff;
 mod state;
 
-pub use parser::{SystemModel, ModelConfig, parse_model_file};
+pub use parser::{SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage};
 pub use diff::{ModelDiff, DiffAction, compute_diff, ApplyOptions};
-pub use state::{SystemState, capture_current_state, snapshot_to_model};
+pub use state::{SystemState, InstalledPackage, capture_current_state, snapshot_to_model};
 
 use std::path::Path;
 use thiserror::Error;

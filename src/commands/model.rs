@@ -8,10 +8,153 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use conary::db;
+use conary::db::models::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
+use conary::derived::build_from_definition;
+use conary::filesystem::CasStore;
+use conary::hash::sha256;
 use conary::model::{
     capture_current_state, compute_diff, parse_model_file, snapshot_to_model,
-    DiffAction,
+    DiffAction, ModelDerivedPackage,
 };
+use rusqlite::Connection;
+use tracing::info;
+
+/// Create a derived package definition from a model specification
+fn create_derived_from_model(
+    conn: &Connection,
+    model_derived: &ModelDerivedPackage,
+    model_dir: &Path,
+    cas: &CasStore,
+) -> Result<i64> {
+    // Check if already exists
+    if let Some(existing) = DerivedPackage::find_by_name(conn, &model_derived.name)? {
+        info!(
+            "Derived package '{}' already exists, updating",
+            model_derived.name
+        );
+        // Return existing ID, patches/overrides will be checked separately
+        return Ok(existing.id.unwrap());
+    }
+
+    // Parse version policy
+    let version_policy = if model_derived.version == "inherit" {
+        VersionPolicy::Inherit
+    } else if model_derived.version.starts_with('+') {
+        VersionPolicy::Suffix(model_derived.version.clone())
+    } else {
+        VersionPolicy::Specific(model_derived.version.clone())
+    };
+
+    // Create the derived package
+    let mut derived = DerivedPackage::new(
+        model_derived.name.clone(),
+        model_derived.from.clone(),
+    );
+    derived.version_policy = version_policy;
+    derived.model_source = Some(model_dir.display().to_string());
+
+    let derived_id = derived.insert(conn)?;
+    info!(
+        "Created derived package '{}' with id={}",
+        model_derived.name, derived_id
+    );
+
+    // Add patches
+    for (order, patch_path) in model_derived.patches.iter().enumerate() {
+        let full_path = model_dir.join(patch_path);
+        if !full_path.exists() {
+            return Err(anyhow!(
+                "Patch file not found: {} (for derived package '{}')",
+                full_path.display(),
+                model_derived.name
+            ));
+        }
+
+        let patch_content = std::fs::read(&full_path)?;
+        let patch_hash = sha256(&patch_content);
+        let patch_name = Path::new(patch_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("patch")
+            .to_string();
+
+        let mut patch = DerivedPatch::new(
+            derived_id,
+            (order + 1) as i32,
+            patch_name,
+            patch_hash,
+        );
+        patch.insert(conn)?;
+
+        // Store in CAS
+        cas.store(&patch_content)?;
+    }
+
+    // Add file overrides
+    for (target_path, source_path) in &model_derived.override_files {
+        if source_path.is_empty() || source_path == "REMOVE" {
+            // File removal
+            let mut ov = DerivedOverride::new_remove(derived_id, target_path.clone());
+            ov.insert(conn)?;
+        } else {
+            // File replacement
+            let full_source = model_dir.join(source_path);
+            if !full_source.exists() {
+                return Err(anyhow!(
+                    "Override source file not found: {} (for derived package '{}')",
+                    full_source.display(),
+                    model_derived.name
+                ));
+            }
+
+            let content = std::fs::read(&full_source)?;
+            let source_hash = sha256(&content);
+
+            let mut ov = DerivedOverride::new_replace(
+                derived_id,
+                target_path.clone(),
+                source_hash,
+            );
+            ov.source_path = Some(source_path.clone());
+            ov.insert(conn)?;
+
+            // Store in CAS
+            cas.store(&content)?;
+        }
+    }
+
+    Ok(derived_id)
+}
+
+/// Build a derived package and return success/failure
+fn build_derived_package(
+    conn: &Connection,
+    name: &str,
+    cas: &CasStore,
+) -> Result<()> {
+    let mut derived = DerivedPackage::find_by_name(conn, name)?
+        .ok_or_else(|| anyhow!("Derived package '{}' not found", name))?;
+
+    // Build the derived package
+    let result = build_from_definition(conn, &derived, cas);
+
+    match result {
+        Ok(build_result) => {
+            println!("  Built '{}': {} files, {} patches applied",
+                name,
+                build_result.files.len(),
+                build_result.patches_applied.len()
+            );
+            derived.set_status(conn, DerivedStatus::Built)?;
+            Ok(())
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+            derived.mark_error(conn, &error_msg)?;
+            Err(anyhow!("Build failed for '{}': {}", name, error_msg))
+        }
+    }
+}
 
 /// Show what changes are needed to reach the model state
 pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
@@ -144,10 +287,10 @@ pub fn cmd_model_apply(
         .actions
         .iter()
         .filter(|a| {
-            if skip_optional {
-                if let DiffAction::Install { optional, .. } = a {
-                    return !optional;
-                }
+            if skip_optional
+                && let DiffAction::Install { optional, .. } = a
+            {
+                return !optional;
             }
             if !strict {
                 // In non-strict mode, skip MarkDependency actions
@@ -182,10 +325,23 @@ pub fn cmd_model_apply(
         return Ok(());
     }
 
-    // TODO: Actually apply the changes using install/remove commands
-    // For now, we just show what would be done
     println!("Applying changes...");
+    println!();
 
+    // Set up CAS for derived package operations
+    let db_path_obj = Path::new(db_path);
+    let objects_dir = db_path_obj.parent().unwrap_or(Path::new(".")).join("objects");
+    let cas = CasStore::new(&objects_dir)?;
+
+    // Get model directory for resolving relative paths
+    let model_dir = model_path.parent().unwrap_or(Path::new("."));
+
+    // Track results
+    let mut errors: Vec<String> = Vec::new();
+    let mut derived_built = 0;
+    let mut derived_rebuilt = 0;
+
+    // Collect different action types
     let installs: Vec<_> = actions
         .iter()
         .filter_map(|a| match a {
@@ -202,24 +358,118 @@ pub fn cmd_model_apply(
         })
         .collect();
 
+    // Process removes first (before derived packages that might depend on them)
     if !removes.is_empty() {
-        println!("Would remove: {}", removes.join(", "));
-        // TODO: Call remove command for each package
+        println!("Packages to remove: {}", removes.join(", "));
+        println!("  [NOTE: Package removal not yet implemented - run manually]");
+        println!();
     }
 
+    // Process regular installs (needed before derived packages)
     if !installs.is_empty() {
-        println!("Would install: {}", installs.join(", "));
-        // TODO: Call install command for each package
+        println!("Packages to install: {}", installs.join(", "));
+        println!("  [NOTE: Package installation not yet implemented - run manually]");
+        println!();
+    }
+
+    // Process derived package actions
+    for action in &actions {
+        match action {
+            DiffAction::BuildDerived { name, parent, needs_parent } => {
+                println!("Building derived package '{}'...", name);
+
+                if *needs_parent {
+                    println!("  [WARNING: Parent '{}' needs to be installed first]", parent);
+                    errors.push(format!(
+                        "Cannot build '{}': parent '{}' not installed",
+                        name, parent
+                    ));
+                    continue;
+                }
+
+                // Find the derived package definition in the model
+                let model_def = model.derive.iter().find(|d| d.name == *name);
+
+                if let Some(def) = model_def {
+                    // Create the derived package definition in DB
+                    match create_derived_from_model(&conn, def, model_dir, &cas) {
+                        Ok(_id) => {
+                            // Now build it
+                            match build_derived_package(&conn, name, &cas) {
+                                Ok(()) => {
+                                    derived_built += 1;
+                                }
+                                Err(e) => {
+                                    errors.push(format!("Build '{}': {}", name, e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!("Create definition '{}': {}", name, e));
+                        }
+                    }
+                } else {
+                    errors.push(format!(
+                        "Derived package '{}' not found in model file",
+                        name
+                    ));
+                }
+            }
+
+            DiffAction::RebuildDerived { name, parent: _ } => {
+                println!("Rebuilding derived package '{}'...", name);
+
+                match build_derived_package(&conn, name, &cas) {
+                    Ok(()) => {
+                        derived_rebuilt += 1;
+                    }
+                    Err(e) => {
+                        errors.push(format!("Rebuild '{}': {}", name, e));
+                    }
+                }
+            }
+
+            _ => {
+                // Other actions (Install, Remove, Pin, etc.) handled above or not yet implemented
+            }
+        }
     }
 
     if autoremove {
-        println!("Would run autoremove to clean up orphaned dependencies");
-        // TODO: Call autoremove command
+        println!();
+        println!("Autoremove: [NOTE: Not yet implemented - run 'conary autoremove' manually]");
     }
 
+    // Summary
     println!();
-    println!("[NOTE: Full apply implementation pending - showing plan only]");
-    println!("To apply manually, run the install/remove commands shown above.");
+    println!("Summary:");
+
+    if derived_built > 0 {
+        println!("  Derived packages built: {}", derived_built);
+    }
+    if derived_rebuilt > 0 {
+        println!("  Derived packages rebuilt: {}", derived_rebuilt);
+    }
+    if !installs.is_empty() {
+        println!("  Packages to install (manual): {}", installs.len());
+    }
+    if !removes.is_empty() {
+        println!("  Packages to remove (manual): {}", removes.len());
+    }
+
+    if !errors.is_empty() {
+        println!();
+        println!("Errors ({}):", errors.len());
+        for err in &errors {
+            println!("  - {}", err);
+        }
+        return Err(anyhow!("{} error(s) during apply", errors.len()));
+    }
+
+    if derived_built > 0 || derived_rebuilt > 0 {
+        println!();
+        println!("Derived packages processed successfully.");
+    }
 
     Ok(())
 }
@@ -305,7 +555,7 @@ pub fn cmd_model_snapshot(
     toml_content.push_str("#\n");
     toml_content.push_str("# Edit this file to define your desired system state.\n");
     toml_content.push_str("# Then run 'conary model-apply' to sync the system.\n");
-    toml_content.push_str("\n");
+    toml_content.push('\n');
 
     // Add model content
     toml_content.push_str(&model.to_toml()?);

@@ -1307,4 +1307,129 @@ pub enum Commands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
+
+    // =========================================================================
+    // Derived Packages Commands
+    // =========================================================================
+
+    /// List all derived packages
+    #[command(name = "derive-list")]
+    DeriveList {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Show details of a derived package
+    #[command(name = "derive-show")]
+    DeriveShow {
+        /// Name of the derived package
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Create a new derived package
+    ///
+    /// Derived packages allow customizing existing packages without rebuilding.
+    /// Use patches and file overrides to make modifications.
+    #[command(name = "derive")]
+    DeriveCreate {
+        /// Name for the derived package
+        name: String,
+
+        /// Parent package to derive from
+        #[arg(long)]
+        from: String,
+
+        /// Version suffix (e.g., "+custom")
+        #[arg(long)]
+        version_suffix: Option<String>,
+
+        /// Description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Add a patch to a derived package
+    #[command(name = "derive-patch")]
+    DerivePatch {
+        /// Name of the derived package
+        name: String,
+
+        /// Path to the patch file
+        patch_file: String,
+
+        /// Strip level for patch application (default: 1)
+        #[arg(long)]
+        strip: Option<i32>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Add a file override to a derived package
+    ///
+    /// Replace a file in the parent package, or remove it.
+    #[command(name = "derive-override")]
+    DeriveOverride {
+        /// Name of the derived package
+        name: String,
+
+        /// Target path in the package to override
+        target: String,
+
+        /// Source file to replace with (omit to remove the file)
+        #[arg(long)]
+        source: Option<String>,
+
+        /// File permissions (octal, e.g., 644)
+        #[arg(long)]
+        mode: Option<u32>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Build a derived package
+    #[command(name = "derive-build")]
+    DeriveBuild {
+        /// Name of the derived package
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Delete a derived package
+    #[command(name = "derive-delete")]
+    DeriveDelete {
+        /// Name of the derived package
+        name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// List stale derived packages (parent was updated)
+    #[command(name = "derive-stale")]
+    DeriveStale {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
 }

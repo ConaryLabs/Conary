@@ -57,6 +57,24 @@ pub enum DiffAction {
     MarkDependency {
         package: String,
     },
+
+    /// Build and install a derived package
+    BuildDerived {
+        /// Name of the derived package
+        name: String,
+        /// Parent package name
+        parent: String,
+        /// Whether the parent needs to be installed first
+        needs_parent: bool,
+    },
+
+    /// Rebuild a stale derived package (parent was updated)
+    RebuildDerived {
+        /// Name of the derived package
+        name: String,
+        /// Parent package name
+        parent: String,
+    },
 }
 
 impl DiffAction {
@@ -70,6 +88,8 @@ impl DiffAction {
             DiffAction::Unpin { package } => package,
             DiffAction::MarkExplicit { package } => package,
             DiffAction::MarkDependency { package } => package,
+            DiffAction::BuildDerived { name, .. } => name,
+            DiffAction::RebuildDerived { name, .. } => name,
         }
     }
 
@@ -108,6 +128,16 @@ impl DiffAction {
             }
             DiffAction::MarkDependency { package } => {
                 format!("Mark {} as dependency", package)
+            }
+            DiffAction::BuildDerived { name, parent, needs_parent } => {
+                if *needs_parent {
+                    format!("Build derived '{}' from '{}' (will install parent first)", name, parent)
+                } else {
+                    format!("Build derived '{}' from '{}'", name, parent)
+                }
+            }
+            DiffAction::RebuildDerived { name, parent } => {
+                format!("Rebuild derived '{}' (parent '{}' was updated)", name, parent)
             }
         }
     }
@@ -186,7 +216,8 @@ impl ModelDiff {
         self.actions.push(action);
     }
 
-    /// Add a warning
+    /// Add a warning (for future use in model validation)
+    #[allow(dead_code)]
     fn add_warning(&mut self, warning: String) {
         self.warnings.push(warning);
     }
@@ -286,25 +317,23 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
 
     // Check excluded packages that are installed
     for package in &model_excluded {
-        if state.is_installed(package) {
-            if let Some(pkg) = state.installed.get(*package) {
-                diff.add_action(DiffAction::Remove {
-                    package: package.to_string(),
-                    current_version: pkg.version.clone(),
-                });
-            }
+        if state.is_installed(package)
+            && let Some(pkg) = state.installed.get(*package)
+        {
+            diff.add_action(DiffAction::Remove {
+                package: package.to_string(),
+                current_version: pkg.version.clone(),
+            });
         }
     }
 
     // Check pins
     for (package, pattern) in &model.pin {
-        if state.is_installed(package) {
-            if !state.is_pinned(package) {
-                diff.add_action(DiffAction::Pin {
-                    package: package.clone(),
-                    pattern: pattern.clone(),
-                });
-            }
+        if state.is_installed(package) && !state.is_pinned(package) {
+            diff.add_action(DiffAction::Pin {
+                package: package.clone(),
+                pattern: pattern.clone(),
+            });
             // TODO: Check if current version matches pin pattern
             // and add Update action if needed
         }
@@ -317,6 +346,33 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
                 package: package.clone(),
             });
         }
+    }
+
+    // Check derived packages from model
+    for derived in &model.derive {
+        // Check if the derived package is already installed
+        let derived_installed = state.is_installed(&derived.name);
+        let parent_installed = state.is_installed(&derived.from);
+
+        if !derived_installed {
+            // Need to build and install the derived package
+            diff.add_action(DiffAction::BuildDerived {
+                name: derived.name.clone(),
+                parent: derived.from.clone(),
+                needs_parent: !parent_installed,
+            });
+
+            // If parent not installed, we also need to install it
+            if !parent_installed && !model_packages.contains(derived.from.as_str()) {
+                diff.add_action(DiffAction::Install {
+                    package: derived.from.clone(),
+                    pin: model.get_pin(&derived.from).map(|s| s.to_string()),
+                    optional: false,
+                });
+            }
+        }
+        // Note: Stale derived packages (parent updated) are detected elsewhere
+        // by checking DerivedPackage.status in the database
     }
 
     diff
@@ -456,6 +512,68 @@ mod tests {
             a,
             DiffAction::Install { package, optional, .. }
             if package == "nginx-geoip" && *optional
+        )));
+    }
+
+    #[test]
+    fn test_derived_package() {
+        use super::super::parser::DerivedPackage;
+
+        let mut model = SystemModel::new();
+        model.derive = vec![DerivedPackage {
+            name: "nginx-custom".to_string(),
+            from: "nginx".to_string(),
+            version: "inherit".to_string(),
+            patches: vec![],
+            override_files: std::collections::HashMap::new(),
+        }];
+
+        // Parent not installed
+        let state = SystemState::new();
+        let diff = compute_diff(&model, &state);
+
+        // Should have BuildDerived action with needs_parent = true
+        assert!(diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::BuildDerived { name, parent, needs_parent }
+            if name == "nginx-custom" && parent == "nginx" && *needs_parent
+        )));
+
+        // Should also install the parent
+        assert!(diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::Install { package, .. } if package == "nginx"
+        )));
+    }
+
+    #[test]
+    fn test_derived_package_with_parent_installed() {
+        use super::super::parser::DerivedPackage;
+
+        let mut model = SystemModel::new();
+        model.derive = vec![DerivedPackage {
+            name: "nginx-custom".to_string(),
+            from: "nginx".to_string(),
+            version: "inherit".to_string(),
+            patches: vec![],
+            override_files: std::collections::HashMap::new(),
+        }];
+
+        // Parent already installed
+        let state = make_state_with_packages(&[("nginx", "1.24.0", true)]);
+        let diff = compute_diff(&model, &state);
+
+        // Should have BuildDerived action with needs_parent = false
+        assert!(diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::BuildDerived { name, parent, needs_parent }
+            if name == "nginx-custom" && parent == "nginx" && !*needs_parent
+        )));
+
+        // Should NOT install parent again
+        assert!(!diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::Install { package, .. } if package == "nginx"
         )));
     }
 }

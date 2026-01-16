@@ -1209,3 +1209,96 @@ pub fn migrate_v24(conn: &Connection) -> Result<()> {
     info!("Schema version 24 applied successfully (reference mirrors)");
     Ok(())
 }
+
+/// Version 25: Derived packages
+///
+/// Derived packages allow creating custom versions of existing packages without
+/// rebuilding from source. This enables enterprise customization such as:
+/// - Custom configuration files (e.g., corporate nginx.conf)
+/// - Security patches applied before upstream releases
+/// - Monitoring/logging instrumentation
+/// - Branding modifications
+///
+/// Creates:
+/// - derived_packages: Track derived package definitions and build status
+/// - derived_patches: Ordered list of patches to apply
+/// - derived_overrides: File overrides (replace or remove specific files)
+pub fn migrate_v25(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 25");
+
+    conn.execute_batch(
+        "
+        -- Derived packages: Custom packages based on existing ones
+        CREATE TABLE derived_packages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Name of the derived package (must be unique)
+            name TEXT NOT NULL UNIQUE,
+            -- Parent trove reference (may be NULL if parent not installed)
+            parent_trove_id INTEGER REFERENCES troves(id) ON DELETE SET NULL,
+            -- Parent package name (always stored for resolution)
+            parent_name TEXT NOT NULL,
+            -- Parent version constraint (NULL = track latest)
+            parent_version TEXT,
+            -- Version policy: inherit (same as parent), suffix (+custom), specific
+            version_policy TEXT NOT NULL DEFAULT 'inherit',
+            -- Version suffix for suffix policy (e.g., '+custom1')
+            version_suffix TEXT,
+            -- Specific version for specific policy
+            specific_version TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- Status: pending (not built), built, stale (parent updated), error
+            status TEXT NOT NULL DEFAULT 'pending',
+            -- Built trove ID (when status = built)
+            built_trove_id INTEGER REFERENCES troves(id) ON DELETE SET NULL,
+            -- Model file this came from (NULL if created via CLI)
+            model_source TEXT,
+            -- Error message if status = error
+            error_message TEXT
+        );
+
+        CREATE INDEX idx_derived_packages_parent ON derived_packages(parent_name);
+        CREATE INDEX idx_derived_packages_status ON derived_packages(status);
+        CREATE INDEX idx_derived_packages_built ON derived_packages(built_trove_id);
+
+        -- Derived package patches: ordered patch files to apply
+        CREATE TABLE derived_patches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            derived_id INTEGER NOT NULL REFERENCES derived_packages(id) ON DELETE CASCADE,
+            -- Order of patch application (1, 2, 3...)
+            patch_order INTEGER NOT NULL,
+            -- Human-readable patch name
+            patch_name TEXT NOT NULL,
+            -- Patch content hash (stored in CAS)
+            patch_hash TEXT NOT NULL,
+            -- Strip level for patch application (default -p1)
+            strip_level INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(derived_id, patch_order)
+        );
+
+        CREATE INDEX idx_derived_patches_derived ON derived_patches(derived_id);
+
+        -- Derived package file overrides: replace or remove specific files
+        CREATE TABLE derived_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            derived_id INTEGER NOT NULL REFERENCES derived_packages(id) ON DELETE CASCADE,
+            -- Target path in the package to override
+            target_path TEXT NOT NULL,
+            -- Source content hash (stored in CAS); NULL means remove the file
+            source_hash TEXT,
+            -- Original source path (for reference in model file)
+            source_path TEXT,
+            -- Permissions override (NULL = inherit from parent)
+            permissions INTEGER,
+            UNIQUE(derived_id, target_path)
+        );
+
+        CREATE INDEX idx_derived_overrides_derived ON derived_overrides(derived_id);
+        CREATE INDEX idx_derived_overrides_path ON derived_overrides(target_path);
+        ",
+    )?;
+
+    info!("Schema version 25 applied successfully (derived packages)");
+    Ok(())
+}

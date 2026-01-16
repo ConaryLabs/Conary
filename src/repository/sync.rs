@@ -99,10 +99,7 @@ fn rebase_download_url(download_url: &str, metadata_url: &str, content_url: Opti
             let metadata_base = metadata_url.trim_end_matches('/');
             let content_base = content_base.trim_end_matches('/');
 
-            if download_url.starts_with(metadata_base) {
-                // Extract relative path after the metadata base
-                let relative = &download_url[metadata_base.len()..];
-
+            if let Some(relative) = download_url.strip_prefix(metadata_base) {
                 // Ensure proper path joining - relative should start with /
                 // This handles cases like:
                 //   metadata_base: "http://foo.com/repo"

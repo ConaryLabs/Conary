@@ -5,6 +5,7 @@ mod adopt;
 pub mod ccs;
 mod collection;
 mod config;
+mod derived;
 mod install;
 mod label;
 mod model;
@@ -27,6 +28,10 @@ pub use collection::{
 pub use config::{
     cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
     cmd_config_restore,
+};
+pub use derived::{
+    cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list,
+    cmd_derive_override, cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
 };
 pub use install::cmd_install;
 pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_snapshot};

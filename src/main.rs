@@ -378,6 +378,39 @@ fn main() -> Result<()> {
             commands::cmd_model_snapshot(&output, &db_path, description.as_deref())
         }
 
+        // Derived Package Commands
+        Some(Commands::DeriveList { db_path, verbose }) => {
+            commands::cmd_derive_list(&db_path, verbose)
+        }
+
+        Some(Commands::DeriveShow { name, db_path }) => {
+            commands::cmd_derive_show(&name, &db_path)
+        }
+
+        Some(Commands::DeriveCreate { name, from, version_suffix, description, db_path }) => {
+            commands::cmd_derive_create(&name, &from, version_suffix.as_deref(), description.as_deref(), &db_path)
+        }
+
+        Some(Commands::DerivePatch { name, patch_file, strip, db_path }) => {
+            commands::cmd_derive_patch(&name, &patch_file, strip, &db_path)
+        }
+
+        Some(Commands::DeriveOverride { name, target, source, mode, db_path }) => {
+            commands::cmd_derive_override(&name, &target, source.as_deref(), mode, &db_path)
+        }
+
+        Some(Commands::DeriveBuild { name, db_path }) => {
+            commands::cmd_derive_build(&name, &db_path)
+        }
+
+        Some(Commands::DeriveDelete { name, db_path }) => {
+            commands::cmd_derive_delete(&name, &db_path)
+        }
+
+        Some(Commands::DeriveStale { db_path }) => {
+            commands::cmd_derive_stale(&db_path)
+        }
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");
