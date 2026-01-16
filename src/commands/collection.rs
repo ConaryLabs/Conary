@@ -308,6 +308,8 @@ pub fn cmd_collection_install(
             sandbox_mode,
             false,  // allow_downgrade
             false,  // convert_to_ccs
+            None,   // refinery
+            None,   // distro
         ) {
             Ok(()) => {
                 installed_count += 1;

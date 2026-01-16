@@ -28,10 +28,10 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { db_path }) => commands::cmd_init(&db_path),
 
-        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts, sandbox, allow_downgrade, convert_to_ccs }) => {
+        Some(Commands::Install { package, db_path, root, version, repo, dry_run, no_deps, no_scripts, sandbox, allow_downgrade, convert_to_ccs, refinery, distro }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .expect("Invalid sandbox mode. Use: auto, always, never");
-            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs)
+            commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs, refinery, distro)
         }
 
         Some(Commands::Remove { package_name, db_path, root, version, no_scripts, sandbox }) => {

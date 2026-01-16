@@ -406,6 +406,8 @@ impl ComponentSelection {
 /// * `sandbox_mode` - Sandbox mode for scriptlet execution
 /// * `allow_downgrade` - Allow installing older versions
 /// * `convert_to_ccs` - Convert legacy packages to CCS format during install
+/// * `refinery` - URL of Refinery server for pre-converted CCS packages
+/// * `distro` - Distribution for Refinery (arch, fedora, ubuntu, debian)
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
@@ -420,7 +422,24 @@ pub fn cmd_install(
     sandbox_mode: SandboxMode,
     allow_downgrade: bool,
     convert_to_ccs: bool,
+    refinery: Option<String>,
+    distro: Option<String>,
 ) -> Result<()> {
+    // Handle Refinery installation path
+    if let Some(refinery_url) = refinery {
+        return cmd_install_from_refinery(
+            package,
+            &refinery_url,
+            distro.as_deref(),
+            version.as_deref(),
+            db_path,
+            root,
+            dry_run,
+            no_scripts,
+            sandbox_mode,
+        );
+    }
+
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
         let selection = if comp == "all" {
@@ -1429,6 +1448,73 @@ pub fn cmd_install(
     create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;
 
     Ok(())
+}
+
+/// Install a package from a Refinery server
+///
+/// This fetches pre-converted CCS packages from a Refinery, which converts
+/// legacy packages (RPM/DEB/Arch) to CCS format on-demand.
+#[allow(clippy::too_many_arguments)]
+fn cmd_install_from_refinery(
+    package: &str,
+    refinery_url: &str,
+    distro: Option<&str>,
+    version: Option<&str>,
+    db_path: &str,
+    root: &str,
+    dry_run: bool,
+    _no_scripts: bool,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
+    use conary::repository::refinery::RefineryClient;
+
+    let distro = distro.ok_or_else(|| {
+        anyhow::anyhow!("--distro is required when using --refinery (arch, fedora, ubuntu, debian)")
+    })?;
+
+    println!("Fetching {} from Refinery: {}", package, refinery_url);
+
+    // Create Refinery client
+    let client = RefineryClient::new(refinery_url)
+        .with_context(|| format!("Failed to connect to Refinery at {}", refinery_url))?;
+
+    // Health check
+    if !client.health_check()? {
+        return Err(anyhow::anyhow!("Refinery at {} is not healthy", refinery_url));
+    }
+
+    // Create temp directory for CCS package
+    let temp_dir = TempDir::new()
+        .context("Failed to create temporary directory")?;
+
+    // Fetch package (handles 202 polling automatically)
+    println!("Requesting package conversion...");
+    let ccs_path = client.fetch_package(distro, package, version, temp_dir.path())
+        .with_context(|| format!("Failed to fetch {} from Refinery", package))?;
+
+    println!("Downloaded CCS package: {}", ccs_path.display());
+
+    if dry_run {
+        println!("[dry-run] Would install CCS package: {}", ccs_path.display());
+        return Ok(());
+    }
+
+    // Install the CCS package using ccs-install
+    let ccs_path_str = ccs_path.to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid CCS package path"))?;
+
+    // Use ccs_install command
+    super::ccs::cmd_ccs_install(
+        ccs_path_str,
+        db_path,
+        root,
+        dry_run,
+        true, // allow_unsigned (Refinery packages aren't signed yet)
+        None, // policy
+        None, // components
+        sandbox_mode,
+        false, // no_deps
+    )
 }
 
 /// Check if missing dependencies are satisfied by packages in the provides table
