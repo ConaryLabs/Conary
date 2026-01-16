@@ -396,23 +396,24 @@ impl CcsBuilder {
         comp_type.as_str().to_string()
     }
 
-    /// Simple glob matching (supports * and **)
+    /// Check if path matches glob pattern using glob crate
     fn matches_glob(&self, path: &str, pattern: &str) -> bool {
-        // Simple implementation - just check prefix and suffix
-        if pattern.contains("**") {
-            let parts: Vec<&str> = pattern.split("**").collect();
-            if parts.len() == 2 {
-                return path.starts_with(parts[0]) && path.ends_with(parts[1]);
-            }
-        } else if pattern.contains('*') {
-            let parts: Vec<&str> = pattern.split('*').collect();
-            if parts.len() == 2 {
-                return path.starts_with(parts[0]) && path.ends_with(parts[1]);
+        use glob::Pattern;
+
+        match Pattern::new(pattern) {
+            Ok(compiled) => compiled.matches(path),
+            Err(_) => {
+                // Fallback to simple matching if pattern is invalid
+                // or just log warning (but we don't have logger here easily accessible without importing)
+                // For now, simple fallback for basic cases
+                if pattern.contains('*') {
+                    // Very basic fallback
+                    path.starts_with(pattern.split('*').next().unwrap_or(""))
+                } else {
+                    path == pattern
+                }
             }
         }
-
-        // Exact match
-        path == pattern
     }
 
     /// Compute a combined hash for a component
