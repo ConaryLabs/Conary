@@ -12,12 +12,14 @@ mod conversion;
 mod handlers;
 mod index_gen;
 mod jobs;
+mod prewarm;
 mod routes;
 
 pub use cache::ChunkCache;
 pub use conversion::{ConversionService, ServerConversionResult};
 pub use index_gen::{generate_indices, IndexGenConfig, IndexGenResult};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
+pub use prewarm::{run_prewarm, PrewarmConfig, PrewarmResult};
 pub use routes::create_router;
 
 use anyhow::Result;

@@ -6,6 +6,7 @@
 //! and provides methods for creating, reading, updating, and deleting records.
 
 mod changeset;
+mod chunk_access;
 mod collection;
 mod component;
 mod component_dependency;
@@ -26,6 +27,7 @@ mod trigger;
 mod trove;
 
 pub use changeset::{Changeset, ChangesetStatus};
+pub use chunk_access::{ChunkAccess, ChunkStats};
 pub use collection::CollectionMember;
 pub use component::Component;
 pub use config::{ConfigBackup, ConfigFile, ConfigSource, ConfigStatus};

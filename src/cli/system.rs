@@ -48,6 +48,45 @@ pub enum SystemCommands {
         sign_key: Option<String>,
     },
 
+    /// Pre-warm the chunk cache by converting popular packages
+    ///
+    /// Downloads and converts packages proactively, reducing latency for
+    /// first-time requests. Can use a popularity file to prioritize packages.
+    #[cfg(feature = "server")]
+    Prewarm {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Path to chunk storage directory
+        #[arg(long, default_value = "/var/lib/conary/data/chunks")]
+        chunk_dir: String,
+
+        /// Path to cache/scratch directory
+        #[arg(long, default_value = "/var/lib/conary/data/cache")]
+        cache_dir: String,
+
+        /// Distribution to pre-warm (arch, fedora, ubuntu, debian)
+        #[arg(long)]
+        distro: String,
+
+        /// Maximum number of packages to convert
+        #[arg(long, default_value = "100")]
+        max_packages: usize,
+
+        /// Path to popularity data file (JSON with name/score pairs)
+        #[arg(long)]
+        popularity_file: Option<String>,
+
+        /// Only convert packages matching this regex pattern
+        #[arg(long)]
+        pattern: Option<String>,
+
+        /// Show what would be converted without actually converting
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Start the Refinery server (CCS conversion proxy)
     ///
     /// The Refinery converts upstream packages to CCS format on-demand,

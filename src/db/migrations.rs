@@ -1350,3 +1350,48 @@ pub fn migrate_v26(conn: &Connection) -> Result<()> {
     info!("Schema version 26 applied successfully (converted packages)");
     Ok(())
 }
+
+/// Version 27: Chunk access tracking for LRU cache management
+///
+/// Tracks chunk access patterns for smarter cache eviction and analytics.
+/// This complements the filesystem-based LRU tracking with persistent metadata.
+///
+/// Creates:
+/// - chunk_access: Track chunk access patterns and popularity
+pub fn migrate_v27(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 27");
+
+    conn.execute_batch(
+        "
+        -- Chunk access tracking for LRU cache management
+        CREATE TABLE chunk_access (
+            -- SHA-256 hash of the chunk (primary key)
+            hash TEXT PRIMARY KEY NOT NULL,
+            -- Size of the chunk in bytes
+            size_bytes INTEGER NOT NULL,
+            -- Number of times this chunk has been accessed
+            access_count INTEGER NOT NULL DEFAULT 1,
+            -- When this chunk was first stored
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- When this chunk was last accessed
+            last_accessed TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- Which packages reference this chunk (JSON array of package names)
+            referenced_by TEXT,
+            -- Whether this chunk is protected from eviction
+            protected INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- Index for LRU queries (oldest accessed first)
+        CREATE INDEX idx_chunk_access_lru ON chunk_access(last_accessed ASC);
+        -- Index for finding large chunks
+        CREATE INDEX idx_chunk_access_size ON chunk_access(size_bytes DESC);
+        -- Index for finding popular chunks
+        CREATE INDEX idx_chunk_access_count ON chunk_access(access_count DESC);
+        -- Index for protected chunks
+        CREATE INDEX idx_chunk_access_protected ON chunk_access(protected) WHERE protected = 1;
+        ",
+    )?;
+
+    info!("Schema version 27 applied successfully (chunk access tracking)");
+    Ok(())
+}

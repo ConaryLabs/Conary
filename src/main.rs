@@ -523,6 +523,59 @@ fn main() -> Result<()> {
             }
 
             #[cfg(feature = "server")]
+            cli::SystemCommands::Prewarm {
+                db_path,
+                chunk_dir,
+                cache_dir,
+                distro,
+                max_packages,
+                popularity_file,
+                pattern,
+                dry_run,
+            } => {
+                use conary::server::{run_prewarm, PrewarmConfig};
+
+                let config = PrewarmConfig {
+                    db_path,
+                    chunk_dir,
+                    cache_dir,
+                    distro,
+                    max_packages,
+                    popularity_file,
+                    pattern,
+                    dry_run,
+                };
+
+                match run_prewarm(&config) {
+                    Ok(result) => {
+                        println!("Pre-warm complete:");
+                        println!("  Processed:  {}", result.packages_processed);
+                        println!("  Converted:  {}", result.packages_converted);
+                        println!("  Skipped:    {}", result.packages_skipped);
+                        println!("  Failed:     {}", result.packages_failed);
+                        println!("  Total size: {} bytes", result.total_bytes);
+
+                        if !result.converted.is_empty() {
+                            println!("\nConverted packages:");
+                            for pkg in &result.converted {
+                                println!("  {}", pkg);
+                            }
+                        }
+
+                        if !result.failed.is_empty() {
+                            println!("\nFailed packages:");
+                            for (pkg, err) in &result.failed {
+                                println!("  {}: {}", pkg, err);
+                            }
+                        }
+
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+
+            #[cfg(feature = "server")]
             cli::SystemCommands::Server {
                 bind,
                 db_path,
