@@ -109,6 +109,15 @@ Key schema additions:
 cargo test                    # All tests
 cargo test --lib             # Library tests only
 cargo test --test '*'        # Integration tests only
+cargo test --test database   # Run specific test module
 ```
 
 508 tests total (459 lib + 3 bin + 35 integration + 11 doctests).
+
+Integration tests are organized in `tests/`:
+- `database.rs` - DB init, transactions (6 tests)
+- `workflow.rs` - Install/remove/rollback (4 tests)
+- `query.rs` - Queries, dependencies, provides (9 tests)
+- `component.rs` - Component classification (7 tests)
+- `features.rs` - Language deps, collections, state, config (9 tests)
+- `common/mod.rs` - Shared test helpers
