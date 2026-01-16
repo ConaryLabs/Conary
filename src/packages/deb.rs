@@ -4,19 +4,18 @@
 //!
 //! Parses .deb packages, which are AR archives containing control and data tarballs
 
+use crate::compression::{self, CompressionFormat};
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
 };
-use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
-use xz2::read::XzDecoder;
 
 /// Debian package representation
 pub struct DebPackage {
@@ -38,6 +37,14 @@ pub struct DebPackage {
 }
 
 impl DebPackage {
+    /// Create a decompressor for tar data based on file extension
+    fn create_tar_decoder<'a>(tar_data: &'a [u8], _ext: &str) -> Result<Box<dyn Read + 'a>> {
+        // Detect format from magic bytes for reliability
+        let format = CompressionFormat::from_magic_bytes(tar_data);
+        compression::create_decoder(tar_data, format)
+            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))
+    }
+
     /// Parse control file from control.tar archive
     fn parse_control(control_content: &str) -> Result<ControlInfo> {
         let mut info = ControlInfo::default();
@@ -153,20 +160,7 @@ impl DebPackage {
         // Try different compression formats
         for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                // Decompress based on extension
-                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
-                    Box::new(GzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".xz") {
-                    Box::new(XzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".zst") {
-                    Box::new(
-                        zstd::Decoder::new(&tar_data[..])
-                            .map_err(|e| Error::InitError(format!("Failed to create zstd decoder: {}", e)))?,
-                    )
-                } else {
-                    Box::new(&tar_data[..])
-                };
-
+                let reader = Self::create_tar_decoder(&tar_data, ext)?;
                 let mut archive = Archive::new(reader);
 
                 // Find control file in tar
@@ -204,21 +198,10 @@ impl DebPackage {
         // Try different compression formats
         for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                // Decompress based on extension
-                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
-                    Box::new(GzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".xz") {
-                    Box::new(XzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".zst") {
-                    if let Ok(decoder) = zstd::Decoder::new(&tar_data[..]) {
-                        Box::new(decoder)
-                    } else {
-                        continue;
-                    }
-                } else {
-                    Box::new(&tar_data[..])
+                let reader = match Self::create_tar_decoder(&tar_data, ext) {
+                    Ok(r) => r,
+                    Err(_) => continue,
                 };
-
                 let mut archive = Archive::new(reader);
 
                 // Look for maintainer scripts
@@ -276,21 +259,10 @@ impl DebPackage {
         // Try different compression formats
         for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                // Decompress based on extension
-                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
-                    Box::new(GzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".xz") {
-                    Box::new(XzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".zst") {
-                    if let Ok(decoder) = zstd::Decoder::new(&tar_data[..]) {
-                        Box::new(decoder)
-                    } else {
-                        continue;
-                    }
-                } else {
-                    Box::new(&tar_data[..])
+                let reader = match Self::create_tar_decoder(&tar_data, ext) {
+                    Ok(r) => r,
+                    Err(_) => continue,
                 };
-
                 let mut archive = Archive::new(reader);
 
                 // Look for conffiles
@@ -333,20 +305,7 @@ impl DebPackage {
         // Try different compression formats
         for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                // Decompress based on extension
-                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
-                    Box::new(GzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".xz") {
-                    Box::new(XzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".zst") {
-                    Box::new(
-                        zstd::Decoder::new(&tar_data[..])
-                            .map_err(|e| Error::InitError(format!("Failed to create zstd decoder: {}", e)))?,
-                    )
-                } else {
-                    Box::new(&tar_data[..])
-                };
-
+                let reader = Self::create_tar_decoder(&tar_data, ext)?;
                 let mut archive = Archive::new(reader);
                 let mut files = Vec::new();
 
@@ -515,20 +474,7 @@ impl PackageFormat for DebPackage {
                 None => return Err(Error::InitError("Package path contains invalid UTF-8".to_string())),
             };
             if let Ok(tar_data) = Self::extract_ar_file(path_str, ext) {
-                // Decompress based on extension
-                let reader: Box<dyn Read> = if ext.ends_with(".gz") {
-                    Box::new(GzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".xz") {
-                    Box::new(XzDecoder::new(&tar_data[..]))
-                } else if ext.ends_with(".zst") {
-                    Box::new(
-                        zstd::Decoder::new(&tar_data[..])
-                            .map_err(|e| Error::InitError(format!("Failed to create zstd decoder: {}", e)))?,
-                    )
-                } else {
-                    Box::new(&tar_data[..])
-                };
-
+                let reader = Self::create_tar_decoder(&tar_data, ext)?;
                 let mut archive = Archive::new(reader);
                 let mut extracted_files = Vec::new();
 

@@ -4,19 +4,18 @@
 //!
 //! Parses .pkg.tar.zst and .pkg.tar.xz packages, extracting metadata from .PKGINFO
 
+use crate::compression::{self, CompressionFormat};
 use crate::db::models::{Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
 };
-use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
-use xz2::read::XzDecoder;
 
 /// Arch Linux package representation
 pub struct ArchPackage {
@@ -40,18 +39,14 @@ pub struct ArchPackage {
 impl ArchPackage {
     /// Detect compression format from file extension
     fn detect_compression(path: &str) -> Result<CompressionFormat> {
-        if path.ends_with(".pkg.tar.zst") {
-            Ok(CompressionFormat::Zstd)
-        } else if path.ends_with(".pkg.tar.xz") {
-            Ok(CompressionFormat::Xz)
-        } else if path.ends_with(".pkg.tar.gz") {
-            Ok(CompressionFormat::Gzip)
-        } else {
-            Err(Error::InitError(format!(
+        let format = CompressionFormat::from_extension(path);
+        if format == CompressionFormat::None {
+            return Err(Error::InitError(format!(
                 "Unsupported Arch package format: {}. Expected .pkg.tar.zst, .pkg.tar.xz, or .pkg.tar.gz",
                 path
-            )))
+            )));
         }
+        Ok(format)
     }
 
     /// Open and decompress the package archive
@@ -59,23 +54,9 @@ impl ArchPackage {
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open package file: {}", e)))?;
 
-        let compression = Self::detect_compression(path)?;
-
-        let reader: Box<dyn Read> = match compression {
-            CompressionFormat::Zstd => {
-                let decoder = zstd::Decoder::new(file)
-                    .map_err(|e| Error::InitError(format!("Failed to create zstd decoder: {}", e)))?;
-                Box::new(decoder)
-            }
-            CompressionFormat::Xz => {
-                let decoder = XzDecoder::new(file);
-                Box::new(decoder)
-            }
-            CompressionFormat::Gzip => {
-                let decoder = GzDecoder::new(file);
-                Box::new(decoder)
-            }
-        };
+        let format = Self::detect_compression(path)?;
+        let reader = compression::create_decoder(file, format)
+            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         Ok(Archive::new(reader))
     }
@@ -310,13 +291,6 @@ impl ArchPackage {
             })
             .collect()
     }
-}
-
-/// Package compression format
-enum CompressionFormat {
-    Zstd,
-    Xz,
-    Gzip,
 }
 
 /// Parsed .PKGINFO metadata

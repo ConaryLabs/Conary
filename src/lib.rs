@@ -15,6 +15,7 @@
 
 pub mod ccs;
 pub mod components;
+pub mod compression;
 pub mod container;
 pub mod db;
 pub mod delta;
