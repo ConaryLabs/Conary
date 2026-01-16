@@ -11,7 +11,6 @@ use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 use thiserror::Error;
 
 /// Policy errors
@@ -323,41 +322,110 @@ impl BuildPolicy for StripBinariesPolicy {
             return Ok(PolicyAction::Keep);
         }
 
-        // Try to strip the binary
-        // We need to write to a temp file, run strip, and read back
-        let temp_file = tempfile::NamedTempFile::new()
-            .map_err(|e| PolicyError::Execution(format!("Failed to create temp file: {}", e)))?;
-
-        std::fs::write(temp_file.path(), ctx.content)
-            .map_err(|e| PolicyError::Execution(format!("Failed to write temp file: {}", e)))?;
-
-        let output = Command::new("strip")
-            .arg("--strip-unneeded")
-            .arg(temp_file.path())
-            .output();
-
-        match output {
-            Ok(result) if result.status.success() => {
-                // Read stripped binary
-                let stripped = std::fs::read(temp_file.path()).map_err(|e| {
-                    PolicyError::Execution(format!("Failed to read stripped binary: {}", e))
-                })?;
-                Ok(PolicyAction::Replace(stripped))
-            }
-            Ok(result) => {
-                // Strip failed, but don't reject - just keep original
-                // This can happen for static libraries or other edge cases
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                log::debug!("strip failed for {}: {}", ctx.entry.path, stderr);
-                Ok(PolicyAction::Keep)
+        // Try to strip the binary using native Rust implementation
+        match strip_elf_binary(ctx.content) {
+            Ok(stripped) => {
+                // Only replace if we actually reduced size
+                if stripped.len() < ctx.content.len() {
+                    log::debug!(
+                        "Stripped {}: {} -> {} bytes",
+                        ctx.entry.path,
+                        ctx.content.len(),
+                        stripped.len()
+                    );
+                    Ok(PolicyAction::Replace(stripped))
+                } else {
+                    Ok(PolicyAction::Keep)
+                }
             }
             Err(e) => {
-                // strip command not available - keep original
-                log::debug!("strip command failed: {}", e);
+                // Strip failed, but don't reject - just keep original
+                log::debug!("strip failed for {}: {}", ctx.entry.path, e);
                 Ok(PolicyAction::Keep)
             }
         }
     }
+}
+
+/// Strip debug symbols from an ELF binary using native Rust
+///
+/// This implementation removes section headers and debug sections by:
+/// 1. Parsing the ELF structure with goblin
+/// 2. Finding the end of the last loadable segment (PT_LOAD)
+/// 3. Truncating the file to that point
+/// 4. Updating the ELF header to indicate no section headers
+///
+/// This is equivalent to a basic `strip --strip-unneeded` for executables
+/// and shared libraries. It preserves program headers needed for execution.
+fn strip_elf_binary(content: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    use goblin::elf::{header::*, program_header::PT_LOAD, Elf};
+
+    // Parse the ELF file
+    let elf = Elf::parse(content).map_err(|e| format!("Failed to parse ELF: {}", e))?;
+
+    // Only strip executables (ET_EXEC) and shared objects (ET_DYN)
+    // Don't strip relocatable files (ET_REL) as they need section headers
+    if elf.header.e_type != ET_EXEC && elf.header.e_type != ET_DYN {
+        return Err("Not an executable or shared library".to_string());
+    }
+
+    // Find the end of the last loadable segment
+    let mut last_segment_end: u64 = 0;
+    for phdr in &elf.program_headers {
+        if phdr.p_type == PT_LOAD {
+            let segment_end = phdr.p_offset + phdr.p_filesz;
+            if segment_end > last_segment_end {
+                last_segment_end = segment_end;
+            }
+        }
+    }
+
+    // Also need to keep program headers
+    let phdr_end = elf.header.e_phoff + (elf.header.e_phnum as u64 * elf.header.e_phentsize as u64);
+    if phdr_end > last_segment_end {
+        last_segment_end = phdr_end;
+    }
+
+    // Ensure we keep at least the ELF header
+    let elf_header_size = elf.header.e_ehsize as u64;
+    if last_segment_end < elf_header_size {
+        last_segment_end = elf_header_size;
+    }
+
+    // Truncate the binary
+    let truncate_at = last_segment_end as usize;
+    if truncate_at >= content.len() {
+        // Nothing to strip
+        return Err("No sections to strip".to_string());
+    }
+
+    let mut stripped = content[..truncate_at].to_vec();
+
+    // Zero out section header references in the ELF header
+    // This tells the loader there are no section headers
+    if elf.is_64 {
+        // 64-bit ELF: e_shoff at offset 40 (8 bytes), e_shnum at 60 (2 bytes), e_shstrndx at 62 (2 bytes)
+        if stripped.len() >= 64 {
+            // e_shoff (8 bytes at offset 40)
+            stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
+            // e_shnum (2 bytes at offset 60)
+            stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
+            // e_shstrndx (2 bytes at offset 62)
+            stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
+        }
+    } else {
+        // 32-bit ELF: e_shoff at offset 32 (4 bytes), e_shnum at 48 (2 bytes), e_shstrndx at 50 (2 bytes)
+        if stripped.len() >= 52 {
+            // e_shoff (4 bytes at offset 32)
+            stripped[32..36].copy_from_slice(&0u32.to_le_bytes());
+            // e_shnum (2 bytes at offset 48)
+            stripped[48..50].copy_from_slice(&0u16.to_le_bytes());
+            // e_shstrndx (2 bytes at offset 50)
+            stripped[50..52].copy_from_slice(&0u16.to_le_bytes());
+        }
+    }
+
+    Ok(stripped)
 }
 
 /// Policy to normalize shebangs in scripts
@@ -646,5 +714,73 @@ mod tests {
         let config = BuildPolicyConfig::default();
         let chain = PolicyChain::from_config(&config).unwrap();
         assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_strip_elf_binary_not_elf() {
+        // Non-ELF content should fail
+        let content = b"not an elf file";
+        let result = strip_elf_binary(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_strip_elf_binary_real() {
+        // Test with a real system binary (if available)
+        // This test is skipped if the binary doesn't exist
+        let binary_paths = ["/bin/true", "/usr/bin/true", "/bin/ls", "/usr/bin/ls"];
+
+        let content = binary_paths
+            .iter()
+            .find_map(|path| std::fs::read(path).ok());
+
+        let Some(content) = content else {
+            // Skip test if no binary found
+            return;
+        };
+
+        // Verify it's an ELF
+        assert!(content.len() >= 4 && &content[0..4] == b"\x7fELF");
+
+        let result = strip_elf_binary(&content);
+
+        // Strip should either succeed (reducing size) or fail gracefully
+        // Modern binaries are often already stripped, so we accept both outcomes
+        match result {
+            Ok(stripped) => {
+                // If successful, verify the output is valid
+                assert!(stripped.len() >= 64, "stripped binary should have ELF header");
+                assert_eq!(&stripped[0..4], b"\x7fELF", "should still be ELF");
+
+                // Section header offset should be zeroed
+                let shoff = u64::from_le_bytes(stripped[40..48].try_into().unwrap());
+                assert_eq!(shoff, 0, "shoff should be zeroed");
+            }
+            Err(e) => {
+                // Acceptable errors: already stripped, nothing to strip
+                assert!(
+                    e.contains("No sections") || e.contains("Not an executable"),
+                    "unexpected error: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_strip_binaries_policy_non_elf() {
+        let policy = StripBinariesPolicy::new();
+
+        // Non-ELF file should be kept unchanged
+        let entry = make_entry("/usr/bin/script", 0o755);
+        let content = b"#!/bin/bash\necho hello";
+        let ctx = PolicyContext {
+            source_path: Path::new("/src/usr/bin/script"),
+            entry: &entry,
+            content,
+            config: &BuildPolicyConfig::default(),
+        };
+        let result = policy.apply(&ctx).unwrap();
+        assert!(matches!(result, PolicyAction::Keep));
     }
 }

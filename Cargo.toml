@@ -113,6 +113,7 @@ filetime = { version = "0.2", optional = true }  # For LRU cache access time tra
 async-trait = { version = "0.1", optional = true }  # For async traits in chunk fetcher
 futures = { version = "0.3", optional = true }  # For stream operations in chunk fetcher
 diffy = "0.4.2"
+goblin = "0.10.4"
 
 [dev-dependencies]
 
