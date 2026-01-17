@@ -53,19 +53,6 @@ pub enum PackageCommands {
         /// declaratively before the original scriptlet.
         #[arg(long)]
         convert_to_ccs: bool,
-
-        /// Fetch pre-converted CCS package from a Refinery server
-        ///
-        /// The Refinery converts legacy packages to CCS on-demand and caches them.
-        /// Example: --refinery http://crucible.conary.io:8080
-        #[arg(long)]
-        refinery: Option<String>,
-
-        /// Distribution for Refinery (arch, fedora, ubuntu, debian)
-        ///
-        /// Required when using --refinery. Specifies which upstream repo to convert from.
-        #[arg(long)]
-        distro: Option<String>,
     },
 
     /// Remove an installed package

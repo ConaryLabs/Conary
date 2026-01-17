@@ -114,14 +114,6 @@ pub enum Commands {
         #[arg(long)]
         convert_to_ccs: bool,
 
-        /// Fetch pre-converted CCS package from a Refinery server
-        #[arg(long)]
-        refinery: Option<String>,
-
-        /// Distribution for Refinery (arch, fedora, ubuntu, debian)
-        #[arg(long)]
-        distro: Option<String>,
-
         /// Skip optional packages (for collection installs)
         #[arg(long)]
         skip_optional: bool,

@@ -3,15 +3,13 @@
 
 mod execute;
 mod prepare;
-mod refinery;
 mod resolve;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
-use refinery::{check_provides_dependencies, cmd_install_from_refinery};
-use resolve::resolve_package_path;
+use resolve::{check_provides_dependencies, resolve_package_path};
 
 use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
@@ -38,6 +36,10 @@ use tracing::{debug, info, warn};
 
 /// Install a package
 ///
+/// Uses the unified resolution flow with per-package routing strategies.
+/// Packages can be resolved from binary repos, on-demand converters, or recipes
+/// based on their routing table entries.
+///
 /// # Arguments
 /// * `package` - Package name or path
 /// * `db_path` - Path to the database
@@ -51,8 +53,6 @@ use tracing::{debug, info, warn};
 /// * `sandbox_mode` - Sandbox mode for scriptlet execution
 /// * `allow_downgrade` - Allow installing older versions
 /// * `convert_to_ccs` - Convert legacy packages to CCS format during install
-/// * `refinery` - URL of Refinery server for pre-converted CCS packages
-/// * `distro` - Distribution for Refinery (arch, fedora, ubuntu, debian)
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_install(
     package: &str,
@@ -67,25 +67,7 @@ pub fn cmd_install(
     sandbox_mode: SandboxMode,
     allow_downgrade: bool,
     convert_to_ccs: bool,
-    refinery: Option<String>,
-    distro: Option<String>,
 ) -> Result<()> {
-    // Handle Refinery installation path
-    if let Some(refinery_url) = refinery {
-        return cmd_install_from_refinery(
-            package,
-            &refinery_url,
-            distro.as_deref(),
-            version.as_deref(),
-            db_path,
-            root,
-            dry_run,
-            no_deps,
-            no_scripts,
-            sandbox_mode,
-        );
-    }
-
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
         let selection = if comp == "all" {

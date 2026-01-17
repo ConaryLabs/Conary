@@ -92,6 +92,14 @@ pub enum Error {
     /// Operation timed out
     #[error("Timeout: {0}")]
     TimeoutError(String),
+
+    /// Package resolution error
+    #[error("Resolution error: {0}")]
+    ResolutionError(String),
+
+    /// Feature not yet implemented
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// Result type alias using Conary's Error type

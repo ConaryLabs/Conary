@@ -1442,3 +1442,58 @@ pub fn migrate_v28(conn: &Connection) -> Result<()> {
     info!("Schema version 28 applied successfully (package redirects)");
     Ok(())
 }
+
+/// Version 29: Package resolution routing table
+///
+/// Transforms repositories from package storage into routing layers that direct
+/// resolution to the appropriate source per-package. This enables:
+/// - Per-package routing (binary cache, Refinery conversion, recipe build, delegation)
+/// - Unified resolution across different package sources
+/// - Tiered caching policies (popular packages cached longer)
+/// - Federation support for label-based delegation
+///
+/// Creates:
+/// - package_resolution: Routing table with per-package resolution strategies
+pub fn migrate_v29(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 29");
+
+    conn.execute_batch(
+        "
+        -- Package resolution routing table: per-package resolution strategies
+        -- When a package is requested, this table determines how to obtain it
+        CREATE TABLE package_resolution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Which repository this routing entry belongs to
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            -- Package name to match
+            name TEXT NOT NULL,
+            -- Version constraint (NULL = any version matches)
+            version TEXT,
+
+            -- Resolution strategies as JSON array of ResolutionStrategy
+            -- Tried in order until one succeeds
+            strategies TEXT NOT NULL,
+            -- Primary strategy for indexing: 'binary', 'refinery', 'recipe', 'delegate', 'legacy'
+            primary_strategy TEXT NOT NULL,
+
+            -- Caching policy
+            -- TTL in seconds (NULL = don't cache, use repository default)
+            cache_ttl INTEGER,
+            -- Higher priority = cached longer, lower priority for eviction
+            cache_priority INTEGER NOT NULL DEFAULT 0,
+
+            UNIQUE(repository_id, name, version)
+        );
+
+        -- Index for fast strategy-based filtering (e.g., find all Refinery packages)
+        CREATE INDEX idx_resolution_strategy ON package_resolution(repository_id, primary_strategy);
+        -- Index for package name lookup within a repository
+        CREATE INDEX idx_resolution_name ON package_resolution(repository_id, name);
+        -- Index for cache priority (for eviction decisions)
+        CREATE INDEX idx_resolution_cache_priority ON package_resolution(cache_priority DESC);
+        ",
+    )?;
+
+    info!("Schema version 29 applied successfully (package resolution routing)");
+    Ok(())
+}
