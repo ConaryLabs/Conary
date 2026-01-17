@@ -47,7 +47,9 @@
 mod format;
 mod kitchen;
 pub mod parser;
+pub mod pkgbuild;
 
 pub use format::{BuildSection, PatchInfo, Recipe, SourceSection};
 pub use kitchen::{Cook, CookResult, Kitchen, KitchenConfig};
 pub use parser::{parse_recipe, parse_recipe_file, validate_recipe};
+pub use pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};

@@ -16,6 +16,7 @@ use tracing::info;
 /// * `jobs` - Number of parallel build jobs (None = auto)
 /// * `keep_builddir` - Keep build directory after completion
 /// * `validate_only` - Only validate the recipe, don't cook
+/// * `isolate` - Run build in container isolation
 pub fn cmd_cook(
     recipe_path: &str,
     output_dir: &str,
@@ -23,6 +24,7 @@ pub fn cmd_cook(
     jobs: Option<u32>,
     keep_builddir: bool,
     validate_only: bool,
+    isolate: bool,
 ) -> Result<()> {
     let recipe_path = Path::new(recipe_path);
     let output_dir = Path::new(output_dir);
@@ -60,6 +62,7 @@ pub fn cmd_cook(
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(source_cache),
         keep_builddir,
+        use_isolation: isolate,
         ..Default::default()
     };
 
@@ -67,7 +70,11 @@ pub fn cmd_cook(
         config.jobs = j;
     }
 
-    println!("Cooking with {} parallel jobs...", config.jobs);
+    if isolate {
+        println!("Cooking with {} parallel jobs (isolated)...", config.jobs);
+    } else {
+        println!("Cooking with {} parallel jobs...", config.jobs);
+    }
 
     // Create kitchen and cook
     let kitchen = Kitchen::new(config);

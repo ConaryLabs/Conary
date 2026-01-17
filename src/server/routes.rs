@@ -1,7 +1,7 @@
 // src/server/routes.rs
 //! Axum router configuration for the Remi server
 
-use crate::server::handlers::{chunks, index, jobs, packages};
+use crate::server::handlers::{chunks, index, jobs, packages, recipes};
 use crate::server::ServerState;
 use axum::{
     routing::{get, post},
@@ -34,6 +34,9 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/chunks/:hash", get(chunks::get_chunk))
         // Conversion job status (for 202 Accepted polling)
         .route("/v1/jobs/:job_id", get(jobs::get_job_status))
+        // Recipe build endpoints
+        .route("/v1/recipes/build", post(recipes::build_recipe))
+        .route("/v1/recipes/:name/:version/download", get(recipes::download_recipe_package))
         // Admin endpoints
         .route("/v1/admin/convert", post(packages::trigger_conversion))
         .route("/v1/admin/cache/stats", get(chunks::cache_stats))

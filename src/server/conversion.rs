@@ -371,4 +371,96 @@ impl ConversionService {
             ccs_path: self.cache_dir.join("packages").join(&ccs_filename),
         })
     }
+
+    /// Build a package from a recipe URL
+    ///
+    /// 1. Fetch the recipe from the URL
+    /// 2. Parse and validate the recipe
+    /// 3. Cook it using the Kitchen (with isolation)
+    /// 4. Store chunks in CAS
+    /// 5. Return the result
+    pub async fn build_from_recipe(&self, recipe_url: &str) -> Result<ServerConversionResult> {
+        use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
+
+        info!("Building package from recipe: {}", recipe_url);
+
+        // Step 1: Fetch recipe content
+        let recipe_content = Self::fetch_url(recipe_url).await?;
+        info!("Fetched recipe ({} bytes)", recipe_content.len());
+
+        // Step 2: Parse and validate recipe
+        let recipe = parse_recipe(&recipe_content)
+            .map_err(|e| anyhow!("Failed to parse recipe: {}", e))?;
+
+        info!("Recipe: {} version {}", recipe.package.name, recipe.package.version);
+
+        // Step 3: Cook the recipe
+        let temp_dir = TempDir::new_in(&self.cache_dir)
+            .context("Failed to create temp directory")?;
+
+        let config = KitchenConfig {
+            source_cache: self.cache_dir.join("sources"),
+            use_isolation: true, // Always use isolation on server
+            ..Default::default()
+        };
+
+        let kitchen = Kitchen::new(config);
+        let cook_result = kitchen.cook(&recipe, temp_dir.path())
+            .map_err(|e| anyhow!("Recipe cooking failed: {}", e))?;
+
+        info!("Cooked: {} ({} warnings)", cook_result.package_path.display(), cook_result.warnings.len());
+
+        // Step 4: Store chunks
+        let ccs_data = tokio::fs::read(&cook_result.package_path).await
+            .context("Failed to read cooked CCS package")?;
+
+        let content_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&ccs_data);
+            format!("{:x}", hasher.finalize())
+        };
+
+        // Copy CCS package to persistent location
+        let ccs_filename = Self::safe_ccs_filename(&recipe.package.name, &recipe.package.version)?;
+        let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
+
+        if let Some(parent) = final_ccs_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(&cook_result.package_path, &final_ccs_path).await?;
+
+        // Extract chunk hashes from the CCS package
+        // For now, we'll just report the package itself
+        let chunk_hashes = vec![content_hash.clone()];
+        let total_size = ccs_data.len() as u64;
+
+        Ok(ServerConversionResult {
+            name: recipe.package.name,
+            version: recipe.package.version,
+            distro: "recipe".to_string(),
+            chunk_hashes,
+            total_size,
+            content_hash,
+            ccs_path: final_ccs_path,
+        })
+    }
+
+    /// Fetch content from a URL
+    async fn fetch_url(url: &str) -> Result<String> {
+        use tokio::process::Command;
+
+        let output = Command::new("curl")
+            .args(["--fail", "--silent", "--show-error", "--location", url])
+            .output()
+            .await
+            .context("Failed to execute curl")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Failed to fetch {}: {}", url, stderr));
+        }
+
+        String::from_utf8(output.stdout)
+            .map_err(|e| anyhow!("Invalid UTF-8 in response: {}", e))
+    }
 }

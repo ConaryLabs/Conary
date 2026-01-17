@@ -14,7 +14,7 @@ use crate::packages::traits::{
 use rpm::Package;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
@@ -270,27 +270,24 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to open RPM file: {}", e)))?;
         let mut reader = BufReader::new(file);
 
-        // Skip the RPM header by parsing it
-        let _ = Package::parse(&mut reader)
-            .map_err(|e| Error::InitError(format!("Failed to parse RPM header: {}", e)))?;
+        // Parse the package - this gives us access to the payload content
+        let pkg = Package::parse(&mut reader)
+            .map_err(|e| Error::InitError(format!("Failed to parse RPM: {}", e)))?;
 
-        // Read first few bytes to detect compression
-        let mut magic = [0u8; 6];
-        let n = reader.read(&mut magic).map_err(|e| Error::InitError(format!("Failed to read payload magic: {}", e)))?;
-
-        if n == 0 {
+        // Get the compressed payload from the Package struct
+        let payload = &pkg.content;
+        if payload.is_empty() {
+            debug!("RPM has empty payload");
             return Ok(Vec::new());
         }
 
-        let format = CompressionFormat::from_magic_bytes(&magic[..n]);
+        // Detect compression from payload magic bytes
+        let format = CompressionFormat::from_magic_bytes(payload);
         debug!("Detected payload compression: {}", format);
 
-        // Reconstruct reader
-        let prefix = std::io::Cursor::new(magic[..n].to_vec());
-        let chain = prefix.chain(reader);
-
-        // Create decompressor
-        let decoder = compression::create_decoder(chain, format)
+        // Create decompressor from the payload
+        let cursor = std::io::Cursor::new(payload.clone());
+        let decoder = compression::create_decoder(cursor, format)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         // Map paths to metadata for O(1) lookup

@@ -5,6 +5,7 @@ mod adopt;
 pub mod ccs;
 mod collection;
 mod config;
+mod convert_pkgbuild;
 mod cook;
 mod derived;
 mod install;
@@ -35,6 +36,7 @@ pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list,
     cmd_derive_override, cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
 };
+pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
 pub use install::cmd_install;
 pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot};

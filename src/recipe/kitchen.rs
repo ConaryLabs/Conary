@@ -9,6 +9,9 @@
 //! - Running build commands in isolation
 //! - Packaging the result as CCS
 
+use crate::ccs::builder::{write_ccs_package, CcsBuilder};
+use crate::ccs::manifest::{CcsManifest, PackageDep};
+use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::hash::{hash_bytes, HashAlgorithm};
 use crate::recipe::format::Recipe;
@@ -32,6 +35,12 @@ pub struct KitchenConfig {
     pub allow_network: bool,
     /// Keep build directory after completion (for debugging)
     pub keep_builddir: bool,
+    /// Enable container isolation for builds (requires root or user namespaces)
+    pub use_isolation: bool,
+    /// Memory limit for isolated builds (bytes, 0 = no limit)
+    pub memory_limit: u64,
+    /// CPU time limit for isolated builds (seconds, 0 = no limit)
+    pub cpu_time_limit: u64,
 }
 
 impl Default for KitchenConfig {
@@ -46,6 +55,9 @@ impl Default for KitchenConfig {
             jobs,
             allow_network: false,
             keep_builddir: false,
+            use_isolation: false, // Off by default, requires root or user namespaces
+            memory_limit: 4 * 1024 * 1024 * 1024, // 4 GB for builds
+            cpu_time_limit: 0, // No CPU time limit (builds can be long)
         }
     }
 }
@@ -372,8 +384,105 @@ impl<'a> Cook<'a> {
         info!("Running {} phase", phase);
         debug!("Command: {}", command);
 
-        // For now, run without full isolation (container isolation requires root)
-        // In production, we'd use the Sandbox from src/container
+        if self.kitchen.config.use_isolation {
+            self.run_build_step_isolated(phase, command, workdir, env)
+        } else {
+            self.run_build_step_direct(phase, command, workdir, env)
+        }
+    }
+
+    /// Run a build step with container isolation
+    fn run_build_step_isolated(
+        &mut self,
+        phase: &str,
+        command: &str,
+        workdir: &Path,
+        env: &[(&str, String)],
+    ) -> Result<()> {
+        // Configure container with build-appropriate settings
+        let mut container_config = ContainerConfig::default();
+
+        // Set resource limits from kitchen config
+        container_config.memory_limit = self.kitchen.config.memory_limit;
+        container_config.cpu_time_limit = self.kitchen.config.cpu_time_limit;
+        container_config.timeout = self.kitchen.config.timeout;
+        container_config.hostname = "conary-build".to_string();
+        container_config.workdir = workdir.to_path_buf();
+
+        // Add build-specific bind mounts
+        container_config.bind_mounts.clear();
+
+        // Essential system directories (read-only)
+        for path in &["/usr", "/lib", "/lib64", "/bin", "/sbin"] {
+            if Path::new(path).exists() {
+                container_config.bind_mounts.push(BindMount::readonly(*path, *path));
+            }
+        }
+
+        // Config files that build tools might need
+        for path in &["/etc/passwd", "/etc/group", "/etc/hosts", "/etc/resolv.conf"] {
+            if Path::new(path).exists() {
+                container_config.bind_mounts.push(BindMount::readonly(*path, *path));
+            }
+        }
+
+        // Source directory (read-only - we shouldn't modify sources)
+        container_config.bind_mounts.push(
+            BindMount::readonly(&self.source_dir, &self.source_dir)
+        );
+
+        // Destination directory (writable - where install goes)
+        container_config.bind_mounts.push(
+            BindMount::writable(&self.dest_dir, &self.dest_dir)
+        );
+
+        // Build directory (writable - for build artifacts)
+        container_config.bind_mounts.push(
+            BindMount::writable(self.build_dir.path(), self.build_dir.path())
+        );
+
+        let mut sandbox = Sandbox::new(container_config);
+
+        // Convert env to the format expected by Sandbox
+        let env_refs: Vec<(&str, &str)> = env.iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+
+        let (exit_code, stdout, stderr) = sandbox.execute(
+            "/bin/sh",
+            &format!("cd {} && {}", workdir.display(), command),
+            &[],
+            &env_refs,
+        )?;
+
+        self.log_line(&format!("=== {} (isolated) ===", phase));
+        if !stdout.is_empty() {
+            self.log.push_str(&stdout);
+            self.log.push('\n');
+        }
+        if !stderr.is_empty() {
+            self.log.push_str(&stderr);
+            self.log.push('\n');
+        }
+
+        if exit_code != 0 {
+            return Err(Error::IoError(format!(
+                "{} phase failed with exit code {}\nstderr: {}",
+                phase, exit_code, stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Run a build step directly (no isolation)
+    fn run_build_step_direct(
+        &mut self,
+        phase: &str,
+        command: &str,
+        workdir: &Path,
+        env: &[(&str, String)],
+    ) -> Result<()> {
         let output = Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -416,38 +525,56 @@ impl<'a> Cook<'a> {
             ));
         }
 
-        // Create CCS package from destdir
-        // For now, just copy the destdir to output (CCS builder integration is TODO)
+        // Create CCS manifest from recipe metadata
+        let mut manifest = CcsManifest::new_minimal(
+            &self.recipe.package.name,
+            &self.recipe.package.version,
+        );
+
+        // Copy over additional metadata from recipe
+        if let Some(desc) = &self.recipe.package.description {
+            manifest.package.description = desc.clone();
+        } else if let Some(summary) = &self.recipe.package.summary {
+            manifest.package.description = summary.clone();
+        }
+        manifest.package.license = self.recipe.package.license.clone();
+        manifest.package.homepage = self.recipe.package.homepage.clone();
+
+        // Add build dependencies as requires (for reference)
+        for dep in &self.recipe.build.requires {
+            manifest.requires.packages.push(PackageDep {
+                name: dep.clone(),
+                version: None,
+            });
+        }
+
+        // Build CCS package from destdir
+        let builder = CcsBuilder::new(manifest, &self.dest_dir);
+        let build_result = builder
+            .build()
+            .map_err(|e| Error::IoError(format!("CCS build failed: {e}")))?;
+
+        // Write CCS package
         let package_name = format!(
             "{}-{}-{}.ccs",
             self.recipe.package.name, self.recipe.package.version, self.recipe.package.release
         );
         let package_path = output_dir.join(&package_name);
 
-        // TODO: Use CCS builder to create proper package
-        // For now, create a tarball
-        let tar_path = output_dir.join(format!("{}.tar.gz", package_name));
+        write_ccs_package(&build_result, &package_path)
+            .map_err(|e| Error::IoError(format!("Failed to write CCS package: {e}")))?;
 
-        let status = Command::new("tar")
-            .args([
-                "-czf",
-                tar_path.to_str().unwrap(),
-                "-C",
-                self.dest_dir.to_str().unwrap(),
-                ".",
-            ])
-            .status()
-            .map_err(|e| Error::IoError(format!("Failed to create package: {}", e)))?;
-
-        if !status.success() {
-            return Err(Error::IoError("Failed to create package tarball".to_string()));
-        }
-
-        // Rename to .ccs for now (proper CCS format is TODO)
-        fs::rename(&tar_path, &package_path)?;
-
-        self.log_line(&format!("Created package: {}", package_path.display()));
-        info!("Cooked: {}", package_path.display());
+        self.log_line(&format!(
+            "Created CCS package: {} ({} files, {} blobs)",
+            package_path.display(),
+            build_result.files.len(),
+            build_result.blobs.len()
+        ));
+        info!(
+            "Cooked: {} ({} files)",
+            package_path.display(),
+            build_result.files.len()
+        );
 
         Ok(package_path)
     }

@@ -95,8 +95,12 @@ fn main() -> Result<()> {
             commands::cmd_unpin(&package_name, &db_path)
         }
 
-        Some(Commands::Cook { recipe, output, source_cache, jobs, keep_builddir, validate_only }) => {
-            commands::cmd_cook(&recipe, &output, &source_cache, jobs, keep_builddir, validate_only)
+        Some(Commands::Cook { recipe, output, source_cache, jobs, keep_builddir, validate_only, isolate }) => {
+            commands::cmd_cook(&recipe, &output, &source_cache, jobs, keep_builddir, validate_only, isolate)
+        }
+
+        Some(Commands::ConvertPkgbuild { pkgbuild, output }) => {
+            commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref())
         }
 
         // =====================================================================

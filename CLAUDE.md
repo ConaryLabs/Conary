@@ -87,7 +87,7 @@ cargo clippy -- -D warnings
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
-| `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format) |
+| `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter) |
 
 ## Database Schema
 
@@ -127,7 +127,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-558 tests total (with --features server).
+684 tests total (with --features server).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)

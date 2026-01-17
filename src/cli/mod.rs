@@ -249,7 +249,7 @@ pub enum Commands {
     /// Cook a package from a recipe (build from source)
     ///
     /// Recipes are TOML files that describe how to build a package from source.
-    /// The cooking process runs in an isolated environment for security.
+    /// The cooking process can run in an isolated container for security.
     Cook {
         /// Path to recipe file (.recipe or .toml)
         recipe: String,
@@ -273,6 +273,22 @@ pub enum Commands {
         /// Validate recipe without cooking
         #[arg(long)]
         validate_only: bool,
+
+        /// Run build in container isolation (requires root or user namespaces)
+        #[arg(long)]
+        isolate: bool,
+    },
+
+    /// Convert an Arch Linux PKGBUILD to a Conary recipe
+    ///
+    /// Reads a PKGBUILD file and outputs the equivalent recipe in TOML format.
+    ConvertPkgbuild {
+        /// Path to PKGBUILD file
+        pkgbuild: String,
+
+        /// Output file for the recipe (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
     },
 
     // =========================================================================
