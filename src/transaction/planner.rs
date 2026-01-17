@@ -224,7 +224,7 @@ impl<'a> TransactionPlanner<'a> {
                         },
                         current_hash: Some(existing.sha256_hash),
                         mode: existing.permissions as u32,
-                        size: existing.size as u64,
+                        size: existing.size.try_into().unwrap_or(0),
                     });
 
                     plan.operations.push(PlannedOperation {
@@ -254,7 +254,7 @@ impl<'a> TransactionPlanner<'a> {
                         },
                         current_hash: Some(old_file.hash.clone()),
                         mode: old_file.mode,
-                        size: old_file.size as u64,
+                        size: old_file.size.try_into().unwrap_or(0),
                     });
 
                     plan.operations.push(PlannedOperation {
@@ -346,7 +346,7 @@ impl<'a> TransactionPlanner<'a> {
                     file_type: FileType::Regular,
                     current_hash: Some(old_file.hash.clone()),
                     mode: old_file.mode,
-                    size: old_file.size as u64,
+                    size: old_file.size.try_into().unwrap_or(0),
                 });
 
                 plan.operations.push(PlannedOperation {

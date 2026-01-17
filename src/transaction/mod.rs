@@ -269,15 +269,39 @@ impl TransactionEngine {
     pub fn begin(&self, description: &str) -> Result<Transaction<'_>> {
         let tx_uuid = Uuid::new_v4().to_string();
 
-        // Acquire exclusive lock
+        // Acquire exclusive lock with retry logic
         let lock_path = self.config.txn_dir.join("conary.lock");
         let lock_file = File::create(&lock_path)?;
-        lock_file.try_lock_exclusive().map_err(|e| {
-            crate::Error::IoError(format!(
-                "Another transaction in progress (lock held): {}",
-                e
-            ))
-        })?;
+
+        // Retry lock acquisition with exponential backoff
+        // Tries: 0ms, 100ms, 200ms, 400ms, 800ms (total ~1.5s wait)
+        const MAX_RETRIES: u32 = 5;
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => {
+                    last_error = None;
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        let delay = std::time::Duration::from_millis(100 * (1 << attempt));
+                        std::thread::sleep(delay);
+                    }
+                }
+            }
+        }
+
+        if let Some(e) = last_error {
+            return Err(crate::Error::IoError(format!(
+                "Failed to acquire transaction lock after {} retries. \
+                 Another transaction may be in progress or a previous transaction \
+                 crashed without releasing the lock. Error: {}",
+                MAX_RETRIES, e
+            )));
+        }
 
         // Create transaction working directory
         let txn_work_dir = self.config.txn_dir.join(&tx_uuid);
