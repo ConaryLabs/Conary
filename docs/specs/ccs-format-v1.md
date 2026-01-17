@@ -245,6 +245,41 @@ version = ">=10.11"
 reason = "MySQL replaced by MariaDB in this distribution"
 ```
 
+#### Groups and System Models
+
+Groups can be created in two ways:
+
+1. **From ccs.toml** - Build directly with `conary ccs build` using `type = "group"`
+2. **From system.toml** - Publish a system model with `conary model publish`
+
+The system model (`/etc/conary/system.toml`) is a declarative specification of desired system state. When published, it becomes a versioned group that other systems can subscribe to:
+
+```toml
+# /etc/conary/system.toml
+[model]
+version = 1
+install = ["nginx", "postgresql", "redis"]
+exclude = ["sendmail"]
+
+[pin]
+openssl = "3.0.*"
+
+[include]
+models = ["group-base-server@corp:production"]
+on_conflict = "local"  # local | remote | error
+```
+
+```bash
+# Publish as a group
+conary model publish --name webserver --version 1.0.0 --repo local
+
+# Other systems can now include it
+# [include]
+# models = ["group-webserver@local:stable"]
+```
+
+The `[include]` directive enables composable system definitions - a base server group can be extended with application-specific packages, and upstream changes propagate automatically.
+
 #### [redirects] Section (Optional)
 
 Declare that this package replaces or obsoletes other packages:
