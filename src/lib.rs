@@ -29,6 +29,7 @@ pub mod label;
 pub mod model;
 pub mod packages;
 pub mod progress;
+pub mod recipe;
 pub mod repository;
 pub mod resolver;
 pub mod scriptlet;
@@ -57,3 +58,4 @@ pub use transaction::{
     RecoveryOutcome, Transaction, TransactionConfig, TransactionEngine, TransactionPlan,
     TransactionState,
 };
+pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};

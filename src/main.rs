@@ -95,6 +95,10 @@ fn main() -> Result<()> {
             commands::cmd_unpin(&package_name, &db_path)
         }
 
+        Some(Commands::Cook { recipe, output, source_cache, jobs, keep_builddir, validate_only }) => {
+            commands::cmd_cook(&recipe, &output, &source_cache, jobs, keep_builddir, validate_only)
+        }
+
         // =====================================================================
         // System Commands
         // =====================================================================

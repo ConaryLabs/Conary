@@ -246,6 +246,35 @@ pub enum Commands {
         db_path: String,
     },
 
+    /// Cook a package from a recipe (build from source)
+    ///
+    /// Recipes are TOML files that describe how to build a package from source.
+    /// The cooking process runs in an isolated environment for security.
+    Cook {
+        /// Path to recipe file (.recipe or .toml)
+        recipe: String,
+
+        /// Output directory for the built package
+        #[arg(short, long, default_value = ".")]
+        output: String,
+
+        /// Source cache directory
+        #[arg(long, default_value = "/var/cache/conary/sources")]
+        source_cache: String,
+
+        /// Number of parallel build jobs (default: auto)
+        #[arg(short, long)]
+        jobs: Option<u32>,
+
+        /// Keep build directory after completion (for debugging)
+        #[arg(long)]
+        keep_builddir: bool,
+
+        /// Validate recipe without cooking
+        #[arg(long)]
+        validate_only: bool,
+    },
+
     // =========================================================================
     // Management Contexts
     // =========================================================================

@@ -55,16 +55,47 @@ use crate::db::models::{
     PackageResolution, PrimaryStrategy, Repository, RepositoryPackage, ResolutionStrategy,
 };
 use crate::error::{Error, Result};
+use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
 use crate::repository::refinery::RefineryClient;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 use crate::repository::{download_package_verified, DownloadOptions};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
 /// Maximum depth for delegate chain resolution
 const MAX_DELEGATE_DEPTH: usize = 10;
+
+/// Fetch content from a URL as a string
+///
+/// Uses curl to download the content. Supports HTTP(S) URLs.
+fn fetch_url_content(url: &str) -> Result<String> {
+    debug!("Fetching content from: {}", url);
+
+    let output = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",  // Follow redirects
+            url,
+        ])
+        .output()
+        .map_err(|e| Error::IoError(format!("Failed to execute curl: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::DownloadError(format!(
+            "Failed to fetch {}: {}",
+            url, stderr
+        )));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| Error::ParseError(format!("Invalid UTF-8 content from {}: {}", url, e)))
+}
 
 /// Options for package resolution
 #[derive(Debug, Clone, Default)]
@@ -431,15 +462,40 @@ impl<'a> PackageResolver<'a> {
     /// Try recipe build strategy
     fn try_recipe(
         &self,
-        _recipe_url: &str,
+        recipe_url: &str,
         _source_urls: &[String],
         _patches: &[String],
-        _options: &ResolutionOptions,
+        options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        // Recipe building is Phase 3 - not yet implemented
-        Err(Error::NotImplemented(
-            "Recipe-based building is not yet implemented".to_string(),
-        ))
+        let temp_dir = TempDir::new()
+            .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
+
+        let output_dir = options
+            .output_dir
+            .as_deref()
+            .unwrap_or(temp_dir.path());
+
+        // Fetch the recipe file
+        info!("Fetching recipe from: {}", recipe_url);
+        let recipe_content = fetch_url_content(recipe_url)?;
+
+        // Parse the recipe
+        let recipe = parse_recipe(&recipe_content)
+            .map_err(|e| Error::ParseError(format!("Failed to parse recipe: {}", e)))?;
+
+        info!("Cooking {} from recipe", recipe.package.name);
+
+        // Configure and run the kitchen
+        let config = KitchenConfig::default();
+        let kitchen = Kitchen::new(config);
+
+        let result = kitchen.cook(&recipe, output_dir)
+            .map_err(|e| Error::IoError(format!("Recipe cooking failed: {}", e)))?;
+
+        Ok(PackageSource::Ccs {
+            path: result.package_path,
+            _temp_dir: Some(temp_dir),
+        })
     }
 
     /// Try delegate strategy (federation)
