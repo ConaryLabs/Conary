@@ -1395,3 +1395,50 @@ pub fn migrate_v27(conn: &Connection) -> Result<()> {
     info!("Schema version 27 applied successfully (chunk access tracking)");
     Ok(())
 }
+
+/// Version 28: Package redirects
+///
+/// Redirects allow package names to be aliased or superseded by other packages.
+/// This enables clean handling of:
+/// - Package renames (old-name → new-name)
+/// - Package obsoletes (deprecated-pkg → replacement-pkg)
+/// - Package merges (pkg-a, pkg-b → combined-pkg)
+/// - Package splits (monolith-pkg → pkg-core, pkg-extras)
+///
+/// Creates:
+/// - redirects: Store redirect mappings from source to target packages
+pub fn migrate_v28(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 28");
+
+    conn.execute_batch(
+        "
+        -- Package redirects: Alias or supersede package names
+        CREATE TABLE redirects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Source package name (the name being redirected FROM)
+            source_name TEXT NOT NULL,
+            -- Source version constraint (NULL = all versions redirect)
+            source_version TEXT,
+            -- Target package name (the name being redirected TO)
+            target_name TEXT NOT NULL,
+            -- Target version constraint (NULL = use latest)
+            target_version TEXT,
+            -- Type of redirect: rename, obsolete, merge, split
+            redirect_type TEXT NOT NULL CHECK(redirect_type IN ('rename', 'obsolete', 'merge', 'split')),
+            -- Optional user-facing message explaining the redirect
+            message TEXT,
+            -- When the redirect was created
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- Unique constraint: one redirect per source name/version combo
+            UNIQUE(source_name, source_version)
+        );
+
+        CREATE INDEX idx_redirects_source ON redirects(source_name);
+        CREATE INDEX idx_redirects_target ON redirects(target_name);
+        CREATE INDEX idx_redirects_type ON redirects(redirect_type);
+        ",
+    )?;
+
+    info!("Schema version 28 applied successfully (package redirects)");
+    Ok(())
+}

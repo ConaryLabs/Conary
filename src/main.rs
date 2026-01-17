@@ -481,6 +481,31 @@ fn main() -> Result<()> {
         }
 
         // =====================================================================
+        // Redirect Commands
+        // =====================================================================
+        Some(Commands::Redirect(redirect_cmd)) => match redirect_cmd {
+            cli::RedirectCommands::List { db_path, r#type, verbose } => {
+                commands::cmd_redirect_list(&db_path, r#type.as_deref(), verbose)
+            }
+
+            cli::RedirectCommands::Add { source, target, db_path, r#type, source_version, target_version, message } => {
+                commands::cmd_redirect_add(&source, &target, &db_path, &r#type, source_version.as_deref(), target_version.as_deref(), message.as_deref())
+            }
+
+            cli::RedirectCommands::Show { source, db_path, version } => {
+                commands::cmd_redirect_show(&source, &db_path, version.as_deref())
+            }
+
+            cli::RedirectCommands::Remove { source, db_path } => {
+                commands::cmd_redirect_remove(&source, &db_path)
+            }
+
+            cli::RedirectCommands::Resolve { package, db_path, version } => {
+                commands::cmd_redirect_resolve(&package, &db_path, version.as_deref())
+            }
+        }
+
+        // =====================================================================
         // System Commands
         // =====================================================================
         Some(Commands::System(sys_cmd)) => match sys_cmd {

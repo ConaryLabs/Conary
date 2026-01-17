@@ -3,6 +3,7 @@
 
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
+use conary::db::models::Redirect;
 use conary::repository::{self, DownloadOptions, PackageSelector, SelectionOptions};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -50,13 +51,44 @@ pub fn resolve_package_path(
     let conn = conary::db::open(db_path)
         .context("Failed to open package database")?;
 
+    // Check for package redirects (renames, obsoletes, etc.)
+    let resolved_name = match Redirect::resolve(&conn, package, version) {
+        Ok(result) => {
+            if result.was_redirected {
+                // Print redirect messages to user
+                for msg in &result.messages {
+                    eprintln!("Note: {}", msg);
+                }
+                eprintln!(
+                    "Note: '{}' has been redirected to '{}'",
+                    package, result.resolved
+                );
+                info!(
+                    "Package '{}' redirected to '{}' (chain: {})",
+                    package,
+                    result.resolved,
+                    result.chain.join(" -> ")
+                );
+                result.resolved
+            } else {
+                package.to_string()
+            }
+        }
+        Err(e) => {
+            // Log the error but continue with original name
+            // (redirect table might not exist on older DBs)
+            info!("Redirect check failed (continuing with original name): {}", e);
+            package.to_string()
+        }
+    };
+
     let options = SelectionOptions {
         version: version.map(String::from),
         repository: repo.map(String::from),
         architecture: None,
     };
 
-    let pkg_with_repo = PackageSelector::find_best_package(&conn, package, &options)
+    let pkg_with_repo = PackageSelector::find_best_package(&conn, &resolved_name, &options)
         .with_context(|| format!("Failed to find package '{}' in repositories", package))?;
 
     info!(

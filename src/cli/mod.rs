@@ -16,6 +16,7 @@
 //! - `ccs` - Native CCS package format commands
 //! - `derive` - Derived package management
 //! - `model` - System model commands
+//! - `redirect` - Package redirect management (renames, obsoletes)
 //! - `system` - System-level commands (init, completions, etc.)
 
 use clap::{Parser, Subcommand};
@@ -28,6 +29,7 @@ mod label;
 mod model;
 mod package;
 mod query;
+mod redirect;
 mod repo;
 mod state;
 mod system;
@@ -41,6 +43,7 @@ pub use label::LabelCommands;
 pub use model::ModelCommands;
 pub use package::PackageCommands;
 pub use query::QueryCommands;
+pub use redirect::RedirectCommands;
 pub use repo::RepoCommands;
 pub use state::StateCommands;
 pub use system::SystemCommands;
@@ -101,6 +104,10 @@ pub enum Commands {
     /// System model management
     #[command(subcommand)]
     Model(ModelCommands),
+
+    /// Package redirect management (renames, obsoletes)
+    #[command(subcommand)]
+    Redirect(RedirectCommands),
 
     /// System-level commands
     #[command(subcommand)]

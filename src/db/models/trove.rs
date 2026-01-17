@@ -7,12 +7,14 @@ use crate::flavor::FlavorSpec;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::str::FromStr;
 
-/// Type of trove (package, component, or collection)
+/// Type of trove (package, component, collection, or redirect)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TroveType {
     Package,
     Component,
     Collection,
+    /// A redirect points to another package (for renames, obsoletes, etc.)
+    Redirect,
 }
 
 impl TroveType {
@@ -21,6 +23,7 @@ impl TroveType {
             TroveType::Package => "package",
             TroveType::Component => "component",
             TroveType::Collection => "collection",
+            TroveType::Redirect => "redirect",
         }
     }
 }
@@ -33,6 +36,7 @@ impl FromStr for TroveType {
             "package" => Ok(TroveType::Package),
             "component" => Ok(TroveType::Component),
             "collection" => Ok(TroveType::Collection),
+            "redirect" => Ok(TroveType::Redirect),
             _ => Err(format!("Invalid trove type: {s}")),
         }
     }
