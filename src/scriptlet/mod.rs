@@ -12,8 +12,19 @@
 //! - Arch .INSTALL function wrapper generation
 //! - Timeout protection (60 seconds)
 //! - stdin nullification to prevent hangs
-//! - Non-root install safety (skip scriptlets if root != "/")
+//! - Target root support: scriptlets can run inside a target filesystem
 //! - Optional container isolation for untrusted scripts
+//!
+//! ## Target Root Support
+//!
+//! When installing to a target root (root != "/"), scriptlets are executed
+//! inside a chroot or container rooted at the target path. This allows:
+//! - Bootstrap: Running package scripts during system construction
+//! - Container images: Populating rootfs without affecting host
+//! - Offline installations: Installing packages into mounted filesystems
+//!
+//! The target root must have a working shell and interpreter for scriptlets
+//! to execute successfully.
 
 use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::db::models::ScriptletEntry;
@@ -163,6 +174,11 @@ impl ScriptletExecutor {
         )
     }
 
+    /// Check if we're operating on the live root
+    fn is_live_root(&self) -> bool {
+        self.root == Path::new("/")
+    }
+
     /// Core execution implementation
     fn execute_impl(
         &self,
@@ -172,17 +188,6 @@ impl ScriptletExecutor {
         _flags: Option<&str>,
         mode: &ExecutionMode,
     ) -> Result<()> {
-        // Safety check: Don't run scriptlets on non-root installs
-        // They would affect the host system, not the target root
-        if self.root != Path::new("/") {
-            warn!(
-                "Skipping {} scriptlet: execution in non-root install paths ({}) is not yet supported",
-                phase,
-                self.root.display()
-            );
-            return Ok(());
-        }
-
         // Prepare script content (Arch needs wrapper generation)
         let script_content = if self.package_format == PackageFormat::Arch {
             self.prepare_arch_wrapper(content, phase)
@@ -212,11 +217,6 @@ impl ScriptletExecutor {
             );
         }
 
-        info!(
-            "Executing {} scriptlet for {} v{} (sandbox: {})",
-            phase, self.package_name, self.package_version, use_sandbox
-        );
-
         // Resolve interpreter (Arch always uses bash for wrapper)
         let interpreter_path = if self.package_format == PackageFormat::Arch {
             "/bin/bash".to_string()
@@ -224,13 +224,31 @@ impl ScriptletExecutor {
             interpreter.to_string()
         };
 
-        // Validate interpreter exists - NO FALLBACK
-        if !Path::new(&interpreter_path).exists() {
-            return Err(Error::ScriptletError(format!(
-                "Interpreter not found: {}. Cannot execute {} scriptlet.",
-                interpreter_path,
-                phase
-            )));
+        // For target root installs, validate interpreter exists IN TARGET
+        // For live root, validate it exists on the host
+        let interpreter_check_path = if self.is_live_root() {
+            PathBuf::from(&interpreter_path)
+        } else {
+            self.root.join(interpreter_path.trim_start_matches('/'))
+        };
+
+        if !interpreter_check_path.exists() {
+            if self.is_live_root() {
+                return Err(Error::ScriptletError(format!(
+                    "Interpreter not found: {}. Cannot execute {} scriptlet.",
+                    interpreter_path, phase
+                )));
+            } else {
+                // For target root, warn but don't fail - the scriptlet might not be needed
+                // or the target might be in early bootstrap (no shell yet)
+                warn!(
+                    "Interpreter {} not found in target root {}, skipping {} scriptlet",
+                    interpreter_path,
+                    self.root.display(),
+                    phase
+                );
+                return Ok(());
+            }
         }
 
         // Prepare arguments based on distro, mode, and phase
@@ -240,56 +258,218 @@ impl ScriptletExecutor {
         let env = [
             ("CONARY_PACKAGE_NAME", self.package_name.as_str()),
             ("CONARY_PACKAGE_VERSION", self.package_version.as_str()),
-            ("CONARY_ROOT", "/"),
+            ("CONARY_ROOT", "/"), // Always "/" from script's perspective
             ("CONARY_PHASE", phase),
         ];
 
-        if use_sandbox {
-            // Execute in sandbox with custom timeout and writable bind mounts
-            let config = ContainerConfig {
-                timeout: self.timeout,
-                bind_mounts: {
-                    let mut mounts = ContainerConfig::default().bind_mounts;
-                    // Add writable access to common scriptlet targets
-                    mounts.push(BindMount::writable("/var", "/var"));
-                    mounts.push(BindMount::writable("/etc", "/etc"));
-                    mounts
-                },
-                ..ContainerConfig::default()
-            };
+        info!(
+            "Executing {} scriptlet for {} v{} (root: {}, sandbox: {})",
+            phase,
+            self.package_name,
+            self.package_version,
+            self.root.display(),
+            use_sandbox
+        );
 
-            let mut sandbox = Sandbox::new(config);
-            let (code, stdout, stderr) = sandbox.execute(
-                &interpreter_path,
-                &script_content,
-                &args,
-                &env,
-            )?;
-
-            // Log output
-            if !stdout.is_empty() {
-                for line in stdout.lines() {
-                    info!("[{}] {}", phase, line);
-                }
-            }
-            if !stderr.is_empty() {
-                for line in stderr.lines() {
-                    warn!("[{}] {}", phase, line);
-                }
-            }
-
-            if code == 0 {
-                info!("{} scriptlet completed successfully (sandboxed)", phase);
-                Ok(())
+        if self.is_live_root() {
+            // Live root execution
+            if use_sandbox {
+                self.execute_sandbox_live(phase, &interpreter_path, &script_content, &args, &env)
             } else {
-                Err(Error::ScriptletError(format!(
-                    "{} scriptlet failed with exit code {} (sandboxed)",
-                    phase, code
-                )))
+                self.execute_direct(phase, &interpreter_path, &script_content, &args, &env)
             }
         } else {
-            // Execute directly (legacy behavior)
-            self.execute_direct(phase, &interpreter_path, &script_content, &args, &env)
+            // Target root execution - always use chroot/container
+            self.execute_in_target(phase, &interpreter_path, &script_content, &args, &env)
+        }
+    }
+
+    /// Execute scriptlet in sandbox on live root
+    fn execute_sandbox_live(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        content: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
+        let config = ContainerConfig {
+            timeout: self.timeout,
+            bind_mounts: {
+                let mut mounts = ContainerConfig::default().bind_mounts;
+                // Add writable access to common scriptlet targets
+                mounts.push(BindMount::writable("/var", "/var"));
+                mounts.push(BindMount::writable("/etc", "/etc"));
+                mounts
+            },
+            ..ContainerConfig::default()
+        };
+
+        let mut sandbox = Sandbox::new(config);
+        let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
+
+        // Log output
+        if !stdout.is_empty() {
+            for line in stdout.lines() {
+                info!("[{}] {}", phase, line);
+            }
+        }
+        if !stderr.is_empty() {
+            for line in stderr.lines() {
+                warn!("[{}] {}", phase, line);
+            }
+        }
+
+        if code == 0 {
+            info!("{} scriptlet completed successfully (sandboxed)", phase);
+            Ok(())
+        } else {
+            Err(Error::ScriptletError(format!(
+                "{} scriptlet failed with exit code {} (sandboxed)",
+                phase, code
+            )))
+        }
+    }
+
+    /// Execute scriptlet inside a target root using chroot/container
+    ///
+    /// This is the key method for bootstrap support. It runs the scriptlet
+    /// inside the target filesystem using either:
+    /// - chroot (requires root, simpler)
+    /// - namespace container (more isolation)
+    fn execute_in_target(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        content: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
+        // Create temp directory for script
+        let temp_dir = TempDir::new()?;
+        let script_path = temp_dir.path().join("scriptlet.sh");
+
+        {
+            let mut file = File::create(&script_path)?;
+            file.write_all(content.as_bytes())?;
+            let mut perms = fs::metadata(&script_path)?.permissions();
+            perms.set_mode(0o700);
+            fs::set_permissions(&script_path, perms)?;
+        }
+
+        // Copy script into target root temporarily
+        let target_script_dir = self.root.join("tmp/conary-scriptlets");
+        fs::create_dir_all(&target_script_dir)?;
+        let target_script_path = target_script_dir.join("scriptlet.sh");
+        fs::copy(&script_path, &target_script_path)?;
+
+        // Build chroot command
+        // Using unshare for isolation when available, falling back to plain chroot
+        let result = if nix::unistd::geteuid().is_root() {
+            self.execute_with_chroot(phase, interpreter, &target_script_path, args, env)
+        } else {
+            // Non-root: try unshare with user namespace, fall back to error
+            warn!(
+                "Target root scriptlet execution requires root privileges or user namespaces"
+            );
+            Err(Error::ScriptletError(format!(
+                "Cannot execute {} scriptlet in target root without root privileges",
+                phase
+            )))
+        };
+
+        // Cleanup
+        let _ = fs::remove_file(&target_script_path);
+        let _ = fs::remove_dir(&target_script_dir);
+
+        result
+    }
+
+    /// Execute scriptlet using chroot (requires root)
+    fn execute_with_chroot(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        script_path: &Path,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
+        // Script path relative to chroot
+        let script_in_chroot = script_path
+            .strip_prefix(&self.root)
+            .unwrap_or(script_path);
+        let script_in_chroot = format!("/{}", script_in_chroot.display());
+
+        debug!(
+            "Executing in chroot {}: {} {} {:?}",
+            self.root.display(),
+            interpreter,
+            script_in_chroot,
+            args
+        );
+
+        // Build command: chroot <root> <interpreter> <script> <args>
+        let mut cmd = Command::new("chroot");
+        cmd.arg(&self.root)
+            .arg(interpreter)
+            .arg(&script_in_chroot)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        for (key, value) in env {
+            cmd.env(*key, *value);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            Error::ScriptletError(format!("Failed to spawn chroot for scriptlet: {}", e))
+        })?;
+
+        // Wait with timeout
+        match child.wait_timeout(self.timeout)? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                if !stdout.is_empty() {
+                    for line in stdout.lines() {
+                        info!("[{}] {}", phase, line);
+                    }
+                }
+                if !stderr.is_empty() {
+                    for line in stderr.lines() {
+                        warn!("[{}] {}", phase, line);
+                    }
+                }
+
+                if status.success() {
+                    info!(
+                        "{} scriptlet completed successfully (chroot: {})",
+                        phase,
+                        self.root.display()
+                    );
+                    Ok(())
+                } else {
+                    let code = status.code().unwrap_or(-1);
+                    Err(Error::ScriptletError(format!(
+                        "{} scriptlet failed with exit code {} (chroot: {})",
+                        phase,
+                        code,
+                        self.root.display()
+                    )))
+                }
+            }
+            None => {
+                let _ = child.kill();
+                Err(Error::ScriptletError(format!(
+                    "{} scriptlet timed out after {} seconds (chroot: {})",
+                    phase,
+                    self.timeout.as_secs(),
+                    self.root.display()
+                )))
+            }
         }
     }
 

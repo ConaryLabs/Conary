@@ -12,6 +12,13 @@
 //! - Deduplication (each trigger runs once per changeset, not per file)
 //! - Timeout protection
 //! - Handler existence checking (skip if handler not found)
+//! - Target root support: triggers can run inside a target filesystem
+//!
+//! ## Target Root Support
+//!
+//! When installing to a target root (root != "/"), triggers are executed
+//! inside a chroot rooted at the target path. This allows triggers to run
+//! correctly during bootstrap or container image creation.
 
 use crate::db::models::{ChangesetTrigger, Trigger, TriggerEngine};
 use crate::error::{Error, Result};
@@ -62,17 +69,13 @@ impl<'a> TriggerExecutor<'a> {
         engine.record_triggers(changeset_id, file_paths)
     }
 
+    /// Check if we're operating on the live root
+    fn is_live_root(&self) -> bool {
+        self.root == Path::new("/")
+    }
+
     /// Execute all pending triggers for a changeset
     pub fn execute_pending(&self, changeset_id: i64) -> Result<TriggerResults> {
-        // Safety check: Don't run triggers on non-root installs
-        if self.root != Path::new("/") {
-            warn!(
-                "Skipping triggers: execution in non-root install paths ({}) is not yet supported",
-                self.root.display()
-            );
-            return Ok(TriggerResults::skipped());
-        }
-
         let engine = TriggerEngine::new(self.conn);
         let triggers = engine.get_execution_order(changeset_id)?;
 
@@ -81,7 +84,12 @@ impl<'a> TriggerExecutor<'a> {
             return Ok(TriggerResults::empty());
         }
 
-        info!("Executing {} trigger(s) for changeset {}", triggers.len(), changeset_id);
+        info!(
+            "Executing {} trigger(s) for changeset {} (root: {})",
+            triggers.len(),
+            changeset_id,
+            self.root.display()
+        );
 
         let mut results = TriggerResults::new();
 
@@ -94,16 +102,30 @@ impl<'a> TriggerExecutor<'a> {
                 continue;
             }
 
-            // Check if handler exists
+            // Check if handler exists (in target root if not live)
             let handler_cmd = trigger.handler.split_whitespace().next().unwrap_or("");
-            if !handler_exists(handler_cmd) {
+            let handler_check = if self.is_live_root() {
+                handler_exists(handler_cmd)
+            } else {
+                handler_exists_in_root(handler_cmd, self.root)
+            };
+
+            if !handler_check {
                 info!(
-                    "  [SKIP] Trigger '{}': handler '{}' not found",
-                    trigger.name, handler_cmd
+                    "  [SKIP] Trigger '{}': handler '{}' not found{}",
+                    trigger.name,
+                    handler_cmd,
+                    if self.is_live_root() {
+                        ""
+                    } else {
+                        " in target root"
+                    }
                 );
                 ChangesetTrigger::mark_completed(
-                    self.conn, changeset_id, trigger_id,
-                    Some(&format!("Skipped: handler '{}' not found", handler_cmd))
+                    self.conn,
+                    changeset_id,
+                    trigger_id,
+                    Some(&format!("Skipped: handler '{}' not found", handler_cmd)),
                 )?;
                 results.skipped += 1;
                 continue;
@@ -112,15 +134,31 @@ impl<'a> TriggerExecutor<'a> {
             info!("  Running trigger: {} ({})", trigger.name, trigger.handler);
             ChangesetTrigger::mark_running(self.conn, changeset_id, trigger_id)?;
 
-            match self.execute_handler(&trigger) {
+            let result = if self.is_live_root() {
+                self.execute_handler(&trigger)
+            } else {
+                self.execute_handler_in_target(&trigger)
+            };
+
+            match result {
                 Ok(output) => {
                     info!("  [OK] Trigger '{}' completed", trigger.name);
-                    ChangesetTrigger::mark_completed(self.conn, changeset_id, trigger_id, output.as_deref())?;
+                    ChangesetTrigger::mark_completed(
+                        self.conn,
+                        changeset_id,
+                        trigger_id,
+                        output.as_deref(),
+                    )?;
                     results.succeeded += 1;
                 }
                 Err(e) => {
                     warn!("  [FAIL] Trigger '{}': {}", trigger.name, e);
-                    ChangesetTrigger::mark_failed(self.conn, changeset_id, trigger_id, &e.to_string())?;
+                    ChangesetTrigger::mark_failed(
+                        self.conn,
+                        changeset_id,
+                        trigger_id,
+                        &e.to_string(),
+                    )?;
                     results.failed += 1;
                     results.errors.push(format!("{}: {}", trigger.name, e));
                 }
@@ -195,6 +233,107 @@ impl<'a> TriggerExecutor<'a> {
             }
         }
     }
+
+    /// Execute a trigger handler inside a target root using chroot
+    ///
+    /// This method runs the handler inside the target filesystem, which is
+    /// necessary for triggers to work correctly during bootstrap or when
+    /// installing to a non-live filesystem.
+    fn execute_handler_in_target(&self, trigger: &Trigger) -> Result<Option<String>> {
+        // Parse handler command
+        let parts: Vec<&str> = trigger.handler.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err(Error::TriggerError("Empty handler command".to_string()));
+        }
+
+        let cmd = parts[0];
+        let args = &parts[1..];
+
+        debug!(
+            "Executing in chroot {}: {} {:?}",
+            self.root.display(),
+            cmd,
+            args
+        );
+
+        // Check if we have root privileges (required for chroot)
+        if !nix::unistd::geteuid().is_root() {
+            warn!(
+                "Target root trigger execution requires root privileges, skipping '{}'",
+                trigger.name
+            );
+            return Ok(Some(
+                "Skipped: target root execution requires root privileges".to_string(),
+            ));
+        }
+
+        // Build chroot command
+        let mut child = Command::new("chroot")
+            .arg(&self.root)
+            .arg(cmd)
+            .args(args)
+            .env("CONARY_TRIGGER_NAME", &trigger.name)
+            .env("CONARY_ROOT", "/") // From inside chroot, root is always /
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                Error::TriggerError(format!(
+                    "Failed to spawn chroot for '{}': {}",
+                    cmd, e
+                ))
+            })?;
+
+        // Wait with timeout
+        match child.wait_timeout(self.timeout)? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                // Log output
+                if !stdout.is_empty() {
+                    for line in stdout.lines() {
+                        debug!("[{}] {}", trigger.name, line);
+                    }
+                }
+                if !stderr.is_empty() {
+                    for line in stderr.lines() {
+                        warn!("[{}] {}", trigger.name, line);
+                    }
+                }
+
+                if status.success() {
+                    let combined = format!("{}{}", stdout, stderr);
+                    Ok(if combined.is_empty() {
+                        None
+                    } else {
+                        Some(combined)
+                    })
+                } else {
+                    let code = status.code().unwrap_or(-1);
+                    Err(Error::TriggerError(format!(
+                        "Handler '{}' failed with exit code {} (chroot: {}): {}",
+                        cmd,
+                        code,
+                        self.root.display(),
+                        stderr.trim()
+                    )))
+                }
+            }
+            None => {
+                // Timeout - kill the process
+                let _ = child.kill();
+                Err(Error::TriggerError(format!(
+                    "Handler '{}' timed out after {} seconds (chroot: {})",
+                    cmd,
+                    self.timeout.as_secs(),
+                    self.root.display()
+                )))
+            }
+        }
+    }
 }
 
 /// Check if a handler command exists on the system
@@ -211,6 +350,36 @@ fn handler_exists(cmd: &str) -> bool {
     // Otherwise, check if it's in PATH
     if let Ok(output) = Command::new("which").arg(cmd).output() {
         return output.status.success();
+    }
+
+    false
+}
+
+/// Check if a handler command exists in a target root
+///
+/// For absolute paths, checks under the target root.
+/// For non-absolute paths, checks common bin directories in target.
+pub fn handler_exists_in_root(cmd: &str, root: &Path) -> bool {
+    if cmd.is_empty() {
+        return false;
+    }
+
+    // If it's an absolute path, check under target root
+    if cmd.starts_with('/') {
+        let target_path = root.join(cmd.trim_start_matches('/'));
+        return target_path.exists();
+    }
+
+    // Otherwise, check common bin directories in target
+    let search_paths = [
+        "usr/bin", "usr/sbin", "bin", "sbin", "usr/local/bin", "usr/local/sbin",
+    ];
+
+    for search_path in &search_paths {
+        let target_path = root.join(search_path).join(cmd);
+        if target_path.exists() {
+            return true;
+        }
     }
 
     false

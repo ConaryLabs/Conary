@@ -44,12 +44,21 @@
 //! - Private `/tmp` and network namespace
 //! - Resource limits (CPU, memory, time)
 
+mod cache;
 mod format;
+mod graph;
 mod kitchen;
 pub mod parser;
 pub mod pkgbuild;
 
-pub use format::{BuildSection, PatchInfo, Recipe, SourceSection};
-pub use kitchen::{Cook, CookResult, Kitchen, KitchenConfig};
+pub use cache::{BuildCache, CacheConfig, CacheEntry, CacheStats, ToolchainInfo};
+pub use format::{
+    BuildSection, BuildStage, CrossSection, PatchInfo, Recipe, SourceSection,
+};
+pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
+pub use kitchen::{
+    Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,
+    StageConfig, StageRegistry,
+};
 pub use parser::{parse_recipe, parse_recipe_file, validate_recipe};
 pub use pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};

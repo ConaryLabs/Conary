@@ -215,6 +215,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
         },
         build: BuildSection {
             requires: build_requires,
+            makedepends: Vec::new(), // PKGBUILD makedepends handled separately
             configure,
             make,
             install,
@@ -226,6 +227,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             script_file: None,
             jobs: None,
         },
+        cross: None, // PKGBUILD doesn't support cross-compilation
         patches: patch_section,
         components: None,
         variables: HashMap::new(),

