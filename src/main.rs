@@ -506,6 +506,14 @@ fn main() -> Result<()> {
                 cli::LabelCommands::Query { label, db_path } => {
                     commands::cmd_label_query(&label, &db_path)
                 }
+
+                cli::LabelCommands::Link { label, repository, unlink, db_path } => {
+                    commands::cmd_label_link(&label, repository.as_deref(), unlink, &db_path)
+                }
+
+                cli::LabelCommands::Delegate { label, target, undelegate, db_path } => {
+                    commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db_path)
+                }
             }
         }
 

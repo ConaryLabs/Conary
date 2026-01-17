@@ -289,3 +289,102 @@ pub fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
 
     Ok(())
 }
+
+/// Link a label to a repository for federation
+pub fn cmd_label_link(
+    label_str: &str,
+    repository: Option<&str>,
+    unlink: bool,
+    db_path: &str,
+) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+
+    // Find the label
+    let mut label = conary::db::models::LabelEntry::find_by_string(&conn, label_str)?
+        .ok_or_else(|| anyhow::anyhow!("Label '{}' not found", label_str))?;
+
+    if unlink {
+        // Remove the repository link
+        if label.repository_id.is_none() {
+            println!("Label '{}' is not linked to any repository", label_str);
+            return Ok(());
+        }
+
+        label.set_repository(&conn, None)?;
+        println!("Unlinked label '{}' from repository", label_str);
+        return Ok(());
+    }
+
+    let repo_name = repository
+        .ok_or_else(|| anyhow::anyhow!("Repository name required (or use --unlink)"))?;
+
+    // Find the repository
+    let repo = conary::db::models::Repository::find_by_name(&conn, repo_name)?
+        .ok_or_else(|| anyhow::anyhow!("Repository '{}' not found", repo_name))?;
+
+    let repo_id = repo.id.ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+
+    // Set the repository link
+    label.set_repository(&conn, Some(repo_id))?;
+
+    println!("Linked label '{}' to repository '{}'", label_str, repo_name);
+    println!("Packages resolved through this label will come from '{}'", repo_name);
+
+    Ok(())
+}
+
+/// Set up delegation from one label to another
+pub fn cmd_label_delegate(
+    label_str: &str,
+    target: Option<&str>,
+    undelegate: bool,
+    db_path: &str,
+) -> Result<()> {
+    let conn = conary::db::open(db_path)?;
+
+    // Find the source label
+    let mut label = conary::db::models::LabelEntry::find_by_string(&conn, label_str)?
+        .ok_or_else(|| anyhow::anyhow!("Label '{}' not found", label_str))?;
+
+    if undelegate {
+        // Remove the delegation
+        if label.delegate_to_label_id.is_none() {
+            println!("Label '{}' does not delegate to another label", label_str);
+            return Ok(());
+        }
+
+        label.set_delegate(&conn, None)?;
+        println!("Removed delegation from label '{}'", label_str);
+        return Ok(());
+    }
+
+    let target_str = target
+        .ok_or_else(|| anyhow::anyhow!("Target label required (or use --undelegate)"))?;
+
+    // Find the target label
+    let target_label = conary::db::models::LabelEntry::find_by_string(&conn, target_str)?
+        .ok_or_else(|| anyhow::anyhow!("Target label '{}' not found", target_str))?;
+
+    let target_id = target_label.id.ok_or_else(|| anyhow::anyhow!("Target label has no ID"))?;
+
+    // Check for self-delegation
+    if label.id == Some(target_id) {
+        return Err(anyhow::anyhow!("Cannot delegate label to itself"));
+    }
+
+    // Check for immediate cycles (target delegates back to source)
+    if target_label.delegate_to_label_id == label.id {
+        return Err(anyhow::anyhow!(
+            "Circular delegation detected: '{}' already delegates to '{}'",
+            target_str, label_str
+        ));
+    }
+
+    // Set the delegation
+    label.set_delegate(&conn, Some(target_id))?;
+
+    println!("Label '{}' now delegates to '{}'", label_str, target_str);
+    println!("Packages resolved through '{}' will be fetched from '{}'", label_str, target_str);
+
+    Ok(())
+}

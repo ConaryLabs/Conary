@@ -22,6 +22,10 @@ pub struct LabelEntry {
     pub description: Option<String>,
     pub parent_label_id: Option<i64>,
     pub created_at: Option<String>,
+    /// Repository to use for package resolution through this label (v30)
+    pub repository_id: Option<i64>,
+    /// Delegate resolution to another label (v30 federation)
+    pub delegate_to_label_id: Option<i64>,
 }
 
 impl LabelEntry {
@@ -35,16 +39,24 @@ impl LabelEntry {
             description: None,
             parent_label_id: None,
             created_at: None,
+            repository_id: None,
+            delegate_to_label_id: None,
         }
     }
 
     /// Create a label entry from a LabelSpec
     pub fn from_spec(spec: &LabelSpec) -> Self {
-        Self::new(
-            spec.repository.clone(),
-            spec.namespace.clone(),
-            spec.tag.clone(),
-        )
+        Self {
+            id: None,
+            repository: spec.repository.clone(),
+            namespace: spec.namespace.clone(),
+            tag: spec.tag.clone(),
+            description: None,
+            parent_label_id: None,
+            created_at: None,
+            repository_id: None,
+            delegate_to_label_id: None,
+        }
     }
 
     /// Convert to a LabelSpec
@@ -87,7 +99,7 @@ impl LabelEntry {
     /// Find a label by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE id = ?1",
         )?;
 
@@ -103,7 +115,7 @@ impl LabelEntry {
         tag: &str,
     ) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE repository = ?1 AND namespace = ?2 AND tag = ?3",
         )?;
 
@@ -121,7 +133,7 @@ impl LabelEntry {
     /// List all labels
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels ORDER BY repository, namespace, tag",
         )?;
 
@@ -135,7 +147,7 @@ impl LabelEntry {
     /// Find labels by repository
     pub fn find_by_repository(conn: &Connection, repository: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE repository = ?1 ORDER BY namespace, tag",
         )?;
 
@@ -149,7 +161,7 @@ impl LabelEntry {
     /// Find labels by repository and namespace (all tags on a branch)
     pub fn find_by_branch(conn: &Connection, repository: &str, namespace: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE repository = ?1 AND namespace = ?2 ORDER BY tag",
         )?;
 
@@ -164,7 +176,7 @@ impl LabelEntry {
     pub fn search(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         let search_pattern = format!("%{pattern}%");
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels
              WHERE repository LIKE ?1 OR namespace LIKE ?1 OR tag LIKE ?1 OR description LIKE ?1
              ORDER BY repository, namespace, tag",
@@ -222,12 +234,90 @@ impl LabelEntry {
         })?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE parent_label_id = ?1 ORDER BY tag",
         )?;
 
         let labels = stmt
             .query_map([id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(labels)
+    }
+
+    // --- Federation support (v30) ---
+
+    /// Set the repository for package resolution through this label
+    pub fn set_repository(&mut self, conn: &Connection, repo_id: Option<i64>) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::InitError("Cannot update label without ID".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE labels SET repository_id = ?1 WHERE id = ?2",
+            params![repo_id, id],
+        )?;
+
+        self.repository_id = repo_id;
+        Ok(())
+    }
+
+    /// Set the delegation target (another label to delegate resolution to)
+    pub fn set_delegate(&mut self, conn: &Connection, delegate_label_id: Option<i64>) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::InitError("Cannot update label without ID".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE labels SET delegate_to_label_id = ?1 WHERE id = ?2",
+            params![delegate_label_id, id],
+        )?;
+
+        self.delegate_to_label_id = delegate_label_id;
+        Ok(())
+    }
+
+    /// Get the delegation target label
+    pub fn delegate_to(&self, conn: &Connection) -> Result<Option<Self>> {
+        if let Some(delegate_id) = self.delegate_to_label_id {
+            Self::find_by_id(conn, delegate_id)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if this label delegates to another
+    pub fn is_delegation(&self) -> bool {
+        self.delegate_to_label_id.is_some()
+    }
+
+    /// Find all labels that delegate to this label
+    pub fn delegating_labels(&self, conn: &Connection) -> Result<Vec<Self>> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::InitError("Cannot find delegating labels without ID".to_string())
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
+             FROM labels WHERE delegate_to_label_id = ?1 ORDER BY repository, namespace, tag",
+        )?;
+
+        let labels = stmt
+            .query_map([id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(labels)
+    }
+
+    /// Find labels by their linked repository
+    pub fn find_by_linked_repository(conn: &Connection, repo_id: i64) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
+             FROM labels WHERE repository_id = ?1 ORDER BY repository, namespace, tag",
+        )?;
+
+        let labels = stmt
+            .query_map([repo_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(labels)
@@ -255,6 +345,7 @@ impl LabelEntry {
     }
 
     /// Convert a database row to a LabelEntry
+    /// Row columns: id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
@@ -264,6 +355,9 @@ impl LabelEntry {
             description: row.get(4)?,
             parent_label_id: row.get(5)?,
             created_at: row.get(6)?,
+            // v30 fields - may not exist in older databases
+            repository_id: row.get(7).unwrap_or(None),
+            delegate_to_label_id: row.get(8).unwrap_or(None),
         })
     }
 }
@@ -514,5 +608,74 @@ mod tests {
         let children = parent.children(&conn).unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "1.1");
+    }
+
+    #[test]
+    fn test_label_delegation() {
+        let (_temp, conn) = create_test_db();
+
+        // Create two labels
+        let mut source = LabelEntry::new("local".to_string(), "devel".to_string(), "main".to_string());
+        let source_id = source.insert(&conn).unwrap();
+
+        let mut target = LabelEntry::new("fedora".to_string(), "f41".to_string(), "stable".to_string());
+        let target_id = target.insert(&conn).unwrap();
+
+        // Set up delegation
+        source.set_delegate(&conn, Some(target_id)).unwrap();
+
+        // Verify delegation is set
+        let found = LabelEntry::find_by_id(&conn, source_id).unwrap().unwrap();
+        assert_eq!(found.delegate_to_label_id, Some(target_id));
+        assert!(found.is_delegation());
+
+        // Get delegation target
+        let delegate = found.delegate_to(&conn).unwrap().unwrap();
+        assert_eq!(delegate.repository, "fedora");
+        assert_eq!(delegate.namespace, "f41");
+
+        // Find labels that delegate to target
+        let delegating = target.delegating_labels(&conn).unwrap();
+        assert_eq!(delegating.len(), 1);
+        assert_eq!(delegating[0].repository, "local");
+
+        // Remove delegation
+        source.set_delegate(&conn, None).unwrap();
+        let found = LabelEntry::find_by_id(&conn, source_id).unwrap().unwrap();
+        assert!(!found.is_delegation());
+    }
+
+    #[test]
+    fn test_label_repository_link() {
+        let (_temp, conn) = create_test_db();
+
+        // Create a repository first
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority)
+             VALUES ('test-repo', 'https://example.com', 1, 10)",
+            [],
+        ).unwrap();
+        let repo_id: i64 = conn.last_insert_rowid();
+
+        // Create a label
+        let mut label = LabelEntry::new("fedora".to_string(), "f41".to_string(), "stable".to_string());
+        let label_id = label.insert(&conn).unwrap();
+
+        // Link label to repository
+        label.set_repository(&conn, Some(repo_id)).unwrap();
+
+        // Verify link is set
+        let found = LabelEntry::find_by_id(&conn, label_id).unwrap().unwrap();
+        assert_eq!(found.repository_id, Some(repo_id));
+
+        // Find labels by repository
+        let labels = LabelEntry::find_by_linked_repository(&conn, repo_id).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].repository, "fedora");
+
+        // Unlink
+        label.set_repository(&conn, None).unwrap();
+        let found = LabelEntry::find_by_id(&conn, label_id).unwrap().unwrap();
+        assert_eq!(found.repository_id, None);
     }
 }

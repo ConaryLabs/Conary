@@ -1497,3 +1497,34 @@ pub fn migrate_v29(conn: &Connection) -> Result<()> {
     info!("Schema version 29 applied successfully (package resolution routing)");
     Ok(())
 }
+
+/// Version 30: Label federation support
+///
+/// Adds columns to the labels table to support:
+/// - Linking labels to repositories (for resolution)
+/// - Delegation chains (label A delegates to label B)
+///
+/// This enables the federation feature where packages can be resolved
+/// through label chains, e.g., `local@devel:main` delegates to `fedora@f41:stable`
+pub fn migrate_v30(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 30");
+
+    conn.execute_batch(
+        "
+        -- Add repository link: which repository to resolve packages from for this label
+        ALTER TABLE labels ADD COLUMN repository_id INTEGER REFERENCES repositories(id);
+
+        -- Add delegation target: when resolving through this label, delegate to another
+        ALTER TABLE labels ADD COLUMN delegate_to_label_id INTEGER REFERENCES labels(id);
+
+        -- Index for finding labels by repository
+        CREATE INDEX idx_labels_repository ON labels(repository_id) WHERE repository_id IS NOT NULL;
+
+        -- Index for finding delegation targets
+        CREATE INDEX idx_labels_delegate ON labels(delegate_to_label_id) WHERE delegate_to_label_id IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 30 applied successfully (label federation)");
+    Ok(())
+}

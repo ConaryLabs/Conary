@@ -102,4 +102,44 @@ pub enum LabelCommands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
+
+    /// Link a label to a repository (for federation)
+    ///
+    /// Packages requested through this label will be resolved from the linked repository.
+    /// Use --unlink to remove the link.
+    Link {
+        /// Label to configure
+        label: String,
+
+        /// Repository to link (use name or URL)
+        repository: Option<String>,
+
+        /// Remove the repository link
+        #[arg(long)]
+        unlink: bool,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Set up label delegation (for federation chains)
+    ///
+    /// When packages are resolved through the source label, resolution will
+    /// delegate to the target label. Use --undelegate to remove.
+    Delegate {
+        /// Source label (the one that delegates)
+        label: String,
+
+        /// Target label to delegate to
+        target: Option<String>,
+
+        /// Remove the delegation
+        #[arg(long)]
+        undelegate: bool,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
 }

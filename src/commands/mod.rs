@@ -40,7 +40,7 @@ pub use install::cmd_install;
 pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot};
 pub use remove::{cmd_autoremove, cmd_remove};
 pub use conary::scriptlet::SandboxMode;
-pub use label::{cmd_label_add, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
+pub use label::{cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
 // cmd_scripts is defined in this module, no need to re-export from submodule
 pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom, cmd_whatbreaks, cmd_whatprovides, QueryOptions};
 pub use redirect::{

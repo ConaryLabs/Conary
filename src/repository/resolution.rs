@@ -52,8 +52,10 @@
 //! ```
 
 use crate::db::models::{
-    PackageResolution, PrimaryStrategy, Repository, RepositoryPackage, ResolutionStrategy,
+    LabelEntry, PackageResolution, PrimaryStrategy, Repository, RepositoryPackage,
+    ResolutionStrategy,
 };
+use crate::label::Label;
 use crate::error::{Error, Result};
 use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
 use crate::repository::refinery::RefineryClient;
@@ -372,7 +374,7 @@ impl<'a> PackageResolver<'a> {
 
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
-                self.try_delegate(label, options, delegate_ctx)
+                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx)
             }
 
             ResolutionStrategy::Legacy {
@@ -499,17 +501,121 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try delegate strategy (federation)
+    ///
+    /// Resolves a package through a label chain. The label can either:
+    /// 1. Delegate to another label (chain continues)
+    /// 2. Link to a repository (resolution happens through that repo)
     fn try_delegate(
         &self,
-        label: &str,
-        _options: &ResolutionOptions,
-        _delegate_ctx: &mut DelegateContext,
+        label_str: &str,
+        package_name: &str,
+        options: &ResolutionOptions,
+        delegate_ctx: &mut DelegateContext,
     ) -> Result<PackageSource> {
-        // Label delegation is Phase 4 - not yet implemented
-        // Would parse label, resolve through label chain
-        Err(Error::NotImplemented(format!(
-            "Label delegation to '{}' is not yet implemented",
-            label
+        info!(
+            "Resolving '{}' through label delegation: {}",
+            package_name, label_str
+        );
+
+        // Parse the label string
+        let label_spec = Label::parse(label_str)
+            .map_err(|e| Error::ParseError(format!("Invalid label '{}': {}", label_str, e)))?;
+
+        // Look up the label in the database
+        let label_entry = LabelEntry::find_by_spec(
+            self.conn,
+            &label_spec.repository,
+            &label_spec.namespace,
+            &label_spec.tag,
+        )?
+        .ok_or_else(|| {
+            Error::NotFound(format!("Label '{}' not found in database", label_str))
+        })?;
+
+        // Check for delegation chain
+        if let Some(delegate_to_id) = label_entry.delegate_to_label_id {
+            // Get the target label
+            let target_label = LabelEntry::find_by_id(self.conn, delegate_to_id)?
+                .ok_or_else(|| {
+                    Error::NotFound(format!(
+                        "Delegation target label (id={}) not found",
+                        delegate_to_id
+                    ))
+                })?;
+
+            let target_label_str = target_label.to_string();
+            debug!(
+                "Label {} delegates to {} for package {}",
+                label_str, target_label_str, package_name
+            );
+
+            // Recursively resolve through the target label
+            // DelegateContext tracks depth and visited labels for cycle detection
+            return self.try_delegate(&target_label_str, package_name, options, delegate_ctx);
+        }
+
+        // Check for repository link
+        if let Some(repo_id) = label_entry.repository_id {
+            debug!(
+                "Label {} links to repository id={} for package {}",
+                label_str, repo_id, package_name
+            );
+
+            // Get the repository
+            let repo = Repository::find_by_id(self.conn, repo_id)?
+                .ok_or_else(|| {
+                    Error::NotFound(format!(
+                        "Repository (id={}) linked from label '{}' not found",
+                        repo_id, label_str
+                    ))
+                })?;
+
+            info!(
+                "Resolving '{}' through repository '{}' via label '{}'",
+                package_name, repo.name, label_str
+            );
+
+            // Create options that force resolution through this specific repository
+            let mut repo_options = options.clone();
+            repo_options.repository = Some(repo.name.clone());
+
+            // Use the package selector to find the package in this repository
+            let pkg_with_repo = PackageSelector::find_best_package(
+                self.conn,
+                package_name,
+                &repo_options.to_selection_options(),
+            )?;
+
+            // Get strategies for this package in the target repository
+            let strategies = self.get_strategies_or_legacy(&pkg_with_repo, &repo_options)?;
+
+            // Try strategies (but skip Delegate to avoid infinite loops - we're already delegating)
+            for strategy in &strategies {
+                if matches!(strategy, ResolutionStrategy::Delegate { .. }) {
+                    debug!("Skipping nested delegation to prevent loops");
+                    continue;
+                }
+
+                match self.try_strategy(strategy, &pkg_with_repo, &repo_options, delegate_ctx) {
+                    Ok(source) => return Ok(source),
+                    Err(e) => {
+                        debug!("Strategy failed in delegated repository: {}", e);
+                        continue;
+                    }
+                }
+            }
+
+            return Err(Error::ResolutionError(format!(
+                "Package '{}' not resolvable through label '{}' (repository '{}')",
+                package_name, label_str, repo.name
+            )));
+        }
+
+        // Label has neither delegation nor repository link
+        Err(Error::ResolutionError(format!(
+            "Label '{}' has no delegation target and no linked repository. \
+             Configure with 'conary label-link' or 'conary label-delegate'.",
+            label_str
         )))
     }
 
