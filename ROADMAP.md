@@ -8,7 +8,7 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v28)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v30)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
 - [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v28)
@@ -227,7 +227,9 @@ Inspired by original Conary's label concept for tracking package provenance.
 - [COMPLETE] **Label Path** - Configure search order for labels (priority-based ordering)
 - [COMPLETE] **Label Tracking** - Track which label a package came from (`label_id` on troves, schema v20)
 - [COMPLETE] **Branch History** - Track parent labels via `parent_label_id` relationships
-- [COMPLETE] **CLI Commands** - label-list, label-add, label-remove, label-path, label-show, label-set, label-query
+- [COMPLETE] **Label Federation** - Labels can delegate to other labels or link to repositories (schema v30)
+- [COMPLETE] **Delegation Chains** - Resolve packages through label chains with cycle detection
+- [COMPLETE] **CLI Commands** - label-list, label-add, label-remove, label-path, label-show, label-set, label-query, label-link, label-delegate
 
 ### Enhanced Queries
 
@@ -332,13 +334,23 @@ Move from file-level to chunk-level for massive efficiency gains. CDC gives "del
 
 Design principle: Don't embed P2P in core. Build clean fetch API, let plugins add P2P later. Enterprise blocks P2P anyway.
 
+### Recipe System (Cooking)
+
+Building packages from source using recipe files, following original Conary's culinary metaphors.
+
+- [COMPLETE] **Recipe Parser** - Parse TOML recipe files with package, source, build, and patches sections
+- [COMPLETE] **Kitchen Abstraction** - Isolated build environment for cooking packages
+- [COMPLETE] **Variable Substitution** - Support %(version)s, %(destdir)s, %(builddir)s, etc.
+- [COMPLETE] **Recipe Validation** - Validate recipes with warnings for common issues
+- [COMPLETE] **Cook Command** - `conary cook <recipe>` to build packages from source
+- [COMPLETE] **Recipe Resolution Strategy** - Resolver can fetch and cook recipes automatically
+- [ ] **Source Components** - Store :source troves in repository
+- [ ] **Factory System** - Templates for common package types
+
 ### Advanced Package Building
 
 Building on the CCS format with more sophisticated features.
 
-- [ ] **Recipe Parser** - Parse Conary-style recipe files
-- [ ] **Source Components** - Store :source troves in repository
-- [ ] **Factory System** - Templates for common package types
 - [ ] **Derived Packages** - Create packages based on existing ones
 
 ### Repository Server
@@ -421,6 +433,8 @@ These features from original Conary are not planned for implementation:
 | v26 | Derived packages for model-apply operations |
 | v27 | Refinery chunk access tracking for LRU cache |
 | v28 | Package redirects (renames, obsoletes), SBOM export, CAS garbage collection, dev shells |
+| v29 | Per-package routing (package_resolution table), unified resolution strategies |
+| v30 | Label federation (repository_id, delegate_to_label_id), recipe cooking system |
 
 ---
 

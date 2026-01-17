@@ -87,10 +87,11 @@ cargo clippy -- -D warnings
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute, refinery submodules) |
+| `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format) |
 
 ## Database Schema
 
-Currently v28. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects.
+Currently v30. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -113,6 +114,8 @@ Key schema additions:
 - v26: `derived_packages` table - packages derived from base packages via model-apply
 - v27: `chunk_access` table - LRU cache tracking for Refinery chunk store
 - v28: `redirects` table - package redirect/rename/obsolete tracking
+- v29: `package_resolution` table - per-package routing strategies (binary, refinery, recipe, delegate)
+- v30: `repository_id`, `delegate_to_label_id` columns on labels - label federation support
 
 ## Testing
 

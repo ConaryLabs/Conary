@@ -85,6 +85,42 @@ conary ccs sign pkg.ccs        # Ed25519 signatures
 conary ccs export pkg --format oci  # Export to container
 ```
 
+### Recipe System (Build from Source)
+Cook packages from source using recipe files. Like the original Conary, uses culinary metaphors.
+
+```bash
+conary cook nginx.recipe.toml              # Build from recipe
+conary cook myapp.recipe --validate-only   # Check recipe syntax
+```
+
+Recipe format:
+```toml
+[package]
+name = "nginx"
+version = "1.24.0"
+
+[source]
+archive = "https://nginx.org/download/nginx-%(version)s.tar.gz"
+checksum = "sha256:abc123..."
+
+[build]
+requires = ["openssl:devel", "pcre:devel"]
+configure = "./configure --prefix=/usr"
+make = "make -j$(nproc)"
+install = "make install DESTDIR=%(destdir)s"
+```
+
+### Label Federation
+Route packages through label chains. Local branches can delegate to upstream sources.
+
+```bash
+conary query label add local@devel:main
+conary query label add fedora@f43:stable
+conary query label link fedora@f43:stable fedora-43
+conary query label delegate local@devel:main fedora@f43:stable
+# Now packages resolved via local@devel:main come from fedora-43
+```
+
 ### Dev Shells (Nix-style)
 Temporary environments without permanent install.
 
