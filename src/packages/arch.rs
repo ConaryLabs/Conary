@@ -7,7 +7,7 @@
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::common::PackageMetadata;
+use crate::packages::common::{PackageMetadata, MAX_EXTRACTION_FILE_SIZE};
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -475,6 +475,15 @@ impl PackageFormat for ArchPackage {
 
             let size = entry.header().size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
+
+            // Check file size to prevent memory exhaustion
+            if size > MAX_EXTRACTION_FILE_SIZE {
+                warn!(
+                    "Skipping oversized file '{}' ({} bytes) in Arch package - exceeds {} byte limit",
+                    entry_path, size, MAX_EXTRACTION_FILE_SIZE
+                );
+                continue;
+            }
 
             let mode = entry.header().mode()
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
