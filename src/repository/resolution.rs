@@ -58,7 +58,7 @@ use crate::db::models::{
 use crate::label::Label;
 use crate::error::{Error, Result};
 use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
-use crate::repository::refinery::RefineryClient;
+use crate::repository::remi::RemiClient;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 use crate::repository::{download_package_verified, DownloadOptions};
 use rusqlite::Connection;
@@ -136,7 +136,7 @@ pub enum PackageSource {
         /// Temp directory that must stay alive until installation completes
         _temp_dir: Option<TempDir>,
     },
-    /// CCS package from Refinery
+    /// CCS package from Remi
     Ccs {
         path: PathBuf,
         _temp_dir: Option<TempDir>,
@@ -355,13 +355,13 @@ impl<'a> PackageResolver<'a> {
                 self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options)
             }
 
-            ResolutionStrategy::Refinery {
+            ResolutionStrategy::Remi {
                 endpoint,
                 distro,
                 source_name,
             } => {
                 let pkg_name = source_name.as_deref().unwrap_or(&pkg_with_repo.package.name);
-                self.try_refinery(endpoint, distro, pkg_name, options)
+                self.try_remi(endpoint, distro, pkg_name, options)
             }
 
             ResolutionStrategy::Recipe {
@@ -436,8 +436,8 @@ impl<'a> PackageResolver<'a> {
         })
     }
 
-    /// Try Refinery conversion strategy
-    fn try_refinery(
+    /// Try Remi conversion strategy
+    fn try_remi(
         &self,
         endpoint: &str,
         distro: &str,
@@ -452,7 +452,7 @@ impl<'a> PackageResolver<'a> {
             .as_deref()
             .unwrap_or(temp_dir.path());
 
-        let client = RefineryClient::new(endpoint)?;
+        let client = RemiClient::new(endpoint)?;
         let path = client.fetch_package(distro, name, options.version.as_deref(), output_dir)?;
 
         Ok(PackageSource::Ccs {
@@ -778,10 +778,10 @@ mod tests {
         let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
 
         // Create routing entry
-        let mut resolution = PackageResolution::refinery(
+        let mut resolution = PackageResolution::remi(
             repo_id,
             "nginx".to_string(),
-            "https://refinery.example.com".to_string(),
+            "https://remi.example.com".to_string(),
             "fedora".to_string(),
         );
         resolution.insert(&conn).unwrap();
@@ -799,7 +799,7 @@ mod tests {
         let strategies = resolver.get_strategies_or_legacy(&pkg_with_repo, &options).unwrap();
 
         assert_eq!(strategies.len(), 1);
-        assert!(matches!(strategies[0], ResolutionStrategy::Refinery { .. }));
+        assert!(matches!(strategies[0], ResolutionStrategy::Remi { .. }));
     }
 
     #[test]

@@ -30,7 +30,7 @@ Then `recall("architecture")` and `recall("progress")` before making changes.
 
 ```bash
 cargo build --release                    # Client-only (default)
-cargo build --release --features server  # With Refinery server
+cargo build --release --features server  # With Remi server
 cargo test
 cargo clippy -- -D warnings
 ```
@@ -83,10 +83,10 @@ cargo clippy -- -D warnings
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
 | `src/model/` | System Model - declarative OS state (parser, diff, state capture, remote includes, publishing) |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
-| `src/server/` | Refinery server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
+| `src/server/` | Remi server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
 | `src/commands/` | Command implementations |
-| `src/commands/install/` | Package installation (resolve, prepare, execute, refinery submodules) |
+| `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
 | `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format) |
 
 ## Database Schema
@@ -112,9 +112,9 @@ Key schema additions:
 - v24: `content_url` column on repositories - reference mirrors for split metadata/content
 - v25: `converted_packages` table - track legacy→CCS conversions with fidelity
 - v26: `derived_packages` table - packages derived from base packages via model-apply
-- v27: `chunk_access` table - LRU cache tracking for Refinery chunk store
+- v27: `chunk_access` table - LRU cache tracking for Remi chunk store
 - v28: `redirects` table - package redirect/rename/obsolete tracking
-- v29: `package_resolution` table - per-package routing strategies (binary, refinery, recipe, delegate)
+- v29: `package_resolution` table - per-package routing strategies (binary, remi, recipe, delegate)
 - v30: `repository_id`, `delegate_to_label_id` columns on labels - label federation support
 
 ## Testing

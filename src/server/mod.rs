@@ -1,5 +1,5 @@
 // src/server/mod.rs
-//! Conary Refinery Server - On-demand CCS conversion proxy
+//! Conary Remi Server - On-demand CCS conversion proxy
 //!
 //! This module provides an HTTP server that:
 //! - Serves repository metadata (proxied through Cloudflare)
@@ -91,9 +91,9 @@ impl ServerState {
     }
 }
 
-/// Start the Refinery server
+/// Start the Remi server
 pub async fn run_server(config: ServerConfig) -> Result<()> {
-    tracing::info!("Starting Conary Refinery server on {}", config.bind_addr);
+    tracing::info!("Starting Conary Remi server on {}", config.bind_addr);
     tracing::info!("Database: {:?}", config.db_path);
     tracing::info!("Chunk store: {:?}", config.chunk_dir);
     tracing::info!("Max concurrent conversions: {}", config.max_concurrent_conversions);
@@ -108,7 +108,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     });
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    tracing::info!("Refinery is ready to serve");
+    tracing::info!("Remi is ready to serve");
 
     axum::serve(listener, app).await?;
     Ok(())

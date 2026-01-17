@@ -1447,7 +1447,7 @@ pub fn migrate_v28(conn: &Connection) -> Result<()> {
 ///
 /// Transforms repositories from package storage into routing layers that direct
 /// resolution to the appropriate source per-package. This enables:
-/// - Per-package routing (binary cache, Refinery conversion, recipe build, delegation)
+/// - Per-package routing (binary cache, Remi conversion, recipe build, delegation)
 /// - Unified resolution across different package sources
 /// - Tiered caching policies (popular packages cached longer)
 /// - Federation support for label-based delegation
@@ -1473,7 +1473,7 @@ pub fn migrate_v29(conn: &Connection) -> Result<()> {
             -- Resolution strategies as JSON array of ResolutionStrategy
             -- Tried in order until one succeeds
             strategies TEXT NOT NULL,
-            -- Primary strategy for indexing: 'binary', 'refinery', 'recipe', 'delegate', 'legacy'
+            -- Primary strategy for indexing: 'binary', 'remi', 'recipe', 'delegate', 'legacy'
             primary_strategy TEXT NOT NULL,
 
             -- Caching policy
@@ -1485,7 +1485,7 @@ pub fn migrate_v29(conn: &Connection) -> Result<()> {
             UNIQUE(repository_id, name, version)
         );
 
-        -- Index for fast strategy-based filtering (e.g., find all Refinery packages)
+        -- Index for fast strategy-based filtering (e.g., find all Remi packages)
         CREATE INDEX idx_resolution_strategy ON package_resolution(repository_id, primary_strategy);
         -- Index for package name lookup within a repository
         CREATE INDEX idx_resolution_name ON package_resolution(repository_id, name);

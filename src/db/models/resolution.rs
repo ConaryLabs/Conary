@@ -9,7 +9,7 @@
 //!
 //! Each package can have multiple resolution strategies tried in order:
 //! - **Binary**: Pre-built package at a URL (with optional delta support)
-//! - **Refinery**: Convert from distro package on-demand
+//! - **Remi**: Convert from distro package on-demand
 //! - **Recipe**: Build from source using recipe instructions
 //! - **Delegate**: Federate to another label/repository
 //! - **Legacy**: Use existing repository_packages entry (backwards compat)
@@ -62,9 +62,9 @@ pub enum ResolutionStrategy {
         delta_base: Option<String>,
     },
 
-    /// Convert from distro package via Refinery proxy
-    Refinery {
-        /// Refinery server endpoint
+    /// Convert from distro package via Remi proxy
+    Remi {
+        /// Remi server endpoint
         endpoint: String,
         /// Source distribution (fedora, arch, debian, etc.)
         distro: String,
@@ -100,12 +100,12 @@ pub enum ResolutionStrategy {
 /// Primary strategy type for indexing
 ///
 /// This is a denormalized column for fast filtering queries
-/// (e.g., "find all Refinery packages in this repo").
+/// (e.g., "find all Remi packages in this repo").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrimaryStrategy {
     Binary,
-    Refinery,
+    Remi,
     Recipe,
     Delegate,
     Legacy,
@@ -116,7 +116,7 @@ impl PrimaryStrategy {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Binary => "binary",
-            Self::Refinery => "refinery",
+            Self::Remi => "remi",
             Self::Recipe => "recipe",
             Self::Delegate => "delegate",
             Self::Legacy => "legacy",
@@ -127,7 +127,7 @@ impl PrimaryStrategy {
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "binary" => Ok(Self::Binary),
-            "refinery" => Ok(Self::Refinery),
+            "remi" => Ok(Self::Remi),
             "recipe" => Ok(Self::Recipe),
             "delegate" => Ok(Self::Delegate),
             "legacy" => Ok(Self::Legacy),
@@ -140,7 +140,7 @@ impl From<&ResolutionStrategy> for PrimaryStrategy {
     fn from(strategy: &ResolutionStrategy) -> Self {
         match strategy {
             ResolutionStrategy::Binary { .. } => Self::Binary,
-            ResolutionStrategy::Refinery { .. } => Self::Refinery,
+            ResolutionStrategy::Remi { .. } => Self::Remi,
             ResolutionStrategy::Recipe { .. } => Self::Recipe,
             ResolutionStrategy::Delegate { .. } => Self::Delegate,
             ResolutionStrategy::Legacy { .. } => Self::Legacy,
@@ -212,8 +212,8 @@ impl PackageResolution {
         )
     }
 
-    /// Create a Refinery resolution entry
-    pub fn refinery(
+    /// Create a Remi resolution entry
+    pub fn remi(
         repository_id: i64,
         name: String,
         endpoint: String,
@@ -222,7 +222,7 @@ impl PackageResolution {
         Self::new(
             repository_id,
             name,
-            vec![ResolutionStrategy::Refinery {
+            vec![ResolutionStrategy::Remi {
                 endpoint,
                 distro,
                 source_name: None,
@@ -484,18 +484,18 @@ mod tests {
     }
 
     #[test]
-    fn test_resolution_strategy_refinery() {
-        let refinery = ResolutionStrategy::Refinery {
-            endpoint: "https://refinery.example.com".to_string(),
+    fn test_resolution_strategy_remi() {
+        let remi = ResolutionStrategy::Remi {
+            endpoint: "https://remi.example.com".to_string(),
             distro: "fedora".to_string(),
             source_name: Some("nginx-mainline".to_string()),
         };
 
-        let json = serde_json::to_string(&refinery).unwrap();
-        assert!(json.contains("\"type\":\"refinery\""));
+        let json = serde_json::to_string(&remi).unwrap();
+        assert!(json.contains("\"type\":\"remi\""));
 
         let parsed: ResolutionStrategy = serde_json::from_str(&json).unwrap();
-        assert_eq!(refinery, parsed);
+        assert_eq!(remi, parsed);
     }
 
     #[test]
@@ -597,24 +597,24 @@ mod tests {
         );
         binary.insert(&conn).unwrap();
 
-        // Create refinery entry
-        let mut refinery = PackageResolution::refinery(
+        // Create remi entry
+        let mut remi = PackageResolution::remi(
             repo_id,
             "obscure-tool".to_string(),
-            "https://refinery.example.com".to_string(),
+            "https://remi.example.com".to_string(),
             "fedora".to_string(),
         );
-        refinery.insert(&conn).unwrap();
+        remi.insert(&conn).unwrap();
 
         // Find only binary entries
         let binaries = PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Binary).unwrap();
         assert_eq!(binaries.len(), 1);
         assert_eq!(binaries[0].name, "nginx");
 
-        // Find only refinery entries
-        let refineries = PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Refinery).unwrap();
-        assert_eq!(refineries.len(), 1);
-        assert_eq!(refineries[0].name, "obscure-tool");
+        // Find only remi entries
+        let remis = PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Remi).unwrap();
+        assert_eq!(remis.len(), 1);
+        assert_eq!(remis[0].name, "obscure-tool");
     }
 
     #[test]
@@ -626,12 +626,12 @@ mod tests {
         };
         assert_eq!(PrimaryStrategy::from(&binary), PrimaryStrategy::Binary);
 
-        let refinery = ResolutionStrategy::Refinery {
+        let remi = ResolutionStrategy::Remi {
             endpoint: "ep".to_string(),
             distro: "fedora".to_string(),
             source_name: None,
         };
-        assert_eq!(PrimaryStrategy::from(&refinery), PrimaryStrategy::Refinery);
+        assert_eq!(PrimaryStrategy::from(&remi), PrimaryStrategy::Remi);
 
         let recipe = ResolutionStrategy::Recipe {
             recipe_url: "url".to_string(),
@@ -678,9 +678,9 @@ mod tests {
                     checksum: "sha256:cache".to_string(),
                     delta_base: None,
                 },
-                // Fall back to Refinery
-                ResolutionStrategy::Refinery {
-                    endpoint: "https://refinery.example.com".to_string(),
+                // Fall back to Remi
+                ResolutionStrategy::Remi {
+                    endpoint: "https://remi.example.com".to_string(),
                     distro: "arch".to_string(),
                     source_name: None,
                 },
@@ -696,6 +696,6 @@ mod tests {
 
         // Verify strategies are preserved in order
         assert!(matches!(found.strategies[0], ResolutionStrategy::Binary { .. }));
-        assert!(matches!(found.strategies[1], ResolutionStrategy::Refinery { .. }));
+        assert!(matches!(found.strategies[1], ResolutionStrategy::Remi { .. }));
     }
 }

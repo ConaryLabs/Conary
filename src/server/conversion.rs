@@ -1,5 +1,5 @@
 // src/server/conversion.rs
-//! Package conversion service for the Refinery server
+//! Package conversion service for the Remi server
 //!
 //! Downloads legacy packages from upstream repositories and converts them
 //! to CCS format, storing chunks in the CAS.
@@ -38,7 +38,7 @@ pub struct ServerConversionResult {
     pub ccs_path: PathBuf,
 }
 
-/// Conversion service for the Refinery
+/// Conversion service for Remi
 pub struct ConversionService {
     /// Path to chunk storage
     chunk_dir: PathBuf,

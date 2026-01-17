@@ -1,5 +1,5 @@
 // src/server/routes.rs
-//! Axum router configuration for the Refinery server
+//! Axum router configuration for the Remi server
 
 use crate::server::handlers::{chunks, index, jobs, packages};
 use crate::server::ServerState;

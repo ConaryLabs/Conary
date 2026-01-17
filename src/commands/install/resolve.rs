@@ -11,7 +11,7 @@
 //! 3. Use unified resolver to:
 //!    a. Select best repository (priority/version logic)
 //!    b. Look up routing strategies in `package_resolution` table
-//!    c. Try strategies in order (binary, refinery, recipe, delegate, legacy)
+//!    c. Try strategies in order (binary, remi, recipe, delegate, legacy)
 //! 4. Return local path to downloaded/built package
 
 use crate::commands::progress::{InstallPhase, InstallProgress};
@@ -53,8 +53,8 @@ pub enum ResolvedSourceType {
     LocalFile,
     /// Downloaded binary from repository
     Binary,
-    /// Converted via Refinery
-    Refinery,
+    /// Converted via Remi
+    Remi,
     /// Built from recipe
     Recipe,
     /// Resolved through label delegation
@@ -72,7 +72,7 @@ impl ResolvedSourceType {
         match self {
             Self::LocalFile => "local file",
             Self::Binary => "binary package",
-            Self::Refinery => "Refinery conversion",
+            Self::Remi => "Remi conversion",
             Self::Recipe => "recipe build",
             Self::Delegate => "delegated resolution",
             Self::Legacy => "repository",
@@ -188,12 +188,12 @@ fn convert_source_to_resolved(
         }
 
         PackageSource::Ccs { path, _temp_dir } => {
-            info!("Resolved {} from Refinery: {}", package, path.display());
+            info!("Resolved {} from Remi: {}", package, path.display());
             progress.set_phase(package, InstallPhase::Downloading);
             Ok(ResolvedPackage {
                 path,
                 _temp_dir,
-                source_type: ResolvedSourceType::Refinery,
+                source_type: ResolvedSourceType::Remi,
             })
         }
 
@@ -269,7 +269,7 @@ mod tests {
     fn test_resolved_source_type_description() {
         assert_eq!(ResolvedSourceType::LocalFile.description(), "local file");
         assert_eq!(ResolvedSourceType::Binary.description(), "binary package");
-        assert_eq!(ResolvedSourceType::Refinery.description(), "Refinery conversion");
+        assert_eq!(ResolvedSourceType::Remi.description(), "Remi conversion");
         assert_eq!(ResolvedSourceType::Recipe.description(), "recipe build");
         assert_eq!(ResolvedSourceType::Legacy.description(), "repository");
     }

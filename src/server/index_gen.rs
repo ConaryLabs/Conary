@@ -1,5 +1,5 @@
 // src/server/index_gen.rs
-//! Repository index generation for the Refinery
+//! Repository index generation for Remi
 //!
 //! Generates a JSON index of all converted packages for a distribution.
 //! The index is used by clients to discover available packages without

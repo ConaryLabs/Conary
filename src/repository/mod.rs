@@ -15,7 +15,7 @@ mod dependencies;
 mod download;
 mod management;
 mod metadata;
-pub mod refinery;
+pub mod remi;
 pub mod registry;
 pub mod resolution;
 mod sync;
@@ -44,12 +44,12 @@ pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
 };
-pub use refinery::{RefineryClient, PackageManifest};
+pub use remi::{RemiClient, PackageManifest};
 pub use resolution::{
     build_gpg_options, resolve_package, PackageResolver, PackageSource, ResolutionOptions,
 };
 #[cfg(feature = "server")]
-pub use refinery::AsyncRefineryClient;
+pub use remi::AsyncRemiClient;
 
 #[cfg(feature = "server")]
 pub use chunk_fetcher::{

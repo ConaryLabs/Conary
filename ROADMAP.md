@@ -313,12 +313,12 @@ Move from file-level to chunk-level for massive efficiency gains. CDC gives "del
 - [x] **`--chunked` Flag** - Build CDC-enabled packages with `ccs-build --chunked`
 - [x] **Chunk Statistics** - Build summary shows chunked files, dedup savings
 
-**Phase 2: Refinery (On-Demand Conversion Proxy)** [COMPLETE]
+**Phase 2: Remi (On-Demand Conversion Proxy)** [COMPLETE]
 - [x] **Server Module** - Feature-gated (`--features server`) Axum HTTP server
 - [x] **On-Demand Conversion** - Convert legacy packages (RPM/DEB/Arch) to CCS when requested
 - [x] **202 Accepted Pattern** - Async conversion with job polling for long-running operations
 - [x] **Chunk CAS Storage** - Store converted chunks in content-addressed storage
-- [x] **Client Integration** - RefineryClient with automatic polling and chunk assembly
+- [x] **Client Integration** - RemiClient with automatic polling and chunk assembly
 - [x] **LRU Cache Design** - Evict old chunks to manage disk space (implementation pending)
 - [x] **Deployed** - Running on crucible.conary.io (Hetzner i7-8700, 64GB, 2x1TB NVMe ZFS mirror)
 
@@ -431,7 +431,7 @@ These features from original Conary are not planned for implementation:
 | - | OCI Container Export (podman/docker compatible image generation) |
 | v25 | Legacy→CCS conversion tracking (`converted_packages` table) |
 | v26 | Derived packages for model-apply operations |
-| v27 | Refinery chunk access tracking for LRU cache |
+| v27 | Remi chunk access tracking for LRU cache |
 | v28 | Package redirects (renames, obsoletes), SBOM export, CAS garbage collection, dev shells |
 | v29 | Per-package routing (package_resolution table), unified resolution strategies |
 | v30 | Label federation (repository_id, delegate_to_label_id), recipe cooking system |

@@ -145,7 +145,7 @@ pub enum SystemCommands {
         output: Option<String>,
     },
 
-    /// Generate repository index for the Refinery server
+    /// Generate repository index for the Remi server
     ///
     /// Scans the database and chunk store to generate a repository index
     /// listing all converted packages and their metadata.
@@ -212,9 +212,9 @@ pub enum SystemCommands {
         dry_run: bool,
     },
 
-    /// Start the Refinery server (CCS conversion proxy)
+    /// Start the Remi server (CCS conversion proxy)
     ///
-    /// The Refinery converts upstream packages to CCS format on-demand,
+    /// Remi converts upstream packages to CCS format on-demand,
     /// serving them with chunk deduplication. Requires --features server.
     #[cfg(feature = "server")]
     Server {

@@ -1,5 +1,5 @@
 // src/server/handlers/mod.rs
-//! HTTP request handlers for the Refinery server
+//! HTTP request handlers for the Remi server
 
 pub mod chunks;
 pub mod index;

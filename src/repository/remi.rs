@@ -1,8 +1,8 @@
-// src/repository/refinery.rs
+// src/repository/remi.rs
 
-//! Refinery client for fetching CCS packages from conversion proxies
+//! Remi client for fetching CCS packages from conversion proxies
 //!
-//! The Refinery is a server that converts legacy packages (RPM/DEB/Arch) to CCS
+//! Remi is a server that converts legacy packages (RPM/DEB/Arch) to CCS
 //! format on-demand. When a package isn't cached, the server returns 202 Accepted
 //! with a job ID that the client polls until conversion completes.
 //!
@@ -81,14 +81,14 @@ pub struct ChunkRef {
     pub offset: u64,
 }
 
-/// Client for interacting with a Refinery server
-pub struct RefineryClient {
+/// Client for interacting with a Remi server
+pub struct RemiClient {
     client: Client,
     base_url: String,
 }
 
-impl RefineryClient {
-    /// Create a new Refinery client
+impl RemiClient {
+    /// Create a new Remi client
     pub fn new(base_url: &str) -> Result<Self> {
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -101,7 +101,7 @@ impl RefineryClient {
         Ok(Self { client, base_url })
     }
 
-    /// Request a package from the Refinery
+    /// Request a package from the Remi
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
     /// this will poll automatically until complete or timeout.
@@ -117,10 +117,10 @@ impl RefineryClient {
             format!("{}/v1/{}/packages/{}", self.base_url, distro, name)
         };
 
-        info!("Requesting package from Refinery: {}", url);
+        info!("Requesting package from Remi: {}", url);
 
         let response = self.client.get(&url).send().map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Refinery: {e}"))
+            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
         })?;
 
         match response.status().as_u16() {
@@ -151,13 +151,13 @@ impl RefineryClient {
             }
             503 => {
                 Err(Error::DownloadError(
-                    "Refinery conversion queue is full, try again later".to_string(),
+                    "Remi conversion queue is full, try again later".to_string(),
                 ))
             }
             status => {
                 let body = response.text().unwrap_or_default();
                 Err(Error::DownloadError(format!(
-                    "Refinery returned HTTP {}: {}",
+                    "Remi returned HTTP {}: {}",
                     status, body
                 )))
             }
@@ -375,7 +375,7 @@ impl RefineryClient {
         Ok(())
     }
 
-    /// High-level: Fetch a package from Refinery and save to disk
+    /// High-level: Fetch a package from Remi and save to disk
     ///
     /// This is the main entry point for downloading CCS packages.
     /// Uses the direct download endpoint to get the pre-built CCS package.
@@ -396,10 +396,10 @@ impl RefineryClient {
             format!("{}/v1/{}/packages/{}/download", self.base_url, distro, name)
         };
 
-        info!("Downloading CCS package from Refinery: {}", url);
+        info!("Downloading CCS package from Remi: {}", url);
 
         let response = self.client.get(&url).send().map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Refinery: {e}"))
+            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
         })?;
 
         match response.status().as_u16() {
@@ -441,13 +441,13 @@ impl RefineryClient {
             }
             503 => {
                 Err(Error::DownloadError(
-                    "Refinery conversion queue is full, try again later".to_string(),
+                    "Remi conversion queue is full, try again later".to_string(),
                 ))
             }
             status => {
                 let body = response.text().unwrap_or_default();
                 Err(Error::DownloadError(format!(
-                    "Refinery returned HTTP {}: {}",
+                    "Remi returned HTTP {}: {}",
                     status, body
                 )))
             }
@@ -575,7 +575,7 @@ impl RefineryClient {
         Ok(output_path)
     }
 
-    /// Check if Refinery is healthy
+    /// Check if Remi is healthy
     pub fn health_check(&self) -> Result<bool> {
         let url = format!("{}/health", self.base_url);
         match self.client.get(&url).send() {
@@ -585,31 +585,31 @@ impl RefineryClient {
     }
 }
 
-/// Async Refinery client with HTTP/2 multiplexed chunk fetching
+/// Async Remi client with HTTP/2 multiplexed chunk fetching
 ///
 /// This client uses the ChunkFetcher trait for high-performance parallel
 /// downloads with automatic caching and fallback support.
 ///
 /// # Example
 /// ```ignore
-/// let client = AsyncRefineryClient::new("http://localhost:8080", "/var/cache/conary")?;
+/// let client = AsyncRemiClient::new("http://localhost:8080", "/var/cache/conary")?;
 /// let manifest = client.get_package("arch", "nginx", None).await?;
 /// let chunks = client.download_chunks(&manifest).await?;
 /// client.assemble_package(&manifest, &chunks, Path::new("nginx.ccs"))?;
 /// ```
 #[cfg(feature = "server")]
-pub struct AsyncRefineryClient {
+pub struct AsyncRemiClient {
     http_client: reqwest::Client,
     base_url: String,
     chunk_fetcher: Arc<CompositeChunkFetcher>,
 }
 
 #[cfg(feature = "server")]
-impl AsyncRefineryClient {
-    /// Create a new async Refinery client
+impl AsyncRemiClient {
+    /// Create a new async Remi client
     ///
     /// # Arguments
-    /// * `base_url` - Base URL of the Refinery server
+    /// * `base_url` - Base URL of the Remi server
     /// * `cache_dir` - Directory for local chunk cache
     pub fn new(base_url: &str, cache_dir: impl AsRef<Path>) -> Result<Self> {
         let base_url = base_url.trim_end_matches('/').to_string();
@@ -650,7 +650,7 @@ impl AsyncRefineryClient {
         })
     }
 
-    /// Request a package manifest from the Refinery
+    /// Request a package manifest from the Remi
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
     /// this will poll automatically until complete or timeout.
@@ -666,10 +666,10 @@ impl AsyncRefineryClient {
             format!("{}/v1/{}/packages/{}", self.base_url, distro, name)
         };
 
-        info!("Requesting package from Refinery: {}", url);
+        info!("Requesting package from Remi: {}", url);
 
         let response = self.http_client.get(&url).send().await.map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Refinery: {e}"))
+            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
         })?;
 
         match response.status().as_u16() {
@@ -699,12 +699,12 @@ impl AsyncRefineryClient {
                 name, distro
             ))),
             503 => Err(Error::DownloadError(
-                "Refinery conversion queue is full, try again later".to_string(),
+                "Remi conversion queue is full, try again later".to_string(),
             )),
             status => {
                 let body = response.text().await.unwrap_or_default();
                 Err(Error::DownloadError(format!(
-                    "Refinery returned HTTP {}: {}",
+                    "Remi returned HTTP {}: {}",
                     status, body
                 )))
             }
@@ -816,7 +816,7 @@ impl AsyncRefineryClient {
         output_path: &Path,
     ) -> Result<()> {
         // Delegate to the sync implementation
-        RefineryClient::assemble_package(manifest, chunks, output_path)
+        RemiClient::assemble_package(manifest, chunks, output_path)
     }
 
     /// High-level: Fetch and assemble a package
@@ -866,7 +866,7 @@ impl AsyncRefineryClient {
         Ok(chunks)
     }
 
-    /// Check if Refinery is healthy
+    /// Check if Remi is healthy
     pub async fn health_check(&self) -> Result<bool> {
         let url = format!("{}/health", self.base_url);
         match self.http_client.get(&url).send().await {
@@ -888,11 +888,11 @@ mod tests {
     #[test]
     fn test_base_url_normalization() {
         // With trailing slash
-        let client = RefineryClient::new("http://localhost:8080/").unwrap();
+        let client = RemiClient::new("http://localhost:8080/").unwrap();
         assert_eq!(client.base_url, "http://localhost:8080");
 
         // Without trailing slash
-        let client = RefineryClient::new("http://localhost:8080").unwrap();
+        let client = RemiClient::new("http://localhost:8080").unwrap();
         assert_eq!(client.base_url, "http://localhost:8080");
     }
 
@@ -922,11 +922,11 @@ mod tests {
             let temp_dir = tempfile::tempdir().unwrap();
 
             // With trailing slash
-            let client = AsyncRefineryClient::new("http://localhost:8080/", temp_dir.path()).unwrap();
+            let client = AsyncRemiClient::new("http://localhost:8080/", temp_dir.path()).unwrap();
             assert_eq!(client.base_url, "http://localhost:8080");
 
             // Without trailing slash
-            let client = AsyncRefineryClient::new("http://localhost:8080", temp_dir.path()).unwrap();
+            let client = AsyncRemiClient::new("http://localhost:8080", temp_dir.path()).unwrap();
             assert_eq!(client.base_url, "http://localhost:8080");
         }
 
@@ -938,14 +938,14 @@ mod tests {
             let cache = LocalCacheFetcher::new(temp_dir.path());
             let fetcher = CompositeChunkFetcher::new(vec![Arc::new(cache)]);
 
-            let client = AsyncRefineryClient::with_fetcher("http://localhost:8080", fetcher).unwrap();
+            let client = AsyncRemiClient::with_fetcher("http://localhost:8080", fetcher).unwrap();
             assert_eq!(client.base_url, "http://localhost:8080");
         }
 
         #[tokio::test]
         async fn test_async_client_health_check_unreachable() {
             let temp_dir = tempfile::tempdir().unwrap();
-            let client = AsyncRefineryClient::new("http://localhost:59999", temp_dir.path()).unwrap();
+            let client = AsyncRemiClient::new("http://localhost:59999", temp_dir.path()).unwrap();
 
             // Should return false for unreachable server
             let result = client.health_check().await.unwrap();
