@@ -412,6 +412,14 @@ fn main() -> Result<()> {
             cli::CcsCommands::Export { packages, output, format, db_path } => {
                 commands::ccs::cmd_ccs_export(&packages, &output, &format, &db_path)
             }
+
+            cli::CcsCommands::Shell { packages, db_path, shell, env, keep } => {
+                commands::ccs::cmd_ccs_shell(&packages, &db_path, shell.as_deref(), &env, keep)
+            }
+
+            cli::CcsCommands::Run { package, command, db_path, env } => {
+                commands::ccs::cmd_ccs_run(&package, &command, &db_path, &env)
+            }
         }
 
         // =====================================================================
