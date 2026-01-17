@@ -10,28 +10,32 @@ mod scriptlets;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
+use conversion::{install_converted_ccs, try_convert_to_ccs, ConversionResult};
+use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
 use resolve::{check_provides_dependencies, resolve_package_path};
+use scriptlets::{
+    build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
+    run_post_install, run_pre_install, to_scriptlet_format,
+};
 
 use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
 use super::{detect_package_format, install_package_from_file, PackageFormatType};
 use anyhow::{Context, Result};
-use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::dependencies::LanguageDepDetector;
-use conary::packages::traits::{DependencyType, ScriptletPhase};
+use conary::packages::traits::DependencyType;
 use conary::repository;
-use conary::resolver::{DependencyEdge, Resolver};
-use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
+use conary::resolver::Resolver;
+use conary::scriptlet::SandboxMode;
 use conary::transaction::{
     PackageInfo, TransactionConfig,
     TransactionEngine, TransactionOperations,
 };
-use conary::version::{RpmVersion, VersionConstraint};
-use sha2::Digest;
+use conary::version::RpmVersion;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -144,144 +148,18 @@ pub fn cmd_install(
 
     // Convert to CCS format if requested (only for legacy packages)
     if convert_to_ccs {
-        info!("Converting {} to CCS format...", pkg.name());
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
-        // Compute checksum of original package for deduplication
-        let package_bytes = std::fs::read(&resolved.path)
-            .with_context(|| format!("Failed to read package file for checksum: {}", resolved.path.display()))?;
-        use sha2::Sha256;
-        let mut hasher = Sha256::new();
-        hasher.update(&package_bytes);
-        let hash_result = hasher.finalize();
-        let original_checksum = format!("sha256:{:x}", hash_result);
-
-        // Determine format string
-        let format_str = match format {
-            PackageFormatType::Rpm => "rpm",
-            PackageFormatType::Deb => "deb",
-            PackageFormatType::Arch => "arch",
-        };
-
-        // Open database early to check for existing conversion
-        let conn = conary::db::open(db_path)
-            .context("Failed to open package database")?;
-
-        // Check if already converted (skip re-conversion)
-        let needs_conversion = if let Some(existing) = conary::db::models::ConvertedPackage::find_by_checksum(
-            &conn,
-            &original_checksum,
-        )? {
-            if existing.needs_reconversion() {
-                info!("Re-converting {} (algorithm upgraded)", pkg.name());
-                conary::db::models::ConvertedPackage::delete_by_checksum(
-                    &conn,
-                    &original_checksum,
-                )?;
-                true
-            } else {
-                // Already converted and up to date - skip CCS path, use regular install
-                // (CCS file from previous run is in temp dir that's gone)
-                info!("Package {} already converted, using regular install path", pkg.name());
-                println!("Note: {} was previously converted - using standard install", pkg.name());
-                false
+        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path)? {
+            ConversionResult::Converted { ccs_path, temp_dir: _temp_dir } => {
+                // Install via CCS path (temp_dir kept alive until install completes)
+                return install_converted_ccs(&ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
             }
-        } else {
-            true // No existing conversion, proceed
-        };
-
-        if !needs_conversion {
-            // Fall through to regular install path (below the convert_to_ccs block)
-        } else {
-
-        // Extract files for conversion
-        let extracted = pkg.extract_file_contents()
-            .with_context(|| format!("Failed to extract files for conversion: {}", pkg.name()))?;
-
-        // Build PackageMetadata from the package
-        use conary::packages::common::PackageMetadata;
-        let metadata = PackageMetadata {
-            package_path: resolved.path.clone(),
-            name: pkg.name().to_string(),
-            version: pkg.version().to_string(),
-            architecture: pkg.architecture().map(|s| s.to_string()),
-            description: pkg.description().map(|s| s.to_string()),
-            files: pkg.files().to_vec(),
-            dependencies: pkg.dependencies().to_vec(),
-            scriptlets: pkg.scriptlets().to_vec(),
-            config_files: Vec::new(), // Not all formats provide this
-        };
-
-        // Create temp directory for CCS output
-        let ccs_temp = TempDir::new()
-            .context("Failed to create temp directory for CCS conversion")?;
-
-        let options = ConversionOptions {
-            enable_chunking: true,
-            output_dir: ccs_temp.path().to_path_buf(),
-            auto_classify: true,
-            min_fidelity: FidelityLevel::Partial,
-        };
-
-        let converter = LegacyConverter::new(options);
-        let conversion_result = converter.convert(&metadata, &extracted, format_str, &original_checksum)
-            .with_context(|| format!("Failed to convert {} to CCS format", pkg.name()))?;
-
-        // Warn if fidelity is below High
-        if conversion_result.fidelity.level < FidelityLevel::High {
-            warn!(
-                "Conversion fidelity is {}: complex scripts may not be fully analyzed",
-                conversion_result.fidelity.level
-            );
-            eprintln!(
-                "WARNING: Conversion fidelity is {} - complex legacy scripts may not be fully analyzed",
-                conversion_result.fidelity.level
-            );
+            ConversionResult::Skipped => {
+                // Already converted - fall through to regular install path
+            }
         }
-
-        // Get the package path (should always be Some after successful conversion)
-        let ccs_package_path = conversion_result.package_path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Conversion succeeded but no package path returned"))?;
-
-        info!(
-            "Converted {} to CCS format: {} (fidelity: {})",
-            pkg.name(),
-            ccs_package_path.display(),
-            conversion_result.fidelity.level
-        );
-
-        // Serialize hooks to JSON for storage
-        let hooks_json = serde_json::to_string(&conversion_result.detected_hooks)
-            .unwrap_or_else(|_| "{}".to_string());
-
-        // Create conversion record (will be linked to trove after install)
-        let mut converted_pkg = conary::db::models::ConvertedPackage::new(
-            conversion_result.original_format.clone(),
-            conversion_result.original_checksum.clone(),
-            conversion_result.fidelity.level.to_string(),
-        );
-        converted_pkg.detected_hooks = Some(hooks_json);
-        converted_pkg.insert(&conn)?;
-
-        // Redirect to CCS install
-        println!("Installing converted CCS package...");
-        let ccs_path = ccs_package_path.to_string_lossy().to_string();
-
-        // Use the CCS installer with the converted package
-        return super::ccs::cmd_ccs_install(
-            &ccs_path,
-            db_path,
-            root,
-            dry_run,
-            true, // allow_unsigned - converted packages aren't signed yet
-            None, // policy
-            None, // components - install all
-            sandbox_mode,
-            no_deps, // pass through dependency check flag
-        );
-        } // end of needs_conversion else block
-    } // end of convert_to_ccs block
+    }
 
     let mut conn = conary::db::open(db_path)
         .context("Failed to open package database")?;
@@ -289,25 +167,7 @@ pub fn cmd_install(
     // Build dependency edges from the package
     let package_version = RpmVersion::parse(pkg.version())
         .with_context(|| format!("Failed to parse version '{}' for package '{}'", pkg.version(), pkg.name()))?;
-    let dependency_edges: Vec<DependencyEdge> = pkg
-        .dependencies()
-        .iter()
-        .filter(|d| d.dep_type == DependencyType::Runtime)
-        .map(|d| {
-            let constraint = d
-                .version
-                .as_ref()
-                .and_then(|v| VersionConstraint::parse(v).ok())
-                .unwrap_or(VersionConstraint::Any);
-            DependencyEdge {
-                from: pkg.name().to_string(),
-                to: d.name.clone(),
-                constraint,
-                dep_type: "runtime".to_string(),
-                kind: "package".to_string(),
-            }
-        })
-        .collect();
+    let dependency_edges = build_dependency_edges(pkg.as_ref());
 
     if no_deps && !dependency_edges.is_empty() {
         info!("Skipping dependency check (--no-deps specified)");
@@ -611,21 +471,11 @@ pub fn cmd_install(
         );
     }
 
-    // Determine package format for scriptlet execution
-    let scriptlet_format = match format {
-        PackageFormatType::Rpm => ScriptletPackageFormat::Rpm,
-        PackageFormatType::Deb => ScriptletPackageFormat::Deb,
-        PackageFormatType::Arch => ScriptletPackageFormat::Arch,
-    };
-
-    // Determine execution mode
-    let execution_mode = if let Some(old_trove) = &old_trove_to_upgrade {
-        ExecutionMode::Upgrade {
-            old_version: old_trove.version.clone(),
-        }
-    } else {
-        ExecutionMode::Install
-    };
+    // Determine package format and execution mode for scriptlet execution
+    let scriptlet_format = to_scriptlet_format(format);
+    let execution_mode = build_execution_mode(
+        old_trove_to_upgrade.as_ref().map(|t| t.version.as_str())
+    );
 
     // Execute pre-install scriptlet (before any changes)
     // Scriptlets only run when :runtime or :lib is being installed
@@ -633,29 +483,15 @@ pub fn cmd_install(
     let run_scriptlets = should_run_scriptlets(&installed_component_types);
     if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PreScript);
-        let executor = ScriptletExecutor::new(
+        run_pre_install(
             Path::new(root),
             pkg.name(),
             pkg.version(),
+            &scriptlets,
             scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
-
-        // For Arch packages during upgrade, use PreUpgrade; for RPM/DEB always use PreInstall
-        // (RPM/DEB distinguish via $1 argument, Arch uses different functions)
-        let pre_phase = if scriptlet_format == ScriptletPackageFormat::Arch
-            && matches!(execution_mode, ExecutionMode::Upgrade { .. })
-        {
-            ScriptletPhase::PreUpgrade
-        } else {
-            ScriptletPhase::PreInstall
-        };
-
-        // For Arch: if pre_upgrade is missing, do nothing (it's intentional)
-        // For RPM/DEB: pre_install handles both cases via $1 argument
-        if let Some(pre) = scriptlets.iter().find(|s| s.phase == pre_phase) {
-            info!("Running {} scriptlet...", pre.phase);
-            executor.execute(pre, &execution_mode)?;
-        }
+            &execution_mode,
+            sandbox_mode,
+        )?;
     } else if !no_scripts && !scriptlets.is_empty() && !run_scriptlets {
         info!(
             "Skipping scriptlets: no :runtime or :lib component being installed (components: {:?})",
@@ -665,34 +501,21 @@ pub fn cmd_install(
 
     // Query old package's scriptlets BEFORE we delete it from DB
     // We need these for running pre-remove and post-remove during upgrade
-    let old_package_scriptlets: Vec<ScriptletEntry> = if let Some(ref old_trove) = old_trove_to_upgrade
-        && let Some(old_id) = old_trove.id
-    {
-        ScriptletEntry::find_by_trove(&conn, old_id)?
-    } else {
-        Vec::new()
-    };
+    let old_trove_id = old_trove_to_upgrade.as_ref().and_then(|t| t.id);
+    let old_package_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
-    // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
-    if !no_scripts
-        && !old_package_scriptlets.is_empty()
-        && scriptlet_format != ScriptletPackageFormat::Arch
-        && let Some(ref old_trove) = old_trove_to_upgrade
-    {
-        let old_executor = ScriptletExecutor::new(
-            Path::new(root),
-            &old_trove.name,
-            &old_trove.version,
-            scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
-        let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
-            new_version: pkg.version().to_string(),
-        };
-
-        if let Some(pre_remove) = old_package_scriptlets.iter().find(|s| s.phase == "pre-remove") {
-            info!("Running old package pre-remove scriptlet (upgrade)...");
-            old_executor.execute_entry(pre_remove, &upgrade_removal_mode)?;
+    if !no_scripts {
+        if let Some(ref old_trove) = old_trove_to_upgrade {
+            run_old_pre_remove(
+                Path::new(root),
+                &old_trove.name,
+                &old_trove.version,
+                pkg.version(),
+                &old_package_scriptlets,
+                scriptlet_format,
+                sandbox_mode,
+            )?;
         }
     }
 
@@ -966,63 +789,32 @@ pub fn cmd_install(
     let _ = trove_id;
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
-    // For Arch: skip entirely (Arch does NOT run removal scripts during upgrade)
-    if !no_scripts
-        && !old_package_scriptlets.is_empty()
-        && scriptlet_format != ScriptletPackageFormat::Arch
-        && let Some(ref old_trove) = old_trove_to_upgrade
-    {
-        let old_executor = ScriptletExecutor::new(
-            Path::new(root),
-            &old_trove.name,
-            &old_trove.version,
-            scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
-        let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
-            new_version: pkg.version().to_string(),
-        };
-
-        if let Some(post_remove) = old_package_scriptlets.iter().find(|s| s.phase == "post-remove") {
-            info!("Running old package post-remove scriptlet (upgrade)...");
-            // Post-remove failure during upgrade is not fatal - files are already replaced
-            if let Err(e) = old_executor.execute_entry(post_remove, &upgrade_removal_mode) {
-                warn!("Old package post-remove scriptlet failed: {}. Continuing anyway.", e);
-                eprintln!("WARNING: Old package post-remove scriptlet failed: {}", e);
-            }
+    if !no_scripts {
+        if let Some(ref old_trove) = old_trove_to_upgrade {
+            run_old_post_remove(
+                Path::new(root),
+                &old_trove.name,
+                &old_trove.version,
+                pkg.version(),
+                &old_package_scriptlets,
+                scriptlet_format,
+                sandbox_mode,
+            );
         }
     }
 
     // Execute post-install scriptlet (after files are deployed)
-    // Scriptlets only run when :runtime or :lib is being installed
     if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PostScript);
-        let executor = ScriptletExecutor::new(
+        run_post_install(
             Path::new(root),
             pkg.name(),
             pkg.version(),
+            &scriptlets,
             scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
-
-        // For Arch packages during upgrade, use PostUpgrade; for RPM/DEB always use PostInstall
-        let post_phase = if scriptlet_format == ScriptletPackageFormat::Arch
-            && matches!(execution_mode, ExecutionMode::Upgrade { .. })
-        {
-            ScriptletPhase::PostUpgrade
-        } else {
-            ScriptletPhase::PostInstall
-        };
-
-        // For Arch: if post_upgrade is missing, do nothing (it's intentional)
-        // For RPM/DEB: post_install handles both cases via $1 argument
-        if let Some(post) = scriptlets.iter().find(|s| s.phase == post_phase) {
-            info!("Running {} scriptlet...", post.phase);
-            if let Err(e) = executor.execute(post, &execution_mode) {
-                // Post-install failure is serious but files are already deployed
-                // Log warning but don't fail the install
-                warn!("{} scriptlet failed: {}. Package files are installed.", post.phase, e);
-                eprintln!("WARNING: {} scriptlet failed: {}", post.phase, e);
-            }
-        }
+            &execution_mode,
+            sandbox_mode,
+        );
     }
 
     // Mark post-scripts complete in transaction

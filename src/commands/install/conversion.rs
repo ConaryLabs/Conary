@@ -1,14 +1,9 @@
 // src/commands/install/conversion.rs
-#![allow(dead_code)]
 
 //! CCS conversion during package installation
 //!
 //! Handles converting legacy packages (RPM, DEB, Arch) to CCS format
 //! during installation when --convert-to-ccs is specified.
-//!
-//! This module provides extracted helper functions for CCS conversion.
-//! Currently the inline code in mod.rs is still used, but these functions
-//! can be adopted incrementally to simplify the main install flow.
 
 use super::PackageFormatType;
 use anyhow::{Context, Result};

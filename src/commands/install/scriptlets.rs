@@ -1,14 +1,9 @@
 // src/commands/install/scriptlets.rs
-#![allow(dead_code)]
 
 //! Scriptlet execution during package installation
 //!
 //! Handles pre-install, post-install, and upgrade scriptlet execution
 //! with proper handling for different package formats (RPM, DEB, Arch).
-//!
-//! This module provides extracted helper functions for scriptlet execution.
-//! Currently the inline code in mod.rs is still used, but these functions
-//! can be adopted incrementally to simplify the main install flow.
 
 use super::PackageFormatType;
 use anyhow::Result;
@@ -196,6 +191,7 @@ pub fn run_old_post_remove(
 /// Check if scriptlets should run based on installed components
 ///
 /// Scriptlets only run when :runtime or :lib component is being installed.
+#[allow(dead_code)]
 pub fn should_run(installed_components: &[ComponentType]) -> bool {
     conary::components::should_run_scriptlets(installed_components)
 }

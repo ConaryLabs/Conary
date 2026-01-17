@@ -1,14 +1,14 @@
 // src/commands/install/dependencies.rs
-#![allow(dead_code)]
 
 //! Dependency resolution for package installation
 //!
 //! Handles checking and resolving package dependencies, including
 //! downloading missing dependencies from repositories.
 //!
-//! This module provides extracted helper functions for dependency resolution.
-//! Currently the inline code in mod.rs is still used, but these functions
-//! can be adopted incrementally to simplify the main install flow.
+//! Note: Currently only `build_dependency_edges` is used. Other functions
+//! are available for future refactoring of the dependency resolution flow.
+
+#![allow(dead_code)]
 
 use super::resolve::{check_provides_dependencies, get_keyring_dir};
 use crate::commands::install_package_from_file;
