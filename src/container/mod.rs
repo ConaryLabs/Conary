@@ -661,59 +661,26 @@ impl Sandbox {
 
     /// Apply resource limits using setrlimit
     fn apply_resource_limits(&self) -> Result<()> {
-        // Memory limit (address space)
-        if self.config.memory_limit > 0 {
-            let limit = libc::rlimit {
-                rlim_cur: self.config.memory_limit,
-                rlim_max: self.config.memory_limit,
-            };
-            unsafe {
-                if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
-                    warn!("setrlimit RLIMIT_AS failed");
-                }
-            }
-        }
-
-        // CPU time limit
-        if self.config.cpu_time_limit > 0 {
-            let limit = libc::rlimit {
-                rlim_cur: self.config.cpu_time_limit,
-                rlim_max: self.config.cpu_time_limit,
-            };
-            unsafe {
-                if libc::setrlimit(libc::RLIMIT_CPU, &limit) != 0 {
-                    warn!("setrlimit RLIMIT_CPU failed");
-                }
-            }
-        }
-
-        // File size limit
-        if self.config.file_size_limit > 0 {
-            let limit = libc::rlimit {
-                rlim_cur: self.config.file_size_limit,
-                rlim_max: self.config.file_size_limit,
-            };
-            unsafe {
-                if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
-                    warn!("setrlimit RLIMIT_FSIZE failed");
-                }
-            }
-        }
-
-        // Process limit
-        if self.config.nproc_limit > 0 {
-            let limit = libc::rlimit {
-                rlim_cur: self.config.nproc_limit,
-                rlim_max: self.config.nproc_limit,
-            };
-            unsafe {
-                if libc::setrlimit(libc::RLIMIT_NPROC, &limit) != 0 {
-                    warn!("setrlimit RLIMIT_NPROC failed");
-                }
-            }
-        }
-
+        set_rlimit(libc::RLIMIT_AS, self.config.memory_limit, "RLIMIT_AS");
+        set_rlimit(libc::RLIMIT_CPU, self.config.cpu_time_limit, "RLIMIT_CPU");
+        set_rlimit(libc::RLIMIT_FSIZE, self.config.file_size_limit, "RLIMIT_FSIZE");
+        set_rlimit(libc::RLIMIT_NPROC, self.config.nproc_limit, "RLIMIT_NPROC");
         Ok(())
+    }
+}
+
+/// Set a resource limit if the value is non-zero
+fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
+    if value > 0 {
+        let limit = libc::rlimit {
+            rlim_cur: value,
+            rlim_max: value,
+        };
+        unsafe {
+            if libc::setrlimit(resource, &limit) != 0 {
+                warn!("setrlimit {} failed", name);
+            }
+        }
     }
 }
 

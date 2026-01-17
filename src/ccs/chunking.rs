@@ -41,7 +41,7 @@ pub struct Chunk {
 impl Chunk {
     /// Get the hash as a hex string
     pub fn hash_hex(&self) -> String {
-        hex::encode(&self.hash)
+        hex::encode(self.hash)
     }
 
     /// Get the CAS-style path for this chunk (e.g., "ab/cdef1234...")
@@ -400,25 +400,12 @@ impl From<&ChunkedFile> for ChunkManifestEntry {
         Self {
             path: cf.path.to_string_lossy().to_string(),
             size: cf.size,
-            file_hash: hex::encode(&cf.file_hash),
+            file_hash: hex::encode(cf.file_hash),
             chunks: cf.chunks.iter().map(|c| c.hash_hex()).collect(),
         }
     }
 }
 
-// We need hex for hash encoding
-mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
-    }
-
-    pub fn decode(s: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-            .collect()
-    }
-}
 
 #[cfg(test)]
 mod tests {

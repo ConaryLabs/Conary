@@ -29,10 +29,10 @@ pub enum DetectedHook {
 }
 
 /// Analyzer for extracting declarative operations from scriptlets
-pub struct ScriptletAnalyzer {
-    /// Compiled regex patterns
-    patterns: Patterns,
-}
+///
+/// This is a zero-sized type that provides access to pre-compiled regex patterns
+/// stored in a static `LazyLock`. No per-instance state is needed.
+pub struct ScriptletAnalyzer;
 
 /// Pre-compiled regex patterns for script analysis
 struct Patterns {
@@ -43,16 +43,6 @@ struct Patterns {
     systemctl_enable: Regex,
     systemctl_reload: Regex,
     ldconfig: Regex,
-    chmod: Regex,
-    chown: Regex,
-    update_alternatives: Regex,
-    fc_cache: Regex,
-    gtk_cache: Regex,
-    mime_update: Regex,
-    desktop_update: Regex,
-    glib_schemas: Regex,
-    sysctl: Regex,
-    tmpfiles: Regex,
     external_script: Regex,
     complex_logic: Regex,
 }
@@ -72,24 +62,8 @@ static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
         systemctl_enable: Regex::new(r"(?m)^\s*systemctl\s+(--no-reload\s+)?(enable|disable)\s+(\S+)").unwrap(),
         systemctl_reload: Regex::new(r"(?m)^\s*systemctl\s+daemon-reload").unwrap(),
 
-        // System cache updates
+        // System cache updates (detected but handled by triggers)
         ldconfig: Regex::new(r"(?m)^\s*(/sbin/)?ldconfig").unwrap(),
-        fc_cache: Regex::new(r"(?m)^\s*(/usr/bin/)?fc-cache").unwrap(),
-        gtk_cache: Regex::new(r"(?m)^\s*(/usr/bin/)?gtk-update-icon-cache").unwrap(),
-        mime_update: Regex::new(r"(?m)^\s*(/usr/bin/)?update-mime-database").unwrap(),
-        desktop_update: Regex::new(r"(?m)^\s*(/usr/bin/)?update-desktop-database").unwrap(),
-        glib_schemas: Regex::new(r"(?m)^\s*(/usr/bin/)?glib-compile-schemas").unwrap(),
-
-        // File operations
-        chmod: Regex::new(r"(?m)^\s*chmod\s+(\d+)\s+(\S+)").unwrap(),
-        chown: Regex::new(r"(?m)^\s*chown\s+(-R\s+)?(\S+):(\S+)\s+(\S+)").unwrap(),
-
-        // Alternatives
-        update_alternatives: Regex::new(r"(?m)^\s*update-alternatives\s+--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)").unwrap(),
-
-        // Sysctl and tmpfiles
-        sysctl: Regex::new(r"(?m)^\s*sysctl\s+(-w\s+)?(\S+=\S+)").unwrap(),
-        tmpfiles: Regex::new(r"(?m)^\s*systemd-tmpfiles\s+--create").unwrap(),
 
         // Complex patterns to flag as uncertain
         external_script: Regex::new(r"(?m)^\s*(/[\w/.-]+\.sh|source\s+|\.[\s/])").unwrap(),
@@ -105,30 +79,9 @@ impl Default for ScriptletAnalyzer {
 
 impl ScriptletAnalyzer {
     /// Create a new analyzer
+    #[inline]
     pub fn new() -> Self {
-        Self {
-            patterns: Patterns {
-                useradd: PATTERNS.useradd.clone(),
-                groupadd: PATTERNS.groupadd.clone(),
-                mkdir: PATTERNS.mkdir.clone(),
-                install_d: PATTERNS.install_d.clone(),
-                systemctl_enable: PATTERNS.systemctl_enable.clone(),
-                systemctl_reload: PATTERNS.systemctl_reload.clone(),
-                ldconfig: PATTERNS.ldconfig.clone(),
-                chmod: PATTERNS.chmod.clone(),
-                chown: PATTERNS.chown.clone(),
-                update_alternatives: PATTERNS.update_alternatives.clone(),
-                fc_cache: PATTERNS.fc_cache.clone(),
-                gtk_cache: PATTERNS.gtk_cache.clone(),
-                mime_update: PATTERNS.mime_update.clone(),
-                desktop_update: PATTERNS.desktop_update.clone(),
-                glib_schemas: PATTERNS.glib_schemas.clone(),
-                sysctl: PATTERNS.sysctl.clone(),
-                tmpfiles: PATTERNS.tmpfiles.clone(),
-                external_script: PATTERNS.external_script.clone(),
-                complex_logic: PATTERNS.complex_logic.clone(),
-            },
-        }
+        Self
     }
 
     /// Analyze all scriptlets and extract declarative hooks
@@ -158,7 +111,7 @@ impl ScriptletAnalyzer {
         report: &mut FidelityReport,
     ) {
         // User additions
-        for cap in self.patterns.useradd.captures_iter(content) {
+        for cap in PATTERNS.useradd.captures_iter(content) {
             let args = cap.get(3).map(|m| m.as_str()).unwrap_or("");
             if let Some(hook) = self.parse_useradd(args) {
                 let mut params = std::collections::HashMap::new();
@@ -182,7 +135,7 @@ impl ScriptletAnalyzer {
         }
 
         // Group additions
-        for cap in self.patterns.groupadd.captures_iter(content) {
+        for cap in PATTERNS.groupadd.captures_iter(content) {
             let args = cap.get(3).map(|m| m.as_str()).unwrap_or("");
             if let Some(hook) = self.parse_groupadd(args) {
                 let mut params = std::collections::HashMap::new();
@@ -203,7 +156,7 @@ impl ScriptletAnalyzer {
         }
 
         // Directory creation (mkdir -p)
-        for cap in self.patterns.mkdir.captures_iter(content) {
+        for cap in PATTERNS.mkdir.captures_iter(content) {
             let path = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
             if !path.is_empty() && path.starts_with('/') {
                 let hook = DirectoryHook {
@@ -229,7 +182,7 @@ impl ScriptletAnalyzer {
         }
 
         // Directory creation (install -d)
-        for cap in self.patterns.install_d.captures_iter(content) {
+        for cap in PATTERNS.install_d.captures_iter(content) {
             let path = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
             if !path.is_empty() && path.starts_with('/') {
                 let hook = DirectoryHook {
@@ -255,7 +208,7 @@ impl ScriptletAnalyzer {
         }
 
         // Systemd enable/disable
-        for cap in self.patterns.systemctl_enable.captures_iter(content) {
+        for cap in PATTERNS.systemctl_enable.captures_iter(content) {
             let action = cap.get(2).map(|m| m.as_str()).unwrap_or("enable");
             let unit = cap.get(3).map(|m| m.as_str()).unwrap_or("");
 
@@ -281,7 +234,7 @@ impl ScriptletAnalyzer {
         }
 
         // Detect common operations that don't need hooks (handled by triggers)
-        for cap in self.patterns.ldconfig.captures_iter(content) {
+        for cap in PATTERNS.ldconfig.captures_iter(content) {
             report.add_detected(DetectedOperation {
                 operation_type: OperationType::Ldconfig,
                 phase: phase.to_string(),
@@ -290,7 +243,7 @@ impl ScriptletAnalyzer {
             });
         }
 
-        for cap in self.patterns.systemctl_reload.captures_iter(content) {
+        for cap in PATTERNS.systemctl_reload.captures_iter(content) {
             report.add_detected(DetectedOperation {
                 operation_type: OperationType::SystemdReload,
                 phase: phase.to_string(),
@@ -300,7 +253,7 @@ impl ScriptletAnalyzer {
         }
 
         // Detect uncertain operations
-        for cap in self.patterns.external_script.captures_iter(content) {
+        for cap in PATTERNS.external_script.captures_iter(content) {
             let line = cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
             // Skip if it's a shebang line
             if !line.trim().starts_with("#!") {
@@ -313,7 +266,7 @@ impl ScriptletAnalyzer {
             }
         }
 
-        for cap in self.patterns.complex_logic.captures_iter(content) {
+        for cap in PATTERNS.complex_logic.captures_iter(content) {
             report.add_uncertain(UncertainOperation {
                 description: "Complex control flow".to_string(),
                 reason: "Contains loops, conditionals, or command substitution".to_string(),

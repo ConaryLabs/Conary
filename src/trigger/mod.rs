@@ -403,13 +403,6 @@ impl TriggerResults {
         Self::default()
     }
 
-    fn skipped() -> Self {
-        Self {
-            skipped: 1,
-            ..Self::default()
-        }
-    }
-
     /// Check if all triggers succeeded
     pub fn all_succeeded(&self) -> bool {
         self.failed == 0

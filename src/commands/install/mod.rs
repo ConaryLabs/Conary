@@ -1,9 +1,12 @@
 // src/commands/install/mod.rs
 //! Package installation commands
 
+mod conversion;
+mod dependencies;
 mod execute;
 mod prepare;
 mod resolve;
+mod scriptlets;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
@@ -17,11 +20,10 @@ use super::{detect_package_format, install_package_from_file, PackageFormatType}
 use anyhow::{Context, Result};
 use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
-use sha2::Digest;
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::traits::{DependencyType, ScriptletPhase};
-use conary::repository::{self};
+use conary::repository;
 use conary::resolver::{DependencyEdge, Resolver};
 use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
 use conary::transaction::{
@@ -29,6 +31,7 @@ use conary::transaction::{
     TransactionEngine, TransactionOperations,
 };
 use conary::version::{RpmVersion, VersionConstraint};
+use sha2::Digest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
