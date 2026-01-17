@@ -121,4 +121,27 @@ pub enum SystemCommands {
         #[arg(long, default_value = "30")]
         chunk_ttl_days: u32,
     },
+
+    /// Garbage collect unreferenced files from CAS storage
+    ///
+    /// Removes files from the content-addressable store that are no longer
+    /// referenced by any installed package. Preserves files needed for rollback
+    /// by keeping references from file_history within the retention period.
+    Gc {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Path to CAS objects directory
+        #[arg(long, default_value = "/var/lib/conary/objects")]
+        objects_dir: String,
+
+        /// Days of history to preserve for rollback (default: 30)
+        #[arg(long, default_value = "30")]
+        keep_days: u32,
+
+        /// Show what would be removed without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
 }

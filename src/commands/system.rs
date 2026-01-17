@@ -547,3 +547,193 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
 
     Ok(())
 }
+
+/// Garbage collect unreferenced files from CAS storage
+///
+/// This removes files from the content-addressable store that are no longer
+/// referenced by any installed package or recent file history (for rollback).
+pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -> Result<()> {
+    use std::collections::HashSet;
+    use std::fs;
+
+    info!(
+        "Starting CAS garbage collection (keep_days={}, dry_run={})",
+        keep_days, dry_run
+    );
+
+    let conn = conary::db::open(db_path)?;
+    let objects_path = Path::new(objects_dir);
+
+    if !objects_path.exists() {
+        println!("CAS directory does not exist: {}", objects_dir);
+        return Ok(());
+    }
+
+    // Step 1: Collect all referenced hashes from installed files
+    println!("Collecting referenced hashes from installed packages...");
+    let mut referenced_hashes: HashSet<String> = HashSet::new();
+
+    let file_hashes: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT DISTINCT sha256_hash FROM files WHERE sha256_hash IS NOT NULL AND sha256_hash != ''")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for hash in file_hashes {
+        referenced_hashes.insert(hash);
+    }
+    println!("  Found {} hashes from installed files", referenced_hashes.len());
+
+    // Step 2: Collect hashes from file_history within retention period
+    println!("Collecting hashes from recent file history ({}+ days)...", keep_days);
+    let history_hashes: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT fh.sha256_hash FROM file_history fh
+             JOIN changesets c ON fh.changeset_id = c.id
+             WHERE fh.sha256_hash IS NOT NULL AND fh.sha256_hash != ''
+             AND c.applied_at >= datetime('now', ?1)"
+        )?;
+        let days_param = format!("-{} days", keep_days);
+        let rows = stmt.query_map([days_param], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for hash in history_hashes {
+        referenced_hashes.insert(hash);
+    }
+    println!("  Total referenced hashes: {}", referenced_hashes.len());
+
+    // Step 3: Scan CAS directory for all stored objects
+    println!("Scanning CAS directory for objects...");
+    let mut cas_objects: Vec<(PathBuf, String)> = Vec::new();
+    let mut total_cas_size: u64 = 0;
+
+    for prefix_entry in fs::read_dir(objects_path)? {
+        let prefix_entry = prefix_entry?;
+        let prefix_path = prefix_entry.path();
+
+        if !prefix_path.is_dir() {
+            continue;
+        }
+
+        let prefix = prefix_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        // Skip if not a 2-char hex prefix
+        if prefix.len() != 2 || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+
+        for object_entry in fs::read_dir(&prefix_path)? {
+            let object_entry = object_entry?;
+            let object_path = object_entry.path();
+
+            if object_path.is_file() {
+                let suffix = object_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+
+                // Skip temp files
+                if suffix.ends_with(".tmp") {
+                    continue;
+                }
+
+                let hash = format!("{}{}", prefix, suffix);
+                let metadata = fs::metadata(&object_path)?;
+                total_cas_size += metadata.len();
+                cas_objects.push((object_path, hash));
+            }
+        }
+    }
+    println!("  Found {} objects in CAS ({} total)", cas_objects.len(), format_bytes(total_cas_size));
+
+    // Step 4: Find unreferenced objects
+    let unreferenced: Vec<(PathBuf, String)> = cas_objects
+        .into_iter()
+        .filter(|(_, hash)| !referenced_hashes.contains(hash))
+        .collect();
+
+    if unreferenced.is_empty() {
+        println!("\nNo unreferenced objects found. CAS is clean.");
+        return Ok(());
+    }
+
+    // Calculate space to reclaim
+    let mut reclaimable_size: u64 = 0;
+    for (path, _) in &unreferenced {
+        if let Ok(metadata) = fs::metadata(path) {
+            reclaimable_size += metadata.len();
+        }
+    }
+
+    println!(
+        "\nFound {} unreferenced objects ({})",
+        unreferenced.len(),
+        format_bytes(reclaimable_size)
+    );
+
+    // Step 5: Delete unreferenced objects (or just report if dry_run)
+    if dry_run {
+        println!("\nDry run - would remove {} objects:", unreferenced.len());
+        for (_, hash) in unreferenced.iter().take(10) {
+            println!("  {}", hash);
+        }
+        if unreferenced.len() > 10 {
+            println!("  ... and {} more", unreferenced.len() - 10);
+        }
+        println!("\nRun without --dry-run to actually remove these objects.");
+    } else {
+        println!("\nRemoving unreferenced objects...");
+        let mut removed_count = 0;
+        let mut error_count = 0;
+
+        for (path, hash) in &unreferenced {
+            match fs::remove_file(path) {
+                Ok(()) => {
+                    removed_count += 1;
+                    info!("Removed: {}", hash);
+                }
+                Err(e) => {
+                    error_count += 1;
+                    info!("Failed to remove {}: {}", hash, e);
+                }
+            }
+        }
+
+        // Clean up empty prefix directories
+        for prefix_entry in fs::read_dir(objects_path)? {
+            let prefix_entry = prefix_entry?;
+            let prefix_path = prefix_entry.path();
+
+            if prefix_path.is_dir() {
+                // Try to remove if empty (will fail silently if not empty)
+                let _ = fs::remove_dir(&prefix_path);
+            }
+        }
+
+        println!("\nGarbage collection complete:");
+        println!("  Removed: {} objects", removed_count);
+        println!("  Errors: {}", error_count);
+        println!("  Space reclaimed: {}", format_bytes(reclaimable_size));
+    }
+
+    Ok(())
+}
+
+/// Format bytes as human-readable string
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}

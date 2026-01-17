@@ -607,6 +607,10 @@ fn main() -> Result<()> {
                     .expect("Failed to create Tokio runtime")
                     .block_on(run_server(config))
             }
+
+            cli::SystemCommands::Gc { db_path, objects_dir, keep_days, dry_run } => {
+                commands::cmd_gc(&db_path, &objects_dir, keep_days, dry_run)
+            }
         }
 
         None => {

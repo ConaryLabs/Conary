@@ -49,7 +49,7 @@ pub use state::{
     cmd_state_create, cmd_state_diff, cmd_state_list, cmd_state_prune, cmd_state_restore,
     cmd_state_show,
 };
-pub use system::{cmd_init, cmd_rollback, cmd_verify};
+pub use system::{cmd_gc, cmd_init, cmd_rollback, cmd_verify};
 pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list,
     cmd_trigger_remove, cmd_trigger_run, cmd_trigger_show,
