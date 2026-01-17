@@ -8,10 +8,10 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v26)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v28)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
-- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v26)
+- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v28)
 
 ### Package Formats
 
@@ -235,6 +235,11 @@ Inspired by original Conary's label concept for tracking package provenance.
 - [COMPLETE] **Path Query** - `conary query --path /usr/bin/foo` - find package by file
 - [COMPLETE] **Info Query** - Detailed package information with `--info` flag
 - [COMPLETE] **File Listing** - `--lsl` for ls -l style file listing, `--files` for simple listing
+- [COMPLETE] **SBOM Export** - Generate CycloneDX 1.5 Software Bill of Materials (`query sbom`)
+
+### Storage Management
+
+- [COMPLETE] **CAS Garbage Collection** - Remove unreferenced objects from content store (`system gc`)
 
 ### Configuration Management
 
@@ -258,9 +263,9 @@ Inspired by original Conary's label concept for tracking package provenance.
 
 Workflow features that make Nix beloved by developers.
 
-- [ ] **Dev Shells** - `ccs shell --with gcc,cmake,openssl` for temporary environments without permanent install
+- [COMPLETE] **Dev Shells** - `ccs shell <packages>` for temporary environments without permanent install
 - [ ] **Lockfiles** - `ccs.lock` pinning exact versions and hashes of all transitive dependencies
-- [ ] **One-Shot Run** - `ccs run cowsay -- "hello"` to execute without installing
+- [COMPLETE] **One-Shot Run** - `ccs run <package> -- <command>` to execute without installing
 - [ ] **Shell Integration** - Automatic environment activation when entering project directories
 
 ---
@@ -352,7 +357,7 @@ Building on the CCS format with more sophisticated features.
 
 ### Package Evolution
 
-- [ ] **Redirect Packages** - `type = "redirect"` for package renames/replacements (mysql → mariadb)
+- [COMPLETE] **Redirect Packages** - Package redirects for renames/obsoletes with automatic resolution during install (schema v28)
 - [ ] **Package Splits** - Track when packages split (`firefox` → `firefox-bin` + `firefox-lib`)
 - [ ] **Obsoletes Handling** - Clean removal of deprecated packages during updates
 
@@ -412,6 +417,10 @@ These features from original Conary are not planned for implementation:
 | - | CCS Native Package Format (CBOR manifest, Merkle tree, Ed25519 signatures) |
 | - | Build Policy System (trait-based policies, SOURCE_DATE_EPOCH, reproducible builds) |
 | - | OCI Container Export (podman/docker compatible image generation) |
+| v25 | Legacy→CCS conversion tracking (`converted_packages` table) |
+| v26 | Derived packages for model-apply operations |
+| v27 | Refinery chunk access tracking for LRU cache |
+| v28 | Package redirects (renames, obsoletes), SBOM export, CAS garbage collection, dev shells |
 
 ---
 

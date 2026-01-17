@@ -62,7 +62,7 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 - **File-level tracking** - Every file hashed and recorded for integrity, conflict detection, and delta updates
 - **Dual hashing** - SHA-256 for cryptographic verification, XXH128 (~30 GB/s) for CAS content addressing
 - **Conary-inspired architecture** - troves, changesets, flavors, and components modernized for 2026
-- **Database schema v26** with automatic migrations
+- **Database schema v28** with automatic migrations
 - **Ed25519 signatures** for package authentication
 - **CBOR binary manifests** with Merkle tree content verification
 - **VFS tree** with in-memory filesystem operations and efficient path lookups
@@ -102,6 +102,7 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - `conary query component <pkg:comp>` - Query files in a specific component
 - `conary query search <pattern>` - Search for packages in repositories
 - `conary query history` - Show all changeset operations
+- `conary query sbom <package>` - Generate CycloneDX 1.5 SBOM for a package
 
 **Repository Management (`conary repo`):**
 - `conary repo add <name> <url>` - Add a new package repository (supports `--content-url` for reference mirrors)
@@ -179,6 +180,8 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - `conary ccs sign <package.ccs>` - Sign a package with Ed25519 private key
 - `conary ccs install <package.ccs>` - Install a CCS package into the system
 - `conary ccs export <packages...>` - Export packages to OCI container image format
+- `conary ccs shell <packages>` - Spawn a shell with packages available temporarily (Nix-style)
+- `conary ccs run <package> -- <cmd>` - Run a command with a package available temporarily
 
 **Derived Packages (`conary derive`):**
 - `conary derive create <name>` - Create a derived package from base
@@ -186,9 +189,17 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - `conary derive list` - List derived packages
 - `conary derive show <name>` - Show derived package details
 
+**Package Redirects (`conary redirect`):**
+- `conary redirect list` - List all package redirects
+- `conary redirect add <source> <target>` - Create a redirect (renames, obsoletes)
+- `conary redirect show <source>` - Show redirect details
+- `conary redirect remove <source>` - Remove a redirect
+- `conary redirect resolve <package>` - Resolve package through redirect chain
+
 **System Commands (`conary system`):**
 - `conary system init` - Initialize database and storage
 - `conary system completions <shell>` - Generate shell completion scripts
+- `conary system gc` - Garbage collect unreferenced objects from CAS
 
 ### Core Features
 
@@ -322,6 +333,30 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - Compatible with podman, docker, and skopeo
 - Deterministic layer generation for reproducibility
 - Standard OCI image layout (oci-layout, index.json, blobs/)
+
+**Dev Shells (Nix-style):**
+- `ccs shell` for temporary environments without permanent install
+- `ccs run` for one-shot command execution with packages available
+- Automatic PATH and LD_LIBRARY_PATH setup
+- Cleanup on exit (or `--keep` for debugging)
+
+**Package Redirects:**
+- Handle package renames transparently (old-name → new-name)
+- Support obsolete packages pointing to replacements
+- Automatic redirect resolution during install
+- Transitive chain resolution with cycle detection
+
+**SBOM Export:**
+- Generate CycloneDX 1.5 Software Bill of Materials
+- Package URL (PURL) generation for each component
+- SHA-256 hashes for all package files
+- JSON output for integration with security tools
+
+**Storage Management:**
+- CAS garbage collection removes unreferenced objects
+- Configurable retention period for file history
+- Dry-run mode to preview cleanup
+- Space savings statistics
 
 ### Shell Completions
 
@@ -514,7 +549,7 @@ fix_shebangs = { "/usr/bin/env python" = "/usr/bin/python3" }
 
 ### Testing
 
-- **520 tests** (481 lib + 3 bin + 36 integration)
+- **555+ tests** (library, binary, and integration tests)
 - Comprehensive test coverage for CAS, transactions, dependency resolution, repository management, delta operations, component classification, collections, triggers, state snapshots, labels, config management, CCS building, policy engine, OCI export, and core operations
 
 **Integration tests** are organized in `tests/`:
