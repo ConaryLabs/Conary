@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Arch Linux package representation
 pub struct ArchPackage {
@@ -238,7 +238,15 @@ impl ArchPackage {
     fn extract_install_script(path: &str) -> Option<String> {
         let mut archive = Self::open_archive(path).ok()?;
 
-        for entry in archive.entries().ok()?.flatten() {
+        for entry_result in archive.entries().ok()? {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!("Skipping corrupted archive entry in {}: {}", path, e);
+                    continue;
+                }
+            };
+
             let entry_path = entry.path().ok()?.to_string_lossy().to_string();
 
             if entry_path == ".INSTALL" {

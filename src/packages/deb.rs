@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Debian package representation
 pub struct DebPackage {
@@ -200,7 +200,14 @@ impl DebPackage {
 
                 // Look for maintainer scripts
                 if let Ok(entries) = archive.entries() {
-                    for entry in entries.flatten() {
+                    for entry_result in entries {
+                        let entry = match entry_result {
+                            Ok(e) => e,
+                            Err(e) => {
+                                warn!("Skipping corrupted control archive entry in {}: {}", path, e);
+                                continue;
+                            }
+                        };
                         let entry_path = match entry.path() {
                             Ok(p) => p.to_string_lossy().to_string(),
                             Err(_) => continue,
@@ -261,7 +268,14 @@ impl DebPackage {
 
                 // Look for conffiles
                 if let Ok(entries) = archive.entries() {
-                    for entry in entries.flatten() {
+                    for entry_result in entries {
+                        let entry = match entry_result {
+                            Ok(e) => e,
+                            Err(e) => {
+                                warn!("Skipping corrupted control archive entry in {}: {}", path, e);
+                                continue;
+                            }
+                        };
                         let entry_path = match entry.path() {
                             Ok(p) => p.to_string_lossy().to_string(),
                             Err(_) => continue,

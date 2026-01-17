@@ -331,7 +331,13 @@ impl TransactionJournal {
             .join("archive");
         fs::create_dir_all(&archive_dir)?;
 
-        let archive_path = archive_dir.join(self.path.file_name().unwrap());
+        let filename = self.path.file_name().ok_or_else(|| {
+            crate::Error::JournalCorrupted(format!(
+                "Journal path has no filename: {}",
+                self.path.display()
+            ))
+        })?;
+        let archive_path = archive_dir.join(filename);
         fs::rename(&self.path, archive_path)?;
 
         Ok(())

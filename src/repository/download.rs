@@ -17,6 +17,7 @@
 
 use crate::db::models::RepositoryPackage;
 use crate::error::{Error, Result};
+use crate::filesystem::path::sanitize_filename;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -84,13 +85,30 @@ fn download_package_inner(
 }
 
 /// Construct destination path from package info
+///
+/// Extracts filename from URL and sanitizes it to prevent path traversal.
+/// Falls back to a safe default filename if URL filename is invalid.
 fn construct_dest_path(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> PathBuf {
     let default_filename = format!("{}-{}.rpm", repo_pkg.name, repo_pkg.version);
-    let filename = repo_pkg
+
+    // Extract filename from URL
+    let url_filename = repo_pkg
         .download_url
         .split('/')
         .next_back()
         .unwrap_or(&default_filename);
+
+    // Sanitize the filename to prevent path traversal attacks
+    // If sanitization fails (e.g., filename contains path separators or is ".."),
+    // fall back to the safe default filename
+    let filename = sanitize_filename(url_filename).unwrap_or_else(|_| {
+        warn!(
+            "Invalid filename in URL '{}', using default: {}",
+            repo_pkg.download_url, default_filename
+        );
+        default_filename.clone()
+    });
+
     dest_dir.join(filename)
 }
 
@@ -260,16 +278,26 @@ pub fn download_delta(
 ) -> Result<PathBuf> {
     let client = RepositoryClient::new()?;
 
-    // Construct destination path
+    // Construct destination path with sanitization
     let default_filename = format!(
         "{}-{}-to-{}.delta",
         package_name, delta_info.from_version, to_version
     );
-    let filename = delta_info
+
+    // Extract filename from URL and sanitize to prevent path traversal
+    let url_filename = delta_info
         .delta_url
         .split('/')
         .next_back()
         .unwrap_or(&default_filename);
+
+    let filename = sanitize_filename(url_filename).unwrap_or_else(|_| {
+        warn!(
+            "Invalid filename in delta URL '{}', using default: {}",
+            delta_info.delta_url, default_filename
+        );
+        default_filename.clone()
+    });
 
     let dest_path = dest_dir.join(filename);
 
