@@ -73,36 +73,52 @@ Turn any CCS package into an OCI container image with one command. No Dockerfile
 
 ### Commands Available
 
-Commands are organized into logical subcommand groups for easier discovery and use.
+Primary commands are at root level for convenience. Advanced commands are organized into subcommand groups.
 
-**Package Management (`conary package`):**
-- `conary package install <package>` - Install packages from file or repository (supports --version, --repo, --dry-run, --no-scripts, --sandbox)
-- `conary package remove <package>` - Remove installed packages (checks dependencies, supports --sandbox)
-- `conary package update [package]` - Update packages with delta-first logic (supports --security for security-only updates)
-- `conary package update-group <name>` - Update all packages in a collection atomically
-- `conary package autoremove` - Remove orphaned dependencies no longer needed (supports --sandbox)
-- `conary package verify [package]` - Verify file integrity with SHA-256
-- `conary package restore <package>` - Restore modified/deleted files from CAS
-- `conary package pin <package>` - Pin package to prevent updates
-- `conary package unpin <package>` - Unpin package to allow updates
-- `conary package list-pinned` - List all pinned packages
-- `conary package scripts <package.rpm>` - Display scriptlets from a package file
-- `conary package delta-stats` - Show delta update statistics and bandwidth savings
+**Primary Commands:**
+- `conary install <package|@collection>` - Install packages or collections (supports --version, --repo, --dry-run, --no-scripts, --sandbox)
+- `conary remove <package>` - Remove installed packages (checks dependencies, supports --sandbox)
+- `conary update [package|@collection]` - Update packages with delta-first logic (supports --security for security-only updates)
+- `conary search <pattern>` - Search for packages in repositories
+- `conary list [pattern]` - List installed packages (supports --path, --info, --files, --lsl, --pinned)
+- `conary autoremove` - Remove orphaned dependencies no longer needed (supports --sandbox)
+- `conary pin <package>` - Pin package to prevent updates
+- `conary unpin <package>` - Unpin package to allow updates
 
-**Query & Information (`conary query`):**
-- `conary query list [pattern]` - List installed packages (supports --path, --info, --files, --lsl)
-- `conary query repquery [pattern]` - Query packages available in repositories
-- `conary query reason [pattern]` - Show installation reasons for packages
-- `conary query depends <package>` - Show package dependencies
-- `conary query rdepends <package>` - Show reverse dependencies (what depends on this)
-- `conary query deptree <package>` - Show full dependency tree visualization
-- `conary query whatbreaks <package>` - Show what would break if package removed
-- `conary query whatprovides <capability>` - Find what package provides a capability
-- `conary query list-components <package>` - Show components of an installed package
-- `conary query component <pkg:comp>` - Query files in a specific component
-- `conary query search <pattern>` - Search for packages in repositories
-- `conary query history` - Show all changeset operations
-- `conary query sbom <package>` - Generate CycloneDX 1.5 SBOM for a package
+**System Administration (`conary system`):**
+- `conary system init` - Initialize database and storage
+- `conary system completions <shell>` - Generate shell completion scripts
+- `conary system history` - Show all changeset operations
+- `conary system verify [package]` - Verify file integrity with SHA-256
+- `conary system restore <package>` - Restore modified/deleted files from CAS
+- `conary system adopt <packages>` - Adopt system packages (use --system for all, --status for summary)
+- `conary system gc` - Garbage collect unreferenced objects from CAS
+- `conary system sbom <package>` - Generate CycloneDX 1.5 SBOM for a package
+
+*Nested under `conary system state`:*
+- `conary system state list` - List all system state snapshots
+- `conary system state show <id>` - Show state details
+- `conary system state diff <id1> <id2>` - Compare two states
+- `conary system state revert <id>` - Revert system to a previous state
+- `conary system state prune` - Remove old state snapshots
+- `conary system state create` - Create a manual state snapshot
+- `conary system state rollback <id>` - Rollback any changeset, including filesystem changes
+
+*Nested under `conary system trigger`:*
+- `conary system trigger list` - List all registered triggers
+- `conary system trigger show <name>` - Show trigger details
+- `conary system trigger enable <name>` - Enable a trigger
+- `conary system trigger disable <name>` - Disable a trigger
+- `conary system trigger add` - Register a new trigger
+- `conary system trigger remove <name>` - Remove a trigger
+- `conary system trigger run <name>` - Manually run a trigger
+
+*Nested under `conary system redirect`:*
+- `conary system redirect list` - List all package redirects
+- `conary system redirect add <source> <target>` - Create a redirect (renames, obsoletes)
+- `conary system redirect show <source>` - Show redirect details
+- `conary system redirect remove <source>` - Remove a redirect
+- `conary system redirect resolve <package>` - Resolve package through redirect chain
 
 **Repository Management (`conary repo`):**
 - `conary repo add <name> <url>` - Add a new package repository (supports `--content-url` for reference mirrors)
@@ -123,47 +139,38 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - `conary config check` - Check config file status (pristine/modified/missing)
 - `conary config backups` - List available config backups
 
-**State Snapshots (`conary state`):**
-- `conary state list` - List all system state snapshots
-- `conary state show <id>` - Show state details
-- `conary state diff <id1> <id2>` - Compare two states
-- `conary state restore <id>` - Show restore plan to rollback to a state
-- `conary state prune` - Remove old state snapshots
-- `conary state create` - Create a manual state snapshot
-- `conary state rollback <id>` - Rollback any changeset, including filesystem changes
+**Query & Analysis (`conary query`):**
+- `conary query depends <package>` - Show package dependencies
+- `conary query rdepends <package>` - Show reverse dependencies (what depends on this)
+- `conary query deptree <package>` - Show full dependency tree visualization
+- `conary query whatprovides <capability>` - Find what package provides a capability
+- `conary query whatbreaks <package>` - Show what would break if package removed
+- `conary query reason [pattern]` - Show installation reasons for packages
+- `conary query repquery [pattern]` - Query packages available in repositories
+- `conary query component <pkg:comp>` - Query files in a specific component
+- `conary query components <package>` - Show components of an installed package
+- `conary query scripts <package.rpm>` - Display scriptlets from a package file
+- `conary query delta-stats` - Show delta update statistics and bandwidth savings
+- `conary query conflicts` - Show file conflicts between packages
 
-**Trigger Management (`conary trigger`):**
-- `conary trigger list` - List all registered triggers
-- `conary trigger show <name>` - Show trigger details
-- `conary trigger enable <name>` - Enable a trigger
-- `conary trigger disable <name>` - Disable a trigger
-- `conary trigger add` - Register a new trigger
-- `conary trigger remove <name>` - Remove a trigger
-- `conary trigger run <name>` - Manually run a trigger
-
-**Label & Provenance (`conary label`):**
-- `conary label list` - List all labels
-- `conary label add <label>` - Add a new label
-- `conary label remove <label>` - Remove a label
-- `conary label show <label>` - Show label details
-- `conary label set <package> <label>` - Set package label
-- `conary label query <label>` - Query packages by label
-- `conary label path` - Show label search path
+*Nested under `conary query label`:*
+- `conary query label list` - List all labels
+- `conary query label add <label>` - Add a new label
+- `conary query label remove <label>` - Remove a label
+- `conary query label show <package>` - Show label for a package
+- `conary query label set <package> <label>` - Set package label
+- `conary query label query <label>` - Query packages by label
+- `conary query label path` - Show label search path
 
 **Collection Management (`conary collection`):**
 - `conary collection create <name>` - Create a new package collection
 - `conary collection list` - List all collections
 - `conary collection show <name>` - Show collection details and members
-- `conary collection add <name> --members <pkg1,pkg2>` - Add packages to collection
-- `conary collection remove <name> --members <pkg1,pkg2>` - Remove packages from collection
+- `conary collection add <name> <pkg1,pkg2>` - Add packages to collection
+- `conary collection remove <name> <pkg1,pkg2>` - Remove packages from collection
 - `conary collection delete <name>` - Delete a collection
-- `conary collection install <name>` - Install all packages in a collection
 
-**System Adoption (`conary package`):**
-- `conary package adopt <package>` - Adopt a single system package into Conary
-- `conary package adopt-system` - Scan and adopt all system packages
-- `conary package adopt-status` - Show adoption status summary
-- `conary package conflicts` - Show file conflicts between packages
+*Note: Use `conary install @collection-name` to install a collection.*
 
 **System Model (`conary model`) - Declarative OS:**
 - `conary model snapshot` - Capture current system state to a model file
@@ -188,18 +195,6 @@ Commands are organized into logical subcommand groups for easier discovery and u
 - `conary derive build <name>` - Build a derived package
 - `conary derive list` - List derived packages
 - `conary derive show <name>` - Show derived package details
-
-**Package Redirects (`conary redirect`):**
-- `conary redirect list` - List all package redirects
-- `conary redirect add <source> <target>` - Create a redirect (renames, obsoletes)
-- `conary redirect show <source>` - Show redirect details
-- `conary redirect remove <source>` - Remove a redirect
-- `conary redirect resolve <package>` - Resolve package through redirect chain
-
-**System Commands (`conary system`):**
-- `conary system init` - Initialize database and storage
-- `conary system completions <shell>` - Generate shell completion scripts
-- `conary system gc` - Garbage collect unreferenced objects from CAS
 
 ### Core Features
 
@@ -410,19 +405,19 @@ conary repo list
 conary repo sync
 
 # Search for packages
-conary query search nginx
+conary search nginx
 
 # Install from repository by name
-conary package install nginx
+conary install nginx
 
 # Install specific version
-conary package install nginx --version=1.20.1
+conary install nginx --version=1.20.1
 
 # Install from specific repository
-conary package install nginx --repo=myrepo
+conary install nginx --repo=myrepo
 
 # Preview installation without installing
-conary package install nginx --dry-run
+conary install nginx --dry-run
 ```
 
 ### System Model Usage (Declarative OS)
@@ -476,13 +471,16 @@ conary collection list
 conary collection show web-stack
 
 # Add more packages
-conary collection add web-stack --members memcached,nodejs
+conary collection add web-stack memcached,nodejs
 
-# Install all packages in a collection
-conary collection install web-stack
+# Install all packages in a collection (use @name syntax)
+conary install @web-stack
+
+# Update all packages in a collection
+conary update @web-stack
 
 # Remove packages from collection
-conary collection remove web-stack --members memcached
+conary collection remove web-stack memcached
 
 # Delete collection (doesn't uninstall packages)
 conary collection delete web-stack

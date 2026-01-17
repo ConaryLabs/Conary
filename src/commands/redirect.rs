@@ -85,7 +85,7 @@ pub fn cmd_redirect_add(
         } else {
             source.to_string()
         };
-        return Err(anyhow::anyhow!("Redirect for '{}' already exists", source_desc).into());
+        return Err(anyhow::anyhow!("Redirect for '{}' already exists", source_desc));
     }
 
     // Check for circular redirects before adding
@@ -95,7 +95,7 @@ pub fn cmd_redirect_add(
         return Err(anyhow::anyhow!(
             "Adding this redirect would create a circular chain: {} -> {} -> {}",
             source, target, source
-        ).into());
+        ));
     }
 
     let mut redirect = Redirect::new(source.to_string(), target.to_string(), rtype);

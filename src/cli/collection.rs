@@ -77,30 +77,4 @@ pub enum CollectionCommands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
-
-    /// Install all packages in a collection
-    Install {
-        /// Name of the collection
-        name: String,
-
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
-
-        /// Show what would be installed without making changes
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip optional packages in the collection
-        #[arg(long)]
-        skip_optional: bool,
-
-        /// Sandbox mode for scriptlets: auto, always, never (default: never)
-        #[arg(long, default_value = "never")]
-        sandbox: String,
-    },
 }

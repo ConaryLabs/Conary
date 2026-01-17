@@ -39,9 +39,9 @@ pub enum StateCommands {
         db_path: String,
     },
 
-    /// Restore system to a previous state
-    Restore {
-        /// State number to restore to
+    /// Revert system to a previous state
+    Revert {
+        /// State number to revert to
         state_number: i64,
 
         /// Path to the database file

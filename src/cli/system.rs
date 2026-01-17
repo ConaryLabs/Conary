@@ -1,8 +1,12 @@
 // src/cli/system.rs
-//! System-level commands: init, completions, server
+//! System-level commands: init, completions, gc, state, triggers, redirects, etc.
 
 use clap::Subcommand;
 use clap_complete::Shell;
+
+use super::redirect::RedirectCommands;
+use super::state::StateCommands;
+use super::trigger::TriggerCommands;
 
 #[derive(Subcommand)]
 pub enum SystemCommands {
@@ -18,6 +22,127 @@ pub enum SystemCommands {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
+    },
+
+    /// Show changeset history
+    History {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
+
+    /// Verify installed files
+    Verify {
+        /// Optional package name to verify (verifies all if not specified)
+        package: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Verify adopted packages against RPM database instead of CAS
+        #[arg(long)]
+        rpm: bool,
+    },
+
+    /// Restore files from CAS to filesystem
+    Restore {
+        /// Package name to restore (or "all" to check all packages)
+        package: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Installation root directory
+        #[arg(short, long, default_value = "/")]
+        root: String,
+
+        /// Force restore even if files exist (overwrite)
+        #[arg(short, long)]
+        force: bool,
+
+        /// Show what would be restored without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Adopt system packages into Conary tracking
+    ///
+    /// Use --system to adopt all packages, or specify package names.
+    /// Use --status to show adoption progress.
+    Adopt {
+        /// Package name(s) to adopt (ignored if --system or --status)
+        #[arg(required_unless_present_any = ["system", "status"])]
+        packages: Vec<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Copy files to CAS for full management (enables rollback)
+        #[arg(long)]
+        full: bool,
+
+        /// Adopt all installed system packages
+        #[arg(long)]
+        system: bool,
+
+        /// Show adoption status
+        #[arg(long)]
+        status: bool,
+
+        /// Show what would be adopted without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Garbage collect unreferenced files from CAS storage
+    ///
+    /// Removes files from the content-addressable store that are no longer
+    /// referenced by any installed package. Preserves files needed for rollback
+    /// by keeping references from file_history within the retention period.
+    Gc {
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Path to CAS objects directory
+        #[arg(long, default_value = "/var/lib/conary/objects")]
+        objects_dir: String,
+
+        /// Days of history to preserve for rollback (default: 30)
+        #[arg(long, default_value = "30")]
+        keep_days: u32,
+
+        /// Show what would be removed without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Generate SBOM (Software Bill of Materials) for a package
+    ///
+    /// Outputs a CycloneDX 1.5 format SBOM in JSON. This is useful for
+    /// security auditing, compliance, and vulnerability scanning.
+    Sbom {
+        /// Package name (or "all" for entire system)
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Output format
+        #[arg(short, long, default_value = "cyclonedx")]
+        format: String,
+
+        /// Output to file instead of stdout
+        #[arg(short, long)]
+        output: Option<String>,
     },
 
     /// Generate repository index for the Refinery server
@@ -122,26 +247,18 @@ pub enum SystemCommands {
         chunk_ttl_days: u32,
     },
 
-    /// Garbage collect unreferenced files from CAS storage
-    ///
-    /// Removes files from the content-addressable store that are no longer
-    /// referenced by any installed package. Preserves files needed for rollback
-    /// by keeping references from file_history within the retention period.
-    Gc {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+    // =========================================================================
+    // Nested Subcommands
+    // =========================================================================
+    /// System state snapshots and rollback
+    #[command(subcommand)]
+    State(StateCommands),
 
-        /// Path to CAS objects directory
-        #[arg(long, default_value = "/var/lib/conary/objects")]
-        objects_dir: String,
+    /// Trigger management
+    #[command(subcommand)]
+    Trigger(TriggerCommands),
 
-        /// Days of history to preserve for rollback (default: 30)
-        #[arg(long, default_value = "30")]
-        keep_days: u32,
-
-        /// Show what would be removed without actually deleting
-        #[arg(long)]
-        dry_run: bool,
-    },
+    /// Package redirect management (renames, obsoletes)
+    #[command(subcommand)]
+    Redirect(RedirectCommands),
 }
