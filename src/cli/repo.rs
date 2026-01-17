@@ -45,6 +45,25 @@ pub enum RepoCommands {
         /// Require all packages to have valid GPG signatures (strict mode)
         #[arg(long)]
         gpg_strict: bool,
+
+        /// Default resolution strategy for packages from this repository
+        ///
+        /// When no per-package routing entry exists, use this strategy:
+        /// - remi: Convert packages via Remi server (requires --remi-endpoint and --remi-distro)
+        /// - binary: Download pre-built packages directly (default behavior)
+        /// - legacy: Use repository_packages table (same as binary)
+        #[arg(long, value_name = "STRATEGY")]
+        default_strategy: Option<String>,
+
+        /// Remi server endpoint URL (required when --default-strategy=remi)
+        #[arg(long, value_name = "URL")]
+        remi_endpoint: Option<String>,
+
+        /// Distribution name for Remi conversion (required when --default-strategy=remi)
+        ///
+        /// Examples: fedora, arch, debian, ubuntu
+        #[arg(long, value_name = "DISTRO")]
+        remi_distro: Option<String>,
     },
 
     /// List configured repositories

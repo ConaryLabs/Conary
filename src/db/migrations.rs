@@ -1528,3 +1528,33 @@ pub fn migrate_v30(conn: &Connection) -> Result<()> {
     info!("Schema version 30 applied successfully (label federation)");
     Ok(())
 }
+
+/// Version 31: Repository default resolution strategy
+///
+/// Adds columns to repositories table for default resolution strategy.
+/// When no per-package routing entry exists in `package_resolution`,
+/// the resolver uses the repository's default strategy.
+///
+/// This enables seamless Remi integration: add a repo with `--default-strategy=remi`
+/// and all packages from that repo automatically use Remi for conversion.
+pub fn migrate_v31(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 31");
+
+    conn.execute_batch(
+        "
+        -- Default resolution strategy for packages without explicit routing entries
+        -- Values: 'binary', 'remi', 'recipe', 'delegate', 'legacy', NULL
+        -- NULL means no default (use per-package routing or legacy fallback)
+        ALTER TABLE repositories ADD COLUMN default_strategy TEXT;
+
+        -- For 'remi' strategy: the Remi server endpoint URL
+        ALTER TABLE repositories ADD COLUMN default_strategy_endpoint TEXT;
+
+        -- For 'remi' strategy: the distribution name (fedora, arch, debian, etc.)
+        ALTER TABLE repositories ADD COLUMN default_strategy_distro TEXT;
+        ",
+    )?;
+
+    info!("Schema version 31 applied successfully (repository default strategy)");
+    Ok(())
+}

@@ -320,7 +320,7 @@ Move from file-level to chunk-level for massive efficiency gains. CDC gives "del
 - [x] **Chunk CAS Storage** - Store converted chunks in content-addressed storage
 - [x] **Client Integration** - RemiClient with automatic polling and chunk assembly
 - [x] **LRU Cache Design** - Evict old chunks to manage disk space (implementation pending)
-- [x] **Deployed** - Running on crucible.conary.io (Hetzner i7-8700, 64GB, 2x1TB NVMe ZFS mirror)
+- [x] **Deployed** - Running on remi.conary.io (Hetzner i7-8700, 64GB, 2x1TB NVMe ZFS mirror)
 
 **Phase 3: HTTP Chunk Repository**
 - [ ] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`)

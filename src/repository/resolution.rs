@@ -247,7 +247,7 @@ impl<'a> PackageResolver<'a> {
         self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx)
     }
 
-    /// Get resolution strategies from routing table, or construct legacy fallback
+    /// Get resolution strategies from routing table, repo default, or legacy fallback
     fn get_strategies_or_legacy(
         &self,
         pkg_with_repo: &PackageWithRepo,
@@ -257,7 +257,7 @@ impl<'a> PackageResolver<'a> {
             Error::InitError("Repository missing ID".to_string())
         })?;
 
-        // Check routing table first
+        // Check routing table first (per-package routing)
         if let Some(resolution) = PackageResolution::find(
             self.conn,
             repo_id,
@@ -271,6 +271,45 @@ impl<'a> PackageResolver<'a> {
                 resolution.primary_strategy
             );
             return Ok(resolution.strategies);
+        }
+
+        // Check repository's default strategy
+        if let Some(ref strategy) = pkg_with_repo.repository.default_strategy {
+            debug!(
+                "No routing entry for {}, using repo default strategy: {}",
+                pkg_with_repo.package.name, strategy
+            );
+
+            match strategy.as_str() {
+                "remi" => {
+                    // Construct Remi strategy from repo config
+                    let endpoint = pkg_with_repo.repository.default_strategy_endpoint.clone()
+                        .ok_or_else(|| Error::ConfigError(
+                            format!("Repository '{}' has default_strategy=remi but no endpoint configured",
+                                pkg_with_repo.repository.name)
+                        ))?;
+                    let distro = pkg_with_repo.repository.default_strategy_distro.clone()
+                        .ok_or_else(|| Error::ConfigError(
+                            format!("Repository '{}' has default_strategy=remi but no distro configured",
+                                pkg_with_repo.repository.name)
+                        ))?;
+
+                    return Ok(vec![ResolutionStrategy::Remi {
+                        endpoint,
+                        distro,
+                        source_name: None, // Use package name as-is
+                    }]);
+                }
+                "binary" | "legacy" => {
+                    // Fall through to legacy handling below
+                }
+                other => {
+                    warn!(
+                        "Unknown default_strategy '{}' for repo '{}', falling back to legacy",
+                        other, pkg_with_repo.repository.name
+                    );
+                }
+            }
         }
 
         // Implicit legacy fallback - construct from repository_packages

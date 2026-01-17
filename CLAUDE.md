@@ -91,7 +91,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v30. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution.
+Currently v31. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -116,6 +116,7 @@ Key schema additions:
 - v28: `redirects` table - package redirect/rename/obsolete tracking
 - v29: `package_resolution` table - per-package routing strategies (binary, remi, recipe, delegate)
 - v30: `repository_id`, `delegate_to_label_id` columns on labels - label federation support
+- v31: `default_strategy`, `default_strategy_endpoint`, `default_strategy_distro` columns on repositories - repo-level default resolution strategy
 
 ## Testing
 

@@ -29,11 +29,27 @@ pub fn cmd_repo_add(
     gpg_key: Option<String>,
     no_gpg_check: bool,
     gpg_strict: bool,
+    default_strategy: Option<String>,
+    remi_endpoint: Option<String>,
+    remi_distro: Option<String>,
 ) -> Result<()> {
     info!("Adding repository: {} ({})", name, url);
+
+    // Validate remi strategy configuration
+    if let Some(ref strategy) = default_strategy {
+        if strategy == "remi" {
+            if remi_endpoint.is_none() {
+                anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
+            }
+            if remi_distro.is_none() {
+                anyhow::bail!("--remi-distro is required when --default-strategy=remi");
+            }
+        }
+    }
+
     let conn = conary::db::open(db_path)?;
 
-    // Create the repository with GPG settings
+    // Create the repository with all settings
     let mut repo = conary::db::models::Repository::new(name.to_string(), url.to_string());
     repo.content_url = content_url;
     repo.enabled = !disabled;
@@ -41,6 +57,9 @@ pub fn cmd_repo_add(
     repo.gpg_check = !no_gpg_check;
     repo.gpg_strict = gpg_strict;
     repo.gpg_key_url = gpg_key.clone();
+    repo.default_strategy = default_strategy.clone();
+    repo.default_strategy_endpoint = remi_endpoint;
+    repo.default_strategy_distro = remi_distro;
 
     repo.insert(&conn)?;
 
@@ -54,6 +73,19 @@ pub fn cmd_repo_add(
     println!("  GPG Check: {}", repo.gpg_check);
     if repo.gpg_strict {
         println!("  GPG Strict: true (missing signatures will fail)");
+    }
+
+    // Show default strategy if configured
+    if let Some(ref strategy) = repo.default_strategy {
+        println!("  Default Strategy: {}", strategy);
+        if strategy == "remi" {
+            if let Some(ref endpoint) = repo.default_strategy_endpoint {
+                println!("  Remi Endpoint: {}", endpoint);
+            }
+            if let Some(ref distro) = repo.default_strategy_distro {
+                println!("  Remi Distro: {}", distro);
+            }
+        }
     }
 
     // If GPG key was provided, import it

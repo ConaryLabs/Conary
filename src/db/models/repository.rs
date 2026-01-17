@@ -24,6 +24,13 @@ pub struct Repository {
     pub metadata_expire: i32,
     pub last_sync: Option<String>,
     pub created_at: Option<String>,
+    /// Default resolution strategy for packages without explicit routing entries
+    /// Values: "binary", "remi", "recipe", "delegate", "legacy", or None
+    pub default_strategy: Option<String>,
+    /// For "remi" strategy: the Remi server endpoint URL
+    pub default_strategy_endpoint: Option<String>,
+    /// For "remi" strategy: the distribution name (fedora, arch, debian, etc.)
+    pub default_strategy_distro: Option<String>,
 }
 
 impl Repository {
@@ -42,6 +49,9 @@ impl Repository {
             metadata_expire: 3600, // Default: 1 hour
             last_sync: None,
             created_at: None,
+            default_strategy: None,
+            default_strategy_endpoint: None,
+            default_strategy_distro: None,
         }
     }
 
@@ -60,6 +70,9 @@ impl Repository {
             metadata_expire: 3600,
             last_sync: None,
             created_at: None,
+            default_strategy: None,
+            default_strategy_endpoint: None,
+            default_strategy_distro: None,
         }
     }
 
@@ -72,8 +85,8 @@ impl Repository {
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 &self.name,
                 &self.url,
@@ -84,6 +97,9 @@ impl Repository {
                 self.gpg_strict as i32,
                 &self.gpg_key_url,
                 &self.metadata_expire,
+                &self.default_strategy,
+                &self.default_strategy_endpoint,
+                &self.default_strategy_distro,
             ],
         )?;
 
@@ -95,7 +111,7 @@ impl Repository {
     /// Find a repository by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
              FROM repositories WHERE id = ?1",
         )?;
 
@@ -107,7 +123,7 @@ impl Repository {
     /// Find a repository by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
              FROM repositories WHERE name = ?1",
         )?;
 
@@ -119,7 +135,7 @@ impl Repository {
     /// List all repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
              FROM repositories ORDER BY priority DESC, name",
         )?;
 
@@ -133,7 +149,7 @@ impl Repository {
     /// List enabled repositories
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at
+            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
              FROM repositories WHERE enabled = 1 ORDER BY priority DESC, name",
         )?;
 
@@ -152,7 +168,9 @@ impl Repository {
 
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
-             gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10 WHERE id = ?11",
+             gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10,
+             default_strategy = ?11, default_strategy_endpoint = ?12, default_strategy_distro = ?13
+             WHERE id = ?14",
             params![
                 &self.name,
                 &self.url,
@@ -164,6 +182,9 @@ impl Repository {
                 &self.gpg_key_url,
                 &self.metadata_expire,
                 &self.last_sync,
+                &self.default_strategy,
+                &self.default_strategy_endpoint,
+                &self.default_strategy_distro,
                 id,
             ],
         )?;
@@ -192,6 +213,9 @@ impl Repository {
             metadata_expire: row.get(9)?,
             last_sync: row.get(10)?,
             created_at: row.get(11)?,
+            default_strategy: row.get(12)?,
+            default_strategy_endpoint: row.get(13)?,
+            default_strategy_distro: row.get(14)?,
         })
     }
 }

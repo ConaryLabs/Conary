@@ -21,6 +21,10 @@ pub enum Error {
     #[error("Failed to initialize database: {0}")]
     InitError(String),
 
+    /// Configuration error
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
     /// Database not found
     #[error("Database not found at path: {0}")]
     DatabaseNotFound(String),

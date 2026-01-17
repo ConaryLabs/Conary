@@ -359,8 +359,8 @@ fn main() -> Result<()> {
         // Repository Commands
         // =====================================================================
         Some(Commands::Repo(repo_cmd)) => match repo_cmd {
-            cli::RepoCommands::Add { name, url, db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict } => {
-                commands::cmd_repo_add(&name, &url, &db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict)
+            cli::RepoCommands::Add { name, url, db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict, default_strategy, remi_endpoint, remi_distro } => {
+                commands::cmd_repo_add(&name, &url, &db_path, content_url, priority, disabled, gpg_key, no_gpg_check, gpg_strict, default_strategy, remi_endpoint, remi_distro)
             }
 
             cli::RepoCommands::List { db_path, all } => {
