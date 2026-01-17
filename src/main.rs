@@ -165,6 +165,10 @@ fn main() -> Result<()> {
             cli::QueryCommands::History { db_path } => {
                 commands::cmd_history(&db_path)
             }
+
+            cli::QueryCommands::Sbom { package_name, db_path, format, output } => {
+                commands::cmd_sbom(&package_name, &db_path, &format, output.as_deref())
+            }
         }
 
         // =====================================================================

@@ -39,7 +39,7 @@ pub use remove::{cmd_autoremove, cmd_remove};
 pub use conary::scriptlet::SandboxMode;
 pub use label::{cmd_label_add, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_whatbreaks, cmd_whatprovides, QueryOptions};
+pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom, cmd_whatbreaks, cmd_whatprovides, QueryOptions};
 pub use repo::{
     cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,

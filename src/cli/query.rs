@@ -160,4 +160,25 @@ pub enum QueryCommands {
         #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
         db_path: String,
     },
+
+    /// Generate SBOM (Software Bill of Materials) for a package
+    ///
+    /// Outputs a CycloneDX 1.5 format SBOM in JSON. This is useful for
+    /// security auditing, compliance, and vulnerability scanning.
+    Sbom {
+        /// Package name (or "all" for entire system)
+        package_name: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+
+        /// Output format
+        #[arg(short, long, default_value = "cyclonedx")]
+        format: String,
+
+        /// Output to file instead of stdout
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
