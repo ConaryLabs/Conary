@@ -12,9 +12,10 @@ use conary::db::models::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedS
 use conary::derived::build_from_definition;
 use conary::filesystem::CasStore;
 use conary::hash::sha256;
+use conary::db::models::{CollectionMember, Repository, Trove, TroveType};
 use conary::model::{
-    capture_current_state, compute_diff, parse_model_file, snapshot_to_model,
-    DiffAction, ModelDerivedPackage,
+    capture_current_state, compute_diff, compute_diff_with_includes, parse_model_file,
+    snapshot_to_model, DiffAction, ModelDerivedPackage,
 };
 use rusqlite::Connection;
 use tracing::info;
@@ -179,8 +180,13 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
     let state = capture_current_state(&conn)?;
 
-    // Compute diff
-    let diff = compute_diff(&model, &state);
+    // Compute diff, resolving includes if present
+    let diff = if model.has_includes() {
+        println!("Resolving {} remote include(s)...", model.include.models.len());
+        compute_diff_with_includes(&model, &state, &conn)?
+    } else {
+        compute_diff(&model, &state)
+    };
 
     if diff.is_empty() {
         println!("System is in sync with model - no changes needed");
@@ -274,8 +280,13 @@ pub fn cmd_model_apply(
     let conn = db::open(db_path)?;
     let state = capture_current_state(&conn)?;
 
-    // Compute diff
-    let diff = compute_diff(&model, &state);
+    // Compute diff, resolving includes if present
+    let diff = if model.has_includes() {
+        println!("Resolving {} remote include(s)...", model.include.models.len());
+        compute_diff_with_includes(&model, &state, &conn)?
+    } else {
+        compute_diff(&model, &state)
+    };
 
     if diff.is_empty() {
         println!("System is already in sync with model - no changes needed");
@@ -494,8 +505,12 @@ pub fn cmd_model_check(
     let conn = db::open(db_path)?;
     let state = capture_current_state(&conn)?;
 
-    // Compute diff
-    let diff = compute_diff(&model, &state);
+    // Compute diff, resolving includes if present
+    let diff = if model.has_includes() {
+        compute_diff_with_includes(&model, &state, &conn)?
+    } else {
+        compute_diff(&model, &state)
+    };
 
     if diff.is_empty() {
         println!("OK: System matches model");
@@ -572,6 +587,154 @@ pub fn cmd_model_snapshot(
     println!("Edit the file to customize, then run:");
     println!("  conary model-diff -m {}   # Preview changes", output_path);
     println!("  conary model-apply -m {}  # Apply changes", output_path);
+
+    Ok(())
+}
+
+/// Publish a system model as a versioned collection to a local repository
+///
+/// This creates a collection (group trove) from the model file and stores it
+/// in a local repository. Other systems can then include this collection
+/// using the `[include]` directive in their model files.
+pub fn cmd_model_publish(
+    model_path: &str,
+    name: &str,
+    version: &str,
+    repo_name: &str,
+    description: Option<&str>,
+    db_path: &str,
+) -> Result<()> {
+    // Check if model file exists
+    let model_path = Path::new(model_path);
+    if !model_path.exists() {
+        return Err(anyhow!("Model file not found: {}", model_path.display()));
+    }
+
+    // Load the model
+    let model = parse_model_file(model_path)?;
+
+    // Ensure group- prefix
+    let group_name = if name.starts_with("group-") {
+        name.to_string()
+    } else {
+        format!("group-{}", name)
+    };
+
+    println!("Publishing model as collection '{}'...", group_name);
+
+    // Open database
+    let mut conn = db::open(db_path)?;
+
+    // Get repository and verify it's local
+    let repo = Repository::find_by_name(&conn, repo_name)?
+        .ok_or_else(|| anyhow!("Repository '{}' not found", repo_name))?;
+
+    let repo_url = &repo.url;
+    if !repo_url.starts_with("file://") && !repo_url.starts_with('/') {
+        return Err(anyhow!(
+            "Publishing only supported to local repositories. '{}' is remote (URL: {})",
+            repo_name,
+            repo_url
+        ));
+    }
+
+    // Get the repository path
+    let repo_path = repo_url.strip_prefix("file://").unwrap_or(repo_url);
+    let repo_dir = Path::new(repo_path);
+
+    // Verify repository path exists and is writable
+    if !repo_dir.exists() {
+        return Err(anyhow!("Repository path does not exist: {}", repo_path));
+    }
+    if !repo_dir.is_dir() {
+        return Err(anyhow!("Repository path is not a directory: {}", repo_path));
+    }
+
+    // Check write permission by attempting to create a temp file
+    let test_path = repo_dir.join(".conary_write_test");
+    std::fs::write(&test_path, b"test")
+        .map_err(|e| anyhow!("No write permission to repository {}: {}", repo_path, e))?;
+    std::fs::remove_file(&test_path)?;
+
+    // Check if collection already exists
+    let existing = Trove::find_by_name(&conn, &group_name)?;
+    if !existing.is_empty() {
+        // Check if it's a collection
+        if existing.iter().any(|t| t.trove_type == TroveType::Collection) {
+            return Err(anyhow!(
+                "Collection '{}' already exists. Use a different name or remove the existing one.",
+                group_name
+            ));
+        }
+    }
+
+    // Create the collection in the database
+    db::transaction(&mut conn, |tx| {
+        // Create the collection trove
+        let mut trove = Trove::new(
+            group_name.clone(),
+            version.to_string(),
+            TroveType::Collection,
+        );
+        trove.description = description.map(|s| s.to_string());
+        trove.selection_reason = Some(format!("Published from {}", model_path.display()));
+        let collection_id = trove.insert(tx)?;
+
+        info!("Created collection '{}' with id={}", group_name, collection_id);
+
+        // Add members from the model's install list
+        for pkg_name in &model.config.install {
+            let version_constraint = model.pin.get(pkg_name).cloned();
+            let is_optional = model.optional.packages.contains(pkg_name);
+
+            let mut member = CollectionMember::new(collection_id, pkg_name.clone());
+            if let Some(v) = version_constraint {
+                member = member.with_version(v);
+            }
+            if is_optional {
+                member = member.optional();
+            }
+            member.insert(tx)?;
+        }
+
+        // Also add optional packages that aren't in the install list
+        for pkg_name in &model.optional.packages {
+            if !model.config.install.contains(pkg_name) {
+                let mut member = CollectionMember::new(collection_id, pkg_name.clone())
+                    .optional();
+                if let Some(v) = model.pin.get(pkg_name) {
+                    member = member.with_version(v.clone());
+                }
+                member.insert(tx)?;
+            }
+        }
+
+        Ok(collection_id)
+    })?;
+
+    // Count members for summary
+    let member_count = model.config.install.len() + model.optional.packages.iter()
+        .filter(|p| !model.config.install.contains(*p))
+        .count();
+    let optional_count = model.optional.packages.len();
+    let pinned_count = model.pin.len();
+
+    println!();
+    println!("Published {} v{} to repository '{}'", group_name, version, repo_name);
+    println!("  Members: {} package(s)", member_count);
+    if optional_count > 0 {
+        println!("  Optional: {} package(s)", optional_count);
+    }
+    if pinned_count > 0 {
+        println!("  Pinned: {} package(s)", pinned_count);
+    }
+    if !model.config.exclude.is_empty() {
+        println!("  Exclude: {} package(s)", model.config.exclude.len());
+    }
+    println!();
+    println!("Other systems can now include this collection:");
+    println!("  [include]");
+    println!("  models = [\"{}@{}:stable\"]", group_name, repo_name);
 
     Ok(())
 }

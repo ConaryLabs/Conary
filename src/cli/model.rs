@@ -92,4 +92,38 @@ pub enum ModelCommands {
         #[arg(long)]
         description: Option<String>,
     },
+
+    /// Publish a system model as a versioned collection to a repository
+    ///
+    /// Converts a system.toml into a CCS collection package and stores it
+    /// in a local repository. This allows other systems to include the
+    /// model using the [include] directive.
+    ///
+    /// Note: Currently only supports local repositories (file:// URLs).
+    /// Remote publishing requires repository authentication (not yet implemented).
+    Publish {
+        /// Path to system model file
+        #[arg(short, long, default_value = "/etc/conary/system.toml")]
+        model: String,
+
+        /// Name for the published collection (will add group- prefix if missing)
+        #[arg(short, long)]
+        name: String,
+
+        /// Version string for the published collection
+        #[arg(short, long)]
+        version: String,
+
+        /// Repository to publish to (must be a local repository)
+        #[arg(short, long)]
+        repo: String,
+
+        /// Description of the collection
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+        db_path: String,
+    },
 }

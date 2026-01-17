@@ -637,6 +637,10 @@ fn main() -> Result<()> {
             cli::ModelCommands::Snapshot { output, db_path, description } => {
                 commands::cmd_model_snapshot(&output, &db_path, description.as_deref())
             }
+
+            cli::ModelCommands::Publish { model, name, version, repo, description, db_path } => {
+                commands::cmd_model_publish(&model, &name, &version, &repo, description.as_deref(), &db_path)
+            }
         }
 
         None => {

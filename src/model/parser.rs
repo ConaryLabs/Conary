@@ -29,6 +29,10 @@ pub struct SystemModel {
     /// Derived package definitions
     #[serde(default)]
     pub derive: Vec<DerivedPackage>,
+
+    /// Remote model includes
+    #[serde(default)]
+    pub include: IncludeConfig,
 }
 
 /// Core model configuration section
@@ -89,6 +93,31 @@ fn default_version_inherit() -> String {
     "inherit".to_string()
 }
 
+/// Configuration for including remote models/collections
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IncludeConfig {
+    /// Remote models to include (e.g., "group-base@repo:branch")
+    #[serde(default)]
+    pub models: Vec<String>,
+
+    /// Conflict resolution strategy when local and remote define same package
+    #[serde(default)]
+    pub on_conflict: ConflictStrategy,
+}
+
+/// Strategy for resolving conflicts between local and remote model definitions
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictStrategy {
+    /// Local definitions take precedence (default)
+    #[default]
+    Local,
+    /// Remote definitions take precedence
+    Remote,
+    /// Fail on any conflict
+    Error,
+}
+
 impl SystemModel {
     /// Create a new empty system model
     pub fn new() -> Self {
@@ -102,7 +131,13 @@ impl SystemModel {
             pin: HashMap::new(),
             optional: OptionalConfig::default(),
             derive: Vec::new(),
+            include: IncludeConfig::default(),
         }
+    }
+
+    /// Check if this model has any remote includes
+    pub fn has_includes(&self) -> bool {
+        !self.include.models.is_empty()
     }
 
     /// Get pinned version pattern for a package, if any
@@ -269,5 +304,46 @@ patches = ["custom.patch"]
 
         assert_eq!(parsed.config.install, model.config.install);
         assert_eq!(parsed.pin, model.pin);
+    }
+
+    #[test]
+    fn test_parse_include_section() {
+        let toml = r#"
+[model]
+version = 1
+install = ["custom-app"]
+
+[include]
+models = ["group-base-server@myrepo:stable", "group-security@corp:production"]
+on_conflict = "local"
+"#;
+        let model = parse_model_string(toml).unwrap();
+        assert_eq!(model.include.models.len(), 2);
+        assert_eq!(model.include.models[0], "group-base-server@myrepo:stable");
+        assert_eq!(model.include.on_conflict, ConflictStrategy::Local);
+    }
+
+    #[test]
+    fn test_parse_include_error_strategy() {
+        let toml = r#"
+[model]
+version = 1
+install = ["custom-app"]
+
+[include]
+models = ["group-base@myrepo:stable"]
+on_conflict = "error"
+"#;
+        let model = parse_model_string(toml).unwrap();
+        assert_eq!(model.include.on_conflict, ConflictStrategy::Error);
+    }
+
+    #[test]
+    fn test_has_includes() {
+        let mut model = SystemModel::new();
+        assert!(!model.has_includes());
+
+        model.include.models.push("group-base@repo:stable".to_string());
+        assert!(model.has_includes());
     }
 }

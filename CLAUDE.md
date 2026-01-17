@@ -81,7 +81,7 @@ cargo clippy -- -D warnings
 | `src/flavor/` | Build variation specs |
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
-| `src/model/` | System Model - declarative OS state (parser, diff, state capture) |
+| `src/model/` | System Model - declarative OS state (parser, diff, state capture, remote includes, publishing) |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
 | `src/server/` | Refinery server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
@@ -123,7 +123,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-539 tests total (with --features server).
+558 tests total (with --features server).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)

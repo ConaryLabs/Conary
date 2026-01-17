@@ -465,4 +465,38 @@ impl Trove {
     pub fn find_explicitly_installed(conn: &Connection) -> Result<Vec<Self>> {
         Self::find_by_reason(conn, "Explicitly installed")
     }
+
+    /// Promote a dependency to explicit installation
+    ///
+    /// If the package is currently installed as a dependency, this updates it
+    /// to be marked as explicitly installed. This prevents autoremove from
+    /// removing it when the original requiring package is removed.
+    ///
+    /// Returns `Ok(true)` if the package was promoted, `Ok(false)` if it was
+    /// already explicit or not found.
+    pub fn promote_to_explicit(
+        conn: &Connection,
+        name: &str,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        let rows = conn.execute(
+            "UPDATE troves
+             SET install_reason = 'explicit',
+                 selection_reason = ?1
+             WHERE name = ?2
+               AND install_reason = 'dependency'
+               AND type = 'package'",
+            rusqlite::params![
+                reason.unwrap_or("Explicitly installed"),
+                name,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Find a single trove by name (returns the first match if multiple exist)
+    pub fn find_one_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
+        let troves = Self::find_by_name(conn, name)?;
+        Ok(troves.into_iter().next())
+    }
 }

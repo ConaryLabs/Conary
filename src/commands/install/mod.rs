@@ -106,6 +106,33 @@ pub fn cmd_install(
 
     info!("Installing package: {} (components: {})", package_name, component_selection.display());
 
+    // Check if the package is already installed as a dependency - if so, promote it
+    // This must happen before we try to download, as we may not need to do anything else
+    {
+        let conn = conary::db::open(db_path)
+            .context("Failed to open package database for promotion check")?;
+
+        if let Some(existing) = conary::db::models::Trove::find_one_by_name(&conn, &package_name)?
+            && existing.install_reason == conary::db::models::InstallReason::Dependency
+        {
+            // Check if we're requesting a specific version that differs
+            let needs_version_change = version.as_ref().is_some_and(|v| v != &existing.version);
+
+            // Promote to explicit
+            let reason = selection_reason.unwrap_or("Explicitly installed by user");
+            conary::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
+            println!("Promoted {} from dependency to explicit", package_name);
+
+            // If same version (or no version specified), we're done
+            if !needs_version_change {
+                println!("{} {} is already installed", package_name, existing.version);
+                return Ok(());
+            }
+            // Otherwise continue with version upgrade
+            info!("Continuing with version change: {} -> {:?}", existing.version, version);
+        }
+    }
+
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
     progress.set_phase(&package_name, InstallPhase::Downloading);

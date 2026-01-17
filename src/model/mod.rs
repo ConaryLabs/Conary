@@ -48,10 +48,12 @@ mod parser;
 mod diff;
 mod state;
 
-pub use parser::{SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage};
-pub use diff::{ModelDiff, DiffAction, compute_diff, ApplyOptions};
+pub use parser::{SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage, IncludeConfig, ConflictStrategy};
+pub use diff::{ModelDiff, DiffAction, compute_diff, compute_diff_with_includes, compute_diff_from_resolved, ApplyOptions};
 pub use state::{SystemState, InstalledPackage, capture_current_state, snapshot_to_model};
 
+use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -96,6 +98,244 @@ pub fn load_model(path: Option<&Path>) -> ModelResult<SystemModel> {
 pub fn model_exists(path: Option<&Path>) -> bool {
     let path = path.unwrap_or_else(|| Path::new(DEFAULT_MODEL_PATH));
     path.exists()
+}
+
+/// A resolved model with all includes expanded
+#[derive(Debug, Clone)]
+pub struct ResolvedModel {
+    /// All packages to install (from local model + includes)
+    pub install: Vec<String>,
+
+    /// Merged pin constraints (package -> version pattern)
+    pub pins: HashMap<String, String>,
+
+    /// All optional packages
+    pub optionals: Vec<String>,
+
+    /// All excluded packages
+    pub exclude: Vec<String>,
+
+    /// Search path (from local model)
+    pub search: Vec<String>,
+
+    /// Source of each package (for debugging/display)
+    pub sources: HashMap<String, String>,
+}
+
+impl ResolvedModel {
+    /// Create a resolved model from a base system model (no includes resolved yet)
+    pub fn from_model(model: &SystemModel) -> Self {
+        let mut sources = HashMap::new();
+        for pkg in &model.config.install {
+            sources.insert(pkg.clone(), "local".to_string());
+        }
+        for pkg in &model.optional.packages {
+            sources.insert(pkg.clone(), "local (optional)".to_string());
+        }
+
+        Self {
+            install: model.config.install.clone(),
+            pins: model.pin.clone(),
+            optionals: model.optional.packages.clone(),
+            exclude: model.config.exclude.clone(),
+            search: model.config.search.clone(),
+            sources,
+        }
+    }
+}
+
+/// A member spec from an included collection
+#[derive(Debug, Clone)]
+pub struct IncludedMember {
+    pub name: String,
+    pub version_constraint: Option<String>,
+    pub is_optional: bool,
+}
+
+/// Fetched collection data from a remote include
+#[derive(Debug, Clone)]
+pub struct FetchedCollection {
+    pub name: String,
+    pub members: Vec<IncludedMember>,
+    /// Nested includes (collections can include other collections)
+    pub includes: Vec<String>,
+}
+
+/// Parse a trove spec like "group-base@repo:branch" or just "group-base"
+///
+/// Returns (name, optional label spec)
+pub fn parse_trove_spec(spec: &str) -> ModelResult<(String, Option<String>)> {
+    if let Some((name, label)) = spec.split_once('@') {
+        Ok((name.to_string(), Some(label.to_string())))
+    } else {
+        Ok((spec.to_string(), None))
+    }
+}
+
+/// Fetch a collection from local database or repository
+///
+/// First checks if the collection exists locally (as a trove with type=collection).
+/// If not found locally, attempts to fetch from repositories matching the label spec.
+fn fetch_collection(
+    conn: &Connection,
+    name: &str,
+    _label: Option<&str>,
+) -> ModelResult<FetchedCollection> {
+    use crate::db::models::{CollectionMember, Trove, TroveType};
+
+    // First, try to find locally
+    let troves = Trove::find_by_name(conn, name)
+        .map_err(|e| ModelError::DatabaseError(e.to_string()))?;
+
+    let collection = troves
+        .into_iter()
+        .find(|t| t.trove_type == TroveType::Collection);
+
+    if let Some(coll) = collection {
+        let coll_id = coll.id.ok_or_else(|| {
+            ModelError::DatabaseError("Collection has no ID".to_string())
+        })?;
+
+        let members = CollectionMember::find_by_collection(conn, coll_id)
+            .map_err(|e| ModelError::DatabaseError(e.to_string()))?;
+
+        let fetched_members: Vec<IncludedMember> = members
+            .into_iter()
+            .map(|m| IncludedMember {
+                name: m.member_name,
+                version_constraint: m.member_version,
+                is_optional: m.is_optional,
+            })
+            .collect();
+
+        return Ok(FetchedCollection {
+            name: name.to_string(),
+            members: fetched_members,
+            includes: Vec::new(), // Local collections don't have nested includes (yet)
+        });
+    }
+
+    // TODO: Fetch from remote repository using label spec
+    // For now, return an error if not found locally
+    Err(ModelError::InvalidSearchPath(format!(
+        "Collection '{}' not found locally. Remote collection fetching not yet implemented.",
+        name
+    )))
+}
+
+/// Resolve all includes in a system model
+///
+/// This performs a two-pass resolution:
+/// 1. Collect all include specs
+/// 2. Fetch each collection, detect cycles, and merge members
+///
+/// Returns a fully resolved model with all includes expanded.
+pub fn resolve_includes(
+    model: &SystemModel,
+    conn: &Connection,
+) -> ModelResult<ResolvedModel> {
+    let mut resolved = ResolvedModel::from_model(model);
+
+    if model.include.models.is_empty() {
+        return Ok(resolved);
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+
+    resolve_includes_recursive(
+        &model.include.models,
+        &model.include.on_conflict,
+        conn,
+        &mut resolved,
+        &mut visited,
+    )?;
+
+    Ok(resolved)
+}
+
+fn resolve_includes_recursive(
+    includes: &[String],
+    on_conflict: &parser::ConflictStrategy,
+    conn: &Connection,
+    resolved: &mut ResolvedModel,
+    visited: &mut HashSet<String>,
+) -> ModelResult<()> {
+    for include_spec in includes {
+        // Cycle detection
+        if visited.contains(include_spec) {
+            return Err(ModelError::ConflictingSpecs(format!(
+                "Circular include detected: {}",
+                include_spec
+            )));
+        }
+        visited.insert(include_spec.clone());
+
+        // Parse "group-name@repo:branch" or "group-name"
+        let (name, label) = parse_trove_spec(include_spec)?;
+
+        // Fetch collection from local DB or repository
+        let collection = fetch_collection(conn, &name, label.as_deref())?;
+
+        // Recursively resolve nested includes if the collection has them
+        if !collection.includes.is_empty() {
+            resolve_includes_recursive(
+                &collection.includes,
+                on_conflict,
+                conn,
+                resolved,
+                visited,
+            )?;
+        }
+
+        // Merge members according to conflict strategy
+        for member in &collection.members {
+            let already_defined = resolved.install.contains(&member.name)
+                || resolved.optionals.contains(&member.name);
+
+            if already_defined {
+                match on_conflict {
+                    parser::ConflictStrategy::Local => {
+                        // Local wins, skip this member
+                        continue;
+                    }
+                    parser::ConflictStrategy::Remote => {
+                        // Remote wins, update pin if provided
+                        if let Some(constraint) = &member.version_constraint {
+                            resolved.pins.insert(member.name.clone(), constraint.clone());
+                        }
+                        resolved.sources.insert(
+                            member.name.clone(),
+                            format!("included from {}", include_spec),
+                        );
+                    }
+                    parser::ConflictStrategy::Error => {
+                        return Err(ModelError::ConflictingSpecs(format!(
+                            "Package '{}' defined in both local model and included '{}'",
+                            member.name, include_spec
+                        )));
+                    }
+                }
+            } else {
+                // New package from include
+                if member.is_optional {
+                    resolved.optionals.push(member.name.clone());
+                } else {
+                    resolved.install.push(member.name.clone());
+                }
+
+                if let Some(constraint) = &member.version_constraint {
+                    resolved.pins.insert(member.name.clone(), constraint.clone());
+                }
+
+                resolved.sources.insert(
+                    member.name.clone(),
+                    format!("included from {}", include_spec),
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
