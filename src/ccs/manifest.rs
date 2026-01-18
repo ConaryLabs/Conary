@@ -286,6 +286,9 @@ pub struct Hooks {
     pub directories: Vec<DirectoryHook>,
 
     #[serde(default)]
+    pub services: Vec<Service>,
+
+    #[serde(default)]
     pub systemd: Vec<SystemdHook>,
 
     #[serde(default)]
@@ -296,6 +299,26 @@ pub struct Hooks {
 
     #[serde(default)]
     pub alternatives: Vec<AlternativeHook>,
+}
+
+pub type User = UserHook;
+pub type Group = GroupHook;
+
+/// Generic service management hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Service {
+    pub name: String,
+    pub action: ServiceAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceAction {
+    Enable,
+    Disable,
+    Start,
+    Stop,
+    Restart,
 }
 
 /// User creation hook (sysusers-style)

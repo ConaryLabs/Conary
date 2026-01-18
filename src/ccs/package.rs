@@ -109,6 +109,7 @@ pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryM
             group: d.group.clone(),
             cleanup: None,
         }).collect(),
+        services: Vec::new(), // Not yet supported in binary format
         systemd: h.systemd.iter().map(|s| SystemdHook {
             unit: s.unit.clone(),
             enable: s.enable,

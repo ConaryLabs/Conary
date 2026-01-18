@@ -23,8 +23,10 @@
 //! 4. Assume scripts are idempotent (standard practice)
 
 mod analyzer;
+pub mod capture;
 mod converter;
 mod fidelity;
+pub mod mock;
 
 pub use analyzer::{DetectedHook, ScriptletAnalyzer};
 pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};

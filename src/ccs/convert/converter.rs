@@ -11,7 +11,7 @@ use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
 use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
-    Requires, Suggests, User, Group, Service, ServiceAction,
+    Requires, Suggests, User, Service, ServiceAction,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::packages::common::PackageMetadata;
@@ -130,12 +130,10 @@ impl LegacyConverter {
                                 if let Some(name) = args.last() {
                                      captured_hooks.users.push(User {
                                          name: name.clone(),
-                                         uid: None,
-                                         gid: None,
-                                         groups: vec![],
+                                         system: true,
                                          home: None,
                                          shell: None,
-                                         system: true,
+                                         group: None,
                                      });
                                 }
                             },

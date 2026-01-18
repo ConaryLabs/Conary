@@ -10,7 +10,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Sets up mock tools in the given root directory
 pub fn setup_mock_tools(root: &Path) -> Result<()> {

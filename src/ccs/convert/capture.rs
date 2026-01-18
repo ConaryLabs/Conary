@@ -6,13 +6,13 @@
 //! their side effects (file creations) and declarative intents (service enablement).
 
 use crate::container::{ContainerConfig, Sandbox, BindMount};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::packages::traits::ExtractedFile;
 use super::mock::{self, CapturedIntent};
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 use walkdir::WalkDir;
@@ -64,20 +64,6 @@ impl ScriptletCapturer {
         // 4. Configure Sandbox
         // We use a "permissive" sandbox in terms of mounts (we want to write to root)
         // but strict on network.
-        // NOTE: The `Sandbox` usually mounts the host /bin. We need to OVERRIDE that
-        // to use our mock /bin tools, but we still need a real shell (`sh`, `bash`).
-        
-        let mut config = ContainerConfig::default();
-        config.isolate_network = true; // No network access
-        config.workdir = PathBuf::from("/");
-        config.hostname = "conary-capture".to_string();
-
-        // Important: We need a real shell.
-        // We bind mount /bin/sh and /bin/bash from host to /bin in sandbox
-        // BUT we also put our mock tools in /bin.
-        // This suggests we need to be careful. 
-        // Strategy: Mount host /bin to /host/bin. Symlink /bin/sh -> /host/bin/sh.
-        // Since `ContainerConfig` is strict about mounts, let's use `pristine` and build up.
         
         let mut config = ContainerConfig::pristine();
         config.isolate_network = true;
@@ -85,35 +71,12 @@ impl ScriptletCapturer {
         // Mount the temp dir as root (RW)
         config.add_bind_mount(BindMount::writable(root_path, "/"));
 
-        // We need a shell. 
-        // Ideally we'd have a static busybox. For now, we rely on host's /bin/sh.
-        // We mount host /bin to /usr/bin to avoid clashing with our mock /bin?
-        // Let's bind mount host /bin/sh to /bin/sh explicitly if possible, 
-        // or mount host /bin to /host-bin and symlink.
-        
-        // Simpler approach: 
-        // 1. Copy host /bin/sh and dependencies to root_path/bin/sh? Too complex (libs).
-        // 2. Mount host /usr (RO) so we have libs.
-        // 3. Mount host /bin (RO) to /usr/bin (or wherever).
-        // 4. Overlay our mock tools?
-        
         // Let's try mounting host /usr and /lib (for shell deps)
         config.add_bind_mount(BindMount::readonly("/usr", "/usr"));
         config.add_bind_mount(BindMount::readonly("/lib", "/lib"));
         if Path::new("/lib64").exists() {
             config.add_bind_mount(BindMount::readonly("/lib64", "/lib64"));
         }
-        
-        // The sandbox setup usually mounts /bin. 
-        // Our mock tools are in `root_path/bin`.
-        // If we bind mount host /bin to /bin, we hide our mocks.
-        // We need our mocks to take precedence.
-        
-        // Correct approach:
-        // 1. Mount host /bin to /host-bin
-        // 2. Symlink /bin/sh -> /host-bin/sh in our `root_path`
-        // 3. `setup_mock_tools` puts fake tools in `root_path/bin`
-        // 4. Sandbox treats `root_path` as `/`.
         
         config.add_bind_mount(BindMount::readonly("/bin", "/host-bin"));
         
@@ -132,7 +95,7 @@ impl ScriptletCapturer {
         let mut sandbox = Sandbox::new(config);
         
         info!("Running scriptlet in capture mode...");
-        let (code, stdout, stderr) = sandbox.execute(
+        let (code, _stdout, stderr) = sandbox.execute(
             interpreter,
             script,
             &[],
@@ -141,8 +104,6 @@ impl ScriptletCapturer {
 
         if code != 0 {
             warn!("Scriptlet failed with code {}: {}", code, stderr);
-            // We might still want to capture what it *did* do, or fail.
-            // For now, let's capture partial results but warn.
         }
 
         // 6. Diff filesystem
@@ -209,9 +170,6 @@ impl ScriptletCapturer {
             // It's a new file
             let content = fs::read(path)?;
             let metadata = fs::metadata(path)?;
-            
-            // Calculate SHA256 (simplified for brevity, should use hash util)
-            // let sha = ...
             
             new_files.push(ExtractedFile {
                 path: abs_path,

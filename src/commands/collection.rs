@@ -308,8 +308,9 @@ pub fn cmd_collection_install(
             sandbox_mode,
             false,  // allow_downgrade
             false,  // convert_to_ccs
+            false,  // no_capture
         ) {
-            Ok(()) => {
+            Ok(_) => {
                 installed_count += 1;
             }
             Err(e) => {
