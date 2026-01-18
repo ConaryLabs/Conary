@@ -1,0 +1,110 @@
+# recipes/core/editors/nano.toml
+#
+# GNU nano - Simple text editor
+#
+# A user-friendly terminal text editor, good for beginners.
+
+[package]
+name = "nano"
+version = "8.0"
+release = "1"
+summary = "GNU nano - simple terminal text editor"
+description = """
+GNU nano is a small and friendly text editor. It aims to replace Pico,
+the default editor included in the Pine package, with a free software
+replacement with many extra features. Nano is designed to be intuitive
+and easy to use, making it ideal for users who prefer simplicity.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.nano-editor.org"
+
+[source]
+archive = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz.asc"
+
+[build]
+requires = ["glibc", "ncurses", "zlib"]
+makedepends = ["gcc", "make", "pkgconf"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --enable-utf8 \
+    --enable-color \
+    --enable-nanorc \
+    --enable-multibuffer \
+    --disable-speller
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move nano to /bin for emergency access
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/nano %(destdir)s/bin/
+ln -sf /bin/nano %(destdir)s/usr/bin/nano
+
+# Create rnano symlink (restricted mode)
+ln -sf nano %(destdir)s/bin/rnano
+ln -sf /bin/rnano %(destdir)s/usr/bin/rnano
+
+# Create sensible default nanorc
+cat > %(destdir)s/etc/nanorc << 'NANORC'
+## /etc/nanorc - System-wide nano configuration
+##
+## Users can override these settings in ~/.nanorc
+
+## Use auto-indentation
+set autoindent
+
+## Backup files to the current filename plus a tilde
+# set backup
+
+## Use bold text instead of reverse video text
+set boldtext
+
+## Use UTF-8 character encoding
+set utf8
+
+## Make the Home key smarter
+set smarthome
+
+## Enable mouse support
+# set mouse
+
+## Allow nano to be suspended
+set suspendable
+
+## Use smooth scrolling
+set smooth
+
+## Set the tab size to 4
+set tabsize 4
+
+## Convert typed tabs to spaces
+# set tabstospaces
+
+## Show line numbers
+set linenumbers
+
+## Display line+column+character position in the status bar
+set constantshow
+
+## Enable soft line wrapping
+set softwrap
+
+## Include syntax highlighting definitions
+include "/usr/share/nano/*.nanorc"
+include "/usr/share/nano/extra/*.nanorc"
+NANORC
+
+# Install syntax highlighting files
+mkdir -p %(destdir)s/usr/share/nano/extra
+"""
+
+[variables]
+jobs = "$(nproc)"

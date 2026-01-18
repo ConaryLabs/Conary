@@ -127,6 +127,11 @@ psmisc = "24.0"
 shadow = "4.16.0"
 sudo = "1.9.18"
 
+[editors]
+# Text editors (latest stable as of Jan 2026)
+vim = "9.2"
+nano = "8.0"
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"

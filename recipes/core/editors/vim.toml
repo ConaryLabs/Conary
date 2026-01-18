@@ -1,0 +1,140 @@
+# recipes/core/editors/vim.toml
+#
+# Vim - Vi Improved text editor
+#
+# The ubiquitous modal text editor, essential for system administration.
+
+[package]
+name = "vim"
+version = "9.2"
+release = "1"
+summary = "Vi Improved - highly configurable text editor"
+description = """
+Vim is a highly configurable text editor built to enable efficient text
+editing. It is an improved version of the vi editor distributed with most
+UNIX systems. Vim is often called a "programmer's editor" and is useful
+for system administration and software development.
+"""
+license = "Vim"
+homepage = "https://www.vim.org"
+
+[source]
+archive = "https://github.com/vim/vim/archive/v%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = ["gcc", "make"]
+
+configure = """
+cd src
+./configure \
+    --prefix=/usr \
+    --with-features=huge \
+    --enable-multibyte \
+    --enable-nls \
+    --with-tlib=ncursesw \
+    --disable-gui \
+    --without-x \
+    --disable-gpm \
+    --disable-selinux \
+    --disable-canberra
+"""
+
+make = "cd src && make -j%(jobs)s"
+
+install = """
+cd src
+make DESTDIR=%(destdir)s install
+
+# Create vi symlink (vim is the standard vi on this system)
+ln -sf vim %(destdir)s/usr/bin/vi
+
+# Move vi/vim to /bin for emergency access
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/vim %(destdir)s/bin/
+mv %(destdir)s/usr/bin/vi %(destdir)s/bin/
+ln -sf /bin/vim %(destdir)s/usr/bin/vim
+ln -sf /bin/vi %(destdir)s/usr/bin/vi
+
+# Also link common variants
+ln -sf vim %(destdir)s/bin/view
+ln -sf vim %(destdir)s/bin/ex
+ln -sf /bin/view %(destdir)s/usr/bin/view
+ln -sf /bin/ex %(destdir)s/usr/bin/ex
+
+# Create sensible default vimrc
+mkdir -p %(destdir)s/etc
+cat > %(destdir)s/etc/vimrc << 'VIMRC'
+" /etc/vimrc - System-wide Vim configuration
+"
+" This file is loaded for all users. Users can override these
+" settings in their own ~/.vimrc file.
+
+" Use Vim defaults (not Vi compatibility mode)
+set nocompatible
+
+" Enable file type detection and plugins
+filetype plugin indent on
+
+" Enable syntax highlighting
+syntax on
+
+" Basic editor settings
+set encoding=utf-8
+set fileencoding=utf-8
+set backspace=indent,eol,start
+set ruler
+set showcmd
+set showmode
+set laststatus=2
+
+" Search settings
+set incsearch
+set hlsearch
+set ignorecase
+set smartcase
+
+" Indentation
+set autoindent
+set smartindent
+set tabstop=8
+set shiftwidth=4
+set expandtab
+
+" Line numbers (off by default, enable with :set number)
+" set number
+
+" Show matching brackets
+set showmatch
+
+" Don't create backup files
+set nobackup
+set nowritebackup
+
+" Enable mouse in all modes (optional, comment out if unwanted)
+" set mouse=a
+
+" Better command-line completion
+set wildmenu
+set wildmode=list:longest
+
+" Status line
+set statusline=%F%m%r%h%w\ [%{&ff}]\ [%Y]\ [%l,%v][%p%%]
+
+" Color scheme (uses terminal colors)
+set background=dark
+
+" Source local vimrc if it exists
+if filereadable("/etc/vimrc.local")
+    source /etc/vimrc.local
+endif
+VIMRC
+
+# Create vimdiff symlink
+ln -sf vim %(destdir)s/bin/vimdiff
+ln -sf /bin/vimdiff %(destdir)s/usr/bin/vimdiff
+"""
+
+[variables]
+jobs = "$(nproc)"
