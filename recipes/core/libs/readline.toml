@@ -1,0 +1,50 @@
+# recipes/core/libs/readline.toml
+#
+# GNU Readline - Line editing library
+#
+# Provides command-line editing, history, and completion features.
+
+[package]
+name = "readline"
+version = "8.3"
+release = "1"
+summary = "GNU Readline library"
+description = """
+The GNU Readline library provides a set of functions for use by
+applications that allow users to edit command lines as they are
+typed in. Both Emacs and vi editing modes are available. The
+Readline library also provides a history mechanism.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://tiswww.case.edu/php/chet/readline/rltop.html"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/readline/readline-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/readline/readline-%(version)s.tar.gz.sig"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --disable-static \
+    --with-curses \
+    --enable-multibyte
+"""
+
+make = "make SHLIB_LIBS='-lncursesw' -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s SHLIB_LIBS='-lncursesw' install
+
+# Install documentation
+mkdir -p %(destdir)s/usr/share/doc/readline
+install -m644 CHANGES COPYING NEWS README %(destdir)s/usr/share/doc/readline/
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,57 @@
+# recipes/core/libs/openssl.toml
+#
+# OpenSSL - Cryptography and TLS library
+#
+# The industry-standard cryptographic library and toolkit.
+
+[package]
+name = "openssl"
+version = "3.5.4"
+release = "1"
+summary = "Cryptography and TLS library"
+description = """
+OpenSSL is a robust, commercial-grade, and full-featured toolkit for
+the Transport Layer Security (TLS) and Secure Sockets Layer (SSL)
+protocols. It is also a general-purpose cryptography library.
+"""
+license = "Apache-2.0"
+homepage = "https://www.openssl.org"
+
+[source]
+archive = "https://github.com/openssl/openssl/releases/download/openssl-%(version)s/openssl-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = ["gcc", "perl"]
+
+configure = """
+./Configure \
+    --prefix=/usr \
+    --libdir=lib \
+    --openssldir=/etc/ssl \
+    shared \
+    zlib-dynamic \
+    enable-ktls \
+    linux-x86_64
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install_sw install_ssldirs
+
+# Remove static libraries
+rm -f %(destdir)s/usr/lib/*.a
+
+# Create certificate directory
+mkdir -p %(destdir)s/etc/ssl/certs
+
+# Create default configuration if not present
+if [ ! -f %(destdir)s/etc/ssl/openssl.cnf ]; then
+    install -m644 apps/openssl.cnf %(destdir)s/etc/ssl/openssl.cnf
+fi
+"""
+
+[variables]
+jobs = "$(nproc)"

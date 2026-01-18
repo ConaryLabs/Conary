@@ -1,0 +1,149 @@
+# recipes/core/libs/linux-pam.toml
+#
+# Linux-PAM - Pluggable Authentication Modules
+#
+# Flexible authentication system for Linux.
+
+[package]
+name = "linux-pam"
+version = "1.7.1"
+release = "1"
+summary = "Pluggable Authentication Modules"
+description = """
+Linux-PAM (Pluggable Authentication Modules for Linux) is a suite of
+shared libraries that enable the local system administrator to choose
+how applications authenticate users. PAM provides a way to develop
+programs that are independent of authentication scheme.
+"""
+license = "BSD-3-Clause OR GPL-2.0-only"
+homepage = "https://github.com/linux-pam/linux-pam"
+
+[source]
+archive = "https://github.com/linux-pam/linux-pam/releases/download/v%(version)s/Linux-PAM-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "meson", "ninja", "pkg-config", "flex", "bison"]
+
+configure = """
+meson setup build \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --buildtype=release \
+    -Ddocs=disabled \
+    -Dselinux=disabled \
+    -Daudit=disabled \
+    -Deconf=disabled \
+    -Dnis=disabled \
+    -Duserdb=disabled
+"""
+
+make = "ninja -C build -j%(jobs)s"
+
+install = """
+DESTDIR=%(destdir)s ninja -C build install
+
+# Create PAM configuration directory
+mkdir -p %(destdir)s/etc/pam.d
+
+# Create basic system-auth configuration
+cat > %(destdir)s/etc/pam.d/system-auth << 'PAM_SYSTEM_AUTH'
+# /etc/pam.d/system-auth - Conary default system authentication
+
+auth        required      pam_unix.so     try_first_pass nullok
+auth        optional      pam_permit.so
+auth        required      pam_env.so
+
+account     required      pam_unix.so
+account     optional      pam_permit.so
+account     required      pam_time.so
+
+password    required      pam_unix.so     try_first_pass nullok sha512 shadow
+password    optional      pam_permit.so
+
+session     required      pam_limits.so
+session     required      pam_unix.so
+session     optional      pam_permit.so
+PAM_SYSTEM_AUTH
+
+# Create other PAM configuration
+cat > %(destdir)s/etc/pam.d/other << 'PAM_OTHER'
+# /etc/pam.d/other - Default PAM configuration
+
+auth        required      pam_unix.so
+account     required      pam_unix.so
+password    required      pam_unix.so
+session     required      pam_unix.so
+PAM_OTHER
+
+# Create login configuration
+cat > %(destdir)s/etc/pam.d/login << 'PAM_LOGIN'
+# /etc/pam.d/login - Login authentication
+
+auth        required      pam_securetty.so
+auth        requisite     pam_nologin.so
+auth        include       system-auth
+
+account     required      pam_access.so
+account     include       system-auth
+
+password    include       system-auth
+
+session     required      pam_loginuid.so
+session     optional      pam_keyinit.so force revoke
+session     include       system-auth
+session     optional      pam_motd.so
+session     optional      pam_mail.so dir=/var/mail standard
+PAM_LOGIN
+
+# Create su configuration
+cat > %(destdir)s/etc/pam.d/su << 'PAM_SU'
+# /etc/pam.d/su - su authentication
+
+auth        sufficient    pam_rootok.so
+auth        required      pam_wheel.so use_uid
+auth        include       system-auth
+
+account     include       system-auth
+
+password    include       system-auth
+
+session     required      pam_env.so
+session     include       system-auth
+PAM_SU
+
+# Create limits.conf
+mkdir -p %(destdir)s/etc/security
+cat > %(destdir)s/etc/security/limits.conf << 'LIMITS'
+# /etc/security/limits.conf
+# Each line describes a limit for a user in the form:
+# <domain> <type> <item> <value>
+
+*               soft    core            0
+*               hard    nofile          524288
+root            hard    nofile          524288
+LIMITS
+
+# Create access.conf
+cat > %(destdir)s/etc/security/access.conf << 'ACCESS'
+# /etc/security/access.conf
+# Login access control table.
+# Format: permission : users : origins
+
+# Allow root from local
++ : root : LOCAL
+
+# Allow all users from local
++ : ALL : LOCAL
+
+# Deny everything else
+- : ALL : ALL
+ACCESS
+"""
+
+workdir = "."
+
+[variables]
+jobs = "$(nproc)"

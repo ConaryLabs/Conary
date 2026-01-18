@@ -1,0 +1,74 @@
+# recipes/core/libs/dbus.toml
+#
+# D-Bus - Message bus system
+#
+# Inter-process communication system for applications.
+
+[package]
+name = "dbus"
+version = "1.16.2"
+release = "1"
+summary = "Message bus system"
+description = """
+D-Bus is a message bus system, a simple way for applications to talk
+to one another. In addition to interprocess communication, D-Bus helps
+coordinate process lifecycle; it makes it simple and reliable to code
+a "single instance" application or daemon, and to launch applications
+and daemons on demand when their services are needed.
+"""
+license = "AFL-2.1 OR GPL-2.0-or-later"
+homepage = "https://dbus.freedesktop.org"
+
+[source]
+archive = "https://dbus.freedesktop.org/releases/dbus/dbus-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "expat"]
+makedepends = ["gcc", "meson", "ninja", "pkg-config", "expat-devel"]
+
+configure = """
+meson setup build \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --buildtype=release \
+    -Ddbus_user=messagebus \
+    -Dsystem_socket=/run/dbus/system_bus_socket \
+    -Dsystem_pid_file=/run/dbus/pid \
+    -Druntime_dir=/run \
+    -Dselinux=disabled \
+    -Dapparmor=disabled \
+    -Dlibaudit=disabled \
+    -Dsystemd=enabled \
+    -Duser_session=true \
+    -Dmodular_tests=disabled \
+    -Dinstalled_tests=false \
+    -Ddoxygen_docs=disabled \
+    -Dxml_docs=disabled
+"""
+
+make = "ninja -C build -j%(jobs)s"
+
+install = """
+DESTDIR=%(destdir)s ninja -C build install
+
+# Create runtime directories
+mkdir -p %(destdir)s/run/dbus
+mkdir -p %(destdir)s/var/lib/dbus
+
+# Create messagebus user/group placeholder script
+mkdir -p %(destdir)s/usr/lib/sysusers.d
+cat > %(destdir)s/usr/lib/sysusers.d/dbus.conf << 'EOF'
+u messagebus - "D-Bus Message Daemon User" /run/dbus
+EOF
+
+# Ensure dbus-daemon is accessible from /bin
+mkdir -p %(destdir)s/bin
+ln -sf /usr/bin/dbus-daemon %(destdir)s/bin/dbus-daemon
+"""
+
+workdir = "."
+
+[variables]
+jobs = "$(nproc)"

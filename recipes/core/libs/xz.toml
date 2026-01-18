@@ -1,0 +1,56 @@
+# recipes/core/libs/xz.toml
+#
+# XZ Utils - LZMA compression utilities and library
+#
+# Provides liblzma and command-line tools for .xz and .lzma compression.
+
+[package]
+name = "xz"
+version = "5.6.4"
+release = "1"
+summary = "XZ compression utilities"
+description = """
+XZ Utils provide a general-purpose data compression library (liblzma)
+and command-line tools (xz, unxz, xzcat, lzma, unlzma, lzcat) for
+compressing and decompressing .xz and .lzma files. The compression
+algorithm is LZMA2, which provides excellent compression ratios.
+"""
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later AND 0BSD"
+homepage = "https://tukaani.org/xz/"
+
+[source]
+archive = "https://github.com/tukaani-project/xz/releases/download/v%(version)s/xz-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --disable-static \
+    --enable-threads=posix \
+    --disable-doc
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move xz to /bin for initramfs
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/xz %(destdir)s/bin/xz
+ln -sf /bin/xz %(destdir)s/usr/bin/xz
+
+# Create convenience symlinks
+for link in lzma unlzma lzcat unxz xzcat; do
+    ln -sf xz %(destdir)s/bin/$link
+    ln -sf /bin/$link %(destdir)s/usr/bin/$link
+done
+"""
+
+[variables]
+jobs = "$(nproc)"

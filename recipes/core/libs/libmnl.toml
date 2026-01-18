@@ -1,0 +1,42 @@
+# recipes/core/libs/libmnl.toml
+#
+# libmnl - Minimalistic Netlink library
+#
+# User-space library for Netlink developers.
+
+[package]
+name = "libmnl"
+version = "1.0.5"
+release = "1"
+summary = "Minimalistic Netlink library"
+description = """
+libmnl is a minimalistic user-space library oriented to Netlink
+developers. There are a lot of common tasks in parsing, validating,
+constructing of both the Netlink header and TLVs that are repetitive
+and easy to get wrong. This library aims to provide simple helpers
+that allow you to re-use code and avoid re-inventing the wheel.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://www.netfilter.org/projects/libmnl/"
+
+[source]
+archive = "https://www.netfilter.org/projects/libmnl/files/libmnl-%(version)s.tar.bz2"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://www.netfilter.org/projects/libmnl/files/libmnl-%(version)s.tar.bz2.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --disable-static
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

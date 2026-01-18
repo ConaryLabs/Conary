@@ -1,0 +1,51 @@
+# recipes/core/libs/zlib.toml
+#
+# zlib - Compression library
+#
+# The most widely used compression library, required by countless packages.
+
+[package]
+name = "zlib"
+version = "1.3.1"
+release = "1"
+summary = "Compression library"
+description = """
+zlib is a general-purpose lossless data-compression library. It provides
+in-memory compression and decompression functions, including integrity
+checks of the uncompressed data. This version of the library supports
+only one compression method (deflation) but other algorithms will be
+added later with the same stream interface.
+"""
+license = "Zlib"
+homepage = "https://zlib.net"
+
+[source]
+archive = "https://zlib.net/zlib-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --sharedlibdir=/usr/lib \
+    --includedir=/usr/include
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove static library (keep shared)
+rm -f %(destdir)s/usr/lib/libz.a
+
+# Create pkgconfig file if missing
+mkdir -p %(destdir)s/usr/lib/pkgconfig
+"""
+
+[variables]
+jobs = "$(nproc)"

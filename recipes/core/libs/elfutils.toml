@@ -1,0 +1,50 @@
+# recipes/core/libs/elfutils.toml
+#
+# elfutils - ELF handling libraries and utilities
+#
+# Provides libelf, libdw, and tools for working with ELF files.
+
+[package]
+name = "elfutils"
+version = "0.194"
+release = "1"
+summary = "ELF handling libraries and utilities"
+description = """
+elfutils is a collection of utilities and libraries to read, create,
+and modify ELF binary files, find and handle DWARF debug data, and
+process GNU-style archives. Includes libelf, libdw, and command-line
+tools like eu-readelf, eu-objdump, eu-strip, and eu-addr2line.
+"""
+license = "GPL-3.0-or-later AND LGPL-3.0-or-later"
+homepage = "https://sourceware.org/elfutils/"
+
+[source]
+archive = "https://sourceware.org/elfutils/ftp/%(version)s/elfutils-%(version)s.tar.bz2"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://sourceware.org/elfutils/ftp/%(version)s/elfutils-%(version)s.tar.bz2.sig"
+
+[build]
+requires = ["glibc", "zlib", "xz", "zstd"]
+makedepends = ["gcc", "m4"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --disable-debuginfod \
+    --disable-libdebuginfod \
+    --enable-deterministic-archives \
+    --program-prefix=eu-
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove static libraries (keep shared)
+rm -f %(destdir)s/usr/lib/*.a
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,45 @@
+# recipes/core/libs/libcap.toml
+#
+# libcap - POSIX capabilities library
+#
+# Library for getting and setting POSIX.1e capabilities.
+
+[package]
+name = "libcap"
+version = "2.73"
+release = "1"
+summary = "POSIX capabilities library"
+description = """
+libcap implements the user-space interfaces to the POSIX 1003.1e
+capabilities available in Linux kernels. These capabilities are a
+partitioning of the all-powerful root privilege into a set of
+distinct privileges.
+"""
+license = "BSD-3-Clause OR GPL-2.0-only"
+homepage = "https://sites.google.com/site/fullycapable/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "perl"]
+
+# libcap uses a simple Makefile, not autoconf
+configure = ""
+
+make = """
+make prefix=/usr lib=lib GOLANG=no -j%(jobs)s
+"""
+
+install = """
+make prefix=/usr lib=lib DESTDIR=%(destdir)s GOLANG=no install
+
+# Remove static library
+rm -f %(destdir)s/usr/lib/libcap.a
+rm -f %(destdir)s/usr/lib/libpsx.a
+"""
+
+[variables]
+jobs = "$(nproc)"

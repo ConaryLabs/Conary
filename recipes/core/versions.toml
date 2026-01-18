@@ -41,16 +41,28 @@ systemd = "257.9"
 iproute2 = "6.15.0"
 openssh = "10.1p1"
 
-# Additional base utilities
-readline = "8.3"
-ncurses = "6.5"
+[libs]
+# Core libraries (latest stable as of Jan 2026)
+
+# Compression
 zlib = "1.3.1"
 xz = "5.6.4"
 zstd = "1.5.6"
-openssl = "3.4.0"
+
+# Text/Terminal
+ncurses = "6.6"
+readline = "8.3"
+
+# Crypto/Security
+openssl = "3.5.4"
 libcap = "2.73"
+linux-pam = "1.7.1"
+
+# System
+elfutils = "0.194"
+libmnl = "1.0.5"
+dbus = "1.16.2"
 kmod = "34"
-dbus = "1.16.0"
 
 [urls]
 # Mirror URLs for source downloads

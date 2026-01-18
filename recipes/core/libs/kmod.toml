@@ -1,0 +1,69 @@
+# recipes/core/libs/kmod.toml
+#
+# kmod - Linux kernel module handling
+#
+# Tools and library for managing Linux kernel modules.
+
+[package]
+name = "kmod"
+version = "34"
+release = "1"
+summary = "Linux kernel module handling"
+description = """
+kmod is a set of tools to handle common tasks with Linux kernel modules
+like insert, remove, list, check properties, resolve dependencies, and
+aliases. It replaces module-init-tools. The library (libkmod) provides
+an API for programs to manage kernel modules.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/kernel/kmod/kmod-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib", "xz", "zstd", "openssl"]
+makedepends = ["gcc", "pkg-config"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --sysconfdir=/etc \
+    --bindir=/bin \
+    --with-openssl \
+    --with-xz \
+    --with-zstd \
+    --with-zlib
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create symlinks for module-init-tools compatibility
+mkdir -p %(destdir)s/sbin
+for tool in depmod insmod modinfo modprobe rmmod; do
+    ln -sf /bin/kmod %(destdir)s/sbin/$tool
+done
+
+# Also add lsmod symlink
+ln -sf /bin/kmod %(destdir)s/bin/lsmod
+
+# Create module directories
+mkdir -p %(destdir)s/etc/modprobe.d
+mkdir -p %(destdir)s/etc/depmod.d
+mkdir -p %(destdir)s/usr/lib/modprobe.d
+mkdir -p %(destdir)s/usr/lib/depmod.d
+
+# Create default modprobe config
+cat > %(destdir)s/etc/modprobe.d/blacklist.conf << 'EOF'
+# Blacklist kernel modules that cause problems
+# Add entries here to prevent automatic loading
+EOF
+"""
+
+[variables]
+jobs = "$(nproc)"

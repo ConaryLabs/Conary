@@ -1,0 +1,68 @@
+# recipes/core/libs/ncurses.toml
+#
+# ncurses - Terminal handling library
+#
+# Provides terminal-independent screen painting and keyboard handling.
+
+[package]
+name = "ncurses"
+version = "6.6"
+release = "1"
+summary = "Terminal handling library"
+description = """
+ncurses (new curses) is a programming library providing an API that
+allows the programmer to write text-based user interfaces in a
+terminal-independent manner. It is a toolkit for developing GUI-like
+applications that run under a terminal emulator.
+"""
+license = "MIT"
+homepage = "https://invisible-island.net/ncurses/"
+
+[source]
+archive = "https://invisible-mirror.net/archives/ncurses/ncurses-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "pkg-config"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    --mandir=/usr/share/man \
+    --with-shared \
+    --without-debug \
+    --without-ada \
+    --with-cxx-binding \
+    --with-cxx-shared \
+    --enable-widec \
+    --enable-pc-files \
+    --with-pkg-config-libdir=/usr/lib/pkgconfig \
+    --enable-symlinks \
+    --with-termlib \
+    --with-ticlib
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create non-wide character ABI compatibility symlinks
+# Many older programs expect libncurses without the 'w' suffix
+for lib in ncurses form panel menu tinfo tic; do
+    echo "INPUT(-l${lib}w)" > %(destdir)s/usr/lib/lib${lib}.so
+    ln -sf ${lib}w.pc %(destdir)s/usr/lib/pkgconfig/${lib}.pc 2>/dev/null || true
+done
+
+# Some programs look for -lcurses
+echo "INPUT(-lncursesw)" > %(destdir)s/usr/lib/libcurses.so
+ln -sf libncurses.so %(destdir)s/usr/lib/libcurses.so
+
+# Ensure terminfo database is accessible
+mkdir -p %(destdir)s/usr/share/terminfo
+"""
+
+[variables]
+jobs = "$(nproc)"

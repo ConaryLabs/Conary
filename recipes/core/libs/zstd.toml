@@ -1,0 +1,63 @@
+# recipes/core/libs/zstd.toml
+#
+# Zstandard - Fast real-time compression algorithm
+#
+# Modern compression library with excellent speed/ratio tradeoffs.
+
+[package]
+name = "zstd"
+version = "1.5.6"
+release = "1"
+summary = "Fast compression algorithm"
+description = """
+Zstandard (zstd) is a fast lossless compression algorithm, targeting
+real-time compression scenarios at zlib-level and better compression
+ratios. It provides a very wide range of compression / speed trade-offs,
+while being backed by a very fast decoder.
+"""
+license = "BSD-3-Clause"
+homepage = "https://facebook.github.io/zstd/"
+
+[source]
+archive = "https://github.com/facebook/zstd/releases/download/v%(version)s/zstd-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib", "xz"]
+makedepends = ["gcc", "cmake", "ninja"]
+
+configure = """
+cmake -B build -G Ninja \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DZSTD_BUILD_CONTRIB=ON \
+    -DZSTD_BUILD_TESTS=OFF \
+    -DZSTD_BUILD_STATIC=OFF \
+    -DZSTD_PROGRAMS_LINK_SHARED=ON \
+    -DZSTD_ZLIB_SUPPORT=ON \
+    -DZSTD_LZMA_SUPPORT=ON \
+    build/cmake
+"""
+
+make = "ninja -C build -j%(jobs)s"
+
+install = """
+DESTDIR=%(destdir)s ninja -C build install
+
+# Move zstd to /bin for initramfs
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/zstd %(destdir)s/bin/zstd
+ln -sf /bin/zstd %(destdir)s/usr/bin/zstd
+
+# Create convenience symlinks
+for link in unzstd zstdcat zstdmt; do
+    ln -sf zstd %(destdir)s/bin/$link
+    ln -sf /bin/$link %(destdir)s/usr/bin/$link
+done
+"""
+
+workdir = "."
+
+[variables]
+jobs = "$(nproc)"
