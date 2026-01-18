@@ -421,6 +421,7 @@ mod tests {
             output_dir: PathBuf::from("/tmp/test"),
             auto_classify: true,
             min_fidelity: FidelityLevel::Low,
+            capture_scriptlets: false,
         };
         let converter = LegacyConverter::new(options);
 
