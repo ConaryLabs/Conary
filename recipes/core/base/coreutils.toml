@@ -34,9 +34,7 @@ configure = """
     --enable-single-binary=symlinks \
     --disable-acl \
     --disable-xattr \
-    --without-selinux \
-    --without-openssl \
-    --without-gmp
+    --without-selinux
 """
 
 make = "make -j%(jobs)s"
