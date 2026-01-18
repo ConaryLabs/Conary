@@ -1,0 +1,68 @@
+# recipes/core/stage1/binutils.toml
+#
+# GNU Binutils for Stage 1 toolchain
+#
+# Provides the assembler (as), linker (ld), and other binary utilities.
+# Built with Stage 0 cross-toolchain to produce native binaries.
+
+[package]
+name = "binutils"
+version = "2.45.1"
+release = "1"
+summary = "GNU binary utilities"
+description = """
+GNU Binutils includes the assembler (as), linker (ld), and other
+utilities for working with object files and executables.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/binutils/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/binutils/binutils-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/binutils/binutils-%(version)s.tar.xz.sig"
+
+[build]
+requires = []
+makedepends = ["texinfo", "zlib-devel"]
+
+configure = """
+../binutils-%(version)s/configure \
+    --prefix=/usr \
+    --build=$(../binutils-%(version)s/config.guess) \
+    --host=%(target)s \
+    --target=%(target)s \
+    --with-sysroot=%(sysroot)s \
+    --disable-nls \
+    --disable-werror \
+    --disable-gprofng \
+    --enable-default-hash-style=gnu \
+    --enable-new-dtags \
+    --enable-deterministic-archives \
+    --enable-64-bit-bfd \
+    --enable-threads \
+    --enable-plugins \
+    --enable-relro \
+    --with-system-zlib
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+setup = "mkdir -p build && cd build"
+workdir = "build"
+
+[build.environment]
+PATH = "/tools/bin:$PATH"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+cross_tools = "/tools/bin"
+tool_prefix = "x86_64-conary-linux-gnu"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+jobs = "$(nproc)"

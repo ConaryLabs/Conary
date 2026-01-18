@@ -1,0 +1,40 @@
+# recipes/core/stage1/linux-headers.toml
+#
+# Linux kernel headers for Stage 1 toolchain
+#
+# These headers define the kernel API that glibc uses.
+# No compilation needed - just header installation.
+
+[package]
+name = "linux-headers"
+version = "6.18"
+release = "1"
+summary = "Linux kernel headers"
+description = "Linux kernel headers for building the C library"
+license = "GPL-2.0"
+homepage = "https://www.kernel.org"
+
+[source]
+archive = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.sign"
+
+[build]
+requires = []
+makedepends = []
+
+# Headers installation doesn't need configure/make
+# Just install headers to the sysroot
+install = """
+make ARCH=%(kernel_arch)s INSTALL_HDR_PATH=%(destdir)s/usr headers_install
+find %(destdir)s/usr/include -name '.*' -delete
+rm -f %(destdir)s/usr/include/Makefile
+"""
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+
+[variables]
+kernel_arch = "x86_64"

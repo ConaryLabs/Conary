@@ -1,0 +1,100 @@
+# recipes/core/stage1/gcc-pass1.toml
+#
+# GCC Pass 1: Minimal C compiler for Stage 1
+#
+# This is a minimal GCC build (C only, no threads, no shared libs)
+# used to compile glibc. After glibc is built, we rebuild GCC
+# with full support (gcc-pass2).
+#
+# Bootstrap dependency order:
+#   linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2
+
+[package]
+name = "gcc-pass1"
+version = "15.2.0"
+release = "1"
+summary = "GCC pass 1 (minimal C compiler)"
+description = """
+Minimal GNU Compiler Collection for bootstrap. This build only
+includes C language support and is used to compile the C library.
+A full GCC rebuild happens in gcc-pass2 after glibc is available.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://gcc.gnu.org"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz.sig"
+
+# GCC requires GMP, MPFR, and MPC - download as in-tree dependencies
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+checksum = "sha256:FIXME_GMP_CHECKSUM"
+extract_to = "gmp"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz"
+checksum = "sha256:FIXME_MPFR_CHECKSUM"
+extract_to = "mpfr"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
+checksum = "sha256:FIXME_MPC_CHECKSUM"
+extract_to = "mpc"
+
+[build]
+requires = ["binutils"]
+makedepends = ["texinfo", "gawk", "bison", "flex"]
+
+# Minimal configure for Pass 1:
+# - C only (no C++, Fortran, etc.)
+# - Disable threads (no libc yet)
+# - Disable shared libraries
+# - Use our newly-built binutils
+configure = """
+../gcc-%(version)s/configure \
+    --prefix=/usr \
+    --build=$(../gcc-%(version)s/config.guess) \
+    --host=%(target)s \
+    --target=%(target)s \
+    --with-sysroot=%(sysroot)s \
+    --with-newlib \
+    --without-headers \
+    --disable-nls \
+    --disable-shared \
+    --disable-multilib \
+    --disable-threads \
+    --disable-libatomic \
+    --disable-libgomp \
+    --disable-libquadmath \
+    --disable-libssp \
+    --disable-libvtv \
+    --disable-libstdcxx \
+    --disable-decimal-float \
+    --disable-libffi \
+    --enable-languages=c \
+    --enable-default-pie \
+    --enable-default-ssp
+"""
+
+make = "make -j%(jobs)s all-gcc all-target-libgcc"
+install = "make DESTDIR=%(destdir)s install-gcc install-target-libgcc"
+
+setup = "mkdir -p build && cd build"
+workdir = "build"
+
+[build.environment]
+PATH = "/tools/bin:$PATH"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+cross_tools = "/tools/bin"
+tool_prefix = "x86_64-conary-linux-gnu"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+jobs = "$(nproc)"

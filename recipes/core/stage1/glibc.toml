@@ -1,0 +1,92 @@
+# recipes/core/stage1/glibc.toml
+#
+# GNU C Library (glibc) for Stage 1 toolchain
+#
+# The C library is the foundation of all userspace programs.
+# Built with gcc-pass1 (minimal C compiler), then we rebuild GCC
+# with full support in gcc-pass2.
+#
+# Bootstrap dependency order:
+#   linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2
+
+[package]
+name = "glibc"
+version = "2.42"
+release = "1"
+summary = "GNU C Library"
+description = """
+The GNU C Library (glibc) is the standard C library for GNU/Linux systems.
+It provides the core functionality needed by all programs, including
+system calls, string functions, memory allocation, and threading.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://www.gnu.org/software/libc/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/glibc/glibc-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/glibc/glibc-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["linux-headers"]
+makedepends = ["gcc-pass1", "binutils", "texinfo", "gawk", "bison", "python3"]
+
+# glibc has strict requirements about the build environment
+# Must be built out-of-tree
+configure = """
+# Ensure we have the right headers
+ln -sfv ../lib/ld-linux-x86-64.so.2 %(destdir)s/lib64 2>/dev/null || true
+
+../glibc-%(version)s/configure \
+    --prefix=/usr \
+    --build=$(../glibc-%(version)s/scripts/config.guess) \
+    --host=%(target)s \
+    --with-headers=%(sysroot)s/usr/include \
+    --disable-nscd \
+    --disable-timezone-tools \
+    --enable-kernel=5.15 \
+    --enable-stack-protector=strong \
+    --enable-bind-now \
+    libc_cv_slibdir=/usr/lib
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Install for nscd (even though we disable it, some packages check for it)
+mkdir -pv %(destdir)s/var/cache/nscd
+install -v -Dm644 ../glibc-%(version)s/nscd/nscd.conf %(destdir)s/etc/nscd.conf
+
+# Create essential symlinks
+mkdir -pv %(destdir)s/lib64
+ln -sfv ../usr/lib/ld-linux-x86-64.so.2 %(destdir)s/lib64/ld-linux-x86-64.so.2
+
+# Create locale directory
+mkdir -pv %(destdir)s/usr/lib/locale
+"""
+
+setup = "mkdir -p build && cd build"
+workdir = "build"
+
+# glibc requires specific compiler flags
+[build.environment]
+PATH = "/tools/bin:%(sysroot)s/usr/bin:$PATH"
+# Use gcc-pass1 from the sysroot
+CC = "%(target)s-gcc"
+CXX = "%(target)s-g++"
+AR = "%(target)s-ar"
+RANLIB = "%(target)s-ranlib"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+cross_tools = "/tools/bin"
+tool_prefix = "x86_64-conary-linux-gnu"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+jobs = "$(nproc)"

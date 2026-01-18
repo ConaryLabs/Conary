@@ -1,0 +1,127 @@
+# recipes/core/stage1/gcc-pass2.toml
+#
+# GCC Pass 2: Full compiler with C/C++ support
+#
+# This is the final GCC build for Stage 1, with full C and C++ support,
+# threads, shared libraries, and libstdc++. This compiler is used to
+# build all remaining Stage 1 packages and the base system.
+#
+# Bootstrap dependency order:
+#   linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2
+
+[package]
+name = "gcc"
+version = "15.2.0"
+release = "1"
+summary = "GNU Compiler Collection"
+description = """
+The GNU Compiler Collection includes front ends for C and C++,
+as well as libraries for these languages (libstdc++).
+This is the full Stage 1 compiler with complete functionality.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://gcc.gnu.org"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz.sig"
+
+# GCC requires GMP, MPFR, MPC, and ISL
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+checksum = "sha256:FIXME_GMP_CHECKSUM"
+extract_to = "gmp"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz"
+checksum = "sha256:FIXME_MPFR_CHECKSUM"
+extract_to = "mpfr"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
+checksum = "sha256:FIXME_MPC_CHECKSUM"
+extract_to = "mpc"
+
+[[source.additional]]
+url = "https://libisl.sourceforge.io/isl-0.27.tar.xz"
+checksum = "sha256:FIXME_ISL_CHECKSUM"
+extract_to = "isl"
+
+[build]
+requires = ["glibc", "binutils"]
+makedepends = ["gcc-pass1", "texinfo", "gawk", "bison", "flex", "zlib-devel"]
+
+# Full configure with C and C++ support, threading, shared libs
+configure = """
+# Fix library search path for 64-bit
+case $(uname -m) in
+  x86_64)
+    sed -e '/m64=/s/lib64/lib/' -i.orig ../gcc-%(version)s/gcc/config/i386/t-linux64
+    ;;
+esac
+
+../gcc-%(version)s/configure \
+    --prefix=/usr \
+    --build=$(../gcc-%(version)s/config.guess) \
+    --host=%(target)s \
+    --target=%(target)s \
+    --with-sysroot=%(sysroot)s \
+    --enable-languages=c,c++ \
+    --enable-default-pie \
+    --enable-default-ssp \
+    --enable-threads=posix \
+    --enable-tls \
+    --enable-shared \
+    --enable-__cxa_atexit \
+    --enable-clocale=gnu \
+    --enable-linker-build-id \
+    --enable-plugin \
+    --enable-lto \
+    --enable-checking=release \
+    --disable-nls \
+    --disable-multilib \
+    --disable-bootstrap \
+    --disable-libsanitizer \
+    --with-system-zlib \
+    --with-linker-hash-style=gnu
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create cc symlink
+ln -sv gcc %(destdir)s/usr/bin/cc
+
+# Create compatibility symlinks for LTO plugin
+mkdir -pv %(destdir)s/usr/lib/bfd-plugins
+ln -sfv ../../libexec/gcc/%(target)s/%(version)s/liblto_plugin.so %(destdir)s/usr/lib/bfd-plugins/
+
+# Move misplaced files
+mkdir -pv %(destdir)s/usr/share/gdb/auto-load/usr/lib
+mv -v %(destdir)s/usr/lib/*gdb.py %(destdir)s/usr/share/gdb/auto-load/usr/lib/ 2>/dev/null || true
+"""
+
+setup = "mkdir -p build && cd build"
+workdir = "build"
+
+[build.environment]
+PATH = "/tools/bin:%(sysroot)s/usr/bin:$PATH"
+CC = "%(target)s-gcc"
+CXX = "%(target)s-g++"
+AR = "%(target)s-ar"
+RANLIB = "%(target)s-ranlib"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+cross_tools = "/tools/bin"
+tool_prefix = "x86_64-conary-linux-gnu"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+jobs = "$(nproc)"
