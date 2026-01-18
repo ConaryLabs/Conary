@@ -57,16 +57,16 @@ configure = """
 # Fix library search path for 64-bit
 case $(uname -m) in
   x86_64)
-    sed -e '/m64=/s/lib64/lib/' -i.orig ../gcc-%(version)s/gcc/config/i386/t-linux64
+    sed -e '/m64=/s/lib64/lib/' -i.orig ../src/gcc-%(version)s/gcc/config/i386/t-linux64
     ;;
 esac
 
-../gcc-%(version)s/configure \
+../src/gcc-%(version)s/configure \
     --prefix=/usr \
-    --build=$(../gcc-%(version)s/config.guess) \
+    --build=$(../src/gcc-%(version)s/config.guess) \
     --host=%(target)s \
     --target=%(target)s \
-    --with-sysroot=%(sysroot)s \
+    --with-sysroot=%(stage1_sysroot)s \
     --enable-languages=c,c++ \
     --enable-default-pie \
     --enable-default-ssp \
@@ -76,14 +76,14 @@ esac
     --enable-__cxa_atexit \
     --enable-clocale=gnu \
     --enable-linker-build-id \
-    --enable-plugin \
+    --disable-plugin \
+    --disable-libcc1 \
     --enable-lto \
     --enable-checking=release \
     --disable-nls \
     --disable-multilib \
     --disable-bootstrap \
     --disable-libsanitizer \
-    --with-system-zlib \
     --with-linker-hash-style=gnu
 """
 
@@ -108,7 +108,7 @@ setup = "mkdir -p build && cd build"
 workdir = "build"
 
 [build.environment]
-PATH = "/tools/bin:%(sysroot)s/usr/bin:$PATH"
+PATH = "/tools/x86_64-conary-linux-gnu/bin:%(sysroot)s/usr/bin:$PATH"
 CC = "%(target)s-gcc"
 CXX = "%(target)s-g++"
 AR = "%(target)s-ar"
@@ -117,8 +117,9 @@ RANLIB = "%(target)s-ranlib"
 [cross]
 stage = "stage1"
 target = "x86_64-conary-linux-gnu"
-sysroot = "/conary/sysroot/stage1"
-cross_tools = "/tools/bin"
+# Note: sysroot not specified here - gcc-pass2 uses Stage1Builder's sysroot
+# where glibc was installed, specified via --with-sysroot in configure
+cross_tools = "/tools/x86_64-conary-linux-gnu/bin"
 tool_prefix = "x86_64-conary-linux-gnu"
 
 [variables]

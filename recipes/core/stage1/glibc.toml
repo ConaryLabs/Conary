@@ -37,11 +37,11 @@ configure = """
 # Ensure we have the right headers
 ln -sfv ../lib/ld-linux-x86-64.so.2 %(destdir)s/lib64 2>/dev/null || true
 
-../glibc-%(version)s/configure \
+../src/glibc-%(version)s/configure \
     --prefix=/usr \
-    --build=$(../glibc-%(version)s/scripts/config.guess) \
+    --build=$(../src/glibc-%(version)s/scripts/config.guess) \
     --host=%(target)s \
-    --with-headers=%(sysroot)s/usr/include \
+    --with-headers=%(stage1_sysroot)s/usr/include \
     --disable-nscd \
     --disable-timezone-tools \
     --enable-kernel=5.15 \
@@ -57,7 +57,7 @@ make DESTDIR=%(destdir)s install
 
 # Install for nscd (even though we disable it, some packages check for it)
 mkdir -pv %(destdir)s/var/cache/nscd
-install -v -Dm644 ../glibc-%(version)s/nscd/nscd.conf %(destdir)s/etc/nscd.conf
+install -v -Dm644 ../src/glibc-%(version)s/nscd/nscd.conf %(destdir)s/etc/nscd.conf
 
 # Create essential symlinks
 mkdir -pv %(destdir)s/lib64
@@ -72,7 +72,7 @@ workdir = "build"
 
 # glibc requires specific compiler flags
 [build.environment]
-PATH = "/tools/bin:%(sysroot)s/usr/bin:$PATH"
+PATH = "/tools/x86_64-conary-linux-gnu/bin:%(sysroot)s/usr/bin:$PATH"
 # Use gcc-pass1 from the sysroot
 CC = "%(target)s-gcc"
 CXX = "%(target)s-g++"
@@ -83,7 +83,7 @@ RANLIB = "%(target)s-ranlib"
 stage = "stage1"
 target = "x86_64-conary-linux-gnu"
 sysroot = "/conary/sysroot/stage1"
-cross_tools = "/tools/bin"
+cross_tools = "/tools/x86_64-conary-linux-gnu/bin"
 tool_prefix = "x86_64-conary-linux-gnu"
 
 [variables]

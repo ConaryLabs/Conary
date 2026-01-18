@@ -53,12 +53,12 @@ makedepends = ["texinfo", "gawk", "bison", "flex"]
 # - Disable shared libraries
 # - Use our newly-built binutils
 configure = """
-../gcc-%(version)s/configure \
+../src/gcc-%(version)s/configure \
     --prefix=/usr \
-    --build=$(../gcc-%(version)s/config.guess) \
+    --build=$(../src/gcc-%(version)s/config.guess) \
     --host=%(target)s \
     --target=%(target)s \
-    --with-sysroot=%(sysroot)s \
+    --with-sysroot=/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot \
     --with-newlib \
     --without-headers \
     --disable-nls \
@@ -71,7 +71,7 @@ configure = """
     --disable-libssp \
     --disable-libvtv \
     --disable-libstdcxx \
-    --disable-decimal-float \
+    --enable-decimal-float=dpd \
     --disable-libffi \
     --enable-languages=c \
     --enable-default-pie \
@@ -85,16 +85,16 @@ setup = "mkdir -p build && cd build"
 workdir = "build"
 
 [build.environment]
-PATH = "/tools/bin:$PATH"
+PATH = "/tools/x86_64-conary-linux-gnu/bin:$PATH"
 
 [cross]
 stage = "stage1"
 target = "x86_64-conary-linux-gnu"
-sysroot = "/conary/sysroot/stage1"
-cross_tools = "/tools/bin"
+sysroot = "/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot"
+cross_tools = "/tools/x86_64-conary-linux-gnu/bin"
 tool_prefix = "x86_64-conary-linux-gnu"
 
 [variables]
 target = "x86_64-conary-linux-gnu"
-sysroot = "/conary/sysroot/stage1"
+sysroot = "/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot"
 jobs = "$(nproc)"

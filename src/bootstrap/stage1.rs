@@ -238,7 +238,9 @@ impl Stage1Builder {
         info!("Stage 1 build complete!");
 
         // Create and return the Stage 1 toolchain
-        let mut toolchain = Toolchain::from_prefix(&self.sysroot)
+        // Stage 1 uses --prefix=/usr, so binaries are in sysroot/usr/bin
+        let stage1_prefix = self.sysroot.join("usr");
+        let mut toolchain = Toolchain::from_prefix(&stage1_prefix)
             .map_err(|e| Stage1Error::BuildFailed("toolchain".to_string(), e.to_string()))?;
         toolchain.kind = ToolchainKind::Stage1;
 
@@ -275,10 +277,19 @@ impl Stage1Builder {
         // Fetch and extract additional sources (like GMP, MPFR, MPC for GCC)
         self.fetch_additional_sources(idx, &actual_src_dir)?;
 
+        // Determine working directory for build phases
+        // If recipe has a workdir, use build_dir; otherwise use source dir
+        let has_workdir = self.packages[idx].recipe.build.workdir.is_some();
+        let work_dir = if has_workdir {
+            build_dir.clone()
+        } else {
+            actual_src_dir.clone()
+        };
+
         // Run build phases
         self.run_configure(idx, &actual_src_dir, &build_dir)?;
-        self.run_make(idx, &build_dir)?;
-        self.run_install(idx, &build_dir)?;
+        self.run_make(idx, &work_dir)?;
+        self.run_install(idx, &work_dir)?;
 
         Ok(())
     }
@@ -364,14 +375,16 @@ impl Stage1Builder {
                 }
             }
 
-            // Extract to the specified location
+            // Extract to the specified location, stripping top-level directory
+            // This is needed because tarballs like mpfr-4.2.1.tar.xz contain
+            // mpfr-4.2.1/ as the top-level, but GCC expects gmp/, mpfr/, etc.
             let extract_dest = if let Some(dest) = &extract_to {
                 src_dir.join(dest)
             } else {
                 src_dir.clone()
             };
 
-            self.extract_source(&target_path, &extract_dest)?;
+            self.extract_source_strip(&target_path, &extract_dest)?;
         }
 
         Ok(())
@@ -418,6 +431,48 @@ impl Stage1Builder {
             _ => {
                 warn!("  Unknown checksum algorithm: {}", algo);
             }
+        }
+
+        Ok(())
+    }
+
+    /// Extract a source archive, stripping the top-level directory
+    ///
+    /// This is used for in-tree dependencies like GMP, MPFR, MPC for GCC builds.
+    fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
+        fs::create_dir_all(dest)?;
+
+        let filename = archive.file_name().unwrap().to_string_lossy();
+
+        let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
+            Command::new("tar")
+                .args(["xJf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .output()
+        } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
+            Command::new("tar")
+                .args(["xzf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .output()
+        } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
+            Command::new("tar")
+                .args(["xjf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .output()
+        } else {
+            // Try generic tar
+            Command::new("tar")
+                .args(["xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .output()
+        };
+
+        let output = output.map_err(|e| {
+            Stage1Error::BuildFailed("extract".to_string(), e.to_string())
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Stage1Error::BuildFailed(
+                "extract".to_string(),
+                stderr.to_string(),
+            ));
         }
 
         Ok(())
@@ -569,12 +624,13 @@ impl Stage1Builder {
         let pkg = &self.packages[idx];
         let mut result = cmd.to_string();
 
-        // Standard substitutions
+        // Standard substitutions from Stage1Builder
         result = result.replace("%(target)s", &self.config.triple());
-        result = result.replace("%(sysroot)s", &self.sysroot.to_string_lossy());
         result = result.replace("%(jobs)s", &self.config.jobs.to_string());
+        // Special variable for Stage1Builder's sysroot (where linux-headers are installed)
+        result = result.replace("%(stage1_sysroot)s", &self.sysroot.to_string_lossy());
 
-        // Cross-compilation section variables
+        // Cross-compilation section variables (recipe values)
         if let Some(cross) = &pkg.recipe.cross {
             if let Some(target) = &cross.target {
                 result = result.replace("%(target)s", target);
@@ -623,13 +679,23 @@ impl Stage1Builder {
         }
 
         // Add cross-compilation environment from recipe
+        // Merge CFLAGS/CXXFLAGS/LDFLAGS rather than replacing
         for (key, value) in cross_env {
-            command.env(key, value);
+            if key == "CFLAGS" || key == "CXXFLAGS" || key == "LDFLAGS" {
+                // Prepend the base flags from build_env
+                let base_flags = self.build_env.get(&key).map(|s| s.as_str()).unwrap_or("");
+                let merged = format!("{} {}", base_flags, value);
+                command.env(key, merged.trim());
+            } else {
+                command.env(key, value);
+            }
         }
 
         // Add build environment from recipe
+        // Expand environment variable references (e.g., $PATH or ${PATH})
         for (key, value) in build_environment {
-            command.env(key, value);
+            let expanded = self.expand_env_vars(&value);
+            command.env(key, expanded);
         }
 
         // Capture output
@@ -687,6 +753,62 @@ impl Stage1Builder {
             .iter()
             .map(|p| (p.name.as_str(), &p.status))
             .collect()
+    }
+
+    /// Expand environment variable references in a string
+    ///
+    /// Supports both $VAR and ${VAR} syntax. First checks build_env,
+    /// then falls back to the system environment.
+    fn expand_env_vars(&self, value: &str) -> String {
+        let mut result = value.to_string();
+
+        // Handle ${VAR} syntax
+        while let Some(start) = result.find("${") {
+            if let Some(end) = result[start..].find('}') {
+                let var_name = &result[start + 2..start + end];
+                let replacement = self
+                    .build_env
+                    .get(var_name)
+                    .cloned()
+                    .or_else(|| std::env::var(var_name).ok())
+                    .unwrap_or_default();
+                result = format!("{}{}{}", &result[..start], replacement, &result[start + end + 1..]);
+            } else {
+                break;
+            }
+        }
+
+        // Handle $VAR syntax (must come after ${VAR} to avoid conflicts)
+        let mut i = 0;
+        while i < result.len() {
+            if result[i..].starts_with('$') && !result[i..].starts_with("${") {
+                // Find the end of the variable name
+                let rest = &result[i + 1..];
+                let var_end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                if var_end > 0 {
+                    let var_name = &rest[..var_end];
+                    let replacement = self
+                        .build_env
+                        .get(var_name)
+                        .cloned()
+                        .or_else(|| std::env::var(var_name).ok())
+                        .unwrap_or_default();
+                    result = format!(
+                        "{}{}{}",
+                        &result[..i],
+                        replacement,
+                        &result[i + 1 + var_end..]
+                    );
+                    i += replacement.len();
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        result
     }
 }
 
