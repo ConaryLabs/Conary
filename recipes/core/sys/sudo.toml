@@ -1,0 +1,125 @@
+# recipes/core/sys/sudo.toml
+#
+# sudo - Execute commands as another user
+#
+# The standard privilege escalation tool for Unix systems.
+
+[package]
+name = "sudo"
+version = "1.9.18"
+release = "1"
+summary = "Execute commands as another user"
+description = """
+Sudo (superuser do) allows a system administrator to give certain users
+the ability to run commands as root (or another user) while logging all
+commands and arguments. It provides fine-grained access control and
+detailed logging of all activities.
+"""
+license = "ISC"
+homepage = "https://www.sudo.ws"
+
+[source]
+archive = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz.sig"
+
+[build]
+requires = ["glibc", "linux-pam", "zlib", "openssl"]
+makedepends = ["gcc", "make"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sbindir=/usr/sbin \
+    --libexecdir=/usr/lib \
+    --sysconfdir=/etc \
+    --with-rundir=/run/sudo \
+    --with-vardir=/var/db/sudo \
+    --with-logfac=auth \
+    --with-pam \
+    --with-pam-login \
+    --with-env-editor \
+    --with-all-insults \
+    --enable-zlib \
+    --disable-root-mailer \
+    --without-selinux \
+    --without-sssd
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move sudo to /bin for essential access
+mkdir -p %(destdir)s/bin
+if [ -f "%(destdir)s/usr/bin/sudo" ]; then
+    mv "%(destdir)s/usr/bin/sudo" "%(destdir)s/bin/"
+    ln -sf "/bin/sudo" "%(destdir)s/usr/bin/sudo"
+fi
+
+# Create default sudoers file with secure permissions
+install -d -m 750 %(destdir)s/etc/sudoers.d
+cat > %(destdir)s/etc/sudoers << 'SUDOERS'
+## /etc/sudoers - sudo configuration file
+##
+## This file MUST be edited with 'visudo' command as root.
+
+# Host alias specification
+# Host_Alias SERVERS = 192.168.1.0/24
+
+# User alias specification
+# User_Alias ADMINS = user1, user2
+
+# Command alias specification
+# Cmnd_Alias SERVICES = /usr/bin/systemctl
+
+# Defaults specification
+Defaults   env_reset
+Defaults   env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS"
+Defaults   env_keep+="MAIL PS1 PS2 QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE"
+Defaults   env_keep+="LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES"
+Defaults   env_keep+="LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER LC_TELEPHONE"
+Defaults   env_keep+="LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY"
+Defaults   secure_path="/sbin:/bin:/usr/sbin:/usr/bin"
+Defaults   use_pty
+Defaults   log_input, log_output
+Defaults   logfile="/var/log/sudo.log"
+
+# Allow root to run any commands anywhere
+root    ALL=(ALL:ALL) ALL
+
+# Members of the wheel group may run all commands
+%wheel  ALL=(ALL:ALL) ALL
+
+# Uncomment to allow members of group wheel to execute any command
+# without a password (NOT RECOMMENDED for production)
+# %wheel ALL=(ALL:ALL) NOPASSWD: ALL
+
+# Include additional configuration from /etc/sudoers.d
+@includedir /etc/sudoers.d
+SUDOERS
+chmod 440 %(destdir)s/etc/sudoers
+
+# Create PAM configuration
+mkdir -p %(destdir)s/etc/pam.d
+cat > %(destdir)s/etc/pam.d/sudo << 'PAM_SUDO'
+# PAM configuration for sudo
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+session    required     pam_env.so
+session    include      system-auth
+PAM_SUDO
+
+# Create log directory
+mkdir -p %(destdir)s/var/log
+touch %(destdir)s/var/log/sudo.log
+chmod 600 %(destdir)s/var/log/sudo.log
+
+# Remove static library
+rm -f %(destdir)s/usr/lib/libsudo_util.a
+"""
+
+[variables]
+jobs = "$(nproc)"

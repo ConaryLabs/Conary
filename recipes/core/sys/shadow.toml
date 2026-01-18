@@ -1,0 +1,130 @@
+# recipes/core/sys/shadow.toml
+#
+# shadow - User and group management utilities
+#
+# Essential tools for managing users, groups, and passwords.
+
+[package]
+name = "shadow"
+version = "4.16.0"
+release = "1"
+summary = "User and group management utilities"
+description = """
+The shadow package provides programs for managing user accounts and
+passwords with shadow password support. It includes essential tools
+like useradd, usermod, userdel, groupadd, groupmod, groupdel, passwd,
+chage, and others needed for user administration.
+"""
+license = "BSD-3-Clause"
+homepage = "https://github.com/shadow-maint/shadow"
+
+[source]
+archive = "https://github.com/shadow-maint/shadow/releases/download/%(version)s/shadow-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "linux-pam", "libcap"]
+makedepends = ["gcc", "make"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --disable-static \
+    --with-libpam \
+    --with-group-name-max-length=32 \
+    --without-libbsd \
+    --without-selinux \
+    --without-audit
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move essential utilities to /sbin and /bin
+mkdir -p %(destdir)s/sbin %(destdir)s/bin
+
+# User management to /sbin
+for cmd in useradd usermod userdel groupadd groupmod groupdel; do
+    if [ -f "%(destdir)s/usr/sbin/$cmd" ]; then
+        mv "%(destdir)s/usr/sbin/$cmd" "%(destdir)s/sbin/"
+        ln -sf "/sbin/$cmd" "%(destdir)s/usr/sbin/$cmd"
+    fi
+done
+
+# passwd and login utilities to /bin
+for cmd in passwd login su; do
+    if [ -f "%(destdir)s/usr/bin/$cmd" ]; then
+        mv "%(destdir)s/usr/bin/$cmd" "%(destdir)s/bin/"
+        ln -sf "/bin/$cmd" "%(destdir)s/usr/bin/$cmd"
+    fi
+done
+
+# Create default login.defs
+cat > %(destdir)s/etc/login.defs << 'LOGIN_DEFS'
+# /etc/login.defs - Configuration for login and user management
+
+# Password aging controls
+PASS_MAX_DAYS   99999
+PASS_MIN_DAYS   0
+PASS_WARN_AGE   7
+
+# Min/max UID/GID for regular users
+UID_MIN         1000
+UID_MAX         60000
+GID_MIN         1000
+GID_MAX         60000
+
+# System accounts
+SYS_UID_MIN     100
+SYS_UID_MAX     999
+SYS_GID_MIN     100
+SYS_GID_MAX     999
+
+# Home directory creation
+CREATE_HOME     yes
+UMASK           077
+
+# Password encryption method
+ENCRYPT_METHOD  YESCRYPT
+
+# Use PAM for authentication
+LOGIN_DEFS
+# Note: PAM handles most authentication settings
+
+# Create PAM configuration for passwd
+mkdir -p %(destdir)s/etc/pam.d
+cat > %(destdir)s/etc/pam.d/passwd << 'PAM_PASSWD'
+# PAM configuration for passwd
+auth       include      system-auth
+account    include      system-auth
+password   substack     system-auth
+password   optional     pam_gnome_keyring.so use_authtok
+PAM_PASSWD
+
+# Create PAM configuration for login
+cat > %(destdir)s/etc/pam.d/login << 'PAM_LOGIN'
+# PAM configuration for login
+auth       required     pam_securetty.so
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+session    required     pam_loginuid.so
+session    include      system-auth
+PAM_LOGIN
+
+# Create PAM configuration for su
+cat > %(destdir)s/etc/pam.d/su << 'PAM_SU'
+# PAM configuration for su
+auth       sufficient   pam_rootok.so
+auth       include      system-auth
+account    include      system-auth
+session    required     pam_env.so
+session    include      system-auth
+PAM_SU
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,70 @@
+# recipes/core/sys/procps-ng.toml
+#
+# procps-ng - Process monitoring utilities
+#
+# Essential tools for monitoring and managing system processes.
+
+[package]
+name = "procps-ng"
+version = "4.1.0"
+release = "1"
+summary = "System and process monitoring utilities"
+description = """
+The procps-ng package contains programs for monitoring and terminating
+system processes. It provides essential tools like ps, top, free, vmstat,
+pgrep, pkill, and many others that system administrators rely on daily.
+"""
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later"
+homepage = "https://gitlab.com/procps-ng/procps"
+
+[source]
+archive = "https://gitlab.com/procps-ng/procps/-/archive/v%(version)s/procps-v%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "ncurses", "systemd"]
+makedepends = ["gcc", "make", "pkgconf", "autoconf", "automake", "libtool", "gettext"]
+
+configure = """
+# Generate configure script
+./autogen.sh
+
+./configure \
+    --prefix=/usr \
+    --sbindir=/usr/sbin \
+    --libdir=/usr/lib \
+    --disable-static \
+    --disable-kill \
+    --with-systemd \
+    --enable-watch8bit \
+    --enable-pidof \
+    --enable-sigwinch
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move critical utilities to /bin for early boot
+mkdir -p %(destdir)s/bin
+for cmd in ps pidof; do
+    if [ -f "%(destdir)s/usr/bin/$cmd" ]; then
+        mv "%(destdir)s/usr/bin/$cmd" "%(destdir)s/bin/"
+        ln -sf "/bin/$cmd" "%(destdir)s/usr/bin/$cmd"
+    fi
+done
+
+# Move sysctl to /sbin
+mkdir -p %(destdir)s/sbin
+if [ -f "%(destdir)s/usr/sbin/sysctl" ]; then
+    mv "%(destdir)s/usr/sbin/sysctl" "%(destdir)s/sbin/"
+    ln -sf "/sbin/sysctl" "%(destdir)s/usr/sbin/sysctl"
+fi
+
+# Remove libtool archives
+rm -f %(destdir)s/usr/lib/*.la
+"""
+
+[variables]
+jobs = "$(nproc)"

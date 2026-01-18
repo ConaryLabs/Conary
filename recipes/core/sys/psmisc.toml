@@ -1,0 +1,54 @@
+# recipes/core/sys/psmisc.toml
+#
+# psmisc - Miscellaneous process utilities
+#
+# Additional tools for managing processes beyond what procps provides.
+
+[package]
+name = "psmisc"
+version = "24.0"
+release = "1"
+summary = "Miscellaneous process management utilities"
+description = """
+The psmisc package contains programs for displaying information about
+running processes. It includes fuser (identify processes using files),
+killall (kill processes by name), pstree (display process tree), and
+peekfd (peek at file descriptors of running processes).
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://gitlab.com/psmisc/psmisc"
+
+[source]
+archive = "https://gitlab.com/psmisc/psmisc/-/archive/v%(version)s/psmisc-v%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = ["gcc", "make", "autoconf", "automake", "gettext"]
+
+configure = """
+# Generate configure script
+./autogen.sh
+
+./configure \
+    --prefix=/usr \
+    --disable-selinux
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move fuser and killall to /bin for early boot
+mkdir -p %(destdir)s/bin
+for cmd in fuser killall; do
+    if [ -f "%(destdir)s/usr/bin/$cmd" ]; then
+        mv "%(destdir)s/usr/bin/$cmd" "%(destdir)s/bin/"
+        ln -sf "/bin/$cmd" "%(destdir)s/usr/bin/$cmd"
+    fi
+done
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -120,6 +120,13 @@ ca-certificates = "2026-01"  # Mozilla bundle date
 # Version control (latest stable as of Jan 2026)
 git = "2.53.0"
 
+[sys]
+# System utilities (latest stable as of Jan 2026)
+procps-ng = "4.1.0"
+psmisc = "24.0"
+shadow = "4.16.0"
+sudo = "1.9.18"
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"
