@@ -1,0 +1,39 @@
+# recipes/core/text/patch.toml
+#
+# GNU Patch - Apply diff files
+#
+# Applies unified or context diffs to original files.
+
+[package]
+name = "patch"
+version = "2.8"
+release = "1"
+summary = "GNU patch utility"
+description = """
+GNU patch takes a patch file containing a difference listing produced
+by diff and applies those differences to one or more original files,
+producing patched versions. It is essential for applying software
+updates and modifications.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/patch/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/patch/patch-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/patch/patch-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

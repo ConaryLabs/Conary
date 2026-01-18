@@ -1,0 +1,54 @@
+# recipes/core/text/findutils.toml
+#
+# GNU Findutils - File finding utilities
+#
+# Searches for files matching criteria (find, xargs, locate).
+
+[package]
+name = "findutils"
+version = "4.10.0"
+release = "1"
+summary = "GNU file finding utilities"
+description = """
+GNU Findutils provides utilities to find files matching certain
+criteria and perform operations on them. It includes find (search
+for files), xargs (build and execute commands from input), and
+locate (find files by name using a database).
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/findutils/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/findutils/findutils-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/findutils/findutils-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --localstatedir=/var/lib/locate \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move find and xargs to /bin
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/find %(destdir)s/bin/find
+mv %(destdir)s/usr/bin/xargs %(destdir)s/bin/xargs
+ln -sf /bin/find %(destdir)s/usr/bin/find
+ln -sf /bin/xargs %(destdir)s/usr/bin/xargs
+
+# Create locate database directory
+mkdir -p %(destdir)s/var/lib/locate
+"""
+
+[variables]
+jobs = "$(nproc)"

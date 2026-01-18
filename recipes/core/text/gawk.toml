@@ -1,0 +1,46 @@
+# recipes/core/text/gawk.toml
+#
+# GNU Awk - Pattern scanning and processing language
+#
+# Powerful text processing language for data extraction and reporting.
+
+[package]
+name = "gawk"
+version = "5.3.2"
+release = "1"
+summary = "GNU awk implementation"
+description = """
+GNU awk (gawk) is a pattern scanning and processing language. It is
+useful for data extraction and reporting. The awk utility interprets
+a special-purpose programming language that makes it easy to handle
+simple data-reformatting jobs.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gawk/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gawk/gawk-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/gawk/gawk-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc", "readline", "mpfr"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create awk symlink
+ln -sf gawk %(destdir)s/usr/bin/awk
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,52 @@
+# recipes/core/text/less.toml
+#
+# less - Terminal pager
+#
+# View file contents one screen at a time, with scrolling.
+
+[package]
+name = "less"
+version = "685"
+release = "1"
+summary = "Terminal pager"
+description = """
+less is a terminal pager program used to view the contents of a text
+file one screen at a time. It is similar to more, but allows backward
+movement in the file as well as forward movement. It also does not
+have to read the entire file before starting.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.greenwoodsoftware.com/less/"
+
+[source]
+archive = "https://www.greenwoodsoftware.com/less/less-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://www.greenwoodsoftware.com/less/less-%(version)s.sig"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move less to /bin
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/less %(destdir)s/bin/less
+ln -sf /bin/less %(destdir)s/usr/bin/less
+
+# Also move lessecho and lesskey
+mv %(destdir)s/usr/bin/lessecho %(destdir)s/bin/lessecho 2>/dev/null || true
+mv %(destdir)s/usr/bin/lesskey %(destdir)s/bin/lesskey 2>/dev/null || true
+"""
+
+[variables]
+jobs = "$(nproc)"

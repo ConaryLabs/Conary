@@ -1,0 +1,47 @@
+# recipes/core/text/file.toml
+#
+# file - File type identification
+#
+# Determines file type using magic numbers and patterns.
+
+[package]
+name = "file"
+version = "5.46"
+release = "1"
+summary = "File type identification utility"
+description = """
+file is a standard Unix program for recognizing the type of data
+contained in a computer file. It performs three types of tests:
+filesystem tests, magic number tests, and language tests. It uses
+a database of 'magic' patterns to identify file types.
+"""
+license = "BSD-2-Clause"
+homepage = "https://www.darwinsys.com/file/"
+
+[source]
+archive = "https://astron.com/pub/file/file-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --datadir=/usr/share
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move file to /bin
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/file %(destdir)s/bin/file
+ln -sf /bin/file %(destdir)s/usr/bin/file
+"""
+
+[variables]
+jobs = "$(nproc)"

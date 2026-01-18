@@ -1,0 +1,48 @@
+# recipes/core/text/sed.toml
+#
+# GNU Sed - Stream editor
+#
+# Performs text transformations on input streams.
+
+[package]
+name = "sed"
+version = "4.9"
+release = "1"
+summary = "GNU stream editor"
+description = """
+GNU sed is a stream editor used to perform basic text transformations
+on an input stream (a file or input from a pipeline). While similar
+to an editor that permits scripted edits, sed works by making only
+one pass through the input(s), and is more efficient.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/sed/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/sed/sed-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/sed/sed-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move sed to /bin for early boot
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/sed %(destdir)s/bin/sed
+ln -sf /bin/sed %(destdir)s/usr/bin/sed
+"""
+
+[variables]
+jobs = "$(nproc)"

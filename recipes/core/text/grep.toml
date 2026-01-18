@@ -1,0 +1,53 @@
+# recipes/core/text/grep.toml
+#
+# GNU Grep - Pattern matching utility
+#
+# Searches files for lines matching regular expressions.
+
+[package]
+name = "grep"
+version = "3.12"
+release = "1"
+summary = "GNU pattern matching utility"
+description = """
+GNU grep searches for patterns in files and prints the lines that
+match. It supports basic and extended regular expressions, as well
+as Perl-compatible regular expressions with the -P option.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/grep/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/grep/grep-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/grep/grep-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc", "pcre2"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move grep to /bin for early boot
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/grep %(destdir)s/bin/grep
+ln -sf /bin/grep %(destdir)s/usr/bin/grep
+
+# Create egrep and fgrep symlinks
+ln -sf grep %(destdir)s/bin/egrep
+ln -sf grep %(destdir)s/bin/fgrep
+ln -sf /bin/egrep %(destdir)s/usr/bin/egrep
+ln -sf /bin/fgrep %(destdir)s/usr/bin/fgrep
+"""
+
+[variables]
+jobs = "$(nproc)"

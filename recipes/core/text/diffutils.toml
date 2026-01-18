@@ -1,0 +1,40 @@
+# recipes/core/text/diffutils.toml
+#
+# GNU Diffutils - File comparison utilities
+#
+# Compares files and shows differences (diff, cmp, sdiff, diff3).
+
+[package]
+name = "diffutils"
+version = "3.12"
+release = "1"
+summary = "GNU file comparison utilities"
+description = """
+GNU Diffutils provides utilities to compare files and show the
+differences. It includes diff (shows differences between files),
+cmp (compares two files byte by byte), sdiff (side-by-side merge),
+and diff3 (compares three files).
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/diffutils/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/diffutils/diffutils-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/diffutils/diffutils-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"
