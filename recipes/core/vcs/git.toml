@@ -1,0 +1,93 @@
+# recipes/core/vcs/git.toml
+#
+# Git - Distributed version control system
+#
+# The most widely used version control system in the world.
+
+[package]
+name = "git"
+version = "2.53.0"
+release = "1"
+summary = "Fast distributed version control system"
+description = """
+Git is a free and open source distributed version control system designed
+to handle everything from small to very large projects with speed and
+efficiency. Git is easy to learn and has a tiny footprint with lightning
+fast performance.
+"""
+license = "GPL-2.0-only"
+homepage = "https://git-scm.com"
+
+[source]
+archive = "https://www.kernel.org/pub/software/scm/git/git-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://www.kernel.org/pub/software/scm/git/git-%(version)s.tar.sign"
+
+[build]
+requires = ["glibc", "zlib", "openssl", "curl", "ca-certificates"]
+makedepends = ["gcc", "make", "perl", "python"]
+
+configure = """
+# Git uses a Makefile-based build system with configuration via make variables
+# No ./configure script needed
+"""
+
+make = """
+make -j%(jobs)s \
+    prefix=/usr \
+    gitexecdir=/usr/libexec/git-core \
+    INSTALL_SYMLINKS=1 \
+    NO_PERL_CPAN_FALLBACKS=1 \
+    USE_LIBPCRE2= \
+    NO_EXPAT=1 \
+    NO_TCLTK=1 \
+    NO_GETTEXT=1 \
+    CURL_LDFLAGS="-lcurl" \
+    all doc
+"""
+
+install = """
+make prefix=/usr \
+    gitexecdir=/usr/libexec/git-core \
+    INSTALL_SYMLINKS=1 \
+    NO_PERL_CPAN_FALLBACKS=1 \
+    USE_LIBPCRE2= \
+    NO_EXPAT=1 \
+    NO_TCLTK=1 \
+    NO_GETTEXT=1 \
+    DESTDIR=%(destdir)s \
+    install install-doc
+
+# Install bash completion
+mkdir -p %(destdir)s/usr/share/bash-completion/completions
+install -m644 contrib/completion/git-completion.bash \
+    %(destdir)s/usr/share/bash-completion/completions/git
+
+# Install git-prompt for shell integration
+mkdir -p %(destdir)s/usr/share/git
+install -m644 contrib/completion/git-prompt.sh \
+    %(destdir)s/usr/share/git/git-prompt.sh
+
+# Create system gitconfig with sensible defaults
+mkdir -p %(destdir)s/etc
+cat > %(destdir)s/etc/gitconfig << 'GITCONFIG'
+[init]
+    defaultBranch = main
+
+[core]
+    autocrlf = input
+
+[color]
+    ui = auto
+
+[pull]
+    rebase = false
+
+[http]
+    sslCAPath = /etc/ssl/certs
+    sslCAInfo = /etc/ssl/certs/ca-certificates.crt
+GITCONFIG
+"""
+
+[variables]
+jobs = "$(nproc)"

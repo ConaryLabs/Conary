@@ -116,6 +116,10 @@ curl = "8.18.0"
 wget2 = "2.2.1"
 ca-certificates = "2026-01"  # Mozilla bundle date
 
+[vcs]
+# Version control (latest stable as of Jan 2026)
+git = "2.53.0"
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"
