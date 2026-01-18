@@ -659,6 +659,47 @@ fn main() -> Result<()> {
             }
         }
 
+        // =====================================================================
+        // Bootstrap Commands
+        // =====================================================================
+        Some(Commands::Bootstrap(bootstrap_cmd)) => match bootstrap_cmd {
+            cli::BootstrapCommands::Init { work_dir, target, jobs } => {
+                commands::cmd_bootstrap_init(&work_dir, &target, jobs)
+            }
+
+            cli::BootstrapCommands::Check { verbose } => {
+                commands::cmd_bootstrap_check(verbose)
+            }
+
+            cli::BootstrapCommands::Stage0 { work_dir, config, jobs, verbose, download_only, clean } => {
+                commands::cmd_bootstrap_stage0(&work_dir, config, jobs, verbose, download_only, clean)
+            }
+
+            cli::BootstrapCommands::Stage1 { work_dir, jobs, verbose } => {
+                commands::cmd_bootstrap_stage1(&work_dir, jobs, verbose)
+            }
+
+            cli::BootstrapCommands::Base { work_dir, root, verbose } => {
+                commands::cmd_bootstrap_base(&work_dir, &root, verbose)
+            }
+
+            cli::BootstrapCommands::Image { work_dir, output, format, size } => {
+                commands::cmd_bootstrap_image(&work_dir, &output, &format, &size)
+            }
+
+            cli::BootstrapCommands::Status { work_dir, verbose } => {
+                commands::cmd_bootstrap_status(&work_dir, verbose)
+            }
+
+            cli::BootstrapCommands::Resume { work_dir, verbose } => {
+                commands::cmd_bootstrap_resume(&work_dir, verbose)
+            }
+
+            cli::BootstrapCommands::Clean { work_dir, stage, sources } => {
+                commands::cmd_bootstrap_clean(&work_dir, stage, sources)
+            }
+        }
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

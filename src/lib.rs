@@ -13,6 +13,7 @@
 //! - Flavors: Build-time variations tracked in metadata
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
+pub mod bootstrap;
 pub mod ccs;
 pub mod components;
 pub mod compression;
@@ -59,3 +60,7 @@ pub use transaction::{
     TransactionState,
 };
 pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
+pub use bootstrap::{
+    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, Stage0Builder, StageManager,
+    TargetArch, Toolchain, ToolchainKind,
+};

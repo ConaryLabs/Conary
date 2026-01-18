@@ -27,6 +27,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod bootstrap;
 mod ccs;
 mod collection;
 mod config;
@@ -41,6 +42,7 @@ mod state;
 mod system;
 mod trigger;
 
+pub use bootstrap::BootstrapCommands;
 pub use ccs::CcsCommands;
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
@@ -328,4 +330,11 @@ pub enum Commands {
     /// Collection management (create, delete, membership)
     #[command(subcommand)]
     Collection(CollectionCommands),
+
+    // =========================================================================
+    // Bootstrap
+    // =========================================================================
+    /// Bootstrap a complete Conary system from scratch
+    #[command(subcommand)]
+    Bootstrap(BootstrapCommands),
 }

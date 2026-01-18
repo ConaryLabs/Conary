@@ -2,6 +2,7 @@
 //! Command handlers for the Conary CLI
 
 mod adopt;
+mod bootstrap;
 pub mod ccs;
 mod collection;
 mod config;
@@ -24,6 +25,11 @@ mod update;
 
 // Re-export all command handlers
 pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
+pub use bootstrap::{
+    cmd_bootstrap_base, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_image,
+    cmd_bootstrap_init, cmd_bootstrap_resume, cmd_bootstrap_stage0, cmd_bootstrap_stage1,
+    cmd_bootstrap_status,
+};
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
     cmd_collection_list, cmd_collection_remove_member, cmd_collection_show,
