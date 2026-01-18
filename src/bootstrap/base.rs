@@ -267,10 +267,34 @@ impl BaseBuilder {
         // Set up build environment
         let mut build_env = toolchain.env();
 
-        // Standard build flags
-        build_env.insert("CFLAGS".to_string(), "-O2 -pipe".to_string());
-        build_env.insert("CXXFLAGS".to_string(), "-O2 -pipe".to_string());
-        build_env.insert("LDFLAGS".to_string(), String::new());
+        // Standard build flags with target sysroot paths
+        let include_path = format!("-I{}/usr/include", target_root.display());
+        let lib_path = format!(
+            "-L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
+            target_root.display(),
+            target_root.display(),
+            target_root.display()
+        );
+        build_env.insert(
+            "CFLAGS".to_string(),
+            format!("-O2 -pipe {}", include_path),
+        );
+        build_env.insert(
+            "CXXFLAGS".to_string(),
+            format!("-O2 -pipe {}", include_path),
+        );
+        build_env.insert("LDFLAGS".to_string(), lib_path.clone());
+
+        // Also set LIBRARY_PATH for static linking and tools that don't use LDFLAGS
+        build_env.insert(
+            "LIBRARY_PATH".to_string(),
+            format!("{}/usr/lib:{}/lib", target_root.display(), target_root.display()),
+        );
+
+        // Set C_INCLUDE_PATH and CPLUS_INCLUDE_PATH for compilers
+        let include_dir = format!("{}/usr/include", target_root.display());
+        build_env.insert("C_INCLUDE_PATH".to_string(), include_dir.clone());
+        build_env.insert("CPLUS_INCLUDE_PATH".to_string(), include_dir);
 
         // PKG_CONFIG paths
         let pkg_config_path = format!(
