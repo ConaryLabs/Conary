@@ -1,0 +1,73 @@
+# recipes/core/base/util-linux.toml
+#
+# util-linux - Essential system utilities
+#
+# Provides low-level system utilities: mount, fdisk, blkid, lsblk,
+# login, agetty, and many more essential tools.
+
+[package]
+name = "util-linux"
+version = "2.41.3"
+release = "1"
+summary = "System utilities for Linux"
+description = """
+util-linux is a collection of essential utilities for Linux systems.
+It includes disk management tools (fdisk, mkfs, mount), system tools
+(login, agetty, sulogin), and various other utilities (lscpu, lsblk,
+kill, more, hexdump, etc.).
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://github.com/util-linux/util-linux"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/util-linux/v%(version_major)s/util-linux-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "ncurses", "zlib"]
+makedepends = ["gcc", "pkg-config", "libcap-ng-devel", "pam-devel", "libudev-devel"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --bindir=/bin \
+    --sbindir=/sbin \
+    --libdir=/usr/lib \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --disable-static \
+    --enable-fs-paths-default=/sbin \
+    --enable-usrdir-path \
+    --enable-write \
+    --enable-mesg \
+    --enable-raw \
+    --without-python \
+    --without-systemd \
+    --with-readline=no
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Ensure critical tools are in /sbin for early boot
+mkdir -p %(destdir)s/sbin
+for prog in agetty blkid blockdev cfdisk fdisk fsck fsck.cramfs \
+            fsck.minix losetup mkfs mkfs.bfs mkfs.cramfs mkfs.minix \
+            mkswap pivot_root raw sfdisk swaplabel swapoff swapon \
+            switch_root wipefs; do
+    if [ -f %(destdir)s/usr/sbin/$prog ]; then
+        mv %(destdir)s/usr/sbin/$prog %(destdir)s/sbin/
+        ln -sf /sbin/$prog %(destdir)s/usr/sbin/$prog
+    fi
+done
+
+# Create required directories
+mkdir -p %(destdir)s/var/lib/hwclock
+mkdir -p %(destdir)s/run/mount
+"""
+
+[variables]
+version_major = "2.41"
+jobs = "$(nproc)"

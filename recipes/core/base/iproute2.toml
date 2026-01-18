@@ -1,0 +1,56 @@
+# recipes/core/base/iproute2.toml
+#
+# iproute2 - Network configuration utilities
+#
+# Modern Linux networking tools: ip, ss, tc, bridge, etc.
+# Replaces older tools like ifconfig, route, netstat.
+
+[package]
+name = "iproute2"
+version = "6.15.0"
+release = "1"
+summary = "Network configuration utilities"
+description = """
+iproute2 is a collection of utilities for controlling TCP/IP networking
+and traffic control in Linux. It includes ip (for network interface
+configuration), ss (socket statistics), tc (traffic control), bridge
+(bridge configuration), and other tools. These replace the older
+net-tools package (ifconfig, route, netstat).
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://wiki.linuxfoundation.org/networking/iproute2"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "libmnl", "libelf"]
+makedepends = ["gcc", "pkg-config", "bison", "flex", "libmnl-devel", "libelf-devel", "libcap-devel", "iptables-devel"]
+
+configure = """
+# iproute2 uses a simple config script, not autoconf
+./configure --prefix=/usr
+"""
+
+make = """
+make DESTDIR= SBINDIR=/sbin PREFIX=/usr -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=%(destdir)s SBINDIR=/sbin PREFIX=/usr install
+
+# Ensure ip is in /sbin for early boot networking
+mkdir -p %(destdir)s/sbin
+if [ ! -f %(destdir)s/sbin/ip ]; then
+    mv %(destdir)s/usr/sbin/ip %(destdir)s/sbin/ip 2>/dev/null || true
+fi
+ln -sf /sbin/ip %(destdir)s/usr/sbin/ip 2>/dev/null || true
+
+# Create configuration directories
+mkdir -p %(destdir)s/etc/iproute2
+install -m644 etc/iproute2/* %(destdir)s/etc/iproute2/ 2>/dev/null || true
+"""
+
+[variables]
+jobs = "$(nproc)"

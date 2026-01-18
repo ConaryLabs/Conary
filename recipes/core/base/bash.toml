@@ -1,0 +1,111 @@
+# recipes/core/base/bash.toml
+#
+# GNU Bourne-Again Shell
+#
+# The default shell for Conary, providing command-line interface
+# and shell scripting capabilities.
+
+[package]
+name = "bash"
+version = "5.3"
+release = "1"
+summary = "GNU Bourne-Again Shell"
+description = """
+Bash is the GNU Project's shell—the Bourne Again SHell. This is an
+sh-compatible shell that incorporates useful features from the Korn shell
+(ksh) and C shell (csh). It offers functional improvements over sh for
+both interactive and programming use.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bash/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/bash/bash-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/bash/bash-%(version)s.tar.gz.sig"
+
+[build]
+requires = ["glibc", "readline", "ncurses"]
+makedepends = ["gcc", "bison", "texinfo"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --without-bash-malloc \
+    --with-curses \
+    --with-installed-readline \
+    --enable-readline \
+    --enable-history \
+    --enable-job-control \
+    --enable-multibyte \
+    --enable-array-variables \
+    --enable-brace-expansion \
+    --enable-command-timing \
+    --enable-cond-command \
+    --enable-cond-regexp \
+    --enable-directory-stack \
+    --enable-dparen-arithmetic \
+    --enable-extended-glob \
+    --enable-process-substitution
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move bash to /bin (required for /bin/bash scripts)
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/bash %(destdir)s/bin/bash
+ln -sf /bin/bash %(destdir)s/usr/bin/bash
+
+# Create sh symlink (bash is POSIX-compatible)
+ln -sf bash %(destdir)s/bin/sh
+ln -sf /bin/sh %(destdir)s/usr/bin/sh
+
+# Install skeleton files
+mkdir -p %(destdir)s/etc/skel
+cat > %(destdir)s/etc/skel/.bashrc << 'BASHRC'
+# ~/.bashrc: executed by bash(1) for non-login shells
+
+# If not running interactively, don't do anything
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+
+# History settings
+HISTCONTROL=ignoreboth
+HISTSIZE=1000
+HISTFILESIZE=2000
+shopt -s histappend
+
+# Check window size after each command
+shopt -s checkwinsize
+
+# Enable color support
+if [ -x /usr/bin/dircolors ]; then
+    eval "$(dircolors -b)"
+    alias ls='ls --color=auto'
+    alias grep='grep --color=auto'
+fi
+
+# Prompt
+PS1='\u@\h:\w\$ '
+BASHRC
+
+cat > %(destdir)s/etc/skel/.bash_profile << 'PROFILE'
+# ~/.bash_profile: executed by bash(1) for login shells
+
+# Include .bashrc if it exists
+if [ -f ~/.bashrc ]; then
+    . ~/.bashrc
+fi
+
+# Set PATH
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+PROFILE
+"""
+
+[variables]
+jobs = "$(nproc)"

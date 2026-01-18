@@ -1,0 +1,54 @@
+# recipes/core/base/coreutils.toml
+#
+# GNU Core Utilities
+#
+# Essential command-line utilities: ls, cp, mv, rm, cat, chmod, etc.
+# These form the foundation of any Unix-like system.
+
+[package]
+name = "coreutils"
+version = "9.9"
+release = "1"
+summary = "GNU core utilities"
+description = """
+GNU Coreutils provides the basic file, shell, and text manipulation
+utilities of the GNU operating system. These include: ls, cat, cp, mv,
+rm, mkdir, rmdir, chmod, chown, head, tail, sort, uniq, wc, and many more.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/coreutils/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "gettext", "gmp-devel", "libcap-devel", "acl-devel", "attr-devel"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --enable-no-install-program=kill,uptime \
+    --enable-single-binary=symlinks \
+    --with-openssl \
+    --with-linux-crypto
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move programs to /bin for FHS compliance and early boot
+mkdir -p %(destdir)s/bin
+for prog in cat chgrp chmod chown cp date dd df echo false ln ls mkdir \
+            mknod mv pwd rm rmdir stty sync true uname; do
+    mv %(destdir)s/usr/bin/$prog %(destdir)s/bin/ 2>/dev/null || true
+    ln -sf /bin/$prog %(destdir)s/usr/bin/$prog
+done
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,127 @@
+# recipes/core/base/systemd.toml
+#
+# systemd - System and Service Manager
+#
+# The init system and service manager for Conary. Provides process
+# management, logging, device management, and many other system services.
+
+[package]
+name = "systemd"
+version = "257.9"
+release = "1"
+summary = "System and Service Manager"
+description = """
+systemd is a system and service manager for Linux, compatible with
+SysV and LSB init scripts. It provides aggressive parallelization
+capabilities, socket and D-Bus activation for starting services,
+offers on-demand starting of daemons, tracks processes using Linux
+cgroups, maintains mount and automount points, and implements an
+elaborate transactional dependency-based service control logic.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://systemd.io"
+
+[source]
+archive = "https://github.com/systemd/systemd/archive/v%(version)s/systemd-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "libcap", "util-linux", "kmod", "dbus", "openssl"]
+makedepends = [
+    "meson", "ninja", "pkg-config", "gperf", "python3", "python3-jinja2",
+    "libmount-devel", "libblkid-devel", "libcap-devel", "libseccomp-devel",
+    "libgcrypt-devel", "lz4-devel", "xz-devel", "zstd-devel", "acl-devel",
+    "pam-devel", "audit-libs-devel", "kmod-devel", "libfdisk-devel"
+]
+
+configure = """
+meson setup build \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --buildtype=release \
+    -Dmode=release \
+    -Dlink-udev-shared=true \
+    -Dlink-systemctl-shared=true \
+    -Dstatic-libsystemd=false \
+    -Dstatic-libudev=false \
+    -Dsplit-bin=false \
+    -Drootprefix=/usr \
+    -Drootlibdir=/usr/lib \
+    -Dsysvinit-path=/etc/init.d \
+    -Drc-local=/etc/rc.local \
+    -Ddefault-hierarchy=unified \
+    -Ddefault-kill-user-processes=false \
+    -Dpamconfdir=/etc/pam.d \
+    -Ddns-servers='1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net' \
+    -Dntp-servers='0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org' \
+    -Dsupport-url='https://github.com/ConaryLabs/Conary/issues' \
+    -Dversion-tag='%(version)s-conary' \
+    -Dfallback-hostname='conary' \
+    -Ddefault-dnssec=no \
+    -Ddefault-mdns=no \
+    -Ddefault-llmnr=no \
+    -Dadm-group=true \
+    -Dwheel-group=true \
+    -Duserdb=true \
+    -Dhomed=false \
+    -Dnetworkd=true \
+    -Dresolve=true \
+    -Dtimesyncd=true \
+    -Dcoredump=true \
+    -Dlogind=true \
+    -Dmachined=true \
+    -Dportabled=false \
+    -Dsysext=true \
+    -Dremote=false \
+    -Dnss-myhostname=true \
+    -Dnss-mymachines=true \
+    -Dnss-resolve=true \
+    -Dnss-systemd=true \
+    -Dfirstboot=true \
+    -Drandomseed=true \
+    -Dbacklight=true \
+    -Dvconsole=true \
+    -Dquotacheck=true \
+    -Dsysusers=true \
+    -Dtmpfiles=true \
+    -Dhwdb=true \
+    -Drfkill=true \
+    -Dxdg-autostart=true \
+    -Dman=false \
+    -Dhtml=false \
+    -Dtests=false \
+    -Dinstall-tests=false
+"""
+
+make = "ninja -C build -j%(jobs)s"
+
+install = """
+DESTDIR=%(destdir)s ninja -C build install
+
+# Create machine-id placeholder
+touch %(destdir)s/etc/machine-id
+
+# Create required directories
+mkdir -p %(destdir)s/var/lib/systemd/coredump
+mkdir -p %(destdir)s/var/lib/systemd/catalog
+mkdir -p %(destdir)s/var/log/journal
+
+# Enable essential services
+mkdir -p %(destdir)s/etc/systemd/system/multi-user.target.wants
+mkdir -p %(destdir)s/etc/systemd/system/sockets.target.wants
+mkdir -p %(destdir)s/etc/systemd/system/sysinit.target.wants
+
+# Link systemd as init
+ln -sf /usr/lib/systemd/systemd %(destdir)s/sbin/init
+
+# Link common tools to /bin for compatibility
+mkdir -p %(destdir)s/bin
+ln -sf /usr/bin/systemctl %(destdir)s/bin/systemctl
+ln -sf /usr/bin/journalctl %(destdir)s/bin/journalctl
+"""
+
+workdir = "."
+
+[variables]
+jobs = "$(nproc)"

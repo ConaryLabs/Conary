@@ -1,0 +1,175 @@
+# recipes/core/base/openssh.toml
+#
+# OpenSSH - Secure Shell client and server
+#
+# Provides secure remote login, file transfer, and tunneling.
+
+[package]
+name = "openssh"
+version = "10.1p1"
+release = "1"
+summary = "OpenSSH client and server"
+description = """
+OpenSSH is a free implementation of the SSH protocol suite of network
+connectivity tools. It provides encrypted communications between two
+untrusted hosts over an insecure network. OpenSSH includes the ssh
+client, sshd server, scp, sftp, and related tools.
+"""
+license = "BSD-2-Clause"
+homepage = "https://www.openssh.com"
+
+[source]
+archive = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz.asc"
+
+[build]
+requires = ["glibc", "openssl", "zlib"]
+makedepends = ["gcc", "pkg-config", "openssl-devel", "zlib-devel", "pam-devel", "libselinux-devel", "audit-libs-devel"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sbindir=/usr/sbin \
+    --sysconfdir=/etc/ssh \
+    --libexecdir=/usr/lib/openssh \
+    --with-pid-dir=/run \
+    --with-privsep-user=sshd \
+    --with-privsep-path=/var/lib/sshd \
+    --with-ssl-engine \
+    --with-pam \
+    --with-selinux \
+    --with-audit=linux \
+    --disable-strip \
+    --with-default-path=/usr/local/bin:/usr/bin:/bin \
+    --with-superuser-path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create privilege separation directory
+mkdir -p %(destdir)s/var/lib/sshd
+chmod 700 %(destdir)s/var/lib/sshd
+
+# Install sshd_config with secure defaults
+cat > %(destdir)s/etc/ssh/sshd_config << 'SSHD_CONFIG'
+# Conary default sshd configuration
+
+# Network
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+# Host keys
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+
+# Logging
+SyslogFacility AUTH
+LogLevel INFO
+
+# Authentication
+LoginGraceTime 2m
+PermitRootLogin prohibit-password
+StrictModes yes
+MaxAuthTries 6
+MaxSessions 10
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication yes
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+UsePAM yes
+
+# Environment
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# Security
+X11Forwarding no
+PrintMotd no
+PrintLastLog yes
+TCPKeepAlive yes
+ClientAliveInterval 60
+ClientAliveCountMax 3
+SSHD_CONFIG
+
+# Create systemd service file
+mkdir -p %(destdir)s/usr/lib/systemd/system
+cat > %(destdir)s/usr/lib/systemd/system/sshd.service << 'SERVICE'
+[Unit]
+Description=OpenSSH Daemon
+Documentation=man:sshd(8) man:sshd_config(5)
+After=network.target
+
+[Service]
+Type=notify
+ExecStartPre=/usr/sbin/sshd -t
+ExecStart=/usr/sbin/sshd -D
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=42s
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+# Create socket activation (optional)
+cat > %(destdir)s/usr/lib/systemd/system/sshd.socket << 'SOCKET'
+[Unit]
+Description=OpenSSH Server Socket
+Documentation=man:sshd(8) man:sshd_config(5)
+Conflicts=sshd.service
+
+[Socket]
+ListenStream=22
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+SOCKET
+
+cat > %(destdir)s/usr/lib/systemd/system/sshd@.service << 'INSTANCE'
+[Unit]
+Description=OpenSSH Per-Connection Daemon
+Documentation=man:sshd(8) man:sshd_config(5)
+After=sshd-keygen.target
+
+[Service]
+ExecStart=-/usr/sbin/sshd -i
+StandardInput=socket
+INSTANCE
+
+# Key generation service
+cat > %(destdir)s/usr/lib/systemd/system/sshd-keygen.target << 'KEYGEN_TARGET'
+[Unit]
+Description=Generate sshd host keys
+ConditionPathExists=|!/etc/ssh/ssh_host_ed25519_key
+ConditionPathExists=|!/etc/ssh/ssh_host_rsa_key
+ConditionPathExists=|!/etc/ssh/ssh_host_ecdsa_key
+Wants=sshd-keygen@ed25519.service sshd-keygen@rsa.service sshd-keygen@ecdsa.service
+
+[Install]
+WantedBy=multi-user.target
+KEYGEN_TARGET
+
+cat > %(destdir)s/usr/lib/systemd/system/sshd-keygen@.service << 'KEYGEN'
+[Unit]
+Description=Generate sshd %i host key
+ConditionPathExists=!/etc/ssh/ssh_host_%i_key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -q -t %i -f /etc/ssh/ssh_host_%i_key -N ""
+RemainAfterExit=yes
+KEYGEN
+"""
+
+[variables]
+jobs = "$(nproc)"

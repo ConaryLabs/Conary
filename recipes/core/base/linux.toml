@@ -1,0 +1,100 @@
+# recipes/core/base/linux.toml
+#
+# Linux kernel for the base system
+#
+# This builds a minimal but functional kernel suitable for general use.
+# The configuration enables common hardware support, networking, and
+# container features while keeping the build reasonably small.
+
+[package]
+name = "linux"
+version = "6.18"
+release = "1"
+summary = "Linux kernel"
+description = """
+The Linux kernel is the core of the operating system, managing hardware,
+processes, memory, and system calls. This build includes support for
+common hardware, networking, containers, and security features.
+"""
+license = "GPL-2.0-only"
+homepage = "https://kernel.org"
+
+[source]
+archive = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.sign"
+
+[build]
+requires = ["linux-headers"]
+makedepends = ["gcc", "binutils", "bc", "bison", "flex", "libelf-devel", "openssl-devel", "perl"]
+
+configure = """
+# Start with a default config for x86_64
+make ARCH=%(kernel_arch)s defconfig
+
+# Apply Conary-specific options
+scripts/config --enable CONFIG_IKCONFIG
+scripts/config --enable CONFIG_IKCONFIG_PROC
+scripts/config --enable CONFIG_NAMESPACES
+scripts/config --enable CONFIG_USER_NS
+scripts/config --enable CONFIG_PID_NS
+scripts/config --enable CONFIG_NET_NS
+scripts/config --enable CONFIG_CGROUPS
+scripts/config --enable CONFIG_CGROUP_DEVICE
+scripts/config --enable CONFIG_CGROUP_FREEZER
+scripts/config --enable CONFIG_CGROUP_PIDS
+scripts/config --enable CONFIG_MEMCG
+scripts/config --enable CONFIG_BLK_CGROUP
+scripts/config --enable CONFIG_OVERLAY_FS
+scripts/config --enable CONFIG_SECCOMP
+scripts/config --enable CONFIG_SECCOMP_FILTER
+
+# Common filesystem support
+scripts/config --enable CONFIG_EXT4_FS
+scripts/config --enable CONFIG_BTRFS_FS
+scripts/config --enable CONFIG_XFS_FS
+scripts/config --enable CONFIG_VFAT_FS
+scripts/config --enable CONFIG_TMPFS
+scripts/config --enable CONFIG_DEVTMPFS
+scripts/config --enable CONFIG_DEVTMPFS_MOUNT
+
+# Networking
+scripts/config --enable CONFIG_NET
+scripts/config --enable CONFIG_INET
+scripts/config --enable CONFIG_IPV6
+scripts/config --enable CONFIG_NETFILTER
+scripts/config --enable CONFIG_NF_CONNTRACK
+
+# Refresh config with new options
+make ARCH=%(kernel_arch)s olddefconfig
+"""
+
+make = """
+make ARCH=%(kernel_arch)s -j%(jobs)s bzImage modules
+"""
+
+install = """
+# Install kernel image
+install -Dm644 arch/%(kernel_arch)s/boot/bzImage %(destdir)s/boot/vmlinuz-%(version)s-conary
+
+# Install modules
+make ARCH=%(kernel_arch)s INSTALL_MOD_PATH=%(destdir)s modules_install
+
+# Install System.map
+install -Dm644 System.map %(destdir)s/boot/System.map-%(version)s-conary
+
+# Create symlinks
+ln -sf vmlinuz-%(version)s-conary %(destdir)s/boot/vmlinuz
+ln -sf System.map-%(version)s-conary %(destdir)s/boot/System.map
+
+# Remove build/source symlinks from modules (they point to build host)
+rm -f %(destdir)s/lib/modules/%(version)s*/build
+rm -f %(destdir)s/lib/modules/%(version)s*/source
+"""
+
+[build.environment]
+ARCH = "%(kernel_arch)s"
+
+[variables]
+kernel_arch = "x86_64"
+jobs = "$(nproc)"
