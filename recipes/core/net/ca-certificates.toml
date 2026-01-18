@@ -1,0 +1,75 @@
+# recipes/core/net/ca-certificates.toml
+#
+# CA Certificates - Mozilla's trusted certificate bundle
+#
+# Root certificates for TLS/SSL verification.
+
+[package]
+name = "ca-certificates"
+version = "2026.01"
+release = "1"
+summary = "Mozilla CA certificate bundle"
+description = """
+This package contains the Certificate Authority (CA) certificates
+from the Mozilla root certificate program. These are used to verify
+the identity of TLS/SSL connections, ensuring secure communications
+with websites and services.
+"""
+license = "MPL-2.0"
+homepage = "https://curl.se/docs/caextract.html"
+
+[source]
+# The curl project maintains an up-to-date extraction of Mozilla's bundle
+archive = "https://curl.se/ca/cacert.pem"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+# This is a single PEM file, not a tarball
+extract = false
+
+[build]
+requires = ["glibc"]
+makedepends = ["openssl"]
+
+# No compilation needed
+configure = ""
+make = ""
+
+install = """
+# Create certificate directories
+mkdir -p %(destdir)s/etc/ssl/certs
+mkdir -p %(destdir)s/etc/pki/tls/certs
+
+# Install the certificate bundle
+install -Dm644 %(srcdir)s/cacert.pem %(destdir)s/etc/ssl/certs/ca-certificates.crt
+
+# Create compatibility symlinks
+ln -sf /etc/ssl/certs/ca-certificates.crt %(destdir)s/etc/pki/tls/certs/ca-bundle.crt
+ln -sf /etc/ssl/certs/ca-certificates.crt %(destdir)s/etc/ssl/cert.pem
+
+# Generate individual certificate files and rehash
+# This creates the hash symlinks that OpenSSL uses
+cd %(destdir)s/etc/ssl/certs
+
+# Split the bundle into individual certs
+awk 'BEGIN {n=0} /-----BEGIN CERTIFICATE-----/ {n++} {print > "cert" n ".pem"}' ca-certificates.crt
+
+# Create hash symlinks using openssl
+for cert in cert*.pem; do
+    if [ -f "$cert" ]; then
+        hash=$(openssl x509 -hash -noout -in "$cert" 2>/dev/null)
+        if [ -n "$hash" ]; then
+            # Find next available index for this hash
+            i=0
+            while [ -e "${hash}.${i}" ]; do
+                i=$((i + 1))
+            done
+            ln -sf "$cert" "${hash}.${i}"
+        fi
+    fi
+done
+
+# Clean up individual certs (optional - keep bundle only)
+# rm -f cert*.pem
+"""
+
+[variables]
+srcdir = "."

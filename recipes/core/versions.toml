@@ -110,6 +110,12 @@ bzip2 = "1.0.8"
 cpio = "2.15"
 # Note: zstd and xz are in [libs] section
 
+[net]
+# Networking tools (latest stable as of Jan 2026)
+curl = "8.18.0"
+wget2 = "2.2.1"
+ca-certificates = "2026-01"  # Mozilla bundle date
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"

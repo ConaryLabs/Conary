@@ -1,0 +1,76 @@
+# recipes/core/net/wget2.toml
+#
+# GNU Wget2 - Network file retriever
+#
+# Modern replacement for wget with improved performance and features.
+
+[package]
+name = "wget2"
+version = "2.2.1"
+release = "1"
+summary = "GNU network file retriever"
+description = """
+GNU Wget2 is a free utility for non-interactive download of files from
+the Web. It supports HTTP, HTTPS, and FTP protocols, as well as retrieval
+through HTTP proxies. Wget2 is the successor to GNU Wget with improved
+performance, parallel downloads, and modern protocol support.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://gitlab.com/gnuwget/wget2"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/wget/wget2-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/wget/wget2-%(version)s.tar.gz.sig"
+
+[build]
+requires = ["glibc", "openssl", "zlib", "zstd", "xz", "ca-certificates"]
+makedepends = ["gcc", "pkgconf"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --disable-static \
+    --with-ssl=openssl \
+    --with-openssl \
+    --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+    --with-ca-path=/etc/ssl/certs \
+    --enable-threads=posix
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create wget symlink for compatibility (unless classic wget is installed)
+ln -sf wget2 %(destdir)s/usr/bin/wget 2>/dev/null || true
+
+# Remove libtool archives
+rm -f %(destdir)s/usr/lib/*.la
+
+# Create default wgetrc
+mkdir -p %(destdir)s/etc
+cat > %(destdir)s/etc/wgetrc << 'WGETRC'
+# Global wget configuration file
+
+# Use certificate bundle
+ca_certificate = /etc/ssl/certs/ca-certificates.crt
+
+# Follow FTP links from HTML documents by default
+#follow_ftp = on
+
+# Default timeout
+timeout = 60
+
+# Retry a few times when download fails
+tries = 3
+
+# Wait between retries
+waitretry = 10
+WGETRC
+"""
+
+[variables]
+jobs = "$(nproc)"

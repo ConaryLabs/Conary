@@ -1,0 +1,60 @@
+# recipes/core/net/curl.toml
+#
+# curl - Command line tool and library for transferring data
+#
+# The ubiquitous data transfer tool supporting HTTP, HTTPS, FTP, and more.
+
+[package]
+name = "curl"
+version = "8.18.0"
+release = "1"
+summary = "Command line tool for transferring data"
+description = """
+curl is a command line tool and library for transferring data with URLs.
+It supports HTTP, HTTPS, FTP, FTPS, SCP, SFTP, TFTP, DICT, TELNET, LDAP,
+and many other protocols. curl is used in command lines or scripts to
+transfer data and is also a powerful library (libcurl) used by thousands
+of applications.
+"""
+license = "curl"
+homepage = "https://curl.se"
+
+[source]
+archive = "https://curl.se/download/curl-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "openssl", "zlib", "ca-certificates"]
+makedepends = ["gcc", "pkgconf"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-static \
+    --enable-threaded-resolver \
+    --with-openssl \
+    --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+    --with-ca-path=/etc/ssl/certs \
+    --enable-ipv6 \
+    --enable-unix-sockets \
+    --enable-cookies \
+    --enable-http-auth \
+    --enable-mime \
+    --enable-dateparse \
+    --enable-netrc \
+    --enable-progress-meter \
+    --enable-dnsshuffle \
+    --enable-get-easy-options
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove libtool archive
+rm -f %(destdir)s/usr/lib/*.la
+"""
+
+[variables]
+jobs = "$(nproc)"
