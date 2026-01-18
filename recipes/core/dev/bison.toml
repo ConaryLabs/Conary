@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/bison/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/bison/bison-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"
 signature = "https://ftp.gnu.org/gnu/bison/bison-%(version)s.tar.xz.sig"
 
 [build]

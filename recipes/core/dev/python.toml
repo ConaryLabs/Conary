@@ -20,7 +20,7 @@ homepage = "https://www.python.org"
 
 [source]
 archive = "https://www.python.org/ftp/python/%(version)s/Python-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:ce543ab854bc256b61b71e9b27f831ffd1bfd60a479d639f8be7f9757cf573e9"
 
 [build]
 requires = ["glibc", "zlib", "xz", "openssl", "ncurses", "readline", "libffi"]

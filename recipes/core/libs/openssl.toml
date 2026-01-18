@@ -19,7 +19,7 @@ homepage = "https://www.openssl.org"
 
 [source]
 archive = "https://github.com/openssl/openssl/releases/download/openssl-%(version)s/openssl-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99"
 
 [build]
 requires = ["glibc", "zlib"]

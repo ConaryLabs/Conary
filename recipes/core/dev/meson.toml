@@ -20,7 +20,7 @@ homepage = "https://mesonbuild.com"
 
 [source]
 archive = "https://github.com/mesonbuild/meson/releases/download/%(version)s/meson-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:08efbe84803eed07f863b05092d653a9d348f7038761d900412fddf56deb0284"
 
 [build]
 requires = ["python", "ninja"]

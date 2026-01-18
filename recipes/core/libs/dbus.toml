@@ -21,7 +21,7 @@ homepage = "https://dbus.freedesktop.org"
 
 [source]
 archive = "https://dbus.freedesktop.org/releases/dbus/dbus-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:0ba2a1a4b16afe7bceb2c07e9ce99a8c2c3508e5dec290dbb643384bd6beb7e2"
 
 [build]
 requires = ["glibc", "expat"]

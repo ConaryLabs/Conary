@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/sed/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/sed/sed-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181"
 signature = "https://ftp.gnu.org/gnu/sed/sed-%(version)s.tar.xz.sig"
 
 [build]

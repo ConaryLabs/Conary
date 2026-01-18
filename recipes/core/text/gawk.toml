@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/gawk/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/gawk/gawk-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:f8c3486509de705192138b00ef2c00bbbdd0e84c30d5c07d23fc73a9dc4cc9cc"
 signature = "https://ftp.gnu.org/gnu/gawk/gawk-%(version)s.tar.xz.sig"
 
 [build]

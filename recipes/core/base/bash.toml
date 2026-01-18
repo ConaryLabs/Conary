@@ -21,7 +21,7 @@ homepage = "https://www.gnu.org/software/bash/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/bash/bash-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba"
 signature = "https://ftp.gnu.org/gnu/bash/bash-%(version)s.tar.gz.sig"
 
 [build]

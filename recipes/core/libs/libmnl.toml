@@ -21,7 +21,7 @@ homepage = "https://www.netfilter.org/projects/libmnl/"
 
 [source]
 archive = "https://www.netfilter.org/projects/libmnl/files/libmnl-%(version)s.tar.bz2"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525"
 signature = "https://www.netfilter.org/projects/libmnl/files/libmnl-%(version)s.tar.bz2.sig"
 
 [build]

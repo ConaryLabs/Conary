@@ -20,7 +20,7 @@ homepage = "https://www.openssh.com"
 
 [source]
 archive = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:b9fc7a2b82579467a6f2f43e4a81c8e1dfda614ddb4f9b255aafd7020bbf0758"
 signature = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz.asc"
 
 [build]

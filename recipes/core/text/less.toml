@@ -20,7 +20,7 @@ homepage = "https://www.greenwoodsoftware.com/less/"
 
 [source]
 archive = "https://www.greenwoodsoftware.com/less/less-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:2701041e767e697ee420ce0825641cedc8f20b51576abe99d92c1666d332e9dc"
 signature = "https://www.greenwoodsoftware.com/less/less-%(version)s.sig"
 
 [build]

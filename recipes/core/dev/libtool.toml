@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/libtool/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/libtool/libtool-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:f81f5860666b0bc7d84baddefa60d1cb9fa6fceb2398cc3baca6afaa60266675"
 signature = "https://ftp.gnu.org/gnu/libtool/libtool-%(version)s.tar.xz.sig"
 
 [build]

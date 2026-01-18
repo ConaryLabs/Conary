@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/grub/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/grub/grub-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:bc8d3c73535b8838d8c8e2654d73edc4e6ae8c8acdb45d5df5dc9a1547446d43"
 signature = "https://ftp.gnu.org/gnu/grub/grub-%(version)s.tar.xz.sig"
 
 [build]

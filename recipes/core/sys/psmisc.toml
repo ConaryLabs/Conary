@@ -20,7 +20,7 @@ homepage = "https://gitlab.com/psmisc/psmisc"
 
 [source]
 archive = "https://gitlab.com/psmisc/psmisc/-/archive/v%(version)s/psmisc-v%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:VERIFY_BEFORE_BUILD"
 
 [build]
 requires = ["glibc", "ncurses"]

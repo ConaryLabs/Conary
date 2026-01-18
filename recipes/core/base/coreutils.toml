@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/coreutils/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:19bcb6ca867183c57d77155eae946c5eced88183143b45ca51ad7d26c628ca75"
 signature = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz.sig"
 
 [build]

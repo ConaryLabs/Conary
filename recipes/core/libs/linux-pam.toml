@@ -20,7 +20,7 @@ homepage = "https://github.com/linux-pam/linux-pam"
 
 [source]
 archive = "https://github.com/linux-pam/linux-pam/releases/download/v%(version)s/Linux-PAM-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:21dbcec6e01dd578f14789eac9024a18941e6f2702a05cf91b28c232eeb26ab0"
 
 [build]
 requires = ["glibc"]

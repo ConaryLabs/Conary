@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/m4/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/m4/m4-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b"
 signature = "https://ftp.gnu.org/gnu/m4/m4-%(version)s.tar.xz.sig"
 
 [build]

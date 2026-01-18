@@ -19,7 +19,7 @@ homepage = "https://gitlab.com/procps-ng/procps"
 
 [source]
 archive = "https://gitlab.com/procps-ng/procps/-/archive/v%(version)s/procps-v%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:6b70dd2f6c347d448c2d6140fdb70429d17135e6713ea6c095df1b34e4010e6a"
 
 [build]
 requires = ["glibc", "ncurses", "systemd"]

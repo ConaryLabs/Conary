@@ -20,7 +20,7 @@ homepage = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git"
 
 [source]
 archive = "https://www.kernel.org/pub/linux/utils/kernel/kmod/kmod-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:12e7884484151fbd432b6a520170ea185c159f4393c7a2c2a886ab820313149a"
 
 [build]
 requires = ["glibc", "zlib", "xz", "zstd", "openssl"]

@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/patch/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/patch/patch-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:f87cee69eec2b4fcbf60a396b030ad6aa3415f192aa5f7ee84cad5e11f7f5ae3"
 signature = "https://ftp.gnu.org/gnu/patch/patch-%(version)s.tar.xz.sig"
 
 [build]

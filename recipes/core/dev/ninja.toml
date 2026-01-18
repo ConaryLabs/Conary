@@ -20,7 +20,7 @@ homepage = "https://ninja-build.org"
 
 [source]
 archive = "https://github.com/ninja-build/ninja/archive/v%(version)s/ninja-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:f0055ad0369bf2e372955ba55128d000cfcc21777057806015b45e4accbebf23"
 
 [build]
 requires = ["glibc"]

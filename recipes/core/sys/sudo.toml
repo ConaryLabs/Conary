@@ -20,7 +20,7 @@ homepage = "https://www.sudo.ws"
 
 [source]
 archive = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:94d9b45d597bac5b9b4c45e04f80dbb04c3c77872822f368151ac9950224b699"
 signature = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz.sig"
 
 [build]

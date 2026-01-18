@@ -21,7 +21,7 @@ homepage = "https://www.gnu.org/software/make/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/make/make-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"
 signature = "https://ftp.gnu.org/gnu/make/make-%(version)s.tar.gz.sig"
 
 [build]

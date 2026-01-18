@@ -20,7 +20,7 @@ homepage = "https://www.nano-editor.org"
 
 [source]
 archive = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:c17f43fc0e37336b33ee50a209c701d5beb808adc2d9f089ca831b40539c9ac4"
 signature = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz.asc"
 
 [build]

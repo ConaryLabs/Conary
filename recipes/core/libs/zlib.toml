@@ -21,7 +21,7 @@ homepage = "https://zlib.net"
 
 [source]
 archive = "https://zlib.net/zlib-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:38ef96b8dfe510d42707d9c781877914792541133e1870841463bfa73f883e32"
 
 [build]
 requires = ["glibc"]

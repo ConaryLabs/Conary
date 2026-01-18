@@ -19,7 +19,7 @@ homepage = "https://www.gnu.org/software/cpio/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/cpio/cpio-%(version)s.tar.bz2"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:efa50ef983137eefc0a02fdb51509d624b5e3295c980aa127ceee4183455499e"
 signature = "https://ftp.gnu.org/gnu/cpio/cpio-%(version)s.tar.bz2.sig"
 
 [build]

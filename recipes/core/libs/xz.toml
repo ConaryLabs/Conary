@@ -20,7 +20,7 @@ homepage = "https://tukaani.org/xz/"
 
 [source]
 archive = "https://github.com/tukaani-project/xz/releases/download/v%(version)s/xz-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:829ccfe79d769748f7557e7a4429a64d06858e27e1e362e25d01ab7b931d9c95"
 
 [build]
 requires = ["glibc"]

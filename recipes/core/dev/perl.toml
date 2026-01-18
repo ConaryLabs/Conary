@@ -20,7 +20,7 @@ homepage = "https://www.perl.org"
 
 [source]
 archive = "https://www.cpan.org/src/5.0/perl-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:73cf6cc1ea2b2b1c110a18c14bbbc73a362073003893ffcedc26d22ebdbdd0c3"
 
 [build]
 requires = ["glibc", "zlib"]

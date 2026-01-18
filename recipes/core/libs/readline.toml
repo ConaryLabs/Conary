@@ -20,7 +20,7 @@ homepage = "https://tiswww.case.edu/php/chet/readline/rltop.html"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/readline/readline-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc"
 signature = "https://ftp.gnu.org/gnu/readline/readline-%(version)s.tar.gz.sig"
 
 [build]

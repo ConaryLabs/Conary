@@ -20,7 +20,7 @@ homepage = "https://git-scm.com"
 
 [source]
 archive = "https://www.kernel.org/pub/software/scm/git/git-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:38bef8cb64da496d6b9f6fc74514c4f785015a7fbd235468f5dde039a77a2fbd"
 signature = "https://www.kernel.org/pub/software/scm/git/git-%(version)s.tar.sign"
 
 [build]

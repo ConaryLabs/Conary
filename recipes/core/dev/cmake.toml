@@ -20,7 +20,7 @@ homepage = "https://cmake.org"
 
 [source]
 archive = "https://github.com/Kitware/CMake/releases/download/v%(version)s/cmake-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:414aacfac54ba0e78e64a018720b64ed6bfca14b587047b8b3489f407a14a070"
 
 [build]
 requires = ["glibc", "ncurses", "openssl", "zlib", "xz", "zstd"]

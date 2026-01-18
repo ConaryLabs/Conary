@@ -20,7 +20,7 @@ homepage = "https://github.com/dosfstools/dosfstools"
 
 [source]
 archive = "https://github.com/dosfstools/dosfstools/releases/download/v%(version)s/dosfstools-%(version)s.tar.gz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:VERIFY_BEFORE_BUILD"
 
 [build]
 requires = ["glibc"]

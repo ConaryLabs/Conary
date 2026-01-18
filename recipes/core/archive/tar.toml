@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/tar/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/tar/tar-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16"
 signature = "https://ftp.gnu.org/gnu/tar/tar-%(version)s.tar.xz.sig"
 
 [build]

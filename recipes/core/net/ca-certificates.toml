@@ -21,7 +21,7 @@ homepage = "https://curl.se/docs/caextract.html"
 [source]
 # The curl project maintains an up-to-date extraction of Mozilla's bundle
 archive = "https://curl.se/ca/cacert.pem"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:f1407d974c5ed87d544bd931a278232e13925177e239fca370619aba63c757b4"
 # This is a single PEM file, not a tarball
 extract = false
 

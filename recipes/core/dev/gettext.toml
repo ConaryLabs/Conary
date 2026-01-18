@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/gettext/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/gettext/gettext-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:d1fb86e260cfe7da6031f94d2e44c0da55903dbae0a2fa0fae78c91ae1b56f00"
 signature = "https://ftp.gnu.org/gnu/gettext/gettext-%(version)s.tar.xz.sig"
 
 [build]

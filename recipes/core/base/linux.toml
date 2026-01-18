@@ -21,7 +21,7 @@ homepage = "https://kernel.org"
 
 [source]
 archive = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
-checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+checksum = "sha256:9106a4605da9e31ff17659d958782b815f9591ab308d03b0ee21aad6c7dced4b"
 signature = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.sign"
 
 [build]
