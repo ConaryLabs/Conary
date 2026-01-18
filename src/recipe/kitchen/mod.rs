@@ -169,11 +169,31 @@ impl Kitchen {
     ///
     /// This is the main entry point for building from source.
     ///
-    /// The cooking process follows these phases:
+    /// ## Hermetic Build Architecture
+    ///
+    /// The cooking process is split into two distinct phases with different
+    /// network access policies, following the BuildStream model:
+    ///
+    /// ### Fetch Phase (Network ALLOWED)
+    /// - Download source archives
+    /// - Download patches
+    /// - Verify checksums
+    /// - Cache sources locally
+    ///
+    /// ### Build Phase (Network BLOCKED)
+    /// - Extract cached sources
+    /// - Apply patches
+    /// - Run configure/make/install
+    /// - Package artifacts
+    ///
+    /// This separation ensures reproducible builds: if all sources are cached,
+    /// the build phase cannot accidentally depend on network resources.
+    ///
+    /// ## Full Cooking Process
     /// 1. **Makedepends**: Resolve and install build dependencies (if enabled)
-    /// 2. **Prep**: Fetch source archives and patches
+    /// 2. **Prep**: Fetch source archives and patches (with network)
     /// 3. **Unpack**: Extract sources and apply patches
-    /// 4. **Simmer**: Run configure/make/install
+    /// 4. **Simmer**: Run configure/make/install (network blocked)
     /// 5. **Plate**: Package result as CCS
     /// 6. **Cleanup**: Remove temporarily installed makedepends (if enabled)
     pub fn cook(&self, recipe: &Recipe, output_dir: &Path) -> Result<CookResult> {
@@ -241,6 +261,100 @@ impl Kitchen {
         }
 
         build_result
+    }
+
+    /// Fetch sources for a recipe without building
+    ///
+    /// Downloads and verifies all source archives and patches for a recipe,
+    /// caching them locally. This is useful for:
+    /// - Pre-fetching sources for offline builds
+    /// - Warming source caches on build servers
+    /// - Verifying source availability before building
+    ///
+    /// This method runs WITH network access (the "fetch phase" of hermetic builds).
+    /// After sources are fetched, they can be built offline using `cook()`.
+    ///
+    /// # Returns
+    /// A list of paths to the fetched and cached source files.
+    pub fn fetch(&self, recipe: &Recipe) -> Result<Vec<PathBuf>> {
+        info!(
+            "Fetching sources for {} version {}",
+            recipe.package.name, recipe.package.version
+        );
+
+        let mut fetched = Vec::new();
+
+        // Fetch main source archive
+        let archive_url = recipe.archive_url();
+        info!("Fetching: {}", archive_url);
+        let path = self.fetch_source(&archive_url, &recipe.source.checksum)?;
+        fetched.push(path);
+
+        // Fetch additional sources
+        for additional in &recipe.source.additional {
+            info!("Fetching additional: {}", additional.url);
+            let path = self.fetch_source(&additional.url, &additional.checksum)?;
+            fetched.push(path);
+        }
+
+        // Fetch remote patches
+        if let Some(patches) = &recipe.patches {
+            for patch in &patches.files {
+                if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
+                    info!("Fetching patch: {}", patch.file);
+                    let checksum = patch.checksum.as_deref().unwrap_or("sha256:0");
+                    let path = self.fetch_source(&patch.file, checksum)?;
+                    fetched.push(path);
+                }
+            }
+        }
+
+        info!(
+            "Fetched {} source file(s) for {}",
+            fetched.len(),
+            recipe.package.name
+        );
+
+        Ok(fetched)
+    }
+
+    /// Check if all sources for a recipe are already cached
+    ///
+    /// Returns `true` if all source archives and patches are available locally,
+    /// meaning the build can proceed without network access.
+    pub fn sources_cached(&self, recipe: &Recipe) -> bool {
+        // Check main archive
+        let cache_key = recipe.source.checksum.replace(':', "_");
+        let cached_path = self.config.source_cache.join(&cache_key);
+        if !cached_path.exists() {
+            return false;
+        }
+
+        // Check additional sources
+        for additional in &recipe.source.additional {
+            let cache_key = additional.checksum.replace(':', "_");
+            let cached_path = self.config.source_cache.join(&cache_key);
+            if !cached_path.exists() {
+                return false;
+            }
+        }
+
+        // Check remote patches
+        if let Some(patches) = &recipe.patches {
+            for patch in &patches.files {
+                if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
+                    if let Some(checksum) = &patch.checksum {
+                        let cache_key = checksum.replace(':', "_");
+                        let cached_path = self.config.source_cache.join(&cache_key);
+                        if !cached_path.exists() {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     /// Cook a recipe with build artifact caching

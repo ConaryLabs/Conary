@@ -57,6 +57,52 @@ pub struct ToolchainInfo {
     pub stage: Option<BuildStage>,
 }
 
+/// Hashes of installed dependencies for precise cache invalidation
+///
+/// For BuildStream-grade reproducibility, the build cache key should include
+/// the content hashes of all dependencies, not just their names. This ensures
+/// that if a dependency is updated (even at the same version), the cache is
+/// invalidated.
+#[derive(Debug, Clone, Default)]
+pub struct DependencyHashes {
+    /// Map of package name to content hash (e.g., "gcc" -> "sha256:abc123...")
+    pub packages: BTreeMap<String, String>,
+}
+
+impl DependencyHashes {
+    /// Create a new empty dependency hash map
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a dependency hash
+    pub fn add(&mut self, name: impl Into<String>, hash: impl Into<String>) {
+        self.packages.insert(name.into(), hash.into());
+    }
+
+    /// Check if any hashes are recorded
+    pub fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+
+    /// Compute a combined hash of all dependencies
+    fn hash(&self) -> String {
+        if self.packages.is_empty() {
+            return String::new();
+        }
+
+        let mut data = String::new();
+        // BTreeMap iteration is already sorted by key
+        for (name, hash) in &self.packages {
+            data.push_str(&format!("dep:{}:{}\n", name, hash));
+        }
+
+        hash_bytes(HashAlgorithm::Sha256, data.as_bytes())
+            .as_str()
+            .to_string()
+    }
+}
+
 impl ToolchainInfo {
     /// Create toolchain info from environment
     pub fn from_env() -> Self {
@@ -143,20 +189,63 @@ impl BuildCache {
     }
 
     /// Compute a cache key for a recipe and toolchain
+    ///
+    /// Note: This method uses dependency NAMES only, not their content hashes.
+    /// For BuildStream-grade reproducibility where dependency updates should
+    /// invalidate the cache, use `cache_key_with_deps()` instead.
     pub fn cache_key(&self, recipe: &Recipe, toolchain: &ToolchainInfo) -> String {
+        self.cache_key_with_deps(recipe, toolchain, None)
+    }
+
+    /// Compute a cache key including dependency content hashes
+    ///
+    /// This provides BuildStream-grade cache invalidation: if any dependency
+    /// is updated (even at the same version), the cache key changes.
+    ///
+    /// # Arguments
+    /// * `recipe` - The recipe to compute the key for
+    /// * `toolchain` - Toolchain information
+    /// * `dep_hashes` - Optional map of dependency name -> content hash
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut deps = DependencyHashes::new();
+    /// deps.add("gcc", "sha256:abc123...");
+    /// deps.add("make", "sha256:def456...");
+    /// let key = cache.cache_key_with_deps(&recipe, &toolchain, Some(&deps));
+    /// ```
+    pub fn cache_key_with_deps(
+        &self,
+        recipe: &Recipe,
+        toolchain: &ToolchainInfo,
+        dep_hashes: Option<&DependencyHashes>,
+    ) -> String {
         let recipe_hash = self.hash_recipe(recipe);
         let toolchain_hash = toolchain.hash();
+        let deps_hash = dep_hashes.map(|d| d.hash()).unwrap_or_default();
 
         // Combine hashes for final key
-        let combined = format!("{}\n{}", recipe_hash, toolchain_hash);
+        let combined = if deps_hash.is_empty() {
+            format!("{}\n{}", recipe_hash, toolchain_hash)
+        } else {
+            format!("{}\n{}\n{}", recipe_hash, toolchain_hash, deps_hash)
+        };
+
         let key = hash_bytes(HashAlgorithm::Sha256, combined.as_bytes())
             .as_str()
             .to_string();
 
-        debug!(
-            "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8})",
-            recipe.package.name, recipe.package.version, &key[..16], recipe_hash, toolchain_hash
-        );
+        if deps_hash.is_empty() {
+            debug!(
+                "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8})",
+                recipe.package.name, recipe.package.version, &key[..16], recipe_hash, toolchain_hash
+            );
+        } else {
+            debug!(
+                "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8}, deps: {:.8})",
+                recipe.package.name, recipe.package.version, &key[..16], recipe_hash, toolchain_hash, deps_hash
+            );
+        }
 
         key
     }
@@ -946,5 +1035,106 @@ mod tests {
         // Should fail verification
         let result = cache.get_by_key(&key).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_dependency_hashes_empty() {
+        let deps = DependencyHashes::new();
+        assert!(deps.is_empty());
+        assert!(deps.hash().is_empty());
+    }
+
+    #[test]
+    fn test_dependency_hashes_add() {
+        let mut deps = DependencyHashes::new();
+        deps.add("gcc", "sha256:abc123");
+        deps.add("make", "sha256:def456");
+
+        assert!(!deps.is_empty());
+        assert_eq!(deps.packages.len(), 2);
+    }
+
+    #[test]
+    fn test_dependency_hashes_deterministic() {
+        let mut deps1 = DependencyHashes::new();
+        deps1.add("gcc", "sha256:abc");
+        deps1.add("make", "sha256:def");
+
+        let mut deps2 = DependencyHashes::new();
+        // Add in different order
+        deps2.add("make", "sha256:def");
+        deps2.add("gcc", "sha256:abc");
+
+        // Should produce same hash regardless of insertion order
+        assert_eq!(deps1.hash(), deps2.hash());
+    }
+
+    #[test]
+    fn test_cache_key_with_deps() {
+        let temp = TempDir::new().unwrap();
+        let config = CacheConfig {
+            cache_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let cache = BuildCache::new(config).unwrap();
+
+        let recipe = make_test_recipe("test", "1.0.0");
+        let toolchain = ToolchainInfo::default();
+
+        // Key without deps
+        let key_no_deps = cache.cache_key(&recipe, &toolchain);
+
+        // Key with deps
+        let mut deps = DependencyHashes::new();
+        deps.add("gcc", "sha256:abc123");
+        let key_with_deps = cache.cache_key_with_deps(&recipe, &toolchain, Some(&deps));
+
+        // Keys should be different
+        assert_ne!(key_no_deps, key_with_deps);
+    }
+
+    #[test]
+    fn test_cache_key_with_deps_changes_on_dep_update() {
+        let temp = TempDir::new().unwrap();
+        let config = CacheConfig {
+            cache_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let cache = BuildCache::new(config).unwrap();
+
+        let recipe = make_test_recipe("test", "1.0.0");
+        let toolchain = ToolchainInfo::default();
+
+        // First build with gcc version A
+        let mut deps1 = DependencyHashes::new();
+        deps1.add("gcc", "sha256:version_a");
+        let key1 = cache.cache_key_with_deps(&recipe, &toolchain, Some(&deps1));
+
+        // Second build with gcc version B (updated)
+        let mut deps2 = DependencyHashes::new();
+        deps2.add("gcc", "sha256:version_b");
+        let key2 = cache.cache_key_with_deps(&recipe, &toolchain, Some(&deps2));
+
+        // Keys should differ because gcc content changed
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_cache_key_without_deps_backward_compatible() {
+        let temp = TempDir::new().unwrap();
+        let config = CacheConfig {
+            cache_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let cache = BuildCache::new(config).unwrap();
+
+        let recipe = make_test_recipe("test", "1.0.0");
+        let toolchain = ToolchainInfo::default();
+
+        // cache_key() should equal cache_key_with_deps(None)
+        let key1 = cache.cache_key(&recipe, &toolchain);
+        let key2 = cache.cache_key_with_deps(&recipe, &toolchain, None);
+
+        assert_eq!(key1, key2);
     }
 }

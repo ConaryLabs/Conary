@@ -251,7 +251,8 @@ pub enum Commands {
     /// Cook a package from a recipe (build from source)
     ///
     /// Recipes are TOML files that describe how to build a package from source.
-    /// The cooking process can run in an isolated container for security.
+    /// By default, the cooking process runs in an isolated container for security
+    /// and reproducibility. Network access is blocked during the build phase.
     Cook {
         /// Path to recipe file (.recipe or .toml)
         recipe: String,
@@ -276,9 +277,26 @@ pub enum Commands {
         #[arg(long)]
         validate_only: bool,
 
-        /// Run build in container isolation (requires root or user namespaces)
+        /// Only fetch sources, don't build
+        ///
+        /// Downloads and caches all source archives and patches without building.
+        /// Useful for pre-fetching sources for offline builds.
         #[arg(long)]
-        isolate: bool,
+        fetch_only: bool,
+
+        /// Disable container isolation (unsafe - allows network access during build)
+        ///
+        /// WARNING: This flag disables security protections and may produce
+        /// non-reproducible builds. Only use for debugging or in trusted environments.
+        #[arg(long)]
+        no_isolation: bool,
+
+        /// Enable hermetic mode (maximum isolation, no host mounts)
+        ///
+        /// Provides BuildStream-grade reproducibility guarantees by isolating
+        /// the build from host system libraries and toolchains.
+        #[arg(long)]
+        hermetic: bool,
     },
 
     /// Convert an Arch Linux PKGBUILD to a Conary recipe

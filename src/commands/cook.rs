@@ -16,7 +16,9 @@ use tracing::info;
 /// * `jobs` - Number of parallel build jobs (None = auto)
 /// * `keep_builddir` - Keep build directory after completion
 /// * `validate_only` - Only validate the recipe, don't cook
-/// * `isolate` - Run build in container isolation
+/// * `fetch_only` - Only fetch sources, don't build
+/// * `no_isolation` - Disable container isolation (unsafe)
+/// * `hermetic` - Enable hermetic mode (maximum isolation)
 pub fn cmd_cook(
     recipe_path: &str,
     output_dir: &str,
@@ -24,7 +26,9 @@ pub fn cmd_cook(
     jobs: Option<u32>,
     keep_builddir: bool,
     validate_only: bool,
-    isolate: bool,
+    fetch_only: bool,
+    no_isolation: bool,
+    hermetic: bool,
 ) -> Result<()> {
     let recipe_path = Path::new(recipe_path);
     let output_dir = Path::new(output_dir);
@@ -54,15 +58,13 @@ pub fn cmd_cook(
         return Ok(());
     }
 
-    // Create output directory if needed
-    std::fs::create_dir_all(output_dir)
-        .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
-
     // Configure the kitchen
+    // By default, isolation is ON. Use --no-isolation to disable.
     let mut config = KitchenConfig {
         source_cache: PathBuf::from(source_cache),
         keep_builddir,
-        use_isolation: isolate,
+        use_isolation: !no_isolation, // Isolation is on by default
+        pristine_mode: hermetic, // Hermetic mode disables host mounts
         ..Default::default()
     };
 
@@ -70,14 +72,49 @@ pub fn cmd_cook(
         config.jobs = j;
     }
 
-    if isolate {
-        println!("Cooking with {} parallel jobs (isolated)...", config.jobs);
+    let kitchen = Kitchen::new(config.clone());
+
+    // Fetch-only mode: just download sources and exit
+    if fetch_only {
+        println!("Fetching sources (fetch-only mode)...");
+        let sources = kitchen.fetch(&recipe)
+            .with_context(|| format!("Failed to fetch sources for {}", recipe.package.name))?;
+
+        println!("\n[COMPLETE] Fetched {} source file(s):", sources.len());
+        for source in &sources {
+            println!("  - {}", source.display());
+        }
+
+        if kitchen.sources_cached(&recipe) {
+            println!("\n[OK] All sources are cached. Ready for offline build.");
+        }
+
+        return Ok(());
+    }
+
+    // Create output directory if needed
+    std::fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
+
+    // Print mode information
+    if no_isolation {
+        println!("[WARNING] Running without isolation - build may not be reproducible");
+        println!("Cooking with {} parallel jobs (UNSAFE)...", config.jobs);
+    } else if hermetic {
+        println!("Cooking with {} parallel jobs (hermetic mode)...", config.jobs);
+        println!("  - Network isolated during build");
+        println!("  - No host system mounts");
     } else {
-        println!("Cooking with {} parallel jobs...", config.jobs);
+        println!("Cooking with {} parallel jobs (isolated)...", config.jobs);
+        println!("  - Network isolated during build");
+    }
+
+    // Check if sources are cached
+    if kitchen.sources_cached(&recipe) {
+        println!("  - Sources already cached (offline build possible)");
     }
 
     // Create kitchen and cook
-    let kitchen = Kitchen::new(config);
     let result = kitchen.cook(&recipe, output_dir)
         .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
 

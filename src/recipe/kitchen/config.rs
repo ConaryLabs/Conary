@@ -209,7 +209,7 @@ impl Default for KitchenConfig {
             jobs,
             allow_network: false,
             keep_builddir: false,
-            use_isolation: false, // Off by default, requires root or user namespaces
+            use_isolation: true, // On by default for security and reproducibility
             memory_limit: 4 * 1024 * 1024 * 1024, // 4 GB for builds
             cpu_time_limit: 0, // No CPU time limit (builds can be long)
             pristine_mode: false,
@@ -280,6 +280,8 @@ mod tests {
         assert!(!config.keep_builddir);
         assert!(!config.auto_makedepends);
         assert!(config.cleanup_makedepends);
+        // Isolation should be ON by default for security
+        assert!(config.use_isolation);
     }
 
     #[test]

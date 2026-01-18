@@ -281,6 +281,11 @@ impl<'a> Cook<'a> {
         container_config.hostname = "conary-build".to_string();
         container_config.workdir = workdir.to_path_buf();
 
+        // Network isolation is on by default - only allow if explicitly configured
+        if self.kitchen.config.allow_network {
+            container_config.allow_network();
+        }
+
         // For non-pristine mode, set up bind mounts manually
         if !self.kitchen.config.pristine_mode {
             // Clear default mounts and add build-specific ones
@@ -295,13 +300,20 @@ impl<'a> Cook<'a> {
                 }
             }
 
-            // Config files that build tools might need
-            for path in &["/etc/passwd", "/etc/group", "/etc/hosts", "/etc/resolv.conf"] {
+            // Config files that build tools might need (no resolv.conf - network is isolated)
+            for path in &["/etc/passwd", "/etc/group", "/etc/hosts"] {
                 if Path::new(path).exists() {
                     container_config
                         .bind_mounts
                         .push(BindMount::readonly(*path, *path));
                 }
+            }
+
+            // Only mount resolv.conf if network is allowed
+            if self.kitchen.config.allow_network && Path::new("/etc/resolv.conf").exists() {
+                container_config
+                    .bind_mounts
+                    .push(BindMount::readonly("/etc/resolv.conf", "/etc/resolv.conf"));
             }
 
             // Source directory (read-only - we shouldn't modify sources)

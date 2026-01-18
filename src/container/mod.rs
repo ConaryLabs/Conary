@@ -120,6 +120,12 @@ pub struct ContainerConfig {
     pub isolate_ipc: bool,
     /// Enable mount namespace isolation
     pub isolate_mount: bool,
+    /// Enable network namespace isolation (blocks all network access)
+    ///
+    /// When enabled, the container has only a loopback interface with no
+    /// external network access. This is critical for hermetic builds where
+    /// network access during the build phase must be prevented.
+    pub isolate_network: bool,
     /// Memory limit in bytes (0 = no limit)
     pub memory_limit: u64,
     /// CPU time limit in seconds (0 = no limit)
@@ -145,6 +151,7 @@ impl Default for ContainerConfig {
             isolate_uts: true,
             isolate_ipc: true,
             isolate_mount: true,
+            isolate_network: true, // On by default for security
             memory_limit: DEFAULT_MEMORY_LIMIT,
             cpu_time_limit: DEFAULT_CPU_TIME_LIMIT,
             file_size_limit: DEFAULT_FILE_SIZE_LIMIT,
@@ -165,6 +172,7 @@ impl ContainerConfig {
             isolate_uts: false,
             isolate_ipc: false,
             isolate_mount: false,
+            isolate_network: false,
             memory_limit: 0,
             cpu_time_limit: 0,
             file_size_limit: 0,
@@ -183,6 +191,7 @@ impl ContainerConfig {
             isolate_uts: true,
             isolate_ipc: true,
             isolate_mount: true,
+            isolate_network: true, // Strict mode includes network isolation
             memory_limit: DEFAULT_MEMORY_LIMIT,
             cpu_time_limit: DEFAULT_CPU_TIME_LIMIT,
             file_size_limit: DEFAULT_FILE_SIZE_LIMIT,
@@ -224,6 +233,7 @@ impl ContainerConfig {
             isolate_uts: true,
             isolate_ipc: true,
             isolate_mount: true,
+            isolate_network: true, // Pristine mode includes network isolation for hermetic builds
             memory_limit: DEFAULT_MEMORY_LIMIT,
             cpu_time_limit: 0, // No CPU limit for long builds
             file_size_limit: 0, // No file size limit for builds
@@ -289,9 +299,50 @@ impl ContainerConfig {
             src == "/usr" || src == "/lib" || src == "/lib64" || src == "/bin" || src == "/sbin"
         })
     }
+
+    /// Create a hermetic config for BuildStream-grade reproducible builds
+    ///
+    /// This configuration provides maximum isolation for fully reproducible builds:
+    /// - Complete network isolation (only loopback interface)
+    /// - No host system mounts (pristine filesystem)
+    /// - All namespaces isolated (PID, UTS, IPC, mount, network)
+    ///
+    /// Use this for builds that must be 100% reproducible and cannot depend
+    /// on any external state or network resources.
+    pub fn hermetic() -> Self {
+        Self::pristine() // pristine() already includes network isolation
+    }
+
+    /// Allow network access in the container
+    ///
+    /// Disables network namespace isolation. Use this for:
+    /// - Fetch phases that need to download sources
+    /// - Scriptlets that legitimately need network access
+    ///
+    /// Note: This reduces build reproducibility guarantees.
+    pub fn allow_network(&mut self) {
+        self.isolate_network = false;
+        // Add resolv.conf mount when network is allowed
+        if !self.bind_mounts.iter().any(|m| m.target.to_string_lossy().contains("resolv.conf")) {
+            self.bind_mounts.push(BindMount::readonly("/etc/resolv.conf", "/etc/resolv.conf"));
+        }
+    }
+
+    /// Deny network access in the container
+    ///
+    /// Enables network namespace isolation. The container will have
+    /// only a loopback interface with no external network access.
+    pub fn deny_network(&mut self) {
+        self.isolate_network = true;
+        // Remove resolv.conf mount when network is denied (useless without network)
+        self.bind_mounts.retain(|m| !m.target.to_string_lossy().contains("resolv.conf"));
+    }
 }
 
 /// Get default bind mounts for scriptlet execution
+///
+/// Note: `/etc/resolv.conf` is NOT included by default since network isolation
+/// is enabled by default. Use `allow_network()` to add it when needed.
 fn default_bind_mounts() -> Vec<BindMount> {
     vec![
         // Essential system directories (read-only)
@@ -300,11 +351,10 @@ fn default_bind_mounts() -> Vec<BindMount> {
         BindMount::readonly("/lib64", "/lib64"),
         BindMount::readonly("/bin", "/bin"),
         BindMount::readonly("/sbin", "/sbin"),
-        // Config files scripts might need
+        // Config files scripts might need (no resolv.conf - network is isolated by default)
         BindMount::readonly("/etc/passwd", "/etc/passwd"),
         BindMount::readonly("/etc/group", "/etc/group"),
         BindMount::readonly("/etc/hosts", "/etc/hosts"),
-        BindMount::readonly("/etc/resolv.conf", "/etc/resolv.conf"),
     ]
 }
 
@@ -543,9 +593,27 @@ impl Sandbox {
         if self.config.isolate_mount {
             flags |= CloneFlags::CLONE_NEWNS;
         }
+        if self.config.isolate_network {
+            flags |= CloneFlags::CLONE_NEWNET;
+        }
 
         if !flags.is_empty() {
             unshare(flags).map_err(|e| Error::ScriptletError(format!("Unshare failed: {}", e)))?;
+        }
+
+        // Set up loopback interface if network namespace was created
+        if self.config.isolate_network {
+            // The loopback interface needs to be brought up in the new network namespace
+            // We'll use a simple approach - try to bring up lo via ip command
+            // If it fails, the container will still work but without loopback
+            if let Ok(status) = std::process::Command::new("ip")
+                .args(["link", "set", "lo", "up"])
+                .status()
+            {
+                if !status.success() {
+                    debug!("Failed to bring up loopback interface");
+                }
+            }
         }
 
         // Set hostname in UTS namespace
@@ -937,5 +1005,81 @@ mod tests {
         // Adding /usr mount makes it not pristine
         config.add_bind_mount(BindMount::readonly("/usr", "/usr"));
         assert!(!config.is_pristine());
+    }
+
+    #[test]
+    fn test_network_isolation_default() {
+        let config = ContainerConfig::default();
+        // Network isolation should be ON by default
+        assert!(config.isolate_network);
+        // resolv.conf should NOT be in default mounts
+        assert!(!config.bind_mounts.iter().any(|m| {
+            m.target.to_string_lossy().contains("resolv.conf")
+        }));
+    }
+
+    #[test]
+    fn test_network_isolation_strict() {
+        let config = ContainerConfig::strict();
+        assert!(config.isolate_network);
+    }
+
+    #[test]
+    fn test_network_isolation_pristine() {
+        let config = ContainerConfig::pristine();
+        assert!(config.isolate_network);
+    }
+
+    #[test]
+    fn test_network_isolation_hermetic() {
+        let config = ContainerConfig::hermetic();
+        assert!(config.isolate_network);
+        assert!(config.is_pristine());
+    }
+
+    #[test]
+    fn test_network_isolation_minimal() {
+        let config = ContainerConfig::minimal(Duration::from_secs(30));
+        // Minimal should have NO network isolation (no isolation at all)
+        assert!(!config.isolate_network);
+    }
+
+    #[test]
+    fn test_allow_network() {
+        let mut config = ContainerConfig::default();
+        assert!(config.isolate_network);
+
+        config.allow_network();
+        assert!(!config.isolate_network);
+        // resolv.conf should be added when network is allowed
+        assert!(config.bind_mounts.iter().any(|m| {
+            m.target.to_string_lossy().contains("resolv.conf")
+        }));
+    }
+
+    #[test]
+    fn test_deny_network() {
+        let mut config = ContainerConfig::default();
+        config.allow_network(); // First allow it
+        assert!(!config.isolate_network);
+
+        config.deny_network();
+        assert!(config.isolate_network);
+        // resolv.conf should be removed when network is denied
+        assert!(!config.bind_mounts.iter().any(|m| {
+            m.target.to_string_lossy().contains("resolv.conf")
+        }));
+    }
+
+    #[test]
+    fn test_allow_network_idempotent() {
+        let mut config = ContainerConfig::default();
+        config.allow_network();
+        config.allow_network(); // Call twice
+        // Should only have one resolv.conf mount
+        let resolv_count = config.bind_mounts.iter()
+            .filter(|m| m.target.to_string_lossy().contains("resolv.conf"))
+            .count();
+        assert_eq!(resolv_count, 1);
     }
 }

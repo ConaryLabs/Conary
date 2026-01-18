@@ -87,7 +87,7 @@ cargo clippy -- -D warnings
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
-| `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter) |
+| `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter, hermetic builds) |
 
 ## Database Schema
 
@@ -136,3 +136,29 @@ Integration tests are organized in `tests/`:
 - `component.rs` - Component classification (7 tests)
 - `features.rs` - Language deps, collections, state, config (9 tests)
 - `common/mod.rs` - Shared test helpers
+
+## Hermetic Builds
+
+Conary provides BuildStream-grade hermetic builds for reproducibility:
+
+**Build Phases:**
+1. **Fetch Phase** (network allowed): Download sources, verify checksums, cache locally
+2. **Build Phase** (network blocked): Extract, patch, configure, make, install
+
+**Container Isolation** (on by default):
+- PID, UTS, IPC, mount, and network namespaces
+- Network isolation via `CLONE_NEWNET` (only loopback available)
+- No `/etc/resolv.conf` mount when network isolated
+
+**CLI Flags:**
+```bash
+conary cook recipe.toml              # Default: isolated, network blocked during build
+conary cook --fetch-only recipe.toml # Pre-fetch sources for offline build
+conary cook --hermetic recipe.toml   # Maximum isolation (no host mounts)
+conary cook --no-isolation recipe.toml # Unsafe: disable all isolation
+```
+
+**Cache Invalidation:**
+- `DependencyHashes` tracks installed dependency content hashes
+- Cache key changes when any dependency is updated (not just version bump)
+- Use `cache_key_with_deps()` for BuildStream-grade reproducibility
