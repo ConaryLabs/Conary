@@ -6,7 +6,7 @@
 
 [package]
 name = "dosfstools"
-version = "4.3"
+version = "4.2"
 release = "1"
 summary = "Utilities for FAT filesystems"
 description = """
@@ -20,7 +20,7 @@ homepage = "https://github.com/dosfstools/dosfstools"
 
 [source]
 archive = "https://github.com/dosfstools/dosfstools/releases/download/v%(version)s/dosfstools-%(version)s.tar.gz"
-checksum = "sha256:VERIFY_BEFORE_BUILD"
+checksum = "sha256:64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527"
 
 [build]
 requires = ["glibc"]

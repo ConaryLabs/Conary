@@ -6,7 +6,7 @@
 
 [package]
 name = "efibootmgr"
-version = "19"
+version = "18"
 release = "1"
 summary = "EFI Boot Manager"
 description = """
@@ -19,8 +19,8 @@ license = "GPL-2.0-or-later"
 homepage = "https://github.com/rhboot/efibootmgr"
 
 [source]
-archive = "https://github.com/rhboot/efibootmgr/releases/download/%(version)s/efibootmgr-%(version)s.tar.bz2"
-checksum = "sha256:VERIFY_BEFORE_BUILD"
+archive = "https://github.com/rhboot/efibootmgr/archive/refs/tags/%(version)s.tar.gz"
+checksum = "sha256:442867d12f8525034a404fc8af3036dba8e1fc970998af2486c3b940dfad0874"
 
 [build]
 requires = ["glibc", "efivar", "popt"]

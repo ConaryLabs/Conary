@@ -14,7 +14,7 @@ system.
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| [stage1/](stage1/) | 4 | Cross-compiler toolchain bootstrap |
+| [stage1/](stage1/) | 5 | Cross-compiler toolchain bootstrap |
 | [base/](base/) | 7 | Core system (kernel, shell, init, networking) |
 | [libs/](libs/) | 12 | Essential libraries (compression, crypto, terminal) |
 | [dev/](dev/) | 14 | Development tools (compilers, build systems) |
@@ -33,6 +33,7 @@ system.
 ### Stage 1: Toolchain Bootstrap
 | Package | Version | Description |
 |---------|---------|-------------|
+| linux-headers | 6.18 | Linux kernel headers for cross-compilation |
 | binutils | 2.45.1 | GNU assembler, linker, and binary utilities |
 | gcc-pass1 | 15.2.0 | GCC Pass 1 - minimal C compiler |
 | glibc | 2.42 | GNU C Library |
@@ -119,7 +120,7 @@ system.
 | Package | Version | Description |
 |---------|---------|-------------|
 | procps-ng | 4.1.0 | Process monitoring (ps, top, free) |
-| psmisc | 24.0 | Process utilities (killall, pstree) |
+| psmisc | 23.7 | Process utilities (killall, pstree) |
 | shadow | 4.16.0 | User management (useradd, passwd) |
 | sudo | 1.9.18 | Privilege escalation |
 
@@ -133,10 +134,10 @@ system.
 | Package | Version | Description |
 |---------|---------|-------------|
 | grub | 2.14 | GRand Unified Bootloader |
-| efibootmgr | 19 | EFI Boot Manager |
+| efibootmgr | 18 | EFI Boot Manager |
 | efivar | 39 | EFI variable tools |
 | popt | 1.19 | Option parsing library |
-| dosfstools | 4.3 | FAT filesystem utilities |
+| dosfstools | 4.2 | FAT filesystem utilities |
 
 ## Bootstrap Build Order
 

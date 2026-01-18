@@ -6,7 +6,7 @@
 
 [package]
 name = "psmisc"
-version = "24.0"
+version = "23.7"
 release = "1"
 summary = "Miscellaneous process management utilities"
 description = """
@@ -19,8 +19,8 @@ license = "GPL-2.0-or-later"
 homepage = "https://gitlab.com/psmisc/psmisc"
 
 [source]
-archive = "https://gitlab.com/psmisc/psmisc/-/archive/v%(version)s/psmisc-v%(version)s.tar.gz"
-checksum = "sha256:VERIFY_BEFORE_BUILD"
+archive = "https://sourceforge.net/projects/psmisc/files/psmisc/psmisc-%(version)s.tar.xz/download"
+checksum = "sha256:58c55d9c1402474065adae669511c191de374b0871eec781239ab400b907c327"
 
 [build]
 requires = ["glibc", "ncurses"]
