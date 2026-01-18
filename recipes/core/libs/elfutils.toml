@@ -33,6 +33,7 @@ configure = """
     --libdir=/usr/lib \
     --disable-debuginfod \
     --disable-libdebuginfod \
+    --disable-nls \
     --enable-deterministic-archives \
     --program-prefix=eu-
 """
