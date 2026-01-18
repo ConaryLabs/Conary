@@ -132,6 +132,14 @@ sudo = "1.9.18"
 vim = "9.2"
 nano = "8.0"
 
+[boot]
+# Boot tools (latest stable as of Jan 2026)
+grub = "2.14"
+efibootmgr = "19"
+efivar = "39"
+popt = "1.19"
+dosfstools = "4.3"
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"

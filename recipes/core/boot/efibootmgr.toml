@@ -1,0 +1,51 @@
+# recipes/core/boot/efibootmgr.toml
+#
+# efibootmgr - EFI Boot Manager
+#
+# Tool for managing UEFI boot entries.
+
+[package]
+name = "efibootmgr"
+version = "19"
+release = "1"
+summary = "EFI Boot Manager"
+description = """
+efibootmgr is a user-space application to modify the EFI Boot Manager.
+It can create and destroy boot entries, change the boot order, change
+the next running boot option, and more. It works with UEFI firmware
+to manage boot options stored in NVRAM.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://github.com/rhboot/efibootmgr"
+
+[source]
+archive = "https://github.com/rhboot/efibootmgr/releases/download/%(version)s/efibootmgr-%(version)s.tar.bz2"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "efivar", "popt"]
+makedepends = ["gcc", "make", "pkgconf"]
+
+# efibootmgr uses a simple Makefile
+configure = ""
+
+make = """
+make \
+    EFIDIR=conary \
+    EFI_LOADER=grubx64.efi \
+    -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move to /sbin for system administration
+mkdir -p %(destdir)s/sbin
+if [ -f "%(destdir)s/usr/sbin/efibootmgr" ]; then
+    mv "%(destdir)s/usr/sbin/efibootmgr" "%(destdir)s/sbin/"
+    ln -sf /sbin/efibootmgr "%(destdir)s/usr/sbin/efibootmgr"
+fi
+"""
+
+[variables]
+jobs = "$(nproc)"

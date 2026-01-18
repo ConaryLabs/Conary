@@ -1,0 +1,44 @@
+# recipes/core/boot/dosfstools.toml
+#
+# dosfstools - FAT filesystem utilities
+#
+# Tools for creating and checking MS-DOS FAT filesystems.
+
+[package]
+name = "dosfstools"
+version = "4.3"
+release = "1"
+summary = "Utilities for FAT filesystems"
+description = """
+dosfstools contains utilities for creating and checking MS-DOS FAT
+filesystems. This includes mkfs.fat for creating FAT12, FAT16, and
+FAT32 filesystems, and fsck.fat for checking and repairing them.
+These tools are essential for EFI System Partitions which use FAT32.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://github.com/dosfstools/dosfstools"
+
+[source]
+archive = "https://github.com/dosfstools/dosfstools/releases/download/v%(version)s/dosfstools-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "make"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --sbindir=/sbin \
+    --mandir=/usr/share/man \
+    --enable-compat-symlinks
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+"""
+
+[variables]
+jobs = "$(nproc)"

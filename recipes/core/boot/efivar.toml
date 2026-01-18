@@ -1,0 +1,42 @@
+# recipes/core/boot/efivar.toml
+#
+# efivar - Tools and library for EFI variables
+#
+# Library and tools for manipulating UEFI variables.
+
+[package]
+name = "efivar"
+version = "39"
+release = "1"
+summary = "Tools and library for EFI variables"
+description = """
+efivar provides a simple command line interface to the UEFI variable
+facility, as well as a library (libefivar) that applications can use
+to manipulate UEFI variables. It is required by efibootmgr and other
+tools that need to interact with UEFI firmware.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://github.com/rhboot/efivar"
+
+[source]
+archive = "https://github.com/rhboot/efivar/releases/download/%(version)s/efivar-%(version)s.tar.bz2"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "popt"]
+makedepends = ["gcc", "make", "pkgconf"]
+
+# efivar uses a simple Makefile
+configure = ""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove static libraries
+rm -f %(destdir)s/usr/lib/*.a
+"""
+
+[variables]
+jobs = "$(nproc)"

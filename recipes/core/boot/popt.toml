@@ -1,0 +1,45 @@
+# recipes/core/boot/popt.toml
+#
+# popt - Command line option parsing library
+#
+# A library for parsing command line options, used by various system tools.
+
+[package]
+name = "popt"
+version = "1.19"
+release = "1"
+summary = "C library for parsing command line options"
+description = """
+Popt is a C library for parsing command line parameters. It was
+originally written for use with RPM and other Red Hat tools, but
+has since been adopted by many other projects. It allows programs
+to easily parse complex command line options.
+"""
+license = "MIT"
+homepage = "https://github.com/rpm-software-management/popt"
+
+[source]
+archive = "https://ftp.osuosl.org/pub/rpm/popt/releases/popt-1.x/popt-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "make"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-static
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove libtool archive
+rm -f %(destdir)s/usr/lib/*.la
+"""
+
+[variables]
+jobs = "$(nproc)"

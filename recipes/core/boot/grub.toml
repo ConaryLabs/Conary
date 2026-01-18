@@ -1,0 +1,116 @@
+# recipes/core/boot/grub.toml
+#
+# GRUB - GRand Unified Bootloader
+#
+# The standard bootloader for Linux systems, supporting BIOS and UEFI.
+
+[package]
+name = "grub"
+version = "2.14"
+release = "1"
+summary = "GRand Unified Bootloader"
+description = """
+GNU GRUB is a multiboot boot loader. It was derived from GRUB, the
+GRand Unified Bootloader. GRUB 2 is a complete rewrite with modular
+design, support for UEFI, and many other improvements. It can boot
+Linux, BSD, Windows, and other operating systems.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/grub/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/grub/grub-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/grub/grub-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc", "zlib", "xz"]
+makedepends = ["gcc", "make", "bison", "flex", "pkgconf", "python", "gettext"]
+
+# Build both BIOS (i386-pc) and UEFI (x86_64-efi) targets
+configure = """
+# GRUB requires building twice for dual BIOS/UEFI support
+# First, prepare for UEFI build
+./configure \
+    --prefix=/usr \
+    --sbindir=/usr/sbin \
+    --sysconfdir=/etc \
+    --disable-werror \
+    --disable-efiemu \
+    --enable-grub-mkfont=no \
+    --enable-device-mapper=no \
+    --with-platform=efi \
+    --target=x86_64
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Now build BIOS version
+make clean
+./configure \
+    --prefix=/usr \
+    --sbindir=/usr/sbin \
+    --sysconfdir=/etc \
+    --disable-werror \
+    --disable-efiemu \
+    --enable-grub-mkfont=no \
+    --enable-device-mapper=no \
+    --with-platform=pc \
+    --target=i386
+
+make -j%(jobs)s
+make DESTDIR=%(destdir)s install
+
+# Create default GRUB configuration directory
+mkdir -p %(destdir)s/etc/default
+cat > %(destdir)s/etc/default/grub << 'GRUB_DEFAULT'
+# /etc/default/grub - GRUB configuration
+#
+# Edit this file and run 'grub-mkconfig -o /boot/grub/grub.cfg'
+# to regenerate the GRUB configuration.
+
+# Default menu entry (0 = first, "saved" for remember last)
+GRUB_DEFAULT=0
+
+# Timeout in seconds (0 = no menu, -1 = wait indefinitely)
+GRUB_TIMEOUT=5
+
+# Distributor identification
+GRUB_DISTRIBUTOR="Conary"
+
+# Kernel command line arguments for normal entries
+GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+
+# Kernel command line arguments for all entries (including recovery)
+GRUB_CMDLINE_LINUX=""
+
+# Disable graphical terminal (text mode only)
+#GRUB_TERMINAL=console
+
+# Graphics mode (keep or set resolution like "1024x768x32")
+#GRUB_GFXMODE=auto
+
+# Disable OS prober (finding other operating systems)
+#GRUB_DISABLE_OS_PROBER=true
+
+# Disable recovery menu entries
+#GRUB_DISABLE_RECOVERY=true
+GRUB_DEFAULT
+
+# Create directory for custom configuration snippets
+mkdir -p %(destdir)s/etc/grub.d
+
+# Create helper script for generating configurations
+cat > %(destdir)s/usr/sbin/update-grub << 'UPDATE_GRUB'
+#!/bin/sh
+set -e
+exec grub-mkconfig -o /boot/grub/grub.cfg "$@"
+UPDATE_GRUB
+chmod 755 %(destdir)s/usr/sbin/update-grub
+"""
+
+[variables]
+jobs = "$(nproc)"
