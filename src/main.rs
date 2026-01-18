@@ -675,8 +675,8 @@ fn main() -> Result<()> {
                 commands::cmd_bootstrap_stage0(&work_dir, config, jobs, verbose, download_only, clean)
             }
 
-            cli::BootstrapCommands::Stage1 { work_dir, jobs, verbose } => {
-                commands::cmd_bootstrap_stage1(&work_dir, jobs, verbose)
+            cli::BootstrapCommands::Stage1 { work_dir, recipe_dir, jobs, verbose } => {
+                commands::cmd_bootstrap_stage1(&work_dir, recipe_dir.as_deref(), jobs, verbose)
             }
 
             cli::BootstrapCommands::Base { work_dir, root, verbose } => {

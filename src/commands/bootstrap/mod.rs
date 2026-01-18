@@ -156,12 +156,27 @@ pub fn cmd_bootstrap_stage0(
 }
 
 /// Build Stage 1 self-hosted toolchain
-pub fn cmd_bootstrap_stage1(work_dir: &str, _jobs: Option<usize>, _verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_stage1(
+    work_dir: &str,
+    recipe_dir: Option<&str>,
+    jobs: Option<usize>,
+    verbose: bool,
+) -> Result<()> {
     println!("Building Stage 1 toolchain...");
     println!("  Work directory: {}", work_dir);
 
     // Check if Stage 0 is complete
-    let bootstrap = Bootstrap::new(work_dir)?;
+    let mut bootstrap = Bootstrap::new(work_dir)?;
+
+    // Set config options (used when we reconfigure the bootstrap)
+    let _config = {
+        let mut c = BootstrapConfig::new().with_verbose(verbose);
+        if let Some(j) = jobs {
+            c = c.with_jobs(j);
+        }
+        c
+    };
+
     let stage0_toolchain = bootstrap.get_stage0_toolchain();
 
     if stage0_toolchain.is_none() {
@@ -173,15 +188,34 @@ pub fn cmd_bootstrap_stage1(work_dir: &str, _jobs: Option<usize>, _verbose: bool
     let toolchain = stage0_toolchain.unwrap();
     println!("  Using Stage 0 toolchain: {}", toolchain.path.display());
 
-    // TODO: Implement Stage 1 build
-    // This will involve:
-    // 1. Building binutils with Stage 0
-    // 2. Building gcc (minimal) with Stage 0
-    // 3. Building glibc with the new gcc
-    // 4. Rebuilding gcc with glibc
+    // Determine recipe directory
+    let recipe_path = recipe_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("recipes/core"));
 
-    println!("\n[NOT IMPLEMENTED] Stage 1 build is not yet implemented.");
-    println!("This will build a self-hosted toolchain using Stage 0.");
+    if !recipe_path.exists() {
+        println!("[ERROR] Recipe directory not found: {}", recipe_path.display());
+        println!("Specify --recipe-dir or ensure recipes/core exists.");
+        return Err(anyhow::anyhow!("Recipe directory not found"));
+    }
+
+    println!("  Recipe directory: {}", recipe_path.display());
+
+    // Build Stage 1
+    println!("\nThis will build the self-hosted toolchain using Stage 0.");
+    println!("Build order: linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2\n");
+
+    let stage1_toolchain = bootstrap.build_stage1(&recipe_path)?;
+
+    println!("\n[OK] Stage 1 toolchain built successfully!");
+    println!("  Path: {}", stage1_toolchain.path.display());
+    println!("  Target: {}", stage1_toolchain.target);
+    if let Some(ref ver) = stage1_toolchain.gcc_version {
+        println!("  GCC: {}", ver);
+    }
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap base' to build the base system packages");
 
     Ok(())
 }
@@ -266,7 +300,7 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         BootstrapStage::Stage0 => {
             cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false)
         }
-        BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, verbose),
+        BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose),
         BootstrapStage::BaseSystem => cmd_bootstrap_base(work_dir, "/conary/sysroot", verbose),
         _ => {
             println!("[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.", current);

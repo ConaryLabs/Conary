@@ -62,6 +62,10 @@ pub enum BootstrapCommands {
         #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
         work_dir: String,
 
+        /// Directory containing recipes (default: recipes/core)
+        #[arg(short, long)]
+        recipe_dir: Option<String>,
+
         /// Number of parallel build jobs
         #[arg(short, long)]
         jobs: Option<usize>,

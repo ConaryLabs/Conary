@@ -45,11 +45,13 @@
 
 mod config;
 mod stage0;
+mod stage1;
 mod stages;
 mod toolchain;
 
 pub use config::{BootstrapConfig, TargetArch};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
+pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use toolchain::{Toolchain, ToolchainKind};
 
@@ -133,6 +135,31 @@ impl Bootstrap {
     pub fn get_stage0_toolchain(&self) -> Option<Toolchain> {
         self.stages
             .get_artifact_path(BootstrapStage::Stage0)
+            .and_then(|p| Toolchain::from_prefix(&p).ok())
+    }
+
+    /// Build Stage 1 toolchain using Stage 0
+    pub fn build_stage1(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
+        // Get Stage 0 toolchain
+        let stage0 = self
+            .get_stage0_toolchain()
+            .ok_or_else(|| anyhow::anyhow!("Stage 0 toolchain not found. Run stage0 first."))?;
+
+        let mut builder = Stage1Builder::new(&self.work_dir, &self.config, stage0)?;
+        builder.load_recipes(recipe_dir)?;
+
+        let toolchain = builder.build()?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Stage1, &toolchain.path)?;
+
+        Ok(toolchain)
+    }
+
+    /// Get the Stage 1 toolchain if it's already built
+    pub fn get_stage1_toolchain(&self) -> Option<Toolchain> {
+        self.stages
+            .get_artifact_path(BootstrapStage::Stage1)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
 
