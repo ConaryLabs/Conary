@@ -32,8 +32,11 @@ configure = """
     --prefix=/usr \
     --enable-no-install-program=kill,uptime \
     --enable-single-binary=symlinks \
-    --with-openssl \
-    --with-linux-crypto
+    --disable-acl \
+    --disable-xattr \
+    --without-selinux \
+    --without-openssl \
+    --without-gmp
 """
 
 make = "make -j%(jobs)s"
