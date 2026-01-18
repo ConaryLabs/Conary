@@ -221,15 +221,60 @@ pub fn cmd_bootstrap_stage1(
 }
 
 /// Build base system packages
-pub fn cmd_bootstrap_base(work_dir: &str, root: &str, _verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_base(
+    work_dir: &str,
+    root: &str,
+    recipe_dir: Option<&str>,
+    _verbose: bool,
+) -> Result<()> {
     println!("Building base system...");
     println!("  Work directory: {}", work_dir);
     println!("  Target root: {}", root);
 
-    // TODO: Implement base system build
-    // This will involve building kernel, glibc, coreutils, etc.
+    // Check if Stage 1 is complete
+    let mut bootstrap = Bootstrap::new(work_dir)?;
 
-    println!("\n[NOT IMPLEMENTED] Base system build is not yet implemented.");
+    let stage1_toolchain = bootstrap.get_stage1_toolchain();
+
+    if stage1_toolchain.is_none() {
+        println!("[ERROR] Stage 1 toolchain not found.");
+        println!("Run 'conary bootstrap stage1' first.");
+        return Err(anyhow::anyhow!("Stage 1 not complete"));
+    }
+
+    let toolchain = stage1_toolchain.unwrap();
+    println!("  Using Stage 1 toolchain: {}", toolchain.path.display());
+
+    // Determine recipe directory
+    let recipe_path = recipe_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("recipes/core"));
+
+    if !recipe_path.exists() {
+        println!("[ERROR] Recipe directory not found: {}", recipe_path.display());
+        println!("Specify --recipe-dir or ensure recipes/core exists.");
+        return Err(anyhow::anyhow!("Recipe directory not found"));
+    }
+
+    println!("  Recipe directory: {}", recipe_path.display());
+
+    // Build base system
+    println!("\nThis will build the complete base system (~52 packages).");
+    println!("Phases: Libraries -> Dev Tools -> Core System -> Userland -> Boot\n");
+
+    let summary = bootstrap.build_base(&recipe_path, root)?;
+
+    println!("\n[OK] Base system build complete!");
+    println!("  Target root: {}", root);
+    println!("  {}", summary);
+
+    if summary.failed > 0 {
+        println!("\n[WARN] {} packages failed (see logs in {}/base/logs/)",
+                 summary.failed, work_dir);
+    }
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap image' to generate a bootable image");
 
     Ok(())
 }
@@ -301,7 +346,7 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
             cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false)
         }
         BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose),
-        BootstrapStage::BaseSystem => cmd_bootstrap_base(work_dir, "/conary/sysroot", verbose),
+        BootstrapStage::BaseSystem => cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose),
         _ => {
             println!("[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.", current);
             Ok(())

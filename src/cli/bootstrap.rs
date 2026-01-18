@@ -82,8 +82,12 @@ pub enum BootstrapCommands {
         work_dir: String,
 
         /// Target root directory for installation
-        #[arg(short, long, default_value = "/conary/sysroot")]
+        #[arg(long, default_value = "/conary/sysroot")]
         root: String,
+
+        /// Directory containing recipes (default: recipes/core)
+        #[arg(short, long)]
+        recipe_dir: Option<String>,
 
         /// Show verbose build output
         #[arg(short, long)]

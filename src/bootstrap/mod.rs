@@ -43,12 +43,14 @@
 //! └─────────────────────────────────────────────┘
 //! ```
 
+mod base;
 mod config;
 mod stage0;
 mod stage1;
 mod stages;
 mod toolchain;
 
+pub use base::{BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary};
 pub use config::{BootstrapConfig, TargetArch};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
@@ -161,6 +163,34 @@ impl Bootstrap {
         self.stages
             .get_artifact_path(BootstrapStage::Stage1)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
+    }
+
+    /// Build base system using Stage 1 toolchain
+    pub fn build_base(
+        &mut self,
+        recipe_dir: impl AsRef<Path>,
+        target_root: impl AsRef<Path>,
+    ) -> Result<BuildSummary> {
+        // Get Stage 1 toolchain
+        let stage1 = self
+            .get_stage1_toolchain()
+            .ok_or_else(|| anyhow::anyhow!("Stage 1 toolchain not found. Run stage1 first."))?;
+
+        let mut builder = BaseBuilder::new(
+            &self.work_dir,
+            &self.config,
+            stage1,
+            target_root.as_ref(),
+            recipe_dir.as_ref(),
+        )?;
+
+        builder.init_packages()?;
+        builder.build()?;
+
+        self.stages
+            .mark_complete(BootstrapStage::BaseSystem, builder.target_root())?;
+
+        Ok(builder.summary())
     }
 
     /// Resume bootstrap from last checkpoint
