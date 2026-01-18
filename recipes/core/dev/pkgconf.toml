@@ -1,0 +1,52 @@
+# recipes/core/dev/pkgconf.toml
+#
+# pkgconf - Package compiler and linker metadata toolkit
+#
+# Modern replacement for pkg-config with additional features.
+
+[package]
+name = "pkgconf"
+version = "2.3.0"
+release = "1"
+summary = "Package compiler and linker metadata toolkit"
+description = """
+pkgconf is a program which helps to configure compiler and linker
+flags for development libraries. It is similar to pkg-config from
+freedesktop.org, providing a compatible interface while offering
+additional features like virtual packages and a better dependency
+resolver.
+"""
+license = "ISC"
+homepage = "http://pkgconf.org"
+
+[source]
+archive = "https://distfiles.ariadne.space/pkgconf/pkgconf-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "meson", "ninja"]
+
+configure = """
+meson setup build \
+    --prefix=/usr \
+    --buildtype=release \
+    -Dtests=disabled
+"""
+
+make = "ninja -C build -j%(jobs)s"
+
+install = """
+DESTDIR=%(destdir)s ninja -C build install
+
+# Create pkg-config symlink for compatibility
+ln -sf pkgconf %(destdir)s/usr/bin/pkg-config
+
+# Create pkg-config man page symlink
+ln -sf pkgconf.1 %(destdir)s/usr/share/man/man1/pkg-config.1 2>/dev/null || true
+"""
+
+workdir = "."
+
+[variables]
+jobs = "$(nproc)"

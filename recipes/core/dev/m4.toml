@@ -1,0 +1,40 @@
+# recipes/core/dev/m4.toml
+#
+# GNU M4 - Macro processor
+#
+# Required by autoconf and many other GNU tools.
+
+[package]
+name = "m4"
+version = "1.4.20"
+release = "1"
+summary = "GNU macro processor"
+description = """
+GNU M4 is an implementation of the traditional Unix macro processor.
+It is mostly SVR4 compatible although it has some extensions. GNU M4
+also has built-in functions for including files, running shell commands,
+doing arithmetic, etc. It is used by autoconf and other tools.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/m4/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/m4/m4-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/m4/m4-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

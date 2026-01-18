@@ -1,0 +1,40 @@
+# recipes/core/dev/libtool.toml
+#
+# GNU Libtool - Portable library builder
+#
+# Simplifies building and using shared libraries.
+
+[package]
+name = "libtool"
+version = "2.5.4"
+release = "1"
+summary = "GNU Libtool"
+description = """
+GNU Libtool is a generic library support script that hides the
+complexity of using shared libraries behind a consistent, portable
+interface. It provides a set of macros for Autoconf and a set of
+shell scripts to use at build time.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://www.gnu.org/software/libtool/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/libtool/libtool-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/libtool/libtool-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc", "m4"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-static
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

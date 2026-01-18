@@ -1,0 +1,40 @@
+# recipes/core/dev/autoconf.toml
+#
+# GNU Autoconf - Configure script generator
+#
+# Creates portable configure scripts from template files.
+
+[package]
+name = "autoconf"
+version = "2.72"
+release = "1"
+summary = "GNU Autoconf"
+description = """
+GNU Autoconf is a tool for producing configure scripts for building,
+installing, and packaging software on computer systems where a Bourne
+shell is available. Autoconf generates a configuration script from a
+template file that lists the operating system features the package
+can use.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/autoconf/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/autoconf/autoconf-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/autoconf/autoconf-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["m4", "perl"]
+makedepends = []
+
+configure = """
+./configure \
+    --prefix=/usr
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

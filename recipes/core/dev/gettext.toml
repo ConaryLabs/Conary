@@ -1,0 +1,45 @@
+# recipes/core/dev/gettext.toml
+#
+# GNU gettext - Internationalization framework
+#
+# Tools and libraries for translating program messages.
+
+[package]
+name = "gettext"
+version = "0.26"
+release = "1"
+summary = "GNU internationalization utilities"
+description = """
+GNU gettext provides a framework for translating program messages.
+It includes a set of conventions and tools for producing multi-lingual
+messages, and a runtime library that programs can use to access
+translated messages.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gettext/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gettext/gettext-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/gettext/gettext-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-static \
+    --enable-shared \
+    --with-included-gettext \
+    --with-included-libunistring \
+    --with-included-libxml \
+    --without-emacs
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,65 @@
+# recipes/core/dev/perl.toml
+#
+# Perl - Practical Extraction and Report Language
+#
+# Scripting language required by many build tools and scripts.
+
+[package]
+name = "perl"
+version = "5.42.0"
+release = "1"
+summary = "Practical Extraction and Report Language"
+description = """
+Perl is a highly capable, feature-rich programming language with
+over 30 years of development. It is used for system administration,
+web development, network programming, and many build systems.
+Many GNU packages require Perl for their build scripts.
+"""
+license = "Artistic-1.0-Perl OR GPL-1.0-or-later"
+homepage = "https://www.perl.org"
+
+[source]
+archive = "https://www.cpan.org/src/5.0/perl-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = ["gcc", "make"]
+
+# Perl uses its own Configure script (note capital C)
+configure = """
+sh Configure -des \
+    -Dprefix=/usr \
+    -Dvendorprefix=/usr \
+    -Dprivlib=/usr/lib/perl5/%(version_major)s/core_perl \
+    -Darchlib=/usr/lib/perl5/%(version_major)s/core_perl \
+    -Dsitelib=/usr/lib/perl5/%(version_major)s/site_perl \
+    -Dsitearch=/usr/lib/perl5/%(version_major)s/site_perl \
+    -Dvendorlib=/usr/lib/perl5/%(version_major)s/vendor_perl \
+    -Dvendorarch=/usr/lib/perl5/%(version_major)s/vendor_perl \
+    -Dman1dir=/usr/share/man/man1 \
+    -Dman3dir=/usr/share/man/man3 \
+    -Dpager='/usr/bin/less -isR' \
+    -Duseshrplib \
+    -Dusethreads \
+    -Doptimize="${CFLAGS:--O2}" \
+    -Dcccdlflags='-fPIC' \
+    -Dlddlflags="-shared ${LDFLAGS:-}"
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Remove perllocal.pod and .packlist files
+find %(destdir)s -name 'perllocal.pod' -delete
+find %(destdir)s -name '.packlist' -delete
+
+# Remove empty directories
+find %(destdir)s -type d -empty -delete 2>/dev/null || true
+"""
+
+[variables]
+version_major = "5.42"
+jobs = "$(nproc)"

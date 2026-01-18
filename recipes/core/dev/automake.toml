@@ -1,0 +1,38 @@
+# recipes/core/dev/automake.toml
+#
+# GNU Automake - Makefile generator
+#
+# Generates Makefile.in files from Makefile.am templates.
+
+[package]
+name = "automake"
+version = "1.18.1"
+release = "1"
+summary = "GNU Automake"
+description = """
+GNU Automake is a tool for automatically generating Makefile.in files
+compliant with the GNU Coding Standards. Automake requires the use of
+GNU Autoconf. It produces Makefiles that are portable across systems.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://www.gnu.org/software/automake/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/automake/automake-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/automake/automake-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["autoconf", "perl"]
+makedepends = []
+
+configure = """
+./configure \
+    --prefix=/usr
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

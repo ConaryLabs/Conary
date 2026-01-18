@@ -1,0 +1,63 @@
+# recipes/core/dev/python.toml
+#
+# Python - Programming language
+#
+# Required by meson, many build scripts, and system tools.
+
+[package]
+name = "python"
+version = "3.14.2"
+release = "1"
+summary = "Python programming language"
+description = """
+Python is a programming language that lets you work quickly and
+integrate systems more effectively. It is required by many build
+systems including Meson, and is used extensively for system
+administration and scripting.
+"""
+license = "Python-2.0"
+homepage = "https://www.python.org"
+
+[source]
+archive = "https://www.python.org/ftp/python/%(version)s/Python-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "zlib", "xz", "openssl", "ncurses", "readline", "libffi"]
+makedepends = ["gcc", "pkgconf"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --enable-shared \
+    --enable-optimizations \
+    --enable-ipv6 \
+    --with-computed-gotos \
+    --with-lto \
+    --with-system-expat \
+    --with-system-ffi \
+    --with-ensurepip=install \
+    --without-static-libpython
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create python3 symlink
+ln -sf python%(version_major)s %(destdir)s/usr/bin/python3
+ln -sf python3 %(destdir)s/usr/bin/python
+
+# Create pip symlinks
+ln -sf pip%(version_major)s %(destdir)s/usr/bin/pip3
+ln -sf pip3 %(destdir)s/usr/bin/pip
+
+# Remove test suite to save space
+rm -rf %(destdir)s/usr/lib/python%(version_major)s/test
+rm -rf %(destdir)s/usr/lib/python%(version_major)s/*/test
+"""
+
+[variables]
+version_major = "3.14"
+jobs = "$(nproc)"

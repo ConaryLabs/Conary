@@ -64,6 +64,33 @@ libmnl = "1.0.5"
 dbus = "1.16.2"
 kmod = "34"
 
+[dev]
+# Development tools (latest stable as of Jan 2026)
+
+# Build systems
+make = "4.4.1"
+cmake = "4.2.1"
+ninja = "1.13.1"
+meson = "1.7.0"
+
+# Autotools
+m4 = "1.4.20"
+autoconf = "2.72"
+automake = "1.18.1"
+libtool = "2.5.4"
+pkgconf = "2.3.0"
+
+# Parsers/Lexers
+bison = "3.8.2"
+flex = "2.6.4"
+
+# Languages
+perl = "5.42.0"
+python = "3.14.2"
+
+# Internationalization
+gettext = "0.26"
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"

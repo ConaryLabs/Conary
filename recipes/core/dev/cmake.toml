@@ -1,0 +1,50 @@
+# recipes/core/dev/cmake.toml
+#
+# CMake - Cross-platform build system generator
+#
+# Modern build system used by many projects.
+
+[package]
+name = "cmake"
+version = "4.2.1"
+release = "1"
+summary = "Cross-platform build system generator"
+description = """
+CMake is an open-source, cross-platform family of tools designed
+to build, test and package software. CMake is used to control the
+software compilation process using simple platform and compiler
+independent configuration files.
+"""
+license = "BSD-3-Clause"
+homepage = "https://cmake.org"
+
+[source]
+archive = "https://github.com/Kitware/CMake/releases/download/v%(version)s/cmake-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "ncurses", "openssl", "zlib", "xz", "zstd"]
+makedepends = ["gcc", "make"]
+
+# CMake can bootstrap itself
+configure = """
+./bootstrap \
+    --prefix=/usr \
+    --datadir=/share/cmake \
+    --docdir=/share/doc/cmake \
+    --mandir=/share/man \
+    --system-curl \
+    --system-zlib \
+    --system-expat \
+    --system-zstd \
+    --parallel=%(jobs)s \
+    -- \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_USE_OPENSSL=ON
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

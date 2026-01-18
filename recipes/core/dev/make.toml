@@ -1,0 +1,41 @@
+# recipes/core/dev/make.toml
+#
+# GNU Make - Build automation tool
+#
+# The foundation of most build systems, executes Makefiles.
+
+[package]
+name = "make"
+version = "4.4.1"
+release = "1"
+summary = "GNU Make build tool"
+description = """
+GNU Make is a tool which controls the generation of executables and
+other non-source files of a program from the program's source files.
+Make gets its knowledge of how to build your program from a file
+called the makefile, which lists each of the non-source files and
+how to compute it from other files.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/make/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/make/make-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/make/make-%(version)s.tar.gz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

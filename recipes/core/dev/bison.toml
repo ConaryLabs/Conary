@@ -1,0 +1,40 @@
+# recipes/core/dev/bison.toml
+#
+# GNU Bison - Parser generator
+#
+# Generates parsers from grammar descriptions, yacc-compatible.
+
+[package]
+name = "bison"
+version = "3.8.2"
+release = "1"
+summary = "GNU parser generator"
+description = """
+GNU Bison is a general-purpose parser generator that converts an
+annotated context-free grammar into a deterministic LR or generalized
+LR (GLR) parser. It is largely compatible with Yacc and produces
+C or C++ code.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bison/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/bison/bison-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/bison/bison-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc", "m4"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+install = "make DESTDIR=%(destdir)s install"
+
+[variables]
+jobs = "$(nproc)"

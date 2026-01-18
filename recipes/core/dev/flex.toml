@@ -1,0 +1,46 @@
+# recipes/core/dev/flex.toml
+#
+# flex - Fast lexical analyzer generator
+#
+# Generates lexical analyzers (scanners) from pattern descriptions.
+
+[package]
+name = "flex"
+version = "2.6.4"
+release = "1"
+summary = "Fast lexical analyzer generator"
+description = """
+flex is a tool for generating scanners: programs which recognize
+lexical patterns in text. flex reads the given input files for a
+description of a scanner to generate. The description is in the
+form of pairs of regular expressions and C code, called rules.
+"""
+license = "BSD-2-Clause"
+homepage = "https://github.com/westes/flex"
+
+[source]
+archive = "https://github.com/westes/flex/releases/download/v%(version)s/flex-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc", "m4"]
+makedepends = ["gcc", "bison"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-static \
+    --disable-nls
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Create lex symlink for compatibility
+ln -sf flex %(destdir)s/usr/bin/lex
+"""
+
+[variables]
+jobs = "$(nproc)"
