@@ -38,10 +38,16 @@ configure = """
     HELP2MAN=true
 """
 
-make = "make -j%(jobs)s"
+make = """
+# Build binaries only, skip man pages (requires help2man which needs perl)
+make -j%(jobs)s -C lib
+make -j%(jobs)s -C src
+"""
 
 install = """
-make DESTDIR=%(destdir)s install
+# Install binaries only (skip man pages)
+make -C lib DESTDIR=%(destdir)s install
+make -C src DESTDIR=%(destdir)s install
 
 # Move programs to /bin for FHS compliance and early boot
 mkdir -p %(destdir)s/bin
