@@ -120,7 +120,7 @@ set wildmenu
 set wildmode=list:longest
 
 " Status line
-set statusline=%F%m%r%h%w\ [%{&ff}]\ [%Y]\ [%l,%v][%p%%]
+set statusline=%F%m%r%h%w\\ [%{&ff}]\\ [%Y]\\ [%l,%v][%p%%]
 
 " Color scheme (uses terminal colors)
 set background=dark
