@@ -34,7 +34,8 @@ configure = """
     --enable-single-binary=symlinks \
     --disable-acl \
     --disable-xattr \
-    --without-selinux
+    --without-selinux \
+    HELP2MAN=true
 """
 
 make = "make -j%(jobs)s"
