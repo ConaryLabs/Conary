@@ -45,6 +45,7 @@
 
 mod base;
 mod config;
+mod image;
 mod stage0;
 mod stage1;
 mod stages;
@@ -52,6 +53,7 @@ mod toolchain;
 
 pub use base::{BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary};
 pub use config::{BootstrapConfig, TargetArch};
+pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
 pub use stages::{BootstrapStage, StageManager, StageState};
@@ -196,6 +198,40 @@ impl Bootstrap {
     /// Resume bootstrap from last checkpoint
     pub fn resume(&mut self) -> Result<BootstrapStage> {
         self.stages.current_stage()
+    }
+
+    /// Get the base system sysroot path if built
+    pub fn get_sysroot(&self) -> Option<PathBuf> {
+        self.stages.get_artifact_path(BootstrapStage::BaseSystem)
+    }
+
+    /// Build a bootable image from the base system
+    pub fn build_image(
+        &mut self,
+        output: impl AsRef<Path>,
+        format: ImageFormat,
+        size: ImageSize,
+    ) -> Result<ImageResult> {
+        // Get sysroot path
+        let sysroot = self
+            .get_sysroot()
+            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run base first."))?;
+
+        let mut builder = ImageBuilder::new(
+            &self.work_dir,
+            &self.config,
+            &sysroot,
+            output.as_ref(),
+            format,
+            size,
+        )?;
+
+        let result = builder.build()?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Image, &result.path)?;
+
+        Ok(result)
     }
 }
 
