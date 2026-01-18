@@ -4,7 +4,8 @@
 
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::common::{PackageMetadata, MAX_EXTRACTION_FILE_SIZE};
+use crate::packages::archive_utils::{check_file_size, normalize_path, is_regular_file_mode};
+use crate::packages::common::PackageMetadata;
 use crate::packages::cpio::CpioReader;
 use crate::compression::{self, CompressionFormat};
 use crate::packages::traits::{
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// RPM package representation
 pub struct RpmPackage {
@@ -301,26 +302,17 @@ impl PackageFormat for RpmPackage {
 
         while let Some((entry, content)) = cpio.next_entry().map_err(|e| Error::InitError(format!("CPIO error: {}", e)))? {
             // Check if regular file (S_IFREG = 0o100000)
-            if (entry.mode & 0o170000) != 0o100000 {
+            if !is_regular_file_mode(entry.mode) {
                 continue;
             }
 
-            // Check file size to prevent memory exhaustion
-            if entry.size > MAX_EXTRACTION_FILE_SIZE {
-                warn!(
-                    "Skipping oversized file '{}' ({} bytes) in RPM - exceeds {} byte limit",
-                    entry.name, entry.size, MAX_EXTRACTION_FILE_SIZE
-                );
+            // Check file size using shared utility
+            if !check_file_size(&entry.name, entry.size) {
                 continue;
             }
 
-            // Normalize path: CPIO paths are relative (e.g. "./usr/bin"), RPM metadata is absolute ("/usr/bin")
-            let rel_path = entry.name.trim_start_matches('.');
-            let abs_path = if rel_path.starts_with('/') {
-                rel_path.to_string()
-            } else {
-                format!("/{}", rel_path)
-            };
+            // Normalize path using shared utility
+            let abs_path = normalize_path(&entry.name);
 
             // Match with metadata to get SHA256 and confirm it's a tracked file
             if let Some(meta) = file_map.get(abs_path.as_str()) {

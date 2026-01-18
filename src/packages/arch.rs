@@ -7,7 +7,8 @@
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::common::{PackageMetadata, MAX_EXTRACTION_FILE_SIZE};
+use crate::packages::archive_utils::{check_file_size, compute_sha256, normalize_path};
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -131,7 +132,7 @@ impl ArchPackage {
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
             files.push(PackageFile {
-                path: format!("/{}", entry_path), // Ensure absolute path
+                path: normalize_path(&entry_path),
                 size: size as i64,
                 mode: mode as i32,
                 sha256: None, // We'll compute this during extraction if needed
@@ -378,7 +379,7 @@ impl PackageFormat for ArchPackage {
                 // Entry may be "path\thash" or just "path"
                 let path = entry.split('\t').next().unwrap_or(entry);
                 ConfigFileInfo {
-                    path: format!("/{}", path.trim_start_matches('/')),
+                    path: normalize_path(path),
                     noreplace: true, // Arch backup files always preserve user changes
                     ghost: false,
                 }
@@ -476,12 +477,8 @@ impl PackageFormat for ArchPackage {
             let size = entry.header().size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
-            // Check file size to prevent memory exhaustion
-            if size > MAX_EXTRACTION_FILE_SIZE {
-                warn!(
-                    "Skipping oversized file '{}' ({} bytes) in Arch package - exceeds {} byte limit",
-                    entry_path, size, MAX_EXTRACTION_FILE_SIZE
-                );
+            // Check file size using shared utility
+            if !check_file_size(&entry_path, size) {
                 continue;
             }
 
@@ -493,14 +490,11 @@ impl PackageFormat for ArchPackage {
             entry.read_to_end(&mut content)
                 .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
-            // Compute SHA-256
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(&content);
-            let hash = format!("{:x}", hasher.finalize());
+            // Compute SHA-256 using shared utility
+            let hash = compute_sha256(&content);
 
             extracted_files.push(ExtractedFile {
-                path: format!("/{}", entry_path), // Ensure absolute path
+                path: normalize_path(&entry_path),
                 content,
                 size: size as i64,
                 mode: mode as i32,

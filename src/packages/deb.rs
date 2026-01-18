@@ -7,7 +7,8 @@
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::common::{PackageMetadata, MAX_EXTRACTION_FILE_SIZE};
+use crate::packages::archive_utils::{check_file_size, compute_sha256, normalize_path};
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -340,7 +341,7 @@ impl DebPackage {
                         .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
                     files.push(PackageFile {
-                        path: format!("/{}", entry_path.trim_start_matches("./")),
+                        path: normalize_path(&entry_path),
                         size: size as i64,
                         mode: mode as i32,
                         sha256: None,
@@ -509,12 +510,8 @@ impl PackageFormat for DebPackage {
                     let size = entry.header().size()
                         .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
-                    // Check file size to prevent memory exhaustion
-                    if size > MAX_EXTRACTION_FILE_SIZE {
-                        warn!(
-                            "Skipping oversized file '{}' ({} bytes) in DEB - exceeds {} byte limit",
-                            entry_path, size, MAX_EXTRACTION_FILE_SIZE
-                        );
+                    // Check file size using shared utility
+                    if !check_file_size(&entry_path, size) {
                         continue;
                     }
 
@@ -527,14 +524,11 @@ impl PackageFormat for DebPackage {
                         .read_to_end(&mut content)
                         .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
-                    // Compute SHA-256
-                    use sha2::{Digest, Sha256};
-                    let mut hasher = Sha256::new();
-                    hasher.update(&content);
-                    let hash = format!("{:x}", hasher.finalize());
+                    // Compute SHA-256 using shared utility
+                    let hash = compute_sha256(&content);
 
                     extracted_files.push(ExtractedFile {
-                        path: format!("/{}", entry_path.trim_start_matches("./")),
+                        path: normalize_path(&entry_path),
                         content,
                         size: size as i64,
                         mode: mode as i32,

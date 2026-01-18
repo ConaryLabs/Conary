@@ -22,7 +22,7 @@ use scriptlets::{
 
 use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
-use super::{detect_package_format, install_package_from_file, PackageFormatType};
+use super::{detect_package_format, PackageFormatType};
 use anyhow::{Context, Result};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
@@ -240,9 +240,22 @@ pub fn cmd_install(
                                         info!("Installing dependency: {}", dep_name);
                                         println!("Installing dependency: {}", dep_name);
                                         let reason = format!("Required by {}", parent_name);
-                                        if let Err(e) =
-                                            install_package_from_file(&dep_path, &mut conn, root, db_path, None, Some(&reason))
-                                        {
+                                        let path_str = dep_path.to_string_lossy().to_string();
+                                        if let Err(e) = cmd_install(
+                                            &path_str,
+                                            db_path,
+                                            root,
+                                            None,
+                                            None,
+                                            dry_run,
+                                            no_deps,
+                                            no_scripts,
+                                            Some(&reason),
+                                            sandbox_mode,
+                                            allow_downgrade,
+                                            convert_to_ccs,
+                                            no_capture,
+                                        ) {
                                             return Err(anyhow::anyhow!(
                                                 "Failed to install dependency {}: {}",
                                                 dep_name,
@@ -900,3 +913,4 @@ pub fn cmd_install(
 
     Ok(())
 }
+

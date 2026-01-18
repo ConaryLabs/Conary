@@ -32,3 +32,6 @@ Thumbs.db
 
 # Build logs
 *.log
+
+.gemini/
+gha-creds-*.json

@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use super::resolve::{check_provides_dependencies, get_keyring_dir};
-use crate::commands::install_package_from_file;
+use crate::commands::{cmd_install, SandboxMode};
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary::packages::traits::DependencyType;
@@ -126,7 +126,7 @@ pub fn handle_missing_dependencies(
 
 /// Handle dependencies that can be downloaded from repositories
 fn handle_downloadable_deps(
-    conn: &mut Connection,
+    _conn: &mut Connection,
     pkg: &dyn PackageFormat,
     to_download: &[(String, repository::PackageWithRepo)],
     dry_run: bool,
@@ -159,7 +159,22 @@ fn handle_downloadable_deps(
                 info!("Installing dependency: {}", dep_name);
                 println!("Installing dependency: {}", dep_name);
                 let reason = format!("Required by {}", parent_name);
-                if let Err(e) = install_package_from_file(&dep_path, conn, root, db_path, None, Some(&reason)) {
+                let path_str = dep_path.to_string_lossy().to_string();
+                if let Err(e) = cmd_install(
+                    &path_str,
+                    db_path,
+                    root,
+                    None,
+                    None,
+                    dry_run,
+                    false, // no_deps - dependencies of dependencies?
+                    false, // no_scripts
+                    Some(&reason),
+                    SandboxMode::None,
+                    false, // allow_downgrade
+                    false, // convert_to_ccs
+                    false  // no_capture
+                ) {
                     return Err(anyhow::anyhow!(
                         "Failed to install dependency {}: {}",
                         dep_name,

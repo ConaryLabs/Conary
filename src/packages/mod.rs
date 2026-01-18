@@ -6,6 +6,7 @@
 //! (RPM, DEB, Arch). Each format implements the `PackageFormat` trait.
 
 pub mod arch;
+pub mod archive_utils;
 pub mod common;
 pub mod cpio;
 pub mod deb;

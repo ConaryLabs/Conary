@@ -1,7 +1,7 @@
 // src/commands/update.rs
 //! Update, pinning, and delta statistics commands
 
-use super::install_package_from_file;
+use super::{cmd_install, SandboxMode};
 use super::progress::{UpdatePhase, UpdateProgress};
 use anyhow::Result;
 use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
@@ -373,9 +373,23 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
                 DownloadResult::Full { trove, pkg_path } => {
                     progress.set_phase(&trove.name, UpdatePhase::Installing);
 
-                    if let Err(e) =
-                        install_package_from_file(&pkg_path, &mut conn, root, db_path, Some(&trove), None)
-                    {
+                    let path_str = pkg_path.to_string_lossy().to_string();
+                    
+                    if let Err(e) = cmd_install(
+                        &path_str,
+                        db_path,
+                        root,
+                        None,
+                        None,
+                        false,
+                        false,
+                        false,
+                        None,
+                        SandboxMode::None,
+                        false,
+                        false,
+                        false
+                    ) {
                         progress.fail_package(&trove.name, &e.to_string());
                         warn!("  Package installation failed: {}", e);
                         let _ = std::fs::remove_file(&pkg_path);
