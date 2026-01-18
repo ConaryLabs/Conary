@@ -304,6 +304,9 @@ impl BaseBuilder {
         );
         build_env.insert("PKG_CONFIG_PATH".to_string(), pkg_config_path);
 
+        // Allow configure scripts to run as root (needed for bootstrap)
+        build_env.insert("FORCE_UNSAFE_CONFIGURE".to_string(), "1".to_string());
+
         Ok(Self {
             work_dir: base_dir,
             config: config.clone(),
