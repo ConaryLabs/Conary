@@ -1,0 +1,49 @@
+# recipes/core/archive/tar.toml
+#
+# GNU Tar - Tape archiver
+#
+# Creates and extracts archive files (.tar, .tar.gz, .tar.xz, etc.)
+
+[package]
+name = "tar"
+version = "1.35"
+release = "1"
+summary = "GNU tape archiver"
+description = """
+GNU tar is an archiving program designed to store multiple files in
+a single file (an archive), and to manipulate such archives. It can
+create, list, and extract archives, and supports various compression
+formats including gzip, bzip2, xz, zstd, and lzip.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/tar/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/tar/tar-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/tar/tar-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls \
+    FORCE_UNSAFE_CONFIGURE=1
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move tar to /bin for early boot
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/tar %(destdir)s/bin/tar
+ln -sf /bin/tar %(destdir)s/usr/bin/tar
+"""
+
+[variables]
+jobs = "$(nproc)"

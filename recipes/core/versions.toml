@@ -102,6 +102,14 @@ patch = "2.8"
 findutils = "4.10.0"
 file = "5.46"
 
+[archive]
+# Compression/archiving tools (latest stable as of Jan 2026)
+tar = "1.35"
+gzip = "1.13"
+bzip2 = "1.0.8"
+cpio = "2.15"
+# Note: zstd and xz are in [libs] section
+
 [urls]
 # Mirror URLs for source downloads
 gnu = "https://ftp.gnu.org/gnu"

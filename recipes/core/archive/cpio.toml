@@ -1,0 +1,48 @@
+# recipes/core/archive/cpio.toml
+#
+# GNU cpio - Copy files to/from archives
+#
+# Archive utility used for initramfs and rpm packages.
+
+[package]
+name = "cpio"
+version = "2.15"
+release = "1"
+summary = "GNU cpio archiver"
+description = """
+GNU cpio copies files into or out of a cpio or tar archive. The archive
+can be another file on disk, a magnetic tape, or a pipe. It is commonly
+used for creating initramfs images and is the format used by RPM packages.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/cpio/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/cpio/cpio-%(version)s.tar.bz2"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/cpio/cpio-%(version)s.tar.bz2.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr \
+    --disable-nls \
+    --enable-mt
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move cpio to /bin for initramfs creation
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/cpio %(destdir)s/bin/cpio
+ln -sf /bin/cpio %(destdir)s/usr/bin/cpio
+"""
+
+[variables]
+jobs = "$(nproc)"

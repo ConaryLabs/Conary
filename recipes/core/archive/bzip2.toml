@@ -1,0 +1,85 @@
+# recipes/core/archive/bzip2.toml
+#
+# bzip2 - Block-sorting file compressor
+#
+# High-quality compression using the Burrows-Wheeler algorithm.
+
+[package]
+name = "bzip2"
+version = "1.0.8"
+release = "1"
+summary = "Block-sorting file compressor"
+description = """
+bzip2 is a freely available, patent free, high-quality data compressor.
+It typically compresses files to within 10% to 15% of the best available
+techniques (the PPM family of statistical compressors), whilst being
+around twice as fast at compression and six times faster at decompression.
+"""
+license = "bzip2-1.0.6"
+homepage = "https://www.sourceware.org/bzip2/"
+
+[source]
+archive = "https://sourceware.org/pub/bzip2/bzip2-%(version)s.tar.gz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+# bzip2 uses a simple Makefile, not autoconf
+configure = ""
+
+make = """
+# Build shared library first
+make -f Makefile-libbz2_so CC=gcc -j%(jobs)s
+
+# Build static library and programs
+make CC=gcc -j%(jobs)s
+"""
+
+install = """
+# Install shared library
+install -Dm755 libbz2.so.%(version)s %(destdir)s/usr/lib/libbz2.so.%(version)s
+ln -sf libbz2.so.%(version)s %(destdir)s/usr/lib/libbz2.so.1.0
+ln -sf libbz2.so.1.0 %(destdir)s/usr/lib/libbz2.so
+
+# Install static library
+install -Dm644 libbz2.a %(destdir)s/usr/lib/libbz2.a
+
+# Install header
+install -Dm644 bzlib.h %(destdir)s/usr/include/bzlib.h
+
+# Install binaries to /bin
+mkdir -p %(destdir)s/bin
+install -m755 bzip2-shared %(destdir)s/bin/bzip2
+ln -sf bzip2 %(destdir)s/bin/bunzip2
+ln -sf bzip2 %(destdir)s/bin/bzcat
+
+# Create /usr/bin symlinks
+mkdir -p %(destdir)s/usr/bin
+ln -sf /bin/bzip2 %(destdir)s/usr/bin/bzip2
+ln -sf /bin/bunzip2 %(destdir)s/usr/bin/bunzip2
+ln -sf /bin/bzcat %(destdir)s/usr/bin/bzcat
+
+# Install other utilities
+install -m755 bzip2recover %(destdir)s/usr/bin/bzip2recover
+install -m755 bzmore %(destdir)s/usr/bin/bzmore
+install -m755 bzgrep %(destdir)s/usr/bin/bzgrep
+install -m755 bzdiff %(destdir)s/usr/bin/bzdiff
+
+# Create symlinks for utilities
+ln -sf bzmore %(destdir)s/usr/bin/bzless
+ln -sf bzgrep %(destdir)s/usr/bin/bzegrep
+ln -sf bzgrep %(destdir)s/usr/bin/bzfgrep
+ln -sf bzdiff %(destdir)s/usr/bin/bzcmp
+
+# Install man pages
+mkdir -p %(destdir)s/usr/share/man/man1
+install -m644 bzip2.1 %(destdir)s/usr/share/man/man1/bzip2.1
+ln -sf bzip2.1 %(destdir)s/usr/share/man/man1/bunzip2.1
+ln -sf bzip2.1 %(destdir)s/usr/share/man/man1/bzcat.1
+ln -sf bzip2.1 %(destdir)s/usr/share/man/man1/bzip2recover.1
+"""
+
+[variables]
+jobs = "$(nproc)"

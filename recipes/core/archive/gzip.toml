@@ -1,0 +1,55 @@
+# recipes/core/archive/gzip.toml
+#
+# GNU Gzip - Compression utility
+#
+# Compresses and decompresses files using the deflate algorithm.
+
+[package]
+name = "gzip"
+version = "1.13"
+release = "1"
+summary = "GNU compression utility"
+description = """
+GNU gzip is a popular data compression program that uses the deflate
+algorithm. It produces .gz files and can decompress files created by
+gzip, zip, compress, and pack. It is commonly used with tar to create
+compressed archives (.tar.gz or .tgz).
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gzip/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gzip/gzip-%(version)s.tar.xz"
+checksum = "sha256:FIXME_ACTUAL_CHECKSUM"
+signature = "https://ftp.gnu.org/gnu/gzip/gzip-%(version)s.tar.xz.sig"
+
+[build]
+requires = ["glibc"]
+makedepends = ["gcc"]
+
+configure = """
+./configure \
+    --prefix=/usr
+"""
+
+make = "make -j%(jobs)s"
+
+install = """
+make DESTDIR=%(destdir)s install
+
+# Move gzip to /bin for early boot
+mkdir -p %(destdir)s/bin
+mv %(destdir)s/usr/bin/gzip %(destdir)s/bin/gzip
+ln -sf /bin/gzip %(destdir)s/usr/bin/gzip
+
+# Move related tools to /bin
+for tool in gunzip gzexe zcat zcmp zdiff zegrep zfgrep zforce zgrep zless zmore znew; do
+    if [ -f %(destdir)s/usr/bin/$tool ]; then
+        mv %(destdir)s/usr/bin/$tool %(destdir)s/bin/$tool
+        ln -sf /bin/$tool %(destdir)s/usr/bin/$tool
+    fi
+done
+"""
+
+[variables]
+jobs = "$(nproc)"
