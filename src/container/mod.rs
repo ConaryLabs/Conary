@@ -40,7 +40,7 @@ use tracing::{debug, warn};
 pub const DEFAULT_MEMORY_LIMIT: u64 = 512 * 1024 * 1024; // 512 MB
 pub const DEFAULT_CPU_TIME_LIMIT: u64 = 60; // 60 seconds CPU time
 pub const DEFAULT_FILE_SIZE_LIMIT: u64 = 100 * 1024 * 1024; // 100 MB max file size
-pub const DEFAULT_NPROC_LIMIT: u64 = 64; // Max 64 processes
+pub const DEFAULT_NPROC_LIMIT: u64 = 1024; // Max 1024 processes
 
 /// Severity levels for dangerous script detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -389,15 +389,24 @@ impl Sandbox {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<(i32, String, String)> {
-        // Check if we can use namespace isolation (requires root)
-        let use_isolation = self.config.isolate_mount && nix::unistd::geteuid().is_root();
+        // Check if we can use namespace isolation
+        let can_isolate = isolation_available();
 
-        if use_isolation {
+        if can_isolate && self.config.isolate_mount {
             self.execute_isolated(interpreter, script_content, args, env)
         } else {
+            // If isolation is required (hermetic/network isolated) but unavailable, FAIL.
+            // Do not fall back to unsafe execution for hermetic builds.
+            if self.config.isolate_network || self.config.is_pristine() {
+                return Err(Error::ScriptletError(
+                    "Hermetic build requires namespace isolation, but it is not available on this system. \
+                     (Root privileges or unprivileged user namespaces required)".to_string()
+                ));
+            }
+
             // Fall back to simple resource-limited execution
-            if self.config.isolate_mount && !nix::unistd::geteuid().is_root() {
-                warn!("Namespace isolation requires root privileges, falling back to resource limits only");
+            if self.config.isolate_mount {
+                warn!("Namespace isolation not available, falling back to resource limits only");
             }
             self.execute_limited(interpreter, script_content, args, env)
         }
@@ -858,14 +867,19 @@ pub fn isolation_available() -> bool {
         return true;
     }
 
-    // Check for unprivileged user namespaces
-    if let Ok(content) = fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
-        && content.trim() == "1"
-    {
-        return true;
+    // Check for unprivileged user namespaces (Debian/Ubuntu specific)
+    let path = Path::new("/proc/sys/kernel/unprivileged_userns_clone");
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(path)
+            && content.trim() == "1"
+        {
+            return true;
+        }
+        return false;
     }
 
-    false
+    // On standard kernels, unprivileged userns are enabled by default
+    true
 }
 
 #[cfg(test)]

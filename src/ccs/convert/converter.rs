@@ -6,14 +6,16 @@
 
 use crate::ccs::builder::{write_ccs_package, BuildResult, CcsBuilder};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
+use crate::ccs::convert::capture::ScriptletCapturer;
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
+use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
-    Requires, Suggests,
+    Requires, Suggests, User, Group, Service, ServiceAction,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::packages::common::PackageMetadata;
-use crate::packages::traits::{DependencyType, ExtractedFile};
+use crate::packages::traits::{DependencyType, ExtractedFile, ScriptletPhase};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -28,6 +30,8 @@ pub struct ConversionOptions {
     pub auto_classify: bool,
     /// Minimum fidelity level to proceed (warns below this)
     pub min_fidelity: FidelityLevel,
+    /// Enable scriptlet capture (unsafe execution in sandbox)
+    pub capture_scriptlets: bool,
 }
 
 impl Default for ConversionOptions {
@@ -37,6 +41,7 @@ impl Default for ConversionOptions {
             output_dir: PathBuf::from("./target/ccs"),
             auto_classify: true,
             min_fidelity: FidelityLevel::High,
+            capture_scriptlets: true, // Default to capture mode for safety
         }
     }
 }
@@ -95,9 +100,76 @@ impl LegacyConverter {
         format: &str,
         checksum: &str,
     ) -> Result<ConversionResult, ConversionError> {
-        // Step 1: Analyze scriptlets to extract declarative hooks
-        let (detected_hooks_list, fidelity) = self.analyzer.analyze(&metadata.scriptlets);
-        let detected_hooks = ScriptletAnalyzer::build_hooks(&detected_hooks_list);
+        let mut final_metadata = metadata.clone();
+        let mut final_files = files.to_vec();
+        let mut captured_hooks = Hooks::default();
+        let mut processed_scriptlets = Vec::new();
+
+        // Step 0: Capture scriptlets if enabled
+        if self.options.capture_scriptlets {
+            let mut capturer = ScriptletCapturer::new()
+                .map_err(|e| ConversionError::IoError(format!("Failed to init capturer: {}", e)))?;
+
+            for script in &metadata.scriptlets {
+                // We only capture post-install for now as it's the most common for state setup
+                if script.phase == ScriptletPhase::PostInstall {
+                    tracing::info!("Capturing PostInstall scriptlet for {}", metadata.name);
+                    
+                    let result = capturer.capture(&script.content, &script.interpreter, files)
+                        .map_err(|e| ConversionError::BuildError(format!("Capture failed: {}", e)))?;
+
+                    // Add new files
+                    final_files.extend(result.new_files);
+
+                    // Convert intents to hooks
+                    for intent in result.intents {
+                        match intent {
+                            CapturedIntent::UserAdd(args) => {
+                                // Simplified: assume args[0] is user name if no flags, or parse flags
+                                // This is a placeholder for real arg parsing
+                                if let Some(name) = args.last() {
+                                     captured_hooks.users.push(User {
+                                         name: name.clone(),
+                                         uid: None,
+                                         gid: None,
+                                         groups: vec![],
+                                         home: None,
+                                         shell: None,
+                                         system: true,
+                                     });
+                                }
+                            },
+                            CapturedIntent::SystemdEnable(svc) => {
+                                captured_hooks.services.push(Service {
+                                    name: svc,
+                                    action: ServiceAction::Enable,
+                                });
+                            },
+                            CapturedIntent::SystemdDisable(svc) => {
+                                captured_hooks.services.push(Service {
+                                    name: svc,
+                                    action: ServiceAction::Disable,
+                                });
+                            },
+                            _ => tracing::debug!("Ignored captured intent: {:?}", intent),
+                        }
+                    }
+                    // Mark as processed (don't include in final metadata)
+                    continue; 
+                }
+                processed_scriptlets.push(script.clone());
+            }
+            final_metadata.scriptlets = processed_scriptlets;
+        }
+
+        // Step 1: Analyze scriptlets (remaining ones) to extract declarative hooks
+        let (detected_hooks_list, fidelity) = self.analyzer.analyze(&final_metadata.scriptlets);
+        let mut detected_hooks = ScriptletAnalyzer::build_hooks(&detected_hooks_list);
+
+        // Merge captured hooks
+        detected_hooks.users.extend(captured_hooks.users);
+        detected_hooks.services.extend(captured_hooks.services);
+        // TODO: Merge other hooks
 
         // Step 2: Check fidelity threshold
         if fidelity.level < self.options.min_fidelity && fidelity.level.requires_warning() {
@@ -110,14 +182,14 @@ impl LegacyConverter {
         }
 
         // Step 3: Build CCS manifest from metadata
-        let manifest = self.build_manifest(metadata, &detected_hooks)?;
+        let manifest = self.build_manifest(&final_metadata, &detected_hooks)?;
 
         // Step 4: Create temporary directory with file structure
         let temp_dir = TempDir::new()
             .map_err(|e| ConversionError::IoError(format!("Failed to create temp dir: {}", e)))?;
 
         // Write files to temp directory
-        self.write_files_to_temp(files, temp_dir.path())?;
+        self.write_files_to_temp(&final_files, temp_dir.path())?;
 
         // Write manifest
         let manifest_path = temp_dir.path().join("ccs.toml");

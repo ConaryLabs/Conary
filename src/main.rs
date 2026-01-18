@@ -32,7 +32,7 @@ fn main() -> Result<()> {
         Some(Commands::Install {
             package, db_path, root, version, repo, dry_run, no_deps,
             no_scripts, sandbox, allow_downgrade, convert_to_ccs,
-            skip_optional,
+            no_capture, skip_optional,
         }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .expect("Invalid sandbox mode. Use: auto, always, never");
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
                 let name = package.trim_start_matches('@');
                 commands::cmd_collection_install(name, &db_path, &root, dry_run, skip_optional, sandbox_mode)
             } else {
-                commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs)
+                commands::cmd_install(&package, &db_path, &root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs, no_capture)
             }
         }
 

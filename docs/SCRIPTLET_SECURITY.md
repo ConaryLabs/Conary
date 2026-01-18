@@ -73,7 +73,22 @@ When sandboxing is enabled, scripts run in a lightweight Linux container with:
 - Wall-clock timeout: 60 seconds (configurable)
 - Scripts exceeding timeout are killed with SIGKILL
 
-### 4. Basic Protections (Always Active)
+### 4. Scriptlet Capture Mode
+
+When adopting legacy packages (RPM/DEB), Conary can **capture** the intent of imperative scriptlets instead of running them on the user's system.
+
+This mode runs the scriptlet in a strict, ephemeral sandbox with **mocked system tools** (`useradd`, `systemctl`, etc.).
+
+#### How Capture Works
+1.  **Mock Environment:** A temporary root is created with fake binaries that log their arguments instead of modifying the system.
+2.  **Execution:** The script runs in a network-isolated sandbox.
+3.  **Diff:** Files created by the script (e.g., config generation) are captured and added to the package payload.
+4.  **Intent Parsing:** Calls to mock tools are parsed and converted to declarative CCS Hooks (e.g., `useradd nginx` -> `[[hooks.users]] name="nginx"`).
+5.  **Discard:** The original imperative script is discarded.
+
+This transforms unsafe runtime scripts into safe, atomic build-time declarations.
+
+### 5. Basic Protections (Always Active)
 
 Even without sandboxing, these protections are always enforced:
 

@@ -651,6 +651,8 @@ impl Stage1Builder {
         workdir: &Path,
         phase: &str,
     ) -> Result<(), Stage1Error> {
+        use crate::container::{ContainerConfig, Sandbox, BindMount};
+
         // Clone all data upfront to avoid borrow conflicts
         let pkg_name = self.packages[idx].name.clone();
         let cross_env = self.packages[idx].recipe.cross_env();
@@ -667,66 +669,91 @@ impl Stage1Builder {
             .collect();
         let verbose = self.config.verbose;
 
-        let mut command = Command::new("bash");
-        command
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(workdir);
-
-        // Set environment
+        // Construct environment vector
+        let mut env_vec: Vec<(String, String)> = Vec::new();
+        
+        // Add base environment
         for (key, value) in &self.build_env {
-            command.env(key, value);
+            env_vec.push((key.clone(), value.clone()));
         }
 
-        // Add cross-compilation environment from recipe
-        // Merge CFLAGS/CXXFLAGS/LDFLAGS rather than replacing
+        // Add cross-compilation environment
         for (key, value) in cross_env {
             if key == "CFLAGS" || key == "CXXFLAGS" || key == "LDFLAGS" {
-                // Prepend the base flags from build_env
+                // Prepend base flags
                 let base_flags = self.build_env.get(&key).map(|s| s.as_str()).unwrap_or("");
                 let merged = format!("{} {}", base_flags, value);
-                command.env(key, merged.trim());
+                // Remove existing if any
+                env_vec.retain(|(k, _)| k != &key);
+                env_vec.push((key, merged.trim().to_string()));
             } else {
-                command.env(key, value);
+                env_vec.retain(|(k, _)| k != &key);
+                env_vec.push((key, value));
             }
         }
 
-        // Add build environment from recipe
-        // Expand environment variable references (e.g., $PATH or ${PATH})
+        // Add recipe environment
         for (key, value) in build_environment {
             let expanded = self.expand_env_vars(&value);
-            command.env(key, expanded);
+            env_vec.retain(|(k, _)| k != &key);
+            env_vec.push((key, expanded));
         }
 
-        // Capture output
-        if verbose {
-            command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-        } else {
-            command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        }
+        // Prepare environment for sandbox (Vec<(&str, &str)>)
+        let env_refs: Vec<(&str, &str)> = env_vec.iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
-        debug!("Running: bash -c \"{}\"", cmd);
+        debug!("Running in sandbox: bash -c \"{}\"", cmd);
         debug!("Workdir: {}", workdir.display());
 
-        let output = command.output().map_err(|e| {
-            Stage1Error::BuildFailed(pkg_name.clone(), e.to_string())
-        })?;
+        // Configure sandbox
+        // Stage 0 path usually ends in .../bin, we want the root (e.g. /tools)
+        let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
+        
+        // We use pristine_for_bootstrap to set up the core mounts
+        // sysroot -> /tools/x86_64.../sysroot (target sysroot)
+        // stage0_root -> /tools (cross compiler)
+        let mut config = ContainerConfig::pristine_for_bootstrap(
+             &self.sysroot, // target sysroot (destdir)
+             &self.work_dir.join("sources"), // source dir
+             &self.work_dir.join("build"), // build dir
+             &self.sysroot, // dest dir (same as sysroot)
+        );
 
-        // Log output directly to avoid borrow issues
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Explicitly mount Stage 0 tools at /tools so the cross-compiler is available
+        // This is critical because `gcc` in the recipe refers to /tools/bin/...
+        config.add_bind_mount(BindMount::readonly(stage0_root, "/tools"));
 
+        // Set working directory
+        config.workdir = workdir.to_path_buf();
+
+        // Enforce network isolation during build
+        config.deny_network();
+
+        let mut sandbox = Sandbox::new(config);
+        
+        let (code, stdout, stderr) = sandbox.execute(
+            "bash",
+            &format!("set -e\n{}", cmd), // Wrap in script, fail fast
+            &[],
+            &env_refs
+        ).map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
+
+        // Log output
         if !stdout.is_empty() {
             self.packages[idx].log.push_str(&format!("stdout:\n{}\n", stdout));
+            if verbose { println!("{}", stdout); }
         }
         if !stderr.is_empty() {
             self.packages[idx].log.push_str(&format!("stderr:\n{}\n", stderr));
+            if verbose { eprintln!("{}", stderr); }
         }
 
-        if !output.status.success() {
+        if code != 0 {
             return Err(Stage1Error::BuildFailed(
                 pkg_name,
-                format!("{} phase failed:\n{}", phase, stderr),
+                format!("{} phase failed with exit code {}:\n{}", phase, code, stderr),
             ));
         }
 

@@ -113,8 +113,15 @@ pub enum Commands {
         allow_downgrade: bool,
 
         /// Convert legacy packages (RPM/DEB/Arch) to CCS format during install
+        ///
+        /// Scriptlets are automatically captured and converted to declarative hooks
+        /// unless --no-capture is specified.
         #[arg(long)]
         convert_to_ccs: bool,
+
+        /// Disable scriptlet capture during conversion (unsafe - runs scriptlets at install time)
+        #[arg(long)]
+        no_capture: bool,
 
         /// Skip optional packages (for collection installs)
         #[arg(long)]

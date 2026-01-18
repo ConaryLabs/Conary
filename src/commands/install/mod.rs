@@ -74,6 +74,7 @@ pub fn cmd_install(
     sandbox_mode: SandboxMode,
     allow_downgrade: bool,
     convert_to_ccs: bool,
+    no_capture: bool,
 ) -> Result<()> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
@@ -150,7 +151,7 @@ pub fn cmd_install(
     if convert_to_ccs {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
-        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path)? {
+        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path, !no_capture)? {
             ConversionResult::Converted { ccs_path, temp_dir: _temp_dir } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
                 return install_converted_ccs(&ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);

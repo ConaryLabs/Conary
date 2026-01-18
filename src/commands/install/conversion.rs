@@ -37,6 +37,7 @@ pub fn try_convert_to_ccs(
     package_path: &Path,
     format: PackageFormatType,
     db_path: &str,
+    capture_scriptlets: bool,
 ) -> Result<ConversionResult> {
     info!("Converting {} to CCS format...", pkg.name());
 
@@ -104,6 +105,7 @@ pub fn try_convert_to_ccs(
         output_dir: ccs_temp.path().to_path_buf(),
         auto_classify: true,
         min_fidelity: FidelityLevel::Partial,
+        capture_scriptlets,
     };
 
     let converter = LegacyConverter::new(options);

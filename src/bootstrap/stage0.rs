@@ -186,6 +186,21 @@ impl Stage0Builder {
     /// Build the Stage 0 toolchain
     pub fn build(&mut self) -> Result<Toolchain, Stage0Error> {
         info!("Building Stage 0 toolchain...");
+
+        // Strategy 1: Download Seed (Preferred)
+        if self.config.seed_url.is_some() || self.has_local_seed() {
+            info!("Using Stage 0 seed...");
+            self.download_and_install_seed()?;
+            
+            // Verify
+            self.verify_toolchain()?;
+            
+            return Toolchain::from_prefix(&self.config.tools_prefix)
+                .map_err(|e| Stage0Error::VerificationFailed(e.to_string()));
+        }
+
+        // Strategy 2: Build from Source (Fallback)
+        info!("No seed configured. Falling back to 'crosstool-ng' build from source.");
         info!("Config: {}", self.ct_config.display());
         info!("Work dir: {}", self.work_dir.display());
         info!("Target: {}", self.config.triple());
@@ -243,6 +258,68 @@ impl Stage0Builder {
         // Return the toolchain
         Toolchain::from_prefix(&self.config.tools_prefix)
             .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))
+    }
+
+    fn has_local_seed(&self) -> bool {
+        // TODO: check for local cached seed
+        false
+    }
+
+    fn download_and_install_seed(&mut self) -> Result<(), Stage0Error> {
+        let url = self.config.seed_url.as_ref()
+            .ok_or_else(|| Stage0Error::MissingPrerequisite("No seed URL configured".to_string()))?;
+        
+        let filename = url.split('/').last().unwrap_or("stage0-seed.tar.xz");
+        let target_path = self.work_dir.join(filename);
+        
+        // Download
+        if !target_path.exists() {
+            info!("Downloading seed: {}", url);
+            let status = Command::new("curl")
+                .args(["-fsSL", "-o", target_path.to_str().unwrap(), url])
+                .status()
+                .map_err(|e| Stage0Error::BuildFailed(format!("Curl failed: {}", e)))?;
+                
+            if !status.success() {
+                return Err(Stage0Error::BuildFailed("Failed to download seed".to_string()));
+            }
+        }
+
+        // Verify Checksum
+        if let Some(expected) = &self.config.seed_checksum {
+            info!("Verifying seed checksum...");
+            let output = Command::new("sha256sum")
+                .arg(&target_path)
+                .output()
+                .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
+                
+            let computed = String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
+                
+            if !computed.eq_ignore_ascii_case(expected) {
+                 return Err(Stage0Error::VerificationFailed(format!(
+                    "Checksum mismatch! Expected {}, got {}", expected, computed
+                )));
+            }
+        }
+
+        // Extract
+        info!("Extracting seed to {}...", self.config.tools_prefix.display());
+        std::fs::create_dir_all(&self.config.tools_prefix)?;
+        
+        let status = Command::new("tar")
+            .args(["xJf", target_path.to_str().unwrap(), "-C", self.config.tools_prefix.to_str().unwrap(), "--strip-components=1"])
+            .status()
+            .map_err(|e| Stage0Error::BuildFailed(format!("Tar failed: {}", e)))?;
+
+        if !status.success() {
+            return Err(Stage0Error::BuildFailed("Failed to extract seed".to_string()));
+        }
+
+        Ok(())
     }
 
     /// Set up the work directory with crosstool-ng config

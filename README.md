@@ -77,7 +77,7 @@ conary system state rollback 5 # Go back
 ```
 
 ### Native CCS Package Format
-Build reproducible, signed packages with automatic quality enforcement.
+Build reproducible, signed packages with automatic quality enforcement. Supports **Scriptlet Capture** to convert legacy scripts into safe declarative hooks.
 
 ```bash
 conary ccs build .             # Build from ccs.toml
@@ -181,6 +181,8 @@ conary system adopt --system    # Track everything installed by RPM/APT
 - **SHA-256 + XXH128** - Integrity verification and fast CAS
 - **CBOR** - Binary manifests with Merkle tree verification
 - **Namespace isolation** - Sandboxed scriptlet execution
+- **Hermetic Builds** - Network-isolated build environment
+- **Scriptlet Capture** - Converts imperative scripts to declarative state
 
 ---
 

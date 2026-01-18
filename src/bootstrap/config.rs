@@ -100,6 +100,12 @@ pub struct BootstrapConfig {
     /// Path to crosstool-ng config (if using custom)
     pub crosstool_config: Option<PathBuf>,
 
+    /// URL for the Stage 0 seed toolchain
+    pub seed_url: Option<String>,
+
+    /// Checksum for the Stage 0 seed toolchain
+    pub seed_checksum: Option<String>,
+
     /// Enable verbose output
     pub verbose: bool,
 }
@@ -117,6 +123,8 @@ impl Default for BootstrapConfig {
             glibc_version: "2.42".to_string(),
             binutils_version: "2.45.1".to_string(),
             crosstool_config: None,
+            seed_url: None,
+            seed_checksum: None,
             verbose: false,
         }
     }
@@ -161,6 +169,13 @@ impl BootstrapConfig {
     /// Use a custom crosstool-ng config
     pub fn with_crosstool_config(mut self, path: impl Into<PathBuf>) -> Self {
         self.crosstool_config = Some(path.into());
+        self
+    }
+
+    /// Set the Stage 0 seed toolchain
+    pub fn with_seed(mut self, url: impl Into<String>, checksum: impl Into<String>) -> Self {
+        self.seed_url = Some(url.into());
+        self.seed_checksum = Some(checksum.into());
         self
     }
 
