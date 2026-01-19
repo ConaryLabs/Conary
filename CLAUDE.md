@@ -54,7 +54,7 @@ cargo clippy -- -D warnings
 - `[FAILED]` not X marks
 
 **Rust Standards**:
-- Edition 2024, Rust 1.91.1
+- Edition 2024, Rust 1.92
 - `thiserror` for error types
 - Clippy-clean (pedantic encouraged)
 - Tests in same file as code
@@ -137,7 +137,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-684 tests total (with --features server).
+905 tests total (with --features server).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
