@@ -99,7 +99,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v33. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits.
+Currently v34. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits, federation_peers, federation_stats.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -127,6 +127,7 @@ Key schema additions:
 - v31: `default_strategy`, `default_strategy_endpoint`, `default_strategy_distro` columns on repositories - repo-level default resolution strategy
 - v32: `provenance_sources`, `provenance_builds`, `provenance_signatures`, `provenance_content`, `provenance_verifications` - Package DNA / full provenance tracking
 - v33: `capabilities`, `capability_audits` - package capability declarations (network, filesystem, syscalls)
+- v34: `federation_peers`, `federation_stats` - CAS federation peers and daily stats
 
 ## Testing
 

@@ -7,7 +7,7 @@
 //! - Compression disabled for chunk responses (already compressed/binary)
 //! - Rate limiting per IP (optional)
 
-use crate::server::handlers::{chunks, index, jobs, packages, recipes};
+use crate::server::handlers::{chunks, federation, index, jobs, packages, recipes};
 use crate::server::ServerState;
 use axum::{
     routing::{get, head, post},
@@ -44,6 +44,8 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     let compressed_routes = Router::new()
         // Health check
         .route("/health", get(health_check))
+        // Federation discovery
+        .route("/v1/federation/directory", get(federation::directory))
         // Repository index endpoints (Cloudflare-cached)
         .route("/v1/:distro/metadata", get(index::get_metadata))
         .route("/v1/:distro/metadata.sig", get(index::get_metadata_sig))
