@@ -245,6 +245,11 @@ impl AutomationDaemon {
     pub fn scheduler(&self) -> &AutomationScheduler {
         &self.scheduler
     }
+
+    /// Record that a check was performed
+    pub fn record_check(&mut self) {
+        self.scheduler.record_check();
+    }
 }
 
 #[cfg(test)]

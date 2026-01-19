@@ -3,7 +3,9 @@
 //! Command implementations for Package DNA / Provenance queries
 
 use anyhow::Result;
+use chrono::Utc;
 use rusqlite::Connection;
+use uuid::Uuid;
 
 /// Show provenance information for a package
 pub fn cmd_provenance_show(
@@ -232,16 +234,30 @@ pub fn cmd_provenance_export(
 
     match trove_info {
         Some((trove_id, trove_name, trove_version)) => {
-            let _prov = query_provenance(&conn, trove_id)?;
+            let prov = query_provenance(&conn, trove_id)?;
 
-            println!("[NOT IMPLEMENTED] SBOM Export");
-            println!();
-            println!("Package: {} v{}", trove_name, trove_version);
-            println!("Format: {}", format);
-            println!("Output: {}", output.unwrap_or("stdout"));
-            println!("Recursive: {}", recursive);
-            println!();
-            println!("Would generate {} SBOM with provenance information.", format.to_uppercase());
+            // Collect dependencies if recursive
+            let deps = if recursive {
+                collect_dependencies(&conn, trove_id)?
+            } else {
+                Vec::new()
+            };
+
+            let sbom = match format {
+                "cyclonedx" => generate_cyclonedx_sbom(&trove_name, &trove_version, &prov, &deps)?,
+                _ => generate_spdx_sbom(&trove_name, &trove_version, &prov, &deps)?,
+            };
+
+            // Output to file or stdout
+            match output {
+                Some(path) => {
+                    std::fs::write(path, &sbom)?;
+                    println!("SBOM written to: {}", path);
+                }
+                None => {
+                    println!("{}", sbom);
+                }
+            }
         }
         None => {
             println!("Package '{}' not found", package);
@@ -250,6 +266,191 @@ pub fn cmd_provenance_export(
     }
 
     Ok(())
+}
+
+/// Generate SPDX 2.3 SBOM in JSON format
+fn generate_spdx_sbom(
+    name: &str,
+    version: &str,
+    prov: &ProvenanceData,
+    deps: &[(String, String, Option<String>)],
+) -> Result<String> {
+    let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let doc_id = format!("SPDXRef-DOCUMENT-{}-{}", name, version.replace('.', "-"));
+    let pkg_id = format!("SPDXRef-Package-{}", name);
+
+    let mut packages = vec![serde_json::json!({
+        "SPDXID": pkg_id,
+        "name": name,
+        "versionInfo": version,
+        "downloadLocation": prov.upstream_url.as_deref().unwrap_or("NOASSERTION"),
+        "filesAnalyzed": false,
+        "checksums": prov.upstream_hash.as_ref().map(|h| vec![{
+            let parts: Vec<&str> = h.splitn(2, ':').collect();
+            serde_json::json!({
+                "algorithm": parts.first().unwrap_or(&"SHA256").to_uppercase(),
+                "checksumValue": parts.get(1).unwrap_or(&h.as_str())
+            })
+        }]).unwrap_or_default(),
+        "externalRefs": prov.dna_hash.as_ref().map(|dna| vec![serde_json::json!({
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": format!("pkg:conary/{}@{}?dna={}", name, version, dna)
+        })]).unwrap_or_default(),
+        "supplier": "NOASSERTION",
+        "copyrightText": "NOASSERTION"
+    })];
+
+    let mut relationships = vec![serde_json::json!({
+        "spdxElementId": doc_id,
+        "relatedSpdxElement": pkg_id,
+        "relationshipType": "DESCRIBES"
+    })];
+
+    // Add dependencies
+    for (dep_name, dep_version, dep_dna) in deps {
+        let dep_id = format!("SPDXRef-Package-{}", dep_name);
+        packages.push(serde_json::json!({
+            "SPDXID": dep_id,
+            "name": dep_name,
+            "versionInfo": dep_version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "externalRefs": dep_dna.as_ref().map(|dna| vec![serde_json::json!({
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": format!("pkg:conary/{}@{}?dna={}", dep_name, dep_version, dna)
+            })]).unwrap_or_default(),
+            "supplier": "NOASSERTION",
+            "copyrightText": "NOASSERTION"
+        }));
+
+        relationships.push(serde_json::json!({
+            "spdxElementId": pkg_id,
+            "relatedSpdxElement": dep_id,
+            "relationshipType": "DEPENDS_ON"
+        }));
+    }
+
+    let sbom = serde_json::json!({
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": doc_id,
+        "name": format!("{}-{}", name, version),
+        "documentNamespace": format!("https://conary.dev/spdx/{}/{}", name, version),
+        "creationInfo": {
+            "created": timestamp,
+            "creators": ["Tool: conary-provenance"],
+            "licenseListVersion": "3.19"
+        },
+        "packages": packages,
+        "relationships": relationships
+    });
+
+    Ok(serde_json::to_string_pretty(&sbom)?)
+}
+
+/// Generate CycloneDX 1.5 SBOM in JSON format
+fn generate_cyclonedx_sbom(
+    name: &str,
+    version: &str,
+    prov: &ProvenanceData,
+    deps: &[(String, String, Option<String>)],
+) -> Result<String> {
+    let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let serial = Uuid::new_v4().to_string();
+
+    let mut components = vec![serde_json::json!({
+        "type": "library",
+        "bom-ref": format!("pkg:conary/{}@{}", name, version),
+        "name": name,
+        "version": version,
+        "purl": format!("pkg:conary/{}@{}", name, version),
+        "hashes": prov.upstream_hash.as_ref().map(|h| {
+            let parts: Vec<&str> = h.splitn(2, ':').collect();
+            vec![serde_json::json!({
+                "alg": parts.first().unwrap_or(&"SHA-256").to_uppercase().replace("SHA", "SHA-"),
+                "content": parts.get(1).unwrap_or(&h.as_str())
+            })]
+        }).unwrap_or_default(),
+        "externalReferences": prov.upstream_url.as_ref().map(|url| vec![serde_json::json!({
+            "type": "distribution",
+            "url": url
+        })]).unwrap_or_default()
+    })];
+
+    let mut dependencies = vec![serde_json::json!({
+        "ref": format!("pkg:conary/{}@{}", name, version),
+        "dependsOn": deps.iter().map(|(n, v, _)| format!("pkg:conary/{}@{}", n, v)).collect::<Vec<_>>()
+    })];
+
+    // Add dependency components
+    for (dep_name, dep_version, _dep_dna) in deps {
+        components.push(serde_json::json!({
+            "type": "library",
+            "bom-ref": format!("pkg:conary/{}@{}", dep_name, dep_version),
+            "name": dep_name,
+            "version": dep_version,
+            "purl": format!("pkg:conary/{}@{}", dep_name, dep_version)
+        }));
+
+        dependencies.push(serde_json::json!({
+            "ref": format!("pkg:conary/{}@{}", dep_name, dep_version),
+            "dependsOn": []
+        }));
+    }
+
+    let sbom = serde_json::json!({
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": format!("urn:uuid:{}", serial),
+        "version": 1,
+        "metadata": {
+            "timestamp": timestamp,
+            "tools": [{
+                "vendor": "Conary",
+                "name": "conary-provenance",
+                "version": "0.1.0"
+            }],
+            "component": {
+                "type": "application",
+                "name": name,
+                "version": version,
+                "purl": format!("pkg:conary/{}@{}", name, version)
+            }
+        },
+        "components": components,
+        "dependencies": dependencies
+    });
+
+    Ok(serde_json::to_string_pretty(&sbom)?)
+}
+
+/// Collect dependencies for a package
+fn collect_dependencies(conn: &Connection, trove_id: i64) -> Result<Vec<(String, String, Option<String>)>> {
+    let mut deps = Vec::new();
+
+    let mut stmt = conn.prepare(
+        "SELECT t.name, t.version, p.dna_hash
+         FROM dependencies d
+         JOIN troves t ON d.dependency_name = t.name
+         LEFT JOIN provenance p ON t.id = p.trove_id
+         WHERE d.trove_id = ?1"
+    )?;
+
+    let rows = stmt.query_map([trove_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+
+    for row in rows {
+        deps.push(row?);
+    }
+
+    Ok(deps)
 }
 
 /// Register provenance in transparency log

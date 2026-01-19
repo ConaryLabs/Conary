@@ -340,21 +340,66 @@ pub fn cmd_automation_daemon(
     };
 
     if !foreground {
-        println!("Daemon mode not yet implemented. Use --foreground.");
+        // TODO: Implement actual daemonization with fork/setsid
+        println!("Background daemon mode not yet implemented. Use --foreground.");
         return Ok(());
     }
 
+    // Write PID file
+    if let Err(e) = std::fs::write(pidfile, std::process::id().to_string()) {
+        tracing::warn!("Could not write PID file {}: {}", pidfile, e);
+    }
+
     println!("Starting automation daemon (foreground mode)...");
-    println!("PID file would be: {}", pidfile);
+    println!("PID: {}", std::process::id());
+    println!("PID file: {}", pidfile);
+    println!("Check interval: {}", config.check_interval);
     println!("Press Ctrl+C to stop.");
     println!();
 
-    let daemon = AutomationDaemon::new(config);
+    let mut daemon = AutomationDaemon::new(config.clone());
     println!("Status: {}", daemon.scheduler().status_line());
+    println!();
 
-    println!("\nDaemon loop not yet implemented.");
+    // Run the daemon loop (Ctrl+C will terminate the process)
+    println!("Daemon running. Waiting for scheduled checks...\n");
+    loop {
+        if daemon.scheduler().should_run() && daemon.scheduler().within_window() {
+            println!("[{}] Running scheduled automation check...",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
 
-    Ok(())
+            // Run the actual check
+            let checker = AutomationChecker::new(&_conn, &config);
+            match checker.run_all() {
+                Ok(results) => {
+                    let summary = AutomationSummary {
+                        total: results.total(),
+                        security_updates: results.security.len(),
+                        available_updates: results.updates.len(),
+                        orphaned_packages: results.orphans.len(),
+                        major_upgrades: 0,
+                        integrity_issues: results.integrity.len(),
+                    };
+
+                    if summary.total > 0 {
+                        println!("  Found: {}", summary.status_line());
+                    } else {
+                        println!("  System up to date");
+                    }
+                }
+                Err(e) => {
+                    println!("  Error: {}", e);
+                }
+            }
+
+            daemon.record_check();
+            println!("  {}", daemon.scheduler().status_line());
+            println!();
+        }
+
+        // Sleep briefly then check again
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
 }
 
 /// Show automation history
