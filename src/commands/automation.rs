@@ -330,7 +330,7 @@ pub fn cmd_automation_daemon(
     foreground: bool,
     pidfile: &str,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let _conn = Connection::open(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;
