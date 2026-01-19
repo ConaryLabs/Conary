@@ -1558,3 +1558,147 @@ pub fn migrate_v31(conn: &Connection) -> Result<()> {
     info!("Schema version 31 applied successfully (repository default strategy)");
     Ok(())
 }
+
+/// Version 32: Package DNA / Full Provenance Tracking
+///
+/// Extends the provenance system to support complete package lineage (Package DNA):
+/// - Source layer: upstream URL, hash, git commit, patches
+/// - Build layer: recipe hash, build deps with their DNA hashes, environment
+/// - Signature layer: builder and reviewer signatures, transparency logs
+/// - Content layer: merkle root, component hashes
+///
+/// The `dna_hash` is a unique identifier computed from all layers, enabling:
+/// - Full lineage queries ("what went into this binary?")
+/// - Reproducibility verification ("do independent builds match?")
+/// - Trust chains ("who vouches for this package?")
+pub fn migrate_v32(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 32");
+
+    conn.execute_batch(
+        "
+        -- Extend provenance table with full DNA tracking
+        -- Source layer
+        ALTER TABLE provenance ADD COLUMN upstream_url TEXT;
+        ALTER TABLE provenance ADD COLUMN upstream_hash TEXT;
+        ALTER TABLE provenance ADD COLUMN git_repo TEXT;
+        ALTER TABLE provenance ADD COLUMN git_tag TEXT;
+        ALTER TABLE provenance ADD COLUMN fetch_timestamp TEXT;
+        ALTER TABLE provenance ADD COLUMN patches_json TEXT;
+
+        -- Build layer
+        ALTER TABLE provenance ADD COLUMN recipe_hash TEXT;
+        ALTER TABLE provenance ADD COLUMN build_deps_json TEXT;
+        ALTER TABLE provenance ADD COLUMN host_arch TEXT;
+        ALTER TABLE provenance ADD COLUMN host_kernel TEXT;
+        ALTER TABLE provenance ADD COLUMN host_distro TEXT;
+        ALTER TABLE provenance ADD COLUMN build_start TEXT;
+        ALTER TABLE provenance ADD COLUMN build_end TEXT;
+        ALTER TABLE provenance ADD COLUMN build_log_hash TEXT;
+        ALTER TABLE provenance ADD COLUMN isolation_level TEXT;
+        ALTER TABLE provenance ADD COLUMN reproducibility_json TEXT;
+
+        -- Signature layer
+        ALTER TABLE provenance ADD COLUMN signatures_json TEXT;
+        ALTER TABLE provenance ADD COLUMN rekor_log_index INTEGER;
+        ALTER TABLE provenance ADD COLUMN sbom_spdx_hash TEXT;
+        ALTER TABLE provenance ADD COLUMN sbom_cyclonedx_hash TEXT;
+
+        -- Content layer
+        ALTER TABLE provenance ADD COLUMN merkle_root TEXT;
+        ALTER TABLE provenance ADD COLUMN component_hashes_json TEXT;
+        ALTER TABLE provenance ADD COLUMN chunk_manifest_json TEXT;
+        ALTER TABLE provenance ADD COLUMN total_size INTEGER;
+        ALTER TABLE provenance ADD COLUMN file_count INTEGER;
+
+        -- DNA hash - unique identifier for complete provenance chain
+        -- Note: UNIQUE constraint enforced via unique index instead of column constraint
+        -- (SQLite doesn't support UNIQUE on ALTER TABLE ADD COLUMN)
+        ALTER TABLE provenance ADD COLUMN dna_hash TEXT;
+
+        -- Index for DNA hash lookups (unique index enforces uniqueness)
+        CREATE UNIQUE INDEX idx_provenance_dna ON provenance(dna_hash) WHERE dna_hash IS NOT NULL;
+
+        -- Index for finding packages built with specific dependency DNA
+        -- (useful for 'what else uses this vulnerable dependency' queries)
+        CREATE INDEX idx_provenance_deps ON provenance(build_deps_json) WHERE build_deps_json IS NOT NULL;
+
+        -- Index for Rekor log lookups
+        CREATE INDEX idx_provenance_rekor ON provenance(rekor_log_index) WHERE rekor_log_index IS NOT NULL;
+
+        -- Table for tracking provenance verification events
+        CREATE TABLE provenance_verifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provenance_id INTEGER NOT NULL REFERENCES provenance(id) ON DELETE CASCADE,
+            verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            verifier_id TEXT NOT NULL,
+            matches_expected BOOLEAN NOT NULL,
+            details TEXT
+        );
+
+        CREATE INDEX idx_prov_verify_prov ON provenance_verifications(provenance_id);
+        CREATE INDEX idx_prov_verify_verifier ON provenance_verifications(verifier_id);
+        ",
+    )?;
+
+    info!("Schema version 32 applied successfully (Package DNA / Full Provenance)");
+    Ok(())
+}
+
+/// Version 33: Capability Declarations
+///
+/// Adds tables for tracking package capability declarations:
+/// - What network access does a package need?
+/// - What filesystem paths does it access?
+/// - What syscalls does it use?
+///
+/// This enables:
+/// - Documentation of package security requirements
+/// - Audit mode to compare declared vs observed behavior
+/// - Future enforcement via landlock/seccomp
+///
+/// Creates:
+/// - capabilities: Store capability declarations as JSON
+/// - capability_audits: Track audit results
+pub fn migrate_v33(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 33");
+
+    conn.execute_batch(
+        "
+        -- Capability declarations for packages
+        -- Stores JSON-encoded CapabilityDeclaration
+        CREATE TABLE capabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Reference to the trove (one declaration per package)
+            trove_id INTEGER UNIQUE REFERENCES troves(id) ON DELETE CASCADE,
+            -- JSON-encoded CapabilityDeclaration
+            declaration_json TEXT NOT NULL,
+            -- Version of the declaration schema
+            declaration_version INTEGER DEFAULT 1,
+            -- When the declaration was stored
+            declared_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_capabilities_trove ON capabilities(trove_id);
+
+        -- Capability audit results
+        -- Tracks results of comparing declared vs observed capabilities
+        CREATE TABLE capability_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Reference to the trove being audited
+            trove_id INTEGER REFERENCES troves(id) ON DELETE CASCADE,
+            -- Audit status: compliant, over_privileged, under_utilized
+            status TEXT NOT NULL,
+            -- JSON array of violations/observations
+            violations_json TEXT,
+            -- When the audit was performed
+            audited_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_capability_audits_trove ON capability_audits(trove_id);
+        CREATE INDEX idx_capability_audits_status ON capability_audits(status);
+        ",
+    )?;
+
+    info!("Schema version 33 applied successfully (capability declarations)");
+    Ok(())
+}

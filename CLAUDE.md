@@ -10,6 +10,10 @@ session_start(project_path="/home/peter/Conary")
 
 Then `recall("architecture")` and `recall("progress")` before making changes.
 
+## External Documentation (Context7)
+
+Always use Context7 MCP when you need library/API documentation, code generation, setup or configuration steps for external libraries (Rust crates, etc.) without the user having to explicitly ask. This retrieves current, version-specific documentation instead of relying on potentially outdated training data.
+
 ## Code Navigation (Use These First)
 
 **Always prefer Mira tools over Grep/Glob for code exploration:**
@@ -88,10 +92,14 @@ cargo clippy -- -D warnings
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
 | `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter, hermetic builds) |
+| `src/capability/` | Capability declarations for packages (network, filesystem, syscalls) - audit and enforcement |
+| `src/provenance/` | Package DNA / full provenance tracking (source, build, signatures, content) |
+| `src/automation/` | Automated maintenance (security updates, orphan cleanup, AI-assisted operations) |
+| `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
 
 ## Database Schema
 
-Currently v31. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution.
+Currently v33. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -117,6 +125,8 @@ Key schema additions:
 - v29: `package_resolution` table - per-package routing strategies (binary, remi, recipe, delegate)
 - v30: `repository_id`, `delegate_to_label_id` columns on labels - label federation support
 - v31: `default_strategy`, `default_strategy_endpoint`, `default_strategy_distro` columns on repositories - repo-level default resolution strategy
+- v32: `provenance_sources`, `provenance_builds`, `provenance_signatures`, `provenance_content`, `provenance_verifications` - Package DNA / full provenance tracking
+- v33: `capabilities`, `capability_audits` - package capability declarations (network, filesystem, syscalls)
 
 ## Testing
 

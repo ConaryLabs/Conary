@@ -298,6 +298,8 @@ impl LegacyConverter {
             build: None,
             legacy: None,
             policy: BuildPolicyConfig::default(),
+            provenance: None,
+            capabilities: None,
         };
 
         Ok(manifest)

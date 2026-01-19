@@ -2,7 +2,9 @@
 //! Command handlers for the Conary CLI
 
 mod adopt;
+mod automation;
 mod bootstrap;
+mod capability;
 pub mod ccs;
 mod collection;
 mod config;
@@ -12,6 +14,7 @@ mod derived;
 mod install;
 mod label;
 mod model;
+mod provenance;
 mod redirect;
 mod remove;
 pub mod progress;
@@ -25,6 +28,15 @@ mod update;
 
 // Re-export all command handlers
 pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
+pub use capability::{
+    cmd_capability_show, cmd_capability_validate, cmd_capability_list,
+    cmd_capability_generate, cmd_capability_audit, cmd_capability_run,
+};
+pub use automation::{
+    cmd_automation_status, cmd_automation_check, cmd_automation_apply,
+    cmd_automation_configure, cmd_automation_daemon, cmd_automation_history,
+    cmd_ai_find, cmd_ai_translate, cmd_ai_query, cmd_ai_explain,
+};
 pub use bootstrap::{
     cmd_bootstrap_base, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_image,
     cmd_bootstrap_init, cmd_bootstrap_resume, cmd_bootstrap_stage0, cmd_bootstrap_stage1,
@@ -46,6 +58,10 @@ pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
 pub use install::cmd_install;
 pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot};
+pub use provenance::{
+    cmd_provenance_show, cmd_provenance_verify, cmd_provenance_diff, cmd_provenance_find_by_dep,
+    cmd_provenance_export, cmd_provenance_register, cmd_provenance_audit,
+};
 pub use remove::{cmd_autoremove, cmd_remove};
 pub use conary::scriptlet::SandboxMode;
 pub use label::{cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};

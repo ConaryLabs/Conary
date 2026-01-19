@@ -13,10 +13,14 @@ mod archive;
 mod config;
 mod cook;
 pub mod makedepends;
+pub mod provenance_capture;
 
 pub use config::{CookResult, KitchenConfig, StageConfig, StageRegistry};
 pub use cook::Cook;
 pub use makedepends::{MakedependsResolver, MakedependsResult, NoopResolver};
+// ProvenanceCapture is used internally by cook.rs; export for external use if needed
+#[allow(unused_imports)]
+pub use provenance_capture::{CapturedDep, CapturedPatch, ProvenanceCapture};
 
 use crate::error::{Error, Result};
 use crate::recipe::cache::{BuildCache, ToolchainInfo};
@@ -239,7 +243,7 @@ impl Kitchen {
 
             // Phase 4: Plate - package the result
             info!("Plating: creating CCS package...");
-            let package_path = cook.plate(output_dir)?;
+            let (package_path, provenance) = cook.plate(output_dir)?;
 
             Ok(CookResult {
                 package_path,
@@ -248,6 +252,7 @@ impl Kitchen {
                 makedepends: makedepends_result.clone(),
                 from_cache: false,
                 cache_key: None,
+                provenance: Some(provenance),
             })
         })();
 
@@ -405,6 +410,7 @@ impl Kitchen {
                 makedepends: None,
                 from_cache: true,
                 cache_key: Some(cache_key),
+                provenance: None, // Provenance not available from cache (yet)
             });
         }
 

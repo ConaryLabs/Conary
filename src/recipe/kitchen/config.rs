@@ -266,6 +266,8 @@ pub struct CookResult {
     pub from_cache: bool,
     /// Cache key used (if caching was enabled)
     pub cache_key: Option<String>,
+    /// Provenance data captured during the build
+    pub provenance: Option<crate::ccs::manifest::ManifestProvenance>,
 }
 
 #[cfg(test)]

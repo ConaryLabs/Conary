@@ -162,6 +162,8 @@ pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryM
         build,
         legacy: None,
         policy: BuildPolicyConfig::default(),
+        provenance: None,
+        capabilities: None,
     }
 }
 

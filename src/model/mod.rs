@@ -44,11 +44,18 @@
 //! packages = ["nginx-module-geoip"]
 //! ```
 
-mod parser;
+pub mod parser;
 mod diff;
 mod state;
 
-pub use parser::{SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage, IncludeConfig, ConflictStrategy};
+pub use parser::{
+    SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage,
+    IncludeConfig, ConflictStrategy,
+    // Automation config types
+    AutomationConfig, AutomationMode, AutomationCategory, AiFeature,
+    AiAssistConfig, AiAssistMode, SecurityAutomation, OrphanAutomation,
+    UpdateAutomation, MajorUpgradeAutomation, RepairAutomation, RollbackTrigger,
+};
 pub use diff::{ModelDiff, DiffAction, compute_diff, compute_diff_with_includes, compute_diff_from_resolved, ApplyOptions};
 pub use state::{SystemState, InstalledPackage, capture_current_state, snapshot_to_model};
 

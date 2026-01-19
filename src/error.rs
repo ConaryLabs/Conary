@@ -104,6 +104,18 @@ pub enum Error {
     /// Feature not yet implemented
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    /// Configuration error (short form)
+    #[error("Config error: {0}")]
+    Config(String),
+
+    /// JSON serialization/deserialization error
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    /// Capability-related errors
+    #[error("Capability error: {0}")]
+    Capability(String),
 }
 
 /// Result type alias using Conary's Error type

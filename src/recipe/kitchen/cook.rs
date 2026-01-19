@@ -3,7 +3,7 @@
 //! Cook: the actual build execution for a single recipe
 
 use crate::ccs::builder::{write_ccs_package, CcsBuilder};
-use crate::ccs::manifest::{CcsManifest, PackageDep};
+use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
 use crate::recipe::format::Recipe;
@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tracing::{debug, info};
 
 use super::archive::{apply_patch, extract_archive};
+use super::provenance_capture::ProvenanceCapture;
 use super::Kitchen;
 
 /// A single cook operation
@@ -30,6 +31,8 @@ pub struct Cook<'a> {
     pub(super) log: String,
     /// Warnings
     pub(super) warnings: Vec<String>,
+    /// Provenance capture for this build
+    pub(super) provenance: ProvenanceCapture,
 }
 
 impl<'a> Cook<'a> {
@@ -43,6 +46,15 @@ impl<'a> Cook<'a> {
         fs::create_dir_all(&source_dir)?;
         fs::create_dir_all(&dest_dir)?;
 
+        // Initialize provenance capture
+        let mut provenance = ProvenanceCapture::new();
+
+        // Record build dependencies from recipe
+        for dep in &recipe.build.makedepends {
+            // TODO: Look up actual versions from installed packages
+            provenance.add_build_dep(dep, "unknown", None);
+        }
+
         Ok(Self {
             kitchen,
             recipe,
@@ -51,6 +63,7 @@ impl<'a> Cook<'a> {
             dest_dir,
             log: String::new(),
             warnings: Vec::new(),
+            provenance,
         })
     }
 
@@ -59,6 +72,9 @@ impl<'a> Cook<'a> {
         // Fetch main source archive
         let archive_url = self.recipe.archive_url();
         let archive_path = self.kitchen.fetch_source(&archive_url, &self.recipe.source.checksum)?;
+
+        // Record source fetch for provenance
+        self.provenance.record_source_fetch(&archive_url, &self.recipe.source.checksum);
 
         // Copy to build directory
         let local_archive = self.build_dir.path().join(self.recipe.archive_filename());
@@ -151,9 +167,21 @@ impl<'a> Cook<'a> {
                 )));
             }
 
+            // Read patch content for provenance hashing
+            let patch_content = fs::read(&patch_path).unwrap_or_default();
+
             info!("Applying patch: {}", patch_info.file);
             apply_patch(&self.source_dir, &patch_path, patch_info.strip)?;
             self.log_line(&format!("Applied patch: {}", patch_info.file));
+
+            // Record patch for provenance
+            self.provenance.record_patch(
+                &patch_info.file,
+                &patch_content,
+                patch_info.strip,
+                None, // Author not typically in recipe
+                None, // Description not in current recipe format
+            );
         }
 
         Ok(())
@@ -161,6 +189,10 @@ impl<'a> Cook<'a> {
 
     /// Phase 3: Simmer - run the build
     pub(super) fn simmer(&mut self) -> Result<()> {
+        // Mark build start for provenance
+        self.provenance.start_build();
+        self.provenance.record_isolation(self.kitchen.config.use_isolation);
+
         let build = &self.recipe.build;
 
         // Determine working directory
@@ -392,7 +424,7 @@ impl<'a> Cook<'a> {
     }
 
     /// Phase 4: Plate - package the result as CCS
-    pub(super) fn plate(&mut self, output_dir: &Path) -> Result<PathBuf> {
+    pub(super) fn plate(&mut self, output_dir: &Path) -> Result<(PathBuf, ManifestProvenance)> {
         // Check that destdir has files
         if fs::read_dir(&self.dest_dir)?.count() == 0 {
             return Err(Error::IoError(
@@ -424,7 +456,28 @@ impl<'a> Cook<'a> {
         }
 
         // Build CCS package from destdir
-        let builder = CcsBuilder::new(manifest, &self.dest_dir);
+        let builder = CcsBuilder::new(manifest.clone(), &self.dest_dir);
+        let build_result = builder
+            .build()
+            .map_err(|e| Error::IoError(format!("CCS build failed: {e}")))?;
+
+        // Record file hashes for provenance merkle root
+        for file in &build_result.files {
+            self.provenance.record_file_hash(&file.path, &file.hash);
+        }
+
+        // Compute merkle root from all file hashes
+        self.provenance.compute_merkle_root();
+
+        // Convert provenance capture to manifest format
+        let provenance = self.provenance.to_manifest_provenance();
+
+        // Update manifest with provenance and rebuild
+        let mut manifest_with_prov = manifest;
+        manifest_with_prov.provenance = Some(provenance.clone());
+
+        // Rebuild with provenance included in manifest
+        let builder = CcsBuilder::new(manifest_with_prov, &self.dest_dir);
         let build_result = builder
             .build()
             .map_err(|e| Error::IoError(format!("CCS build failed: {e}")))?;
@@ -446,12 +499,13 @@ impl<'a> Cook<'a> {
             build_result.blobs.len()
         ));
         info!(
-            "Cooked: {} ({} files)",
+            "Cooked: {} ({} files, DNA: {})",
             package_path.display(),
-            build_result.files.len()
+            build_result.files.len(),
+            provenance.dna_hash.as_deref().unwrap_or("unknown")
         );
 
-        Ok(package_path)
+        Ok((package_path, provenance))
     }
 
     fn log_line(&mut self, line: &str) {

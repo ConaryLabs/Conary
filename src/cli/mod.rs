@@ -27,7 +27,9 @@
 
 use clap::{Args, Parser, Subcommand};
 
+mod automation;
 mod bootstrap;
+mod capability;
 mod ccs;
 mod collection;
 mod config;
@@ -35,6 +37,7 @@ mod derive;
 mod label;
 mod model;
 mod package;
+mod provenance;
 mod query;
 mod redirect;
 mod repo;
@@ -42,13 +45,16 @@ mod state;
 mod system;
 mod trigger;
 
+pub use automation::{AutomationCommands, AiCommands};
 pub use bootstrap::BootstrapCommands;
+pub use capability::CapabilityCommands;
 pub use ccs::CcsCommands;
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derive::DeriveCommands;
 pub use label::LabelCommands;
 pub use model::ModelCommands;
+pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
 pub use repo::RepoCommands;
@@ -351,10 +357,32 @@ pub enum Commands {
     #[command(subcommand)]
     Collection(CollectionCommands),
 
+    /// Automation and AI-assisted operations
+    ///
+    /// Manage automated system maintenance including security updates,
+    /// orphan cleanup, and AI-assisted package management.
+    #[command(subcommand)]
+    Automation(AutomationCommands),
+
     // =========================================================================
     // Bootstrap
     // =========================================================================
     /// Bootstrap a complete Conary system from scratch
     #[command(subcommand)]
     Bootstrap(BootstrapCommands),
+
+    /// Package DNA / Provenance queries
+    ///
+    /// Query complete package lineage: source origin, build environment,
+    /// signatures, and content hashes. Enables trust verification and
+    /// security audits.
+    #[command(subcommand)]
+    Provenance(ProvenanceCommands),
+
+    /// Package capability declarations
+    ///
+    /// View and validate capability declarations that define what system
+    /// resources a package needs (network, filesystem, syscalls).
+    #[command(subcommand)]
+    Capability(CapabilityCommands),
 }

@@ -660,6 +660,53 @@ fn main() -> Result<()> {
         }
 
         // =====================================================================
+        // Automation Commands
+        // =====================================================================
+        Some(Commands::Automation(auto_cmd)) => match auto_cmd {
+            cli::AutomationCommands::Status { db, format, verbose } => {
+                commands::cmd_automation_status(&db.db_path, &format, verbose)
+            }
+
+            cli::AutomationCommands::Check { common, categories, quiet } => {
+                commands::cmd_automation_check(&common.db.db_path, &common.root, categories, quiet)
+            }
+
+            cli::AutomationCommands::Apply { common, yes, categories, dry_run, no_scripts } => {
+                commands::cmd_automation_apply(&common.db.db_path, &common.root, yes, categories, dry_run, no_scripts)
+            }
+
+            cli::AutomationCommands::Configure { db, show, mode, enable, disable, interval, enable_ai, disable_ai } => {
+                commands::cmd_automation_configure(&db.db_path, show, mode, enable, disable, interval, enable_ai, disable_ai)
+            }
+
+            cli::AutomationCommands::Daemon { common, foreground, pidfile } => {
+                commands::cmd_automation_daemon(&common.db.db_path, &common.root, foreground, &pidfile)
+            }
+
+            cli::AutomationCommands::History { db, limit, category, status, since } => {
+                commands::cmd_automation_history(&db.db_path, limit, category, status, since)
+            }
+
+            cli::AutomationCommands::Ai(ai_cmd) => match ai_cmd {
+                cli::AiCommands::Find { intent, db, limit, verbose } => {
+                    commands::cmd_ai_find(&db.db_path, &intent, limit, verbose)
+                }
+
+                cli::AiCommands::Translate { source, format, confidence } => {
+                    commands::cmd_ai_translate(&source, &format, confidence)
+                }
+
+                cli::AiCommands::Query { question, db } => {
+                    commands::cmd_ai_query(&db.db_path, &question)
+                }
+
+                cli::AiCommands::Explain { command, db } => {
+                    commands::cmd_ai_explain(&db.db_path, &command)
+                }
+            }
+        }
+
+        // =====================================================================
         // Bootstrap Commands
         // =====================================================================
         Some(Commands::Bootstrap(bootstrap_cmd)) => match bootstrap_cmd {
@@ -697,6 +744,54 @@ fn main() -> Result<()> {
 
             cli::BootstrapCommands::Clean { work_dir, stage, sources } => {
                 commands::cmd_bootstrap_clean(&work_dir, stage, sources)
+            }
+        }
+
+        Some(cli::Commands::Provenance(cmd)) => match cmd {
+            cli::ProvenanceCommands::Show { package, db, section, recursive, format } => {
+                commands::cmd_provenance_show(&db.db_path, &package, &section, recursive, &format)
+            }
+            cli::ProvenanceCommands::Verify { package, db, all_signatures } => {
+                commands::cmd_provenance_verify(&db.db_path, &package, all_signatures)
+            }
+            cli::ProvenanceCommands::Diff { package1, package2, db, format } => {
+                commands::cmd_provenance_diff(&db.db_path, &package1, &package2, &format)
+            }
+            cli::ProvenanceCommands::FindByDep { dep_name, version, dna, db } => {
+                commands::cmd_provenance_find_by_dep(&db.db_path, &dep_name, version.as_deref(), dna.as_deref())
+            }
+            cli::ProvenanceCommands::Export { package, db, format, output, recursive } => {
+                commands::cmd_provenance_export(&db.db_path, &package, &format, output.as_deref(), recursive)
+            }
+            cli::ProvenanceCommands::Register { package, db, key, dry_run } => {
+                commands::cmd_provenance_register(&db.db_path, &package, &key, dry_run)
+            }
+            cli::ProvenanceCommands::Audit { db, missing, include_converted } => {
+                commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted)
+            }
+        }
+
+        // =====================================================================
+        // Capability Commands
+        // =====================================================================
+        Some(cli::Commands::Capability(cmd)) => match cmd {
+            cli::CapabilityCommands::Show { package, db, format } => {
+                commands::cmd_capability_show(&db.db_path, &package, &format)
+            }
+            cli::CapabilityCommands::Validate { path, verbose } => {
+                commands::cmd_capability_validate(&path, verbose)
+            }
+            cli::CapabilityCommands::List { db, missing, format } => {
+                commands::cmd_capability_list(&db.db_path, missing, &format)
+            }
+            cli::CapabilityCommands::Generate { binary, args, output, timeout } => {
+                commands::cmd_capability_generate(&binary, &args, output.as_deref(), timeout)
+            }
+            cli::CapabilityCommands::Audit { package, db, command, timeout } => {
+                commands::cmd_capability_audit(&db.db_path, &package, command.as_deref(), timeout)
+            }
+            cli::CapabilityCommands::Run { package, command, db, permissive } => {
+                commands::cmd_capability_run(&db.db_path, &package, &command, permissive)
             }
         }
 

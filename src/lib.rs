@@ -14,6 +14,7 @@
 //! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
 
 pub mod bootstrap;
+pub mod capability;
 pub mod ccs;
 pub mod components;
 pub mod compression;
@@ -37,6 +38,8 @@ pub mod scriptlet;
 pub mod transaction;
 pub mod trigger;
 pub mod version;
+pub mod automation;
+pub mod provenance;
 
 #[cfg(feature = "server")]
 pub mod server;
@@ -51,6 +54,14 @@ pub use model::{
     compute_diff, load_model, model_exists, snapshot_to_model, ApplyOptions, DiffAction,
     ModelConfig, ModelDiff, ModelError, SystemModel, SystemState, DEFAULT_MODEL_PATH,
 };
+pub use model::parser::{
+    AiAssistConfig, AiAssistMode, AiFeature, AutomationCategory, AutomationConfig,
+    AutomationMode, RepairAutomation, RollbackTrigger, SecurityAutomation,
+};
+pub use automation::{
+    ActionDecision, ActionStatus, AiSuggestion, AutomationManager, AutomationSummary,
+    PendingAction,
+};
 pub use progress::{
     CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
     SilentProgress,
@@ -63,4 +74,13 @@ pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
 pub use bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, Stage0Builder, StageManager,
     TargetArch, Toolchain, ToolchainKind,
+};
+pub use capability::{
+    CapabilityDeclaration, CapabilityError, FilesystemCapabilities, NetworkCapabilities,
+    SyscallCapabilities, SyscallProfile,
+};
+pub use provenance::{
+    BuildDependency, BuildProvenance, ComponentHash, ContentProvenance, DnaHash, HostAttestation,
+    PackageDna, PatchInfo, Provenance, ReproducibilityInfo, Signature, SignatureProvenance,
+    SignatureScope, SourceProvenance, TransparencyLog,
 };
