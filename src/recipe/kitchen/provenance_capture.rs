@@ -50,6 +50,7 @@ pub struct ProvenanceCapture {
 }
 
 /// A patch captured during the build
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CapturedPatch {
     /// URL or path to the patch file
@@ -82,6 +83,7 @@ impl ProvenanceCapture {
     }
 
     /// Initialize with recipe file hash
+    #[allow(dead_code)]
     pub fn with_recipe_hash(mut self, recipe_path: &Path) -> Self {
         if let Ok(content) = fs::read(recipe_path) {
             let hash = Sha256::digest(&content);
@@ -119,6 +121,7 @@ impl ProvenanceCapture {
     }
 
     /// Record a git commit if building from git
+    #[allow(dead_code)]
     pub fn record_git_commit(&mut self, commit: &str) {
         self.git_commit = Some(commit.to_string());
     }
@@ -143,6 +146,7 @@ impl ProvenanceCapture {
     }
 
     /// Record build dependencies
+    #[allow(dead_code)]
     pub fn record_build_deps(&mut self, deps: Vec<CapturedDep>) {
         self.build_deps = deps;
     }

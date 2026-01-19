@@ -116,6 +116,14 @@ pub enum Error {
     /// Capability-related errors
     #[error("Capability error: {0}")]
     Capability(String),
+
+    /// Federation-related errors
+    #[error("Federation error: {0}")]
+    Federation(String),
+
+    /// Circuit breaker open (peer temporarily unavailable)
+    #[error("Circuit breaker open: {0}")]
+    CircuitOpen(String),
 }
 
 /// Result type alias using Conary's Error type

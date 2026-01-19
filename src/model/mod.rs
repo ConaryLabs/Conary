@@ -55,6 +55,8 @@ pub use parser::{
     AutomationConfig, AutomationMode, AutomationCategory, AiFeature,
     AiAssistConfig, AiAssistMode, SecurityAutomation, OrphanAutomation,
     UpdateAutomation, MajorUpgradeAutomation, RepairAutomation, RollbackTrigger,
+    // Federation config types
+    FederationConfig, FederationTier,
 };
 pub use diff::{ModelDiff, DiffAction, compute_diff, compute_diff_with_includes, compute_diff_from_resolved, ApplyOptions};
 pub use state::{SystemState, InstalledPackage, capture_current_state, snapshot_to_model};

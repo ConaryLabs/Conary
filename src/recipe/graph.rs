@@ -289,12 +289,12 @@ impl RecipeGraph {
         }
 
         while let Some(dep) = queue.pop_front() {
-            if deps.insert(dep.clone()) {
-                if let Some(indirect_deps) = self.edges.get(&dep) {
-                    for indirect in indirect_deps {
-                        if !deps.contains(indirect) {
-                            queue.push_back(indirect.clone());
-                        }
+            if deps.insert(dep.clone())
+                && let Some(indirect_deps) = self.edges.get(&dep)
+            {
+                for indirect in indirect_deps {
+                    if !deps.contains(indirect) {
+                        queue.push_back(indirect.clone());
                     }
                 }
             }
@@ -315,12 +315,12 @@ impl RecipeGraph {
         }
 
         while let Some(dep) = queue.pop_front() {
-            if dependents.insert(dep.clone()) {
-                if let Some(indirect) = self.reverse_edges.get(&dep) {
-                    for ind in indirect {
-                        if !dependents.contains(ind) {
-                            queue.push_back(ind.clone());
-                        }
+            if dependents.insert(dep.clone())
+                && let Some(indirect) = self.reverse_edges.get(&dep)
+            {
+                for ind in indirect {
+                    if !dependents.contains(ind) {
+                        queue.push_back(ind.clone());
                     }
                 }
             }

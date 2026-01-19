@@ -42,6 +42,9 @@ pub mod automation;
 pub mod provenance;
 
 #[cfg(feature = "server")]
+pub mod federation;
+
+#[cfg(feature = "server")]
 pub mod server;
 
 pub use components::{ComponentClassifier, ComponentType};
@@ -56,7 +59,8 @@ pub use model::{
 };
 pub use model::parser::{
     AiAssistConfig, AiAssistMode, AiFeature, AutomationCategory, AutomationConfig,
-    AutomationMode, RepairAutomation, RollbackTrigger, SecurityAutomation,
+    AutomationMode, FederationConfig, FederationTier, RepairAutomation, RollbackTrigger,
+    SecurityAutomation,
 };
 pub use automation::{
     ActionDecision, ActionStatus, AiSuggestion, AutomationManager, AutomationSummary,
@@ -83,4 +87,10 @@ pub use provenance::{
     BuildDependency, BuildProvenance, ComponentHash, ContentProvenance, DnaHash, HostAttestation,
     PackageDna, PatchInfo, Provenance, ReproducibilityInfo, Signature, SignatureProvenance,
     SignatureScope, SourceProvenance, TransparencyLog,
+};
+#[cfg(feature = "server")]
+pub use federation::{
+    CircuitBreaker, CircuitBreakerRegistry, CircuitState, Federation, FederatedChunkFetcher,
+    FederationStats, Peer, PeerId, PeerRegistry, PeerScore, PeerTier, RendezvousRouter,
+    RequestCoalescer,
 };

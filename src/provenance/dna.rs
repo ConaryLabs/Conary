@@ -15,7 +15,7 @@ use std::fmt;
 ///
 /// Two packages with the same DNA hash are provably from the same source,
 /// built the same way, with the same dependencies.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DnaHash {
     /// The hash bytes (SHA-256)
     #[serde(with = "hex_serde")]
@@ -62,12 +62,6 @@ impl fmt::Debug for DnaHash {
 impl fmt::Display for DnaHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sha256:{}", hex::encode(self.bytes))
-    }
-}
-
-impl Default for DnaHash {
-    fn default() -> Self {
-        Self { bytes: [0u8; 32] }
     }
 }
 

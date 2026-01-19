@@ -25,14 +25,14 @@ pub fn cmd_repo_add(
     info!("Adding repository: {} ({})", name, url);
 
     // Validate remi strategy configuration
-    if let Some(ref strategy) = default_strategy {
-        if strategy == "remi" {
-            if remi_endpoint.is_none() {
-                anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
-            }
-            if remi_distro.is_none() {
-                anyhow::bail!("--remi-distro is required when --default-strategy=remi");
-            }
+    if let Some(ref strategy) = default_strategy
+        && strategy == "remi"
+    {
+        if remi_endpoint.is_none() {
+            anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
+        }
+        if remi_distro.is_none() {
+            anyhow::bail!("--remi-distro is required when --default-strategy=remi");
         }
     }
 

@@ -269,7 +269,7 @@ impl<'a> TriggerExecutor<'a> {
 
         // Build chroot command
         let mut child = Command::new("chroot")
-            .arg(&self.root)
+            .arg(self.root)
             .arg(cmd)
             .args(args)
             .env("CONARY_TRIGGER_NAME", &trigger.name)

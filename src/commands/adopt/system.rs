@@ -302,50 +302,50 @@ pub fn compute_file_hash(
     let is_symlink = (file_mode & 0o170000) == 0o120000;
     let is_directory = (file_mode & 0o170000) == 0o040000;
 
-    if full {
-        if let Some(cas_store) = cas {
-            if is_symlink {
-                // Store symlink target in CAS
-                if let Some(target) = link_target {
-                    match cas_store.store_symlink(target) {
-                        Ok(h) => return h,
-                        Err(e) => {
-                            debug!("Failed to store symlink {} in CAS: {}", file_path, e);
-                        }
+    if full
+        && let Some(cas_store) = cas
+    {
+        if is_symlink {
+            // Store symlink target in CAS
+            if let Some(target) = link_target {
+                match cas_store.store_symlink(target) {
+                    Ok(h) => return h,
+                    Err(e) => {
+                        debug!("Failed to store symlink {} in CAS: {}", file_path, e);
                     }
-                } else {
-                    // No target provided, try to read it from filesystem
-                    match std::fs::read_link(file_path) {
-                        Ok(target) => {
-                            let target_str = target.to_string_lossy().to_string();
-                            match cas_store.store_symlink(&target_str) {
-                                Ok(h) => return h,
-                                Err(e) => {
-                                    debug!("Failed to store symlink {} in CAS: {}", file_path, e);
-                                }
+                }
+            } else {
+                // No target provided, try to read it from filesystem
+                match std::fs::read_link(file_path) {
+                    Ok(target) => {
+                        let target_str = target.to_string_lossy().to_string();
+                        match cas_store.store_symlink(&target_str) {
+                            Ok(h) => return h,
+                            Err(e) => {
+                                debug!("Failed to store symlink {} in CAS: {}", file_path, e);
                             }
                         }
-                        Err(e) => {
-                            debug!("Failed to read symlink {}: {}", file_path, e);
-                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to read symlink {}: {}", file_path, e);
                     }
                 }
-            } else if is_directory {
-                // Directories don't have content in CAS
-                debug!("Skipping directory: {}", file_path);
+            }
+        } else if is_directory {
+            // Directories don't have content in CAS
+            debug!("Skipping directory: {}", file_path);
+        } else {
+            // Regular file - use hardlink_from_existing
+            let path = std::path::Path::new(file_path);
+            if path.is_file() {
+                match cas_store.hardlink_from_existing(file_path) {
+                    Ok(h) => return h,
+                    Err(e) => {
+                        debug!("Failed to hardlink {} into CAS: {}", file_path, e);
+                    }
+                }
             } else {
-                // Regular file - use hardlink_from_existing
-                let path = std::path::Path::new(file_path);
-                if path.is_file() {
-                    match cas_store.hardlink_from_existing(file_path) {
-                        Ok(h) => return h,
-                        Err(e) => {
-                            debug!("Failed to hardlink {} into CAS: {}", file_path, e);
-                        }
-                    }
-                } else {
-                    debug!("Skipping non-regular file: {}", file_path);
-                }
+                debug!("Skipping non-regular file: {}", file_path);
             }
         }
     }

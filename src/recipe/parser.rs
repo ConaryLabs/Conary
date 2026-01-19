@@ -58,10 +58,10 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
     // Validate patch checksums for remote patches
     if let Some(patches) = &recipe.patches {
         for patch in &patches.files {
-            if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
-                if patch.checksum.is_none() {
-                    warnings.push(format!("Remote patch {} has no checksum", patch.file));
-                }
+            if (patch.file.starts_with("http://") || patch.file.starts_with("https://"))
+                && patch.checksum.is_none()
+            {
+                warnings.push(format!("Remote patch {} has no checksum", patch.file));
             }
         }
     }

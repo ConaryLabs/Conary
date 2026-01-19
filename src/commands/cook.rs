@@ -19,6 +19,7 @@ use tracing::info;
 /// * `fetch_only` - Only fetch sources, don't build
 /// * `no_isolation` - Disable container isolation (unsafe)
 /// * `hermetic` - Enable hermetic mode (maximum isolation)
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_cook(
     recipe_path: &str,
     output_dir: &str,

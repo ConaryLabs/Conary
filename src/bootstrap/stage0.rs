@@ -269,7 +269,7 @@ impl Stage0Builder {
         let url = self.config.seed_url.as_ref()
             .ok_or_else(|| Stage0Error::MissingPrerequisite("No seed URL configured".to_string()))?;
         
-        let filename = url.split('/').last().unwrap_or("stage0-seed.tar.xz");
+        let filename = url.split('/').next_back().unwrap_or("stage0-seed.tar.xz");
         let target_path = self.work_dir.join(filename);
         
         // Download

@@ -1702,3 +1702,58 @@ pub fn migrate_v33(conn: &Connection) -> Result<()> {
     info!("Schema version 33 applied successfully (capability declarations)");
     Ok(())
 }
+
+/// Version 34: Federation peer and stats tracking
+///
+/// Adds tables for CAS federation:
+/// - federation_peers: Known federation peers with latency/success tracking
+/// - federation_stats: Daily statistics for bandwidth savings
+///
+/// This enables:
+/// - Cross-machine CAS deduplication
+/// - Peer selection based on performance
+/// - Bandwidth savings monitoring
+pub fn migrate_v34(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 34");
+
+    conn.execute_batch(
+        "
+        -- Known federation peers
+        CREATE TABLE federation_peers (
+            id TEXT PRIMARY KEY NOT NULL,          -- Peer ID (SHA-256 of endpoint)
+            endpoint TEXT NOT NULL UNIQUE,         -- HTTP(S) URL
+            node_name TEXT,                        -- Human-friendly name
+            tier TEXT NOT NULL DEFAULT 'leaf',     -- 'region_hub', 'cell_hub', 'leaf'
+            first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            is_enabled INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE INDEX idx_federation_peers_tier ON federation_peers(tier);
+        CREATE INDEX idx_federation_peers_latency ON federation_peers(latency_ms);
+        CREATE INDEX idx_federation_peers_enabled ON federation_peers(is_enabled) WHERE is_enabled = 1;
+
+        -- Daily federation statistics
+        CREATE TABLE federation_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL UNIQUE,             -- YYYY-MM-DD
+            bytes_from_peers INTEGER NOT NULL DEFAULT 0,
+            bytes_from_upstream INTEGER NOT NULL DEFAULT 0,
+            chunks_from_peers INTEGER NOT NULL DEFAULT 0,
+            chunks_from_upstream INTEGER NOT NULL DEFAULT 0,
+            requests_coalesced INTEGER NOT NULL DEFAULT 0,
+            circuit_breaker_trips INTEGER NOT NULL DEFAULT 0,
+            peer_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX idx_federation_stats_date ON federation_stats(date DESC);
+        ",
+    )?;
+
+    info!("Schema version 34 applied successfully (federation peers and stats)");
+    Ok(())
+}

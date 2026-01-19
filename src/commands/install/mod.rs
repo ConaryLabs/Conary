@@ -520,18 +520,18 @@ pub fn cmd_install(
     let old_package_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
-    if !no_scripts {
-        if let Some(ref old_trove) = old_trove_to_upgrade {
-            run_old_pre_remove(
-                Path::new(root),
-                &old_trove.name,
-                &old_trove.version,
-                pkg.version(),
-                &old_package_scriptlets,
-                scriptlet_format,
-                sandbox_mode,
-            )?;
-        }
+    if !no_scripts
+        && let Some(ref old_trove) = old_trove_to_upgrade
+    {
+        run_old_pre_remove(
+            Path::new(root),
+            &old_trove.name,
+            &old_trove.version,
+            pkg.version(),
+            &old_package_scriptlets,
+            scriptlet_format,
+            sandbox_mode,
+        )?;
     }
 
     // Track if this is an upgrade
@@ -804,18 +804,18 @@ pub fn cmd_install(
     let _ = trove_id;
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
-    if !no_scripts {
-        if let Some(ref old_trove) = old_trove_to_upgrade {
-            run_old_post_remove(
-                Path::new(root),
-                &old_trove.name,
-                &old_trove.version,
-                pkg.version(),
-                &old_package_scriptlets,
-                scriptlet_format,
-                sandbox_mode,
-            );
-        }
+    if !no_scripts
+        && let Some(ref old_trove) = old_trove_to_upgrade
+    {
+        run_old_post_remove(
+            Path::new(root),
+            &old_trove.name,
+            &old_trove.version,
+            pkg.version(),
+            &old_package_scriptlets,
+            scriptlet_format,
+            sandbox_mode,
+        );
     }
 
     // Execute post-install scriptlet (after files are deployed)

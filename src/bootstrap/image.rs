@@ -32,6 +32,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -80,9 +81,11 @@ pub enum ImageFormat {
     Iso,
 }
 
-impl ImageFormat {
+impl FromStr for ImageFormat {
+    type Err = ImageError;
+
     /// Parse format from string
-    pub fn from_str(s: &str) -> Result<Self, ImageError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "raw" => Ok(Self::Raw),
             "qcow2" => Ok(Self::Qcow2),
@@ -90,7 +93,9 @@ impl ImageFormat {
             _ => Err(ImageError::InvalidFormat(s.to_string())),
         }
     }
+}
 
+impl ImageFormat {
     /// Get file extension
     pub fn extension(&self) -> &'static str {
         match self {
@@ -115,9 +120,11 @@ impl std::fmt::Display for ImageFormat {
 #[derive(Debug, Clone, Copy)]
 pub struct ImageSize(u64);
 
-impl ImageSize {
+impl FromStr for ImageSize {
+    type Err = ImageError;
+
     /// Parse size from string (e.g., "4G", "512M", "8192")
-    pub fn from_str(s: &str) -> Result<Self, ImageError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         if s.is_empty() {
             return Err(ImageError::InvalidSize("empty size".to_string()));
@@ -142,7 +149,9 @@ impl ImageSize {
 
         Ok(Self(num * multiplier))
     }
+}
 
+impl ImageSize {
     /// Get size in bytes
     pub fn bytes(&self) -> u64 {
         self.0
@@ -191,11 +200,11 @@ impl ImageTools {
     pub fn check() -> Result<Self, ImageError> {
         let find_tool = |names: &[&str]| -> Option<PathBuf> {
             for name in names {
-                if let Ok(output) = Command::new("which").arg(name).output() {
-                    if output.status.success() {
-                        let path = String::from_utf8_lossy(&output.stdout);
-                        return Some(PathBuf::from(path.trim()));
-                    }
+                if let Ok(output) = Command::new("which").arg(name).output()
+                    && output.status.success()
+                {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    return Some(PathBuf::from(path.trim()));
                 }
             }
             None
@@ -312,6 +321,7 @@ pub struct ImageBuilder {
     work_dir: PathBuf,
 
     /// Bootstrap configuration
+    #[allow(dead_code)]
     config: BootstrapConfig,
 
     /// Base system root

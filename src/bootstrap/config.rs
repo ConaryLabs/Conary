@@ -47,7 +47,7 @@ impl TargetArch {
     }
 
     /// Parse from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "x86_64" | "amd64" | "x64" => Some(Self::X86_64),
             "aarch64" | "arm64" => Some(Self::Aarch64),
@@ -215,13 +215,13 @@ mod tests {
     }
 
     #[test]
-    fn test_target_arch_from_str() {
-        assert_eq!(TargetArch::from_str("x86_64"), Some(TargetArch::X86_64));
-        assert_eq!(TargetArch::from_str("amd64"), Some(TargetArch::X86_64));
-        assert_eq!(TargetArch::from_str("aarch64"), Some(TargetArch::Aarch64));
-        assert_eq!(TargetArch::from_str("arm64"), Some(TargetArch::Aarch64));
-        assert_eq!(TargetArch::from_str("riscv64"), Some(TargetArch::Riscv64));
-        assert_eq!(TargetArch::from_str("unknown"), None);
+    fn test_target_arch_parse() {
+        assert_eq!(TargetArch::parse("x86_64"), Some(TargetArch::X86_64));
+        assert_eq!(TargetArch::parse("amd64"), Some(TargetArch::X86_64));
+        assert_eq!(TargetArch::parse("aarch64"), Some(TargetArch::Aarch64));
+        assert_eq!(TargetArch::parse("arm64"), Some(TargetArch::Aarch64));
+        assert_eq!(TargetArch::parse("riscv64"), Some(TargetArch::Riscv64));
+        assert_eq!(TargetArch::parse("unknown"), None);
     }
 
     #[test]

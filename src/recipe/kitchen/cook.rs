@@ -88,7 +88,7 @@ impl<'a> Cook<'a> {
             let filename = additional
                 .url
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("additional.tar.gz");
             let local_path = self.build_dir.path().join(filename);
             fs::copy(&path, &local_path)?;
@@ -101,7 +101,7 @@ impl<'a> Cook<'a> {
                 if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
                     let checksum = patch.checksum.as_deref().unwrap_or("sha256:0");
                     let path = self.kitchen.fetch_source(&patch.file, checksum)?;
-                    let filename = patch.file.split('/').last().unwrap_or("patch.diff");
+                    let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
                     let local_path = self.build_dir.path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
                     fs::copy(&path, &local_path)?;
@@ -154,7 +154,7 @@ impl<'a> Cook<'a> {
             let patch_path = if patch_info.file.starts_with("http://")
                 || patch_info.file.starts_with("https://")
             {
-                let filename = patch_info.file.split('/').last().unwrap_or("patch.diff");
+                let filename = patch_info.file.split('/').next_back().unwrap_or("patch.diff");
                 self.build_dir.path().join("patches").join(filename)
             } else {
                 PathBuf::from(&patch_info.file)

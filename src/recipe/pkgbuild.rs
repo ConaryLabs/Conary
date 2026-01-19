@@ -144,12 +144,12 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let makedepends = extract_array(content, "makedepends").unwrap_or_default();
 
     let mut build_requires: Vec<String> = makedepends.iter()
-        .map(|d| d.split(|c| c == '>' || c == '<' || c == '=').next().unwrap_or(d).to_string())
+        .map(|d| d.split(['>', '<', '=']).next().unwrap_or(d).to_string())
         .collect();
 
     // Add runtime deps to build requires too (they're often needed)
     for dep in &depends {
-        let clean_dep = dep.split(|c| c == '>' || c == '<' || c == '=').next().unwrap_or(dep).to_string();
+        let clean_dep = dep.split(['>', '<', '=']).next().unwrap_or(dep).to_string();
         if !build_requires.contains(&clean_dep) {
             build_requires.push(clean_dep);
         }
@@ -350,17 +350,15 @@ fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
 
     // Replace actual values with placeholders where they appear literally
     let url = url.replace(pkgname, "%(name)s");
-    let url = url.replace(pkgver, "%(version)s");
-
-    url
+    url.replace(pkgver, "%(version)s")
 }
 
 /// Convert function body to shell commands for recipe
 fn convert_function_body(body: &str, pkgname: &str, pkgver: &str) -> String {
-    body.replace("$pkgname", &pkgname)
-        .replace("${pkgname}", &pkgname)
-        .replace("$pkgver", &pkgver)
-        .replace("${pkgver}", &pkgver)
+    body.replace("$pkgname", pkgname)
+        .replace("${pkgname}", pkgname)
+        .replace("$pkgver", pkgver)
+        .replace("${pkgver}", pkgver)
         .replace("$srcdir", ".")
         .replace("${srcdir}", ".")
 }

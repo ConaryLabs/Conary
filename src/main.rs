@@ -265,6 +265,8 @@ fn main() -> Result<()> {
                     max_concurrent_conversions: max_concurrent,
                     cache_max_bytes: max_cache_gb * 1024 * 1024 * 1024,
                     chunk_ttl_days,
+                    // Use defaults for Phase 0 features
+                    ..Default::default()
                 };
 
                 // Run the async server
@@ -792,6 +794,33 @@ fn main() -> Result<()> {
             }
             cli::CapabilityCommands::Run { package, command, db, permissive } => {
                 commands::cmd_capability_run(&db.db_path, &package, &command, permissive)
+            }
+        }
+
+        // =====================================================================
+        // Federation Commands
+        // =====================================================================
+        Some(cli::Commands::Federation(cmd)) => match cmd {
+            cli::FederationCommands::Status { db, verbose } => {
+                commands::cmd_federation_status(&db.db_path, verbose)
+            }
+            cli::FederationCommands::Peers { db, tier, enabled_only } => {
+                commands::cmd_federation_peers(&db.db_path, tier.as_deref(), enabled_only)
+            }
+            cli::FederationCommands::AddPeer { url, db, tier, name } => {
+                commands::cmd_federation_add_peer(&url, &db.db_path, &tier, name.as_deref())
+            }
+            cli::FederationCommands::RemovePeer { peer, db } => {
+                commands::cmd_federation_remove_peer(&peer, &db.db_path)
+            }
+            cli::FederationCommands::Stats { db, days } => {
+                commands::cmd_federation_stats(&db.db_path, days)
+            }
+            cli::FederationCommands::EnablePeer { peer, db, enable } => {
+                commands::cmd_federation_enable_peer(&peer, &db.db_path, enable)
+            }
+            cli::FederationCommands::Test { db, peer, timeout } => {
+                commands::cmd_federation_test(&db.db_path, peer.as_deref(), timeout)
             }
         }
 

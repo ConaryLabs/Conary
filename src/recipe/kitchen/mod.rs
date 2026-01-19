@@ -347,13 +347,13 @@ impl Kitchen {
         // Check remote patches
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
-                if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
-                    if let Some(checksum) = &patch.checksum {
-                        let cache_key = checksum.replace(':', "_");
-                        let cached_path = self.config.source_cache.join(&cache_key);
-                        if !cached_path.exists() {
-                            return false;
-                        }
+                if (patch.file.starts_with("http://") || patch.file.starts_with("https://"))
+                    && let Some(checksum) = &patch.checksum
+                {
+                    let cache_key = checksum.replace(':', "_");
+                    let cached_path = self.config.source_cache.join(&cache_key);
+                    if !cached_path.exists() {
+                        return false;
                     }
                 }
             }

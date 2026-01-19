@@ -264,6 +264,7 @@ pub fn cmd_automation_apply(
 }
 
 /// Configure automation settings
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_automation_configure(
     _db_path: &str,
     show: bool,

@@ -605,7 +605,7 @@ impl BaseBuilder {
             .collect();
 
         for (url, extract_to) in additional {
-            let filename = url.split('/').last().unwrap_or("additional.tar.gz");
+            let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let target_path = self.sources_dir.join(filename);
 
             if !target_path.exists() {

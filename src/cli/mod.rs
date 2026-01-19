@@ -34,6 +34,7 @@ mod ccs;
 mod collection;
 mod config;
 mod derive;
+mod federation;
 mod label;
 mod model;
 mod package;
@@ -52,6 +53,7 @@ pub use ccs::CcsCommands;
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derive::DeriveCommands;
+pub use federation::FederationCommands;
 pub use label::LabelCommands;
 pub use model::ModelCommands;
 pub use provenance::ProvenanceCommands;
@@ -385,4 +387,12 @@ pub enum Commands {
     /// resources a package needs (network, filesystem, syscalls).
     #[command(subcommand)]
     Capability(CapabilityCommands),
+
+    /// Federation management
+    ///
+    /// Manage CAS federation for chunk sharing across machines.
+    /// Federation enables bandwidth savings by fetching chunks from
+    /// nearby peers instead of the origin server.
+    #[command(subcommand)]
+    Federation(FederationCommands),
 }

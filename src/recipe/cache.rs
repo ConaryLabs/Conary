@@ -319,13 +319,13 @@ impl BuildCache {
         }
 
         // Dependencies (sorted)
-        let mut requires: Vec<_> = recipe.build.requires.iter().cloned().collect();
+        let mut requires: Vec<_> = recipe.build.requires.to_vec();
         requires.sort();
         for req in requires {
             data.push_str(&format!("requires:{}\n", req));
         }
 
-        let mut makedepends: Vec<_> = recipe.build.makedepends.iter().cloned().collect();
+        let mut makedepends: Vec<_> = recipe.build.makedepends.to_vec();
         makedepends.sort();
         for dep in makedepends {
             data.push_str(&format!("makedepends:{}\n", dep));
@@ -401,13 +401,11 @@ impl BuildCache {
         }
 
         // Verify integrity if enabled
-        if self.config.verify_integrity {
-            if !self.verify_entry(&cache_path)? {
-                warn!("Cache corruption detected: {}", &key[..16]);
-                let _ = fs::remove_file(&cache_path);
-                let _ = fs::remove_file(self.metadata_path(key));
-                return Ok(None);
-            }
+        if self.config.verify_integrity && !self.verify_entry(&cache_path)? {
+            warn!("Cache corruption detected: {}", &key[..16]);
+            let _ = fs::remove_file(&cache_path);
+            let _ = fs::remove_file(self.metadata_path(key));
+            return Ok(None);
         }
 
         info!("Cache hit: {} ({} bytes)", &key[..16], size);
@@ -522,13 +520,13 @@ impl BuildCache {
                 let file_entry = file_entry?;
                 let path = file_entry.path();
 
-                if path.extension().is_some_and(|e| e == "ccs") {
-                    if let Ok(metadata) = fs::metadata(&path) {
-                        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                        let size = metadata.len();
-                        entries.push((path, mtime, size));
-                        total_size += size;
-                    }
+                if path.extension().is_some_and(|e| e == "ccs")
+                    && let Ok(metadata) = fs::metadata(&path)
+                {
+                    let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                    let size = metadata.len();
+                    entries.push((path, mtime, size));
+                    total_size += size;
                 }
             }
         }
@@ -601,17 +599,17 @@ impl BuildCache {
                 let file_entry = file_entry?;
                 let path = file_entry.path();
 
-                if path.extension().is_some_and(|e| e == "ccs") {
-                    if let Ok(metadata) = fs::metadata(&path) {
-                        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                        let size = metadata.len();
+                if path.extension().is_some_and(|e| e == "ccs")
+                    && let Ok(metadata) = fs::metadata(&path)
+                {
+                    let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                    let size = metadata.len();
 
-                        total_size += size;
-                        entry_count += 1;
+                    total_size += size;
+                    entry_count += 1;
 
-                        oldest = Some(oldest.map_or(mtime, |o| o.min(mtime)));
-                        newest = Some(newest.map_or(mtime, |n| n.max(mtime)));
-                    }
+                    oldest = Some(oldest.map_or(mtime, |o| o.min(mtime)));
+                    newest = Some(newest.map_or(mtime, |n| n.max(mtime)));
                 }
             }
         }

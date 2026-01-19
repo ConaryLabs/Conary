@@ -10,6 +10,7 @@ use conary::bootstrap::{
     Prerequisites, Stage0Builder, TargetArch,
 };
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Initialize bootstrap environment
 pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
@@ -17,7 +18,7 @@ pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> 
     println!("  Work directory: {}", work_dir);
 
     let target_arch =
-        TargetArch::from_str(target).context("Invalid target architecture. Use: x86_64, aarch64, riscv64")?;
+        TargetArch::parse(target).context("Invalid target architecture. Use: x86_64, aarch64, riscv64")?;
 
     println!("  Target: {} ({})", target_arch, target_arch.triple());
 
@@ -401,10 +402,10 @@ pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     for (stage, complete, status) in bootstrap.stages().summary() {
         let marker = if complete { "[COMPLETE]" } else { "[PENDING]" };
         print!("  {} {}", marker, stage);
-        if verbose {
-            if let Some(ref s) = status {
-                print!(" - {}", s);
-            }
+        if verbose
+            && let Some(ref s) = status
+        {
+            print!(" - {}", s);
         }
         println!();
     }

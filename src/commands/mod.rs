@@ -11,6 +11,7 @@ mod config;
 mod convert_pkgbuild;
 mod cook;
 mod derived;
+mod federation;
 mod install;
 mod label;
 mod model;
@@ -86,6 +87,11 @@ pub use triggers::{
     cmd_trigger_remove, cmd_trigger_run, cmd_trigger_show,
 };
 pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group};
+pub use federation::{
+    cmd_federation_status, cmd_federation_peers, cmd_federation_add_peer,
+    cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_enable_peer,
+    cmd_federation_test,
+};
 
 use anyhow::Result;
 use conary::packages::arch::ArchPackage;

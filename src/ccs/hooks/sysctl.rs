@@ -24,7 +24,7 @@ impl HookExecutor {
             fs::create_dir_all(&sysctl_dir)?;
 
             // Use key name as filename
-            let safe_key = key.replace('/', "-").replace('.', "-");
+            let safe_key = key.replace(['/', '.'], "-");
             let filename = format!("99-conary-{}.conf", safe_key);
             let config_path = sysctl_dir.join(&filename);
 

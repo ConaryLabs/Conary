@@ -101,7 +101,7 @@ impl std::fmt::Display for BootstrapStage {
 }
 
 /// State of a single stage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StageState {
     /// Whether this stage is complete
     pub complete: bool,
@@ -117,18 +117,6 @@ pub struct StageState {
 
     /// Duration of the build in seconds
     pub duration_secs: Option<u64>,
-}
-
-impl Default for StageState {
-    fn default() -> Self {
-        Self {
-            complete: false,
-            completed_at: None,
-            artifact_path: None,
-            error: None,
-            duration_secs: None,
-        }
-    }
 }
 
 /// Manager for tracking bootstrap progress
@@ -241,10 +229,8 @@ impl StageManager {
                 let state = self.get(*s);
                 let status = if state.complete {
                     Some("complete".to_string())
-                } else if let Some(ref err) = state.error {
-                    Some(format!("failed: {}", err))
                 } else {
-                    None
+                    state.error.as_ref().map(|err| format!("failed: {}", err))
                 };
                 (*s, state.complete, status)
             })

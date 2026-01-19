@@ -618,10 +618,9 @@ impl Sandbox {
             if let Ok(status) = std::process::Command::new("ip")
                 .args(["link", "set", "lo", "up"])
                 .status()
+                && !status.success()
             {
-                if !status.success() {
-                    debug!("Failed to bring up loopback interface");
-                }
+                debug!("Failed to bring up loopback interface");
             }
         }
 

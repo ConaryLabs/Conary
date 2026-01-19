@@ -351,7 +351,7 @@ impl Stage1Builder {
         let src_dir = src_dir.to_path_buf();
 
         for (url, _checksum, extract_to) in additional_sources {
-            let filename = url.split('/').last().unwrap_or("additional.tar.gz");
+            let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let target_path = sources_dir.join(filename);
 
             // Download if not cached
@@ -625,7 +625,7 @@ impl Stage1Builder {
         let mut result = cmd.to_string();
 
         // Standard substitutions from Stage1Builder
-        result = result.replace("%(target)s", &self.config.triple());
+        result = result.replace("%(target)s", self.config.triple());
         result = result.replace("%(jobs)s", &self.config.jobs.to_string());
         // Special variable for Stage1Builder's sysroot (where linux-headers are installed)
         result = result.replace("%(stage1_sysroot)s", &self.sysroot.to_string_lossy());

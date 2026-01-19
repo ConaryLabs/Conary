@@ -71,7 +71,7 @@ impl Recipe {
     pub fn archive_filename(&self) -> String {
         self.archive_url()
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("source.tar.gz")
             .to_string()
     }

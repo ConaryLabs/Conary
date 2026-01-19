@@ -141,12 +141,14 @@ impl ChunkInfo {
 }
 
 /// Builder for constructing content provenance during package creation
+#[allow(dead_code)]
 pub struct ContentProvenanceBuilder {
     files: Vec<FileHash>,
     chunks: Vec<ChunkInfo>,
     components: BTreeMap<String, Vec<FileHash>>,
 }
 
+#[allow(dead_code)]
 impl ContentProvenanceBuilder {
     /// Create a new builder
     pub fn new() -> Self {
@@ -234,6 +236,7 @@ impl Default for ContentProvenanceBuilder {
 }
 
 /// Internal struct for tracking file hashes
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct FileHash {
     path: String,

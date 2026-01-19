@@ -87,10 +87,10 @@ impl<'a> AutomationChecker<'a> {
         }
 
         // Integrity checks (only if enabled)
-        if self.config.repair.integrity_check {
-            if let Err(e) = self.check_integrity(&mut results) {
-                results.errors.push(format!("Integrity check failed: {}", e));
-            }
+        if self.config.repair.integrity_check
+            && let Err(e) = self.check_integrity(&mut results)
+        {
+            results.errors.push(format!("Integrity check failed: {}", e));
         }
 
         Ok(results)

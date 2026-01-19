@@ -217,13 +217,13 @@ pub fn parse_systemd_install_section(content: &str, key: &str) -> Vec<String> {
         }
 
         // Look for key=value
-        if let Some(value) = trimmed.strip_prefix(key) {
-            if let Some(value) = value.strip_prefix('=') {
-                // Value can be space-separated list
-                for target in value.split_whitespace() {
-                    if !target.is_empty() {
-                        results.push(target.to_string());
-                    }
+        if let Some(value) = trimmed.strip_prefix(key)
+            && let Some(value) = value.strip_prefix('=')
+        {
+            // Value can be space-separated list
+            for target in value.split_whitespace() {
+                if !target.is_empty() {
+                    results.push(target.to_string());
                 }
             }
         }

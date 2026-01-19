@@ -47,10 +47,10 @@ impl HookExecutor {
 
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
-            if let Some(username) = line.split(':').next() {
-                if username == name {
-                    return true;
-                }
+            if let Some(username) = line.split(':').next()
+                && username == name
+            {
+                return true;
             }
         }
         false
@@ -85,10 +85,10 @@ impl HookExecutor {
 
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
-            if let Some(groupname) = line.split(':').next() {
-                if groupname == name {
-                    return true;
-                }
+            if let Some(groupname) = line.split(':').next()
+                && groupname == name
+            {
+                return true;
             }
         }
         false

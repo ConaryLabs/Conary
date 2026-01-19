@@ -9,6 +9,7 @@
 
 use crate::error::Result;
 use crate::model::AutomationConfig;
+#[allow(unused_imports)]
 use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
 use std::time::Duration;
 
