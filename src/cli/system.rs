@@ -7,14 +7,14 @@ use clap_complete::Shell;
 use super::redirect::RedirectCommands;
 use super::state::StateCommands;
 use super::trigger::TriggerCommands;
+use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum SystemCommands {
     /// Initialize a new Conary database
     Init {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Generate shell completions
@@ -26,9 +26,8 @@ pub enum SystemCommands {
 
     /// Show changeset history
     History {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Verify installed files
@@ -36,13 +35,8 @@ pub enum SystemCommands {
         /// Optional package name to verify (verifies all if not specified)
         package: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Verify adopted packages against RPM database instead of CAS
         #[arg(long)]
@@ -54,13 +48,8 @@ pub enum SystemCommands {
         /// Package name to restore (or "all" to check all packages)
         package: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Force restore even if files exist (overwrite)
         #[arg(short, long)]
@@ -80,9 +69,8 @@ pub enum SystemCommands {
         #[arg(required_unless_present_any = ["system", "status"])]
         packages: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Copy files to CAS for full management (enables rollback)
         #[arg(long)]
@@ -107,9 +95,8 @@ pub enum SystemCommands {
     /// referenced by any installed package. Preserves files needed for rollback
     /// by keeping references from file_history within the retention period.
     Gc {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Path to CAS objects directory
         #[arg(long, default_value = "/var/lib/conary/objects")]
@@ -132,9 +119,8 @@ pub enum SystemCommands {
         /// Package name (or "all" for entire system)
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Output format
         #[arg(short, long, default_value = "cyclonedx")]
@@ -151,9 +137,8 @@ pub enum SystemCommands {
     /// listing all converted packages and their metadata.
     #[cfg(feature = "server")]
     IndexGen {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Path to chunk storage directory
         #[arg(long, default_value = "/var/lib/conary/data/chunks")]
@@ -179,9 +164,8 @@ pub enum SystemCommands {
     /// first-time requests. Can use a popularity file to prioritize packages.
     #[cfg(feature = "server")]
     Prewarm {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Path to chunk storage directory
         #[arg(long, default_value = "/var/lib/conary/data/chunks")]
@@ -222,9 +206,8 @@ pub enum SystemCommands {
         #[arg(short, long, default_value = "0.0.0.0:8080")]
         bind: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Path to chunk storage directory
         #[arg(long, default_value = "/var/lib/conary/data/chunks")]

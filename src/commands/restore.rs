@@ -12,6 +12,7 @@
 
 use anyhow::Result;
 use conary::db::models::{FileEntry, Trove};
+use conary::db::paths::objects_dir;
 use conary::filesystem::FileDeployer;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -49,8 +50,7 @@ pub fn cmd_restore(
     println!("Tracked files: {}", files.len());
 
     // Set up deployer
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
-    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
 
     let deployer = FileDeployer::new(&objects_dir, &install_root)?;
@@ -158,8 +158,7 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     // Set up deployer
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
-    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
 
     let deployer = FileDeployer::new(&objects_dir, &install_root)?;

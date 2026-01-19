@@ -26,6 +26,7 @@ use super::{detect_package_format, PackageFormatType};
 use anyhow::{Context, Result};
 use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
+use conary::db::paths::keyring_dir;
 use conary::dependencies::LanguageDepDetector;
 use conary::packages::traits::DependencyType;
 use conary::repository;
@@ -230,7 +231,7 @@ pub fn cmd_install(
                         if !dry_run {
                             progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
                             let temp_dir = TempDir::new()?;
-                            let keyring_dir = resolve::get_keyring_dir(db_path);
+                            let keyring_dir = keyring_dir(db_path);
                             match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
                                 Ok(downloaded) => {
                                     // Capture parent package name for selection reason

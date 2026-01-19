@@ -4,6 +4,7 @@
 use clap::Subcommand;
 
 use super::label::LabelCommands;
+use super::DbArgs;
 
 #[derive(Subcommand)]
 pub enum QueryCommands {
@@ -12,9 +13,8 @@ pub enum QueryCommands {
         /// Package name
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Show reverse dependencies (what depends on this package)
@@ -22,9 +22,8 @@ pub enum QueryCommands {
         /// Package name
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Show full dependency tree for a package
@@ -32,9 +31,8 @@ pub enum QueryCommands {
         /// Package name
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show reverse dependency tree (what depends on this, transitively)
         #[arg(short, long)]
@@ -50,9 +48,8 @@ pub enum QueryCommands {
         /// Capability to search for (package name, file path, library, virtual provide)
         capability: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Show what packages would break if a package is removed
@@ -60,9 +57,8 @@ pub enum QueryCommands {
         /// Package name
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Query packages by installation reason
@@ -77,9 +73,8 @@ pub enum QueryCommands {
         /// Reason filter pattern (or show all grouped if not specified)
         pattern: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Query packages available in repositories (not installed)
@@ -90,9 +85,8 @@ pub enum QueryCommands {
         /// Optional pattern to filter packages
         pattern: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show detailed package information
         #[arg(short, long)]
@@ -104,9 +98,8 @@ pub enum QueryCommands {
         /// Component spec in format "package:component" (e.g., nginx:lib)
         component_spec: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// List components of an installed package
@@ -114,9 +107,8 @@ pub enum QueryCommands {
         /// Package name
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Display scriptlets (install/remove hooks) from a package file
@@ -128,16 +120,14 @@ pub enum QueryCommands {
     /// Show delta update statistics
     #[command(name = "delta-stats")]
     DeltaStats {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Check for file conflicts and ownership issues
     Conflicts {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show detailed output
         #[arg(short, long)]

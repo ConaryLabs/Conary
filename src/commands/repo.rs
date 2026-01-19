@@ -2,20 +2,9 @@
 //! Repository management commands
 
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use conary::db::paths::keyring_dir;
+use std::path::Path;
 use tracing::info;
-
-/// Get the keyring directory based on db_path
-fn get_keyring_dir(db_path: &str) -> PathBuf {
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| {
-        Path::new(db_path)
-            .parent()
-            .unwrap_or(Path::new("/var/lib/conary"))
-            .to_string_lossy()
-            .to_string()
-    });
-    PathBuf::from(db_dir).join("keys")
-}
 
 /// Add a new repository
 #[allow(clippy::too_many_arguments)]
@@ -190,7 +179,7 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
         return Ok(());
     }
 
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = keyring_dir(db_path);
 
     use rayon::prelude::*;
     let results: Vec<(String, conary::Result<usize>, Option<String>)> = repos_needing_sync
@@ -265,7 +254,7 @@ pub fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
 fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<String> {
     use conary::repository::GpgVerifier;
 
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = keyring_dir(db_path);
     let verifier = GpgVerifier::new(keyring_dir)?;
 
     // Check if it's a URL
@@ -329,7 +318,7 @@ pub fn cmd_key_list(db_path: &str) -> Result<()> {
     use conary::repository::GpgVerifier;
 
     info!("Listing GPG keys");
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = keyring_dir(db_path);
     let verifier = GpgVerifier::new(keyring_dir)?;
 
     let keys = verifier.list_keys()?;
@@ -350,7 +339,7 @@ pub fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
     use conary::repository::GpgVerifier;
 
     info!("Removing GPG key for repository: {}", repository);
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = keyring_dir(db_path);
     let verifier = GpgVerifier::new(keyring_dir)?;
 
     if !verifier.has_key(repository) {

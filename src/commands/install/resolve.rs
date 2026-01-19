@@ -17,23 +17,12 @@
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary::db::models::{ProvideEntry, Redirect};
+use conary::db::paths::keyring_dir;
 use conary::repository::{resolve_package, PackageSource, ResolutionOptions};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info};
-
-/// Get the keyring directory based on db_path
-pub fn get_keyring_dir(db_path: &str) -> PathBuf {
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| {
-        Path::new(db_path)
-            .parent()
-            .unwrap_or(Path::new("/var/lib/conary"))
-            .to_string_lossy()
-            .to_string()
-    });
-    PathBuf::from(db_dir).join("keys")
-}
 
 /// Result of resolving a package path
 pub struct ResolvedPackage {
@@ -114,7 +103,7 @@ pub fn resolve_package_path(
 
     // Build resolution options
     // Note: keyring_dir will be used when GPG options are integrated into resolution
-    let _keyring_dir = get_keyring_dir(db_path);
+    let _keyring_dir = keyring_dir(db_path);
     let options = ResolutionOptions {
         version: version.map(String::from),
         repository: repo.map(String::from),
@@ -276,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_get_keyring_dir() {
-        let keyring = get_keyring_dir("/var/lib/conary/conary.db");
+        let keyring = keyring_dir("/var/lib/conary/conary.db");
         assert!(keyring.ends_with("keys"));
     }
 }

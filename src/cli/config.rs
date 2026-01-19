@@ -2,6 +2,7 @@
 //! Configuration file management commands
 
 use clap::Subcommand;
+use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
@@ -10,9 +11,8 @@ pub enum ConfigCommands {
         /// Package name (optional - if omitted, shows modified configs)
         package: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show all config files, not just modified
         #[arg(short, long)]
@@ -24,13 +24,8 @@ pub enum ConfigCommands {
         /// Path to the config file
         path: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
     },
 
     /// Backup a configuration file
@@ -38,13 +33,8 @@ pub enum ConfigCommands {
         /// Path to the config file
         path: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
     },
 
     /// Restore a configuration file from backup
@@ -52,13 +42,8 @@ pub enum ConfigCommands {
         /// Path to the config file
         path: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Specific backup ID to restore (default: latest)
         #[arg(long)]
@@ -70,13 +55,8 @@ pub enum ConfigCommands {
         /// Package name (optional - if omitted, checks all)
         package: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
     },
 
     /// List backups for a configuration file
@@ -84,8 +64,7 @@ pub enum ConfigCommands {
         /// Path to the config file
         path: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

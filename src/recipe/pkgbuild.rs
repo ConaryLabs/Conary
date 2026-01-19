@@ -258,8 +258,8 @@ fn extract_variables(content: &str) -> Result<HashMap<String, String>, PkgbuildE
     for line in content.lines() {
         let line = line.trim();
         if let Some(caps) = re.captures(line) {
-            let name = caps.get(1).unwrap().as_str().to_string();
-            let value = caps.get(2).unwrap().as_str().to_string();
+            let name = caps.get(1).expect("regex capture group must exist").as_str().to_string();
+            let value = caps.get(2).expect("regex capture group must exist").as_str().to_string();
             vars.insert(name, value);
         }
     }
@@ -303,11 +303,11 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
     let mut functions = HashMap::new();
 
     // Simple function extraction - looks for function_name() { ... }
-    let fn_re = Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).unwrap();
+    let fn_re = Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex");
 
     for caps in fn_re.captures_iter(content) {
-        let fn_name = caps.get(1).unwrap().as_str();
-        let start = caps.get(0).unwrap().end();
+        let fn_name = caps.get(1).expect("regex capture group must exist").as_str();
+        let start = caps.get(0).expect("regex capture group must exist").end();
 
         // Find matching closing brace (simple nesting)
         let rest = &content[start..];

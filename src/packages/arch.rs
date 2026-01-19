@@ -7,7 +7,8 @@
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::archive_utils::{check_file_size, compute_sha256, normalize_path};
+use crate::hash;
+use crate::packages::archive_utils::{check_file_size, normalize_path};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
@@ -132,7 +133,7 @@ impl ArchPackage {
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
             files.push(PackageFile {
-                path: normalize_path(&entry_path),
+                path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 size: size as i64,
                 mode: mode as i32,
                 sha256: None, // We'll compute this during extraction if needed
@@ -373,18 +374,15 @@ impl PackageFormat for ArchPackage {
         // Convert backup files to ConfigFileInfo
         // Arch backup format is "path\thash" but we just need the path
         // All Arch backup files preserve user changes (like noreplace)
-        let config_files: Vec<ConfigFileInfo> = pkginfo.backup
-            .iter()
-            .map(|entry| {
-                // Entry may be "path\thash" or just "path"
-                let path = entry.split('\t').next().unwrap_or(entry);
-                ConfigFileInfo {
-                    path: normalize_path(path),
-                    noreplace: true, // Arch backup files always preserve user changes
-                    ghost: false,
-                }
-            })
-            .collect();
+        let mut config_files = Vec::new();
+        for entry in &pkginfo.backup {
+            let path = entry.split('\t').next().unwrap_or(entry);
+            config_files.push(ConfigFileInfo {
+                path: normalize_path(path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                noreplace: true, // Arch backup files always preserve user changes
+                ghost: false,
+            });
+        }
 
         debug!(
             "Parsed Arch package: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
@@ -491,10 +489,10 @@ impl PackageFormat for ArchPackage {
                 .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
             // Compute SHA-256 using shared utility
-            let hash = compute_sha256(&content);
+            let hash = hash::sha256(&content);
 
             extracted_files.push(ExtractedFile {
-                path: normalize_path(&entry_path),
+                path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 content,
                 size: size as i64,
                 mode: mode as i32,

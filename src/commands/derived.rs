@@ -6,6 +6,7 @@
 //! of existing packages with patches and file overrides.
 
 use anyhow::Result;
+use conary::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
 
@@ -203,8 +204,7 @@ pub fn cmd_derive_patch(
     patch.insert(&conn)?;
 
     // Store patch content in CAS
-    let db_path_obj = Path::new(db_path);
-    let objects_dir = db_path_obj.parent().unwrap_or(Path::new(".")).join("objects");
+    let objects_dir = objects_dir(db_path);
     let cas = conary::filesystem::CasStore::new(&objects_dir)?;
     cas.store(&patch_content)?;
 
@@ -244,8 +244,7 @@ pub fn cmd_derive_override(
         let source_hash = conary::hash::sha256(&content);
 
         // Store content in CAS
-        let db_path_obj = Path::new(db_path);
-        let objects_dir = db_path_obj.parent().unwrap_or(Path::new(".")).join("objects");
+        let objects_dir = objects_dir(db_path);
         let cas = conary::filesystem::CasStore::new(&objects_dir)?;
         cas.store(&content)?;
 
@@ -283,8 +282,7 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
     }
 
     // Get CAS
-    let db_path_obj = Path::new(db_path);
-    let objects_dir = db_path_obj.parent().unwrap_or(Path::new(".")).join("objects");
+    let objects_dir = objects_dir(db_path);
     let cas = conary::filesystem::CasStore::new(&objects_dir)?;
 
     println!("Building derived package '{}' from '{}'...", name, derived.parent_name);

@@ -2,6 +2,7 @@
 //! Package collection/group management commands
 
 use clap::Subcommand;
+use super::DbArgs;
 
 #[derive(Subcommand)]
 pub enum CollectionCommands {
@@ -18,16 +19,14 @@ pub enum CollectionCommands {
         #[arg(long, value_delimiter = ',')]
         members: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// List all collections
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Show details of a collection
@@ -35,9 +34,8 @@ pub enum CollectionCommands {
         /// Name of the collection
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Add packages to a collection
@@ -49,9 +47,8 @@ pub enum CollectionCommands {
         #[arg(value_delimiter = ',')]
         members: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Remove packages from a collection
@@ -63,9 +60,8 @@ pub enum CollectionCommands {
         #[arg(value_delimiter = ',')]
         members: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Delete a collection
@@ -73,8 +69,7 @@ pub enum CollectionCommands {
         /// Name of the collection
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

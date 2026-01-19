@@ -71,9 +71,9 @@ impl RecipeGraph {
             self.reverse_edges.entry(dep.clone()).or_default();
 
             // Add the edge: name -> dep (name depends on dep)
-            self.edges.get_mut(&name).unwrap().insert(dep.clone());
+            self.edges.get_mut(&name).expect("entry initialized above").insert(dep.clone());
             // Add reverse edge: dep <- name (dep is depended on by name)
-            self.reverse_edges.get_mut(&dep).unwrap().insert(name.clone());
+            self.reverse_edges.get_mut(&dep).expect("entry initialized above").insert(name.clone());
         }
     }
 
@@ -163,7 +163,7 @@ impl RecipeGraph {
                 .iter()
                 .filter(|dep| !self.bootstrap_edges.contains(&(name.clone(), (*dep).clone())))
                 .count();
-            *in_degrees.get_mut(name).unwrap() = effective_deps;
+            *in_degrees.get_mut(name).expect("node initialized in map") = effective_deps;
         }
 
         in_degrees
@@ -266,7 +266,7 @@ impl RecipeGraph {
                     self.find_cycles_dfs(dep, visited, rec_stack, path, cycles);
                 } else if rec_stack.contains(dep) {
                     // Found a cycle - extract it from path
-                    let cycle_start = path.iter().position(|x| x == dep).unwrap();
+                    let cycle_start = path.iter().position(|x| x == dep).expect("cycle node must be in current path");
                     let cycle: Vec<String> = path[cycle_start..].to_vec();
                     cycles.push(cycle);
                 }
@@ -478,7 +478,7 @@ impl BootstrapPlan {
             .iter()
             .filter(|r| {
                 let deps = graph.dependencies(r).map_or(0, |d| d.len());
-                deps == 0 || (deps == 1 && graph.dependencies(r).unwrap().contains("linux-headers"))
+                deps == 0 || (deps == 1 && graph.dependencies(r).expect("recipe from build_order must exist in graph").contains("linux-headers"))
             })
             .cloned()
             .collect();

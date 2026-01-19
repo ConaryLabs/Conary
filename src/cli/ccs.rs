@@ -2,6 +2,7 @@
 //! CCS (Conary Container System) package format commands
 
 use clap::Subcommand;
+use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum CcsCommands {
@@ -127,13 +128,8 @@ pub enum CcsCommands {
         /// Path to .ccs package file
         package: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Show what would be installed without making changes
         #[arg(long)]
@@ -174,9 +170,8 @@ pub enum CcsCommands {
         #[arg(short, long, default_value = "oci")]
         format: String,
 
-        /// Path to the database file (for dependency resolution)
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Spawn a shell with packages available temporarily
@@ -189,9 +184,8 @@ pub enum CcsCommands {
         #[arg(required = true)]
         packages: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Shell to use (defaults to $SHELL or /bin/sh)
         #[arg(long)]
@@ -218,9 +212,8 @@ pub enum CcsCommands {
         #[arg(last = true)]
         command: Vec<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Additional environment variables (KEY=VALUE)
         #[arg(short, long)]

@@ -10,10 +10,11 @@
 
 #![allow(dead_code)]
 
-use super::resolve::{check_provides_dependencies, get_keyring_dir};
+use super::resolve::check_provides_dependencies;
 use crate::commands::{cmd_install, SandboxMode};
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
+use conary::db::paths::keyring_dir;
 use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
 use conary::repository;
@@ -149,7 +150,7 @@ fn handle_downloadable_deps(
 
     progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
     let temp_dir = TempDir::new()?;
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = keyring_dir(db_path);
 
     match repository::download_dependencies(to_download, temp_dir.path(), Some(&keyring_dir)) {
         Ok(downloaded) => {

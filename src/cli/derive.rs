@@ -2,14 +2,14 @@
 //! Derived package management commands
 
 use clap::Subcommand;
+use super::DbArgs;
 
 #[derive(Subcommand)]
 pub enum DeriveCommands {
     /// List all derived packages
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show detailed information
         #[arg(short, long)]
@@ -21,9 +21,8 @@ pub enum DeriveCommands {
         /// Name of the derived package
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Create a new derived package
@@ -46,9 +45,8 @@ pub enum DeriveCommands {
         #[arg(long)]
         description: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Add a patch to a derived package
@@ -63,9 +61,8 @@ pub enum DeriveCommands {
         #[arg(long)]
         strip: Option<i32>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Add a file override to a derived package
@@ -86,9 +83,8 @@ pub enum DeriveCommands {
         #[arg(long)]
         mode: Option<u32>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Build a derived package
@@ -96,9 +92,8 @@ pub enum DeriveCommands {
         /// Name of the derived package
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Delete a derived package
@@ -106,15 +101,13 @@ pub enum DeriveCommands {
         /// Name of the derived package
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// List stale derived packages (parent was updated)
     Stale {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

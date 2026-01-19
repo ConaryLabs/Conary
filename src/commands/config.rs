@@ -5,6 +5,7 @@
 //! Commands for tracking, diffing, and managing configuration files.
 
 use anyhow::Result;
+use conary::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
 
@@ -91,10 +92,7 @@ pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
 
     // Get the CAS store
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let cas = CasStore::new(&objects_dir)?;
 
     // Get the original (package) content from CAS
@@ -172,10 +170,7 @@ pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
 
     // Store in CAS
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let cas = CasStore::new(&objects_dir)?;
     let hash = cas.store(&content)?;
 
@@ -213,10 +208,7 @@ pub fn cmd_config_restore(db_path: &str, path: &str, root: &str, backup_id: Opti
     };
 
     // Get content from CAS
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let cas = CasStore::new(&objects_dir)?;
 
     let content = cas.retrieve(&backup.backup_hash)
@@ -272,10 +264,7 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
         return Ok(());
     }
 
-    let _objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let _objects_dir = objects_dir(db_path);
 
     let mut modified_count = 0;
     let mut missing_count = 0;

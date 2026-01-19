@@ -51,23 +51,23 @@ struct Patterns {
 static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
     Patterns {
         // User/Group management
-        useradd: Regex::new(r"(?m)^\s*(getent\s+passwd\s+(\S+)\s*\|\|\s*)?useradd\s+(.+)$").unwrap(),
-        groupadd: Regex::new(r"(?m)^\s*(getent\s+group\s+(\S+)\s*\|\|\s*)?groupadd\s+(.+)$").unwrap(),
+        useradd: Regex::new(r"(?m)^\s*(getent\s+passwd\s+(\S+)\s*\|\|\s*)?useradd\s+(.+)$").expect("Invalid regex pattern"),
+        groupadd: Regex::new(r"(?m)^\s*(getent\s+group\s+(\S+)\s*\|\|\s*)?groupadd\s+(.+)$").expect("Invalid regex pattern"),
 
         // Directory creation
-        mkdir: Regex::new(r"(?m)^\s*mkdir\s+(-p\s+)?(.+)$").unwrap(),
-        install_d: Regex::new(r"(?m)^\s*install\s+.*-d\s+(.+)$").unwrap(),
+        mkdir: Regex::new(r"(?m)^\s*mkdir\s+(-p\s+)?(.+)$").expect("Invalid regex pattern"),
+        install_d: Regex::new(r"(?m)^\s*install\s+.*-d\s+(.+)$").expect("Invalid regex pattern"),
 
         // Systemd operations
-        systemctl_enable: Regex::new(r"(?m)^\s*systemctl\s+(--no-reload\s+)?(enable|disable)\s+(\S+)").unwrap(),
-        systemctl_reload: Regex::new(r"(?m)^\s*systemctl\s+daemon-reload").unwrap(),
+        systemctl_enable: Regex::new(r"(?m)^\s*systemctl\s+(--no-reload\s+)?(enable|disable)\s+(\S+)").expect("Invalid regex pattern"),
+        systemctl_reload: Regex::new(r"(?m)^\s*systemctl\s+daemon-reload").expect("Invalid regex pattern"),
 
         // System cache updates (detected but handled by triggers)
-        ldconfig: Regex::new(r"(?m)^\s*(/sbin/)?ldconfig").unwrap(),
+        ldconfig: Regex::new(r"(?m)^\s*(/sbin/)?ldconfig").expect("Invalid regex pattern"),
 
         // Complex patterns to flag as uncertain
-        external_script: Regex::new(r"(?m)^\s*(/[\w/.-]+\.sh|source\s+|\.[\s/])").unwrap(),
-        complex_logic: Regex::new(r"(?m)(for\s+\w+\s+in|while\s+|case\s+|function\s+\w+|\$\([^)]+\))").unwrap(),
+        external_script: Regex::new(r"(?m)^\s*(/[\w/.-]+\.sh|source\s+|\.[\s/])").expect("Invalid regex pattern"),
+        complex_logic: Regex::new(r"(?m)(for\s+\w+\s+in|while\s+|case\s+|function\s+\w+|\$\([^)]+\))").expect("Invalid regex pattern"),
     }
 });
 

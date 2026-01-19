@@ -2,6 +2,7 @@
 //! System model management commands
 
 use clap::Subcommand;
+use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum ModelCommands {
@@ -15,9 +16,8 @@ pub enum ModelCommands {
         #[arg(short, long, default_value = "/etc/conary/system.toml")]
         model: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Apply the system model to reach the desired state
@@ -30,13 +30,8 @@ pub enum ModelCommands {
         #[arg(short, long, default_value = "/etc/conary/system.toml")]
         model: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Show what would be done without making changes
         #[arg(long)]
@@ -65,9 +60,8 @@ pub enum ModelCommands {
         #[arg(short, long, default_value = "/etc/conary/system.toml")]
         model: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show details of differences (verbose output)
         #[arg(short, long)]
@@ -84,9 +78,8 @@ pub enum ModelCommands {
         #[arg(short, long, default_value = "system.toml")]
         output: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Add a comment/description to the model
         #[arg(long)]
@@ -122,8 +115,7 @@ pub enum ModelCommands {
         #[arg(long)]
         description: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

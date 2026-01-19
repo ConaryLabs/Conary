@@ -2,6 +2,7 @@
 //! System management commands (init, verify, rollback)
 
 use anyhow::Result;
+use conary::db::paths::objects_dir;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -91,10 +92,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
     let mut conn = conary::db::open(db_path)?;
 
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
@@ -371,10 +369,7 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
         return verify_against_rpm(&conn, package);
     }
 
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 

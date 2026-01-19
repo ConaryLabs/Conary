@@ -25,7 +25,7 @@
 //! - `model` - System model commands
 //! - `collection` - Collection management (create, delete, etc.)
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 mod bootstrap;
 mod ccs;
@@ -56,6 +56,25 @@ pub use state::StateCommands;
 pub use system::SystemCommands;
 pub use trigger::TriggerCommands;
 
+/// Database path arguments
+#[derive(Args, Clone, Debug)]
+pub struct DbArgs {
+    /// Path to the database file
+    #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
+    pub db_path: String,
+}
+
+/// Common arguments for filesystem operations
+#[derive(Args, Clone, Debug)]
+pub struct CommonArgs {
+    #[command(flatten)]
+    pub db: DbArgs,
+
+    /// Installation root directory
+    #[arg(short, long, default_value = "/")]
+    pub root: String,
+}
+
 #[derive(Parser)]
 #[command(name = "conary")]
 #[command(author = "Conary Project")]
@@ -76,13 +95,8 @@ pub enum Commands {
         /// Package name, path to package file, or @collection
         package: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Specific version to install
         #[arg(short, long)]
@@ -133,13 +147,8 @@ pub enum Commands {
         /// Package name to remove
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Specific version to remove (required if multiple versions installed)
         #[arg(short, long)]
@@ -159,13 +168,8 @@ pub enum Commands {
         /// Optional package name or @collection (updates all if not specified)
         package: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Only apply security updates (critical/important severity)
         #[arg(long)]
@@ -177,9 +181,8 @@ pub enum Commands {
         /// Search pattern
         pattern: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// List installed packages
@@ -187,9 +190,8 @@ pub enum Commands {
         /// Optional pattern to filter packages
         pattern: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Find package owning a file path
         #[arg(long)]
@@ -214,13 +216,8 @@ pub enum Commands {
 
     /// Remove orphaned packages (installed as dependencies but no longer needed)
     Autoremove {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
 
         /// Show what would be removed without making changes
         #[arg(long)]
@@ -240,9 +237,8 @@ pub enum Commands {
         /// Package name to pin
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Unpin a package to allow updates and removal
@@ -250,9 +246,8 @@ pub enum Commands {
         /// Package name to unpin
         package_name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Cook a package from a recipe (build from source)

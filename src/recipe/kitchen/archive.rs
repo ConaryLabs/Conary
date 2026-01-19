@@ -12,7 +12,7 @@ use std::process::Command;
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     // Use curl for now (could use reqwest later)
     let output = Command::new("curl")
-        .args(["-fsSL", "-o", dest.to_str().unwrap(), url])
+        .args(["-fsSL", "-o", dest.to_str().expect("path must be valid utf-8"), url])
         .output()
         .map_err(|e| Error::DownloadError(format!("curl failed: {}", e)))?;
 
@@ -63,15 +63,15 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
         .unwrap_or("");
 
     let args: Vec<&str> = if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-        vec!["-xzf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+        vec!["-xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
     } else if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-        vec!["-xJf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+        vec!["-xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
     } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-        vec!["-xjf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+        vec!["-xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
     } else if filename.ends_with(".tar.zst") {
-        vec!["--zstd", "-xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+        vec!["--zstd", "-xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
     } else if filename.ends_with(".tar") {
-        vec!["-xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+        vec!["-xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
     } else {
         return Err(Error::ParseError(format!(
             "Unknown archive format: {}",
@@ -97,7 +97,7 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
 /// Apply a patch to the source directory
 pub fn apply_patch(source_dir: &Path, patch_path: &Path, strip: u32) -> Result<()> {
     let output = Command::new("patch")
-        .args(["-p", &strip.to_string(), "-i", patch_path.to_str().unwrap()])
+        .args(["-p", &strip.to_string(), "-i", patch_path.to_str().expect("patch path must be valid utf-8")])
         .current_dir(source_dir)
         .output()
         .map_err(|e| Error::IoError(format!("patch failed: {}", e)))?;

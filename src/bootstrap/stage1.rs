@@ -313,7 +313,7 @@ impl Stage1Builder {
         self.packages[idx].log.push_str(&format!("Fetching: {}\n", url));
 
         let output = Command::new("curl")
-            .args(["-fsSL", "-o", target_path.to_str().unwrap(), &url])
+            .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
             .output()
             .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
@@ -360,7 +360,7 @@ impl Stage1Builder {
                 self.packages[idx].log.push_str(&format!("Fetching additional: {}\n", filename));
 
                 let output = Command::new("curl")
-                    .args(["-fsSL", "-o", target_path.to_str().unwrap(), &url])
+                    .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
                     .output()
                     .map_err(|e| {
                         Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string())
@@ -442,24 +442,24 @@ impl Stage1Builder {
     fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
         fs::create_dir_all(dest)?;
 
-        let filename = archive.file_name().unwrap().to_string_lossy();
+        let filename = archive.file_name().expect("archive path must have a filename").to_string_lossy();
 
         let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
             Command::new("tar")
-                .args(["xJf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .args(["xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
                 .output()
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
             Command::new("tar")
-                .args(["xzf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .args(["xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
                 .output()
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
             Command::new("tar")
-                .args(["xjf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .args(["xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
                 .output()
         } else {
             // Try generic tar
             Command::new("tar")
-                .args(["xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap(), "--strip-components=1"])
+                .args(["xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
                 .output()
         };
 
@@ -482,24 +482,24 @@ impl Stage1Builder {
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
         fs::create_dir_all(dest)?;
 
-        let filename = archive.file_name().unwrap().to_string_lossy();
+        let filename = archive.file_name().expect("archive path must have a filename").to_string_lossy();
 
         let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
             Command::new("tar")
-                .args(["xJf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()])
+                .args(["xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
                 .output()
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
             Command::new("tar")
-                .args(["xzf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()])
+                .args(["xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
                 .output()
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
             Command::new("tar")
-                .args(["xjf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()])
+                .args(["xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
                 .output()
         } else {
             // Try generic tar
             Command::new("tar")
-                .args(["xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()])
+                .args(["xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
                 .output()
         };
 

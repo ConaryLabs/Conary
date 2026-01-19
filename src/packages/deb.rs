@@ -7,7 +7,8 @@
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::archive_utils::{check_file_size, compute_sha256, normalize_path};
+use crate::hash;
+use crate::packages::archive_utils::{check_file_size, normalize_path};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
@@ -341,7 +342,7 @@ impl DebPackage {
                         .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
                     files.push(PackageFile {
-                        path: normalize_path(&entry_path),
+                        path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                         size: size as i64,
                         mode: mode as i32,
                         sha256: None,
@@ -525,10 +526,10 @@ impl PackageFormat for DebPackage {
                         .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
                     // Compute SHA-256 using shared utility
-                    let hash = compute_sha256(&content);
+                    let hash = hash::sha256(&content);
 
                     extracted_files.push(ExtractedFile {
-                        path: normalize_path(&entry_path),
+                        path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                         content,
                         size: size as i64,
                         mode: mode as i32,

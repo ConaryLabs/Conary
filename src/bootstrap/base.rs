@@ -563,7 +563,7 @@ impl BaseBuilder {
 
     /// Fetch source archive
     fn fetch_source(&mut self, idx: usize) -> Result<PathBuf, BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
         let pkg_name = self.packages[idx].name.clone();
         let url = recipe.archive_url();
         let filename = recipe.archive_filename();
@@ -579,7 +579,7 @@ impl BaseBuilder {
         self.packages[idx].log.push_str(&format!("Fetching: {}\n", url));
 
         let output = Command::new("curl")
-            .args(["-fsSL", "-o", target_path.to_str().unwrap(), &url])
+            .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
             .output()
             .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
@@ -596,7 +596,7 @@ impl BaseBuilder {
 
     /// Fetch additional sources
     fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
         let pkg_name = self.packages[idx].name.clone();
 
         let additional: Vec<_> = recipe.source.additional
@@ -613,7 +613,7 @@ impl BaseBuilder {
                 self.packages[idx].log.push_str(&format!("Fetching: {}\n", filename));
 
                 let output = Command::new("curl")
-                    .args(["-fsSL", "-o", target_path.to_str().unwrap(), &url])
+                    .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
                     .output()
                     .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
@@ -635,7 +635,7 @@ impl BaseBuilder {
 
     /// Verify checksum
     fn verify_checksum(&self, idx: usize, path: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
         let pkg_name = &self.packages[idx].name;
         let expected = &recipe.source.checksum;
 
@@ -675,15 +675,15 @@ impl BaseBuilder {
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), BaseError> {
         fs::create_dir_all(dest)?;
 
-        let filename = archive.file_name().unwrap().to_string_lossy();
+        let filename = archive.file_name().expect("archive path must have a filename").to_string_lossy();
         let args = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            vec!["xJf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+            vec!["xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            vec!["xzf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+            vec!["xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            vec!["xjf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+            vec!["xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
         } else {
-            vec!["xf", archive.to_str().unwrap(), "-C", dest.to_str().unwrap()]
+            vec!["xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")]
         };
 
         let output = Command::new("tar")
@@ -715,7 +715,7 @@ impl BaseBuilder {
 
     /// Run setup phase
     fn run_setup(&mut self, idx: usize, src_dir: &Path, build_dir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
 
         if let Some(setup) = &recipe.build.setup {
             let setup = setup.clone();
@@ -737,7 +737,7 @@ impl BaseBuilder {
 
     /// Run configure phase
     fn run_configure(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
 
         let configure = match &recipe.build.configure {
             Some(cmd) if !cmd.is_empty() => cmd.clone(),
@@ -756,7 +756,7 @@ impl BaseBuilder {
 
     /// Run make phase
     fn run_make(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
 
         let make = match &recipe.build.make {
             Some(cmd) => cmd.clone(),
@@ -775,7 +775,7 @@ impl BaseBuilder {
 
     /// Run install phase
     fn run_install(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
 
         let install = match &recipe.build.install {
             Some(cmd) => cmd.clone(),
@@ -811,7 +811,7 @@ impl BaseBuilder {
         phase: &str,
     ) -> Result<(), BaseError> {
         let pkg_name = self.packages[idx].name.clone();
-        let recipe = self.packages[idx].recipe.as_ref().unwrap();
+        let recipe = self.packages[idx].recipe.as_ref().expect("recipe must be loaded before build");
 
         // Get environment from recipe
         let recipe_env: HashMap<String, String> = recipe.build.environment

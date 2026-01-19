@@ -312,7 +312,8 @@ impl PackageFormat for RpmPackage {
             }
 
             // Normalize path using shared utility
-            let abs_path = normalize_path(&entry.name);
+            let abs_path = normalize_path(&entry.name)
+                .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?;
 
             // Match with metadata to get SHA256 and confirm it's a tracked file
             if let Some(meta) = file_map.get(abs_path.as_str()) {

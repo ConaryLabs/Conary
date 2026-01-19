@@ -8,8 +8,9 @@
 //! - Transaction handling
 //! - CRUD operations for troves, changesets, files, etc.
 
-mod migrations;
+pub mod migrations;
 pub mod models;
+pub mod paths;
 pub mod schema;
 
 use crate::error::{Error, Result};

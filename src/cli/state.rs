@@ -2,14 +2,14 @@
 //! System state snapshot and rollback commands
 
 use clap::Subcommand;
+use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum StateCommands {
     /// List system state snapshots
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Limit number of states shown
         #[arg(short, long)]
@@ -21,9 +21,8 @@ pub enum StateCommands {
         /// State number to show
         state_number: i64,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Compare two system states
@@ -34,9 +33,8 @@ pub enum StateCommands {
         /// Target state number
         to_state: i64,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Revert system to a previous state
@@ -44,9 +42,8 @@ pub enum StateCommands {
         /// State number to revert to
         state_number: i64,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show what would be done without making changes
         #[arg(long)]
@@ -58,9 +55,8 @@ pub enum StateCommands {
         /// Number of states to keep
         keep: i64,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show what would be pruned without making changes
         #[arg(long)]
@@ -76,9 +72,8 @@ pub enum StateCommands {
         #[arg(long)]
         description: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Rollback a changeset
@@ -86,12 +81,7 @@ pub enum StateCommands {
         /// Changeset ID to rollback
         changeset_id: i64,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
-
-        /// Installation root directory
-        #[arg(short, long, default_value = "/")]
-        root: String,
+        #[command(flatten)]
+        common: CommonArgs,
     },
 }

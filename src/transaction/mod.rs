@@ -28,6 +28,7 @@ pub use planner::{
 };
 pub use recovery::RecoveryOutcome;
 
+use crate::db::paths::objects_dir;
 use crate::filesystem::path::safe_join;
 use crate::filesystem::{CasStore, FileDeployer};
 use crate::hash::HashAlgorithm;
@@ -235,11 +236,7 @@ impl TransactionEngine {
         fs::create_dir_all(config.journal_dir.join("archive"))?;
 
         // Create CAS store
-        let cas_dir = config
-            .db_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("objects");
+        let cas_dir = objects_dir(&config.db_path.to_string_lossy());
         let cas = CasStore::with_algorithm(cas_dir, config.hash_algorithm)?;
         let deployer = FileDeployer::with_cas(cas.clone(), &config.root)?;
 

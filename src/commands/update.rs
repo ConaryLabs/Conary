@@ -5,6 +5,7 @@ use super::{cmd_install, SandboxMode};
 use super::progress::{UpdatePhase, UpdateProgress};
 use anyhow::Result;
 use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
+use conary::db::paths::objects_dir;
 use conary::delta::DeltaApplier;
 use conary::repository::{self, DownloadOptions};
 use rayon::prelude::*;
@@ -84,18 +85,6 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Get the keyring directory based on db_path
-fn get_keyring_dir(db_path: &str) -> PathBuf {
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| {
-        Path::new(db_path)
-            .parent()
-            .unwrap_or(Path::new("/var/lib/conary"))
-            .to_string_lossy()
-            .to_string()
-    });
-    PathBuf::from(db_dir).join("keys")
-}
-
 /// Result of a download attempt for an update
 #[derive(Debug)]
 enum DownloadResult {
@@ -117,17 +106,14 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
 
     let mut conn = conary::db::open(db_path)?;
 
-    let objects_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("objects");
+    let objects_dir = objects_dir(db_path);
     let temp_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
         .join("tmp");
     std::fs::create_dir_all(&temp_dir)?;
 
-    let keyring_dir = get_keyring_dir(db_path);
+    let keyring_dir = conary::db::paths::keyring_dir(db_path);
 
     let installed_troves = if let Some(pkg_name) = package {
         Trove::find_by_name(&conn, &pkg_name)?

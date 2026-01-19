@@ -2,6 +2,7 @@
 //! Repository management commands
 
 use clap::Subcommand;
+use super::DbArgs;
 
 #[derive(Subcommand)]
 pub enum RepoCommands {
@@ -13,9 +14,8 @@ pub enum RepoCommands {
         /// Repository URL (for metadata)
         url: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Content mirror URL for package downloads (reference mirror pattern)
         ///
@@ -68,9 +68,8 @@ pub enum RepoCommands {
 
     /// List configured repositories
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show all repositories (including disabled)
         #[arg(short, long)]
@@ -82,9 +81,8 @@ pub enum RepoCommands {
         /// Repository name
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Enable a repository
@@ -92,9 +90,8 @@ pub enum RepoCommands {
         /// Repository name
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Disable a repository
@@ -102,9 +99,8 @@ pub enum RepoCommands {
         /// Repository name
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Sync repository metadata
@@ -112,9 +108,8 @@ pub enum RepoCommands {
         /// Optional repository name (syncs all enabled if not specified)
         name: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Force sync even if recently synced
         #[arg(short, long)]
@@ -130,17 +125,15 @@ pub enum RepoCommands {
         /// Path to GPG public key file, or URL to fetch from
         key: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// List imported GPG keys
     #[command(name = "key-list")]
     KeyList {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Remove a GPG key for a repository
@@ -149,8 +142,7 @@ pub enum RepoCommands {
         /// Repository name whose key to remove
         repository: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }
