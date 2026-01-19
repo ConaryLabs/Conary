@@ -1,7 +1,9 @@
-use sha2::{Digest, Sha256};
+use crate::hash;
+use crate::filesystem::path::sanitize_path;
 use tracing::warn;
 
-pub const MAX_EXTRACTION_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
+/// Maximum size for a single file during package extraction (512 MB).
+pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFREG: u32 = 0o100000;
@@ -12,21 +14,33 @@ pub fn is_regular_file_mode(mode: u32) -> bool {
     (mode & S_IFMT) == S_IFREG
 }
 
-/// Normalize archive entry path to absolute form
+/// Normalize archive entry path to absolute form with security sanitization
 pub fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim_start_matches("./").trim_start_matches('.');
-    if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{}", trimmed)
+    match sanitize_path(path) {
+        Ok(sanitized) => {
+            let s = sanitized.to_string_lossy();
+            if s.starts_with('/') {
+                s.to_string()
+            } else {
+                format!("/{}", s)
+            }
+        }
+        Err(_) => {
+            // Fallback for cases where sanitization fails (e.g. empty)
+            // though sanitize_path is strict.
+            let trimmed = path.trim_start_matches("./").trim_start_matches('.');
+            if trimmed.starts_with('/') {
+                trimmed.to_string()
+            } else {
+                format!("/{}", trimmed)
+            }
+        }
     }
 }
 
 /// Compute SHA256 hash of content
 pub fn compute_sha256(content: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    format!("{:x}", hasher.finalize())
+    hash::sha256(content)
 }
 
 /// Check if file size exceeds limit, warn if so

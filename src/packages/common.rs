@@ -9,13 +9,6 @@ use crate::db::models::{Trove, TroveType};
 use crate::packages::traits::{ConfigFileInfo, Dependency, PackageFile, Scriptlet};
 use std::path::PathBuf;
 
-/// Maximum size for a single file during package extraction (512 MB).
-///
-/// Files larger than this limit are skipped during extraction to prevent
-/// memory exhaustion attacks from malicious packages. Legitimate packages
-/// rarely contain individual files larger than this.
-pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
-
 /// Common metadata shared by all package formats
 ///
 /// This struct contains the core fields that every package format provides.
