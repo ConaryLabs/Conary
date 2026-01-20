@@ -1757,3 +1757,39 @@ pub fn migrate_v34(conn: &Connection) -> Result<()> {
     info!("Schema version 34 applied successfully (federation peers and stats)");
     Ok(())
 }
+
+/// Version 35: Daemon job persistence
+///
+/// Adds the daemon_jobs table for persisting job state across daemon restarts.
+/// Jobs are identified by UUID and have an optional idempotency key for deduplication.
+pub fn migrate_v35(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 35");
+
+    conn.execute_batch(
+        "
+        -- Daemon jobs table
+        -- Persists job state across daemon restarts
+        CREATE TABLE daemon_jobs (
+            id TEXT PRIMARY KEY NOT NULL,           -- UUID job identifier
+            idempotency_key TEXT UNIQUE,            -- Client-provided key for deduplication
+            kind TEXT NOT NULL,                     -- install/remove/update/dry_run/rollback/verify/gc
+            spec_json TEXT NOT NULL,                -- Serialized operation specification
+            status TEXT NOT NULL DEFAULT 'queued',  -- queued/running/completed/failed/cancelled
+            result_json TEXT,                       -- Serialized result (if completed)
+            error_json TEXT,                        -- RFC7807 error (if failed)
+            requested_by_uid INTEGER,               -- UID of requesting user
+            client_info TEXT,                       -- Peer creds, socket path
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TEXT,
+            completed_at TEXT
+        );
+
+        CREATE INDEX idx_daemon_jobs_status ON daemon_jobs(status);
+        CREATE INDEX idx_daemon_jobs_created ON daemon_jobs(created_at DESC);
+        CREATE INDEX idx_daemon_jobs_idempotency ON daemon_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 35 applied successfully (daemon jobs)");
+    Ok(())
+}

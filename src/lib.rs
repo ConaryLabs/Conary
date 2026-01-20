@@ -47,6 +47,9 @@ pub mod federation;
 #[cfg(feature = "server")]
 pub mod server;
 
+#[cfg(feature = "daemon")]
+pub mod daemon;
+
 pub use components::{ComponentClassifier, ComponentType};
 pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 pub use error::{Error, Result};

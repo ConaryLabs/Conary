@@ -13,6 +13,7 @@ categories = ["command-line-utilities"]
 [features]
 default = []
 server = ["dep:axum", "dep:tokio", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime", "dep:async-trait", "dep:futures", "dep:dashmap", "dep:url", "dep:parking_lot", "dep:mdns-sd", "dep:flume"]
+daemon = ["server", "dep:sd-notify", "dep:axum-extra", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-stream"]
 
 [dependencies]
 # Database
@@ -91,7 +92,7 @@ fs2 = "0.4"                      # File locking for transaction safety
 crc32fast = "1.4"                # Fast CRC32 for journal integrity
 
 # Container isolation for scriptlets (Linux namespaces)
-nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource"] }
+nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
 libc = "0.2"                    # Low-level syscalls for resource limits
 
 # Ed25519 signatures for CCS package signing
@@ -119,6 +120,15 @@ url = { version = "2.5", optional = true }  # URL parsing for peer endpoints
 parking_lot = { version = "0.12", optional = true }  # Efficient RwLock for bloom filter
 mdns-sd = { version = "0.11", optional = true }  # mDNS service discovery for cell-local peers
 flume = { version = "0.11", optional = true }  # Channel for mDNS events (used by mdns-sd)
+
+# Daemon (feature-gated)
+sd-notify = { version = "0.4", optional = true }  # Systemd notification (watchdog, ready)
+axum-extra = { version = "0.9", features = ["typed-header"], optional = true }  # SSE, typed headers
+hyper = { version = "1.4", features = ["server", "http1"], optional = true }  # Low-level HTTP for Unix sockets
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"], optional = true }  # Tokio integration for hyper
+http-body-util = { version = "0.1", optional = true }  # Body conversion utilities
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }  # Stream utilities for SSE
+
 diffy = "0.4.2"
 goblin = "0.10.4"
 which = "8.0.0"

@@ -124,6 +124,10 @@ pub enum Error {
     /// Circuit breaker open (peer temporarily unavailable)
     #[error("Circuit breaker open: {0}")]
     CircuitOpen(String),
+
+    /// Operation was cancelled
+    #[error("Operation cancelled: {0}")]
+    Cancelled(String),
 }
 
 /// Result type alias using Conary's Error type

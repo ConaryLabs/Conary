@@ -35,7 +35,9 @@ Always use Context7 MCP when you need library/API documentation, code generation
 ```bash
 cargo build --release                    # Client-only (default)
 cargo build --release --features server  # With Remi server
+cargo build --release --features daemon  # With conaryd daemon
 cargo test
+cargo test --features daemon             # Include daemon tests
 cargo clippy -- -D warnings
 ```
 
@@ -97,10 +99,11 @@ cargo clippy -- -D warnings
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup, AI-assisted operations) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, manifests, mTLS, mDNS |
+| `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd integration (feature-gated: `--features daemon`) |
 
 ## Database Schema
 
-Currently v34. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits, federation_peers, federation_stats.
+Currently v35. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits, federation_peers, federation_stats, daemon_jobs.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -129,6 +132,7 @@ Key schema additions:
 - v32: `provenance_sources`, `provenance_builds`, `provenance_signatures`, `provenance_content`, `provenance_verifications` - Package DNA / full provenance tracking
 - v33: `capabilities`, `capability_audits` - package capability declarations (network, filesystem, syscalls)
 - v34: `federation_peers`, `federation_stats` - CAS federation peers and daily stats
+- v35: `daemon_jobs` - persistent job queue for conaryd daemon
 
 ## Testing
 
@@ -139,7 +143,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-875+ tests total (with --features server).
+980+ tests total (with --features daemon).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
@@ -211,4 +215,74 @@ conary federation add-peer URL --tier cell_hub
 conary federation test                # Test peer connectivity
 conary federation scan                # mDNS discovery (server feature)
 conary federation stats --days 7      # Show bandwidth savings
+```
+
+## conaryd Daemon
+
+Local daemon providing REST API for package operations, acting as the "Guardian of State" with exclusive transaction lock ownership.
+
+**Architecture:**
+- Unix socket primary (`/run/conary/conaryd.sock`) with optional TCP
+- SO_PEERCRED for peer authentication
+- SQLite job persistence (survives daemon restart)
+- SSE for real-time progress streaming
+- Systemd socket activation and watchdog support
+
+**Daemon Modules:**
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | DaemonConfig, DaemonState, run_daemon() |
+| `routes.rs` | Axum router with all REST endpoints |
+| `jobs.rs` | DaemonJob model, OperationQueue with priority |
+| `client.rs` | CLI forwarding client with SSE support |
+| `socket.rs` | Unix socket + optional TCP listener |
+| `lock.rs` | System-wide flock wrapper |
+| `systemd.rs` | Socket activation, watchdog, idle timeout |
+| `auth.rs` | Peer credentials, permission checking, audit logging |
+
+**REST API:**
+```
+GET  /health                        # Health check
+GET  /v1/version                    # API version info
+GET  /v1/metrics                    # Prometheus format metrics
+GET  /v1/packages                   # List installed packages
+GET  /v1/packages/:name             # Package details
+GET  /v1/packages/:name/files       # Package file list
+GET  /v1/search?q=pattern           # Search packages
+GET  /v1/depends/:name              # Dependencies
+GET  /v1/rdepends/:name             # Reverse dependencies
+GET  /v1/history                    # Transaction history
+GET  /v1/transactions               # List jobs
+GET  /v1/transactions/:id           # Job details
+GET  /v1/transactions/:id/stream    # SSE progress stream
+GET  /v1/events                     # Global SSE event stream
+POST /v1/transactions               # Create transaction
+POST /v1/packages/install           # Install packages
+POST /v1/packages/remove            # Remove packages
+POST /v1/packages/update            # Update packages
+DELETE /v1/transactions/:id         # Cancel job
+```
+
+**CLI Forwarding:**
+```rust
+// CLI checks for daemon, forwards if available
+if let Ok(client) = DaemonClient::connect() {
+    client.install(&["nginx"], Default::default())?;
+} else {
+    // Fallback to direct execution
+}
+```
+
+**Systemd Integration:**
+```ini
+# conaryd.socket
+[Socket]
+ListenStream=/run/conary/conaryd.sock
+SocketMode=0660
+
+# conaryd.service
+[Service]
+Type=notify
+ExecStart=/usr/bin/conary daemon
+WatchdogSec=60s
 ```

@@ -19,7 +19,7 @@ use std::fs;
 use std::path::Path;
 
 use super::journal::{find_incomplete_journals, JournalRecord, TransactionJournal};
-use super::{FileType, TransactionEngine, TransactionState};
+use super::{move_file_atomic, FileType, TransactionEngine, TransactionState};
 
 /// Outcome of recovering a transaction
 #[derive(Debug, Clone)]
@@ -270,8 +270,8 @@ pub fn rollback_transaction(
                         }
                     }
 
-                    // Regular file - rename back
-                    if let Err(e) = fs::rename(backup_path, &final_path) {
+                    // Regular file - move back (handles cross-filesystem)
+                    if let Err(e) = move_file_atomic(backup_path, &final_path) {
                         log::warn!(
                             "Failed to restore backup {:?} -> {:?}: {}",
                             backup_path,

@@ -32,14 +32,64 @@ use crate::db::paths::objects_dir;
 use crate::filesystem::path::safe_join;
 use crate::filesystem::{CasStore, FileDeployer};
 use crate::hash::HashAlgorithm;
+use crate::progress::ProgressTracker;
 use crate::Result;
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use uuid::Uuid;
+
+/// Move a file atomically, falling back to copy+sync+delete for cross-filesystem moves.
+///
+/// This handles the EXDEV error that occurs when source and destination are on
+/// different filesystems (e.g., staging on /var and target on /usr).
+///
+/// # Arguments
+/// * `src` - Source file path
+/// * `dst` - Destination file path
+///
+/// # Safety
+/// Uses fsync to ensure data durability before removing source file.
+pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            // Cross-filesystem: copy + fsync + delete
+            log::debug!(
+                "Cross-filesystem move detected ({} -> {}), using copy fallback",
+                src.display(),
+                dst.display()
+            );
+
+            // Copy file content
+            fs::copy(src, dst)?;
+
+            // fsync the destination file to ensure data is on disk
+            let file = File::open(dst)?;
+            file.sync_all()?;
+            drop(file);
+
+            // fsync the parent directory to ensure directory entry is persisted
+            if let Some(parent) = dst.parent() {
+                if let Ok(dir) = File::open(parent) {
+                    // Ignore errors from fsync on directory - not all filesystems support it
+                    let _ = dir.sync_all();
+                }
+            }
+
+            // Now safe to remove source
+            fs::remove_file(src)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
 
 /// Transaction engine configuration
 #[derive(Debug, Clone)]
@@ -317,6 +367,7 @@ impl TransactionEngine {
             start_time: Utc::now(),
             description: description.to_string(),
             lock_file: Some(lock_file),
+            options: TransactionOptions::default(),
         };
 
         // Write begin record
@@ -337,6 +388,59 @@ impl TransactionEngine {
     }
 }
 
+/// Options for controlling transaction execution
+#[derive(Default)]
+pub struct TransactionOptions {
+    /// Cancel token - set to true to request cancellation
+    pub cancel: Option<Arc<AtomicBool>>,
+    /// Progress tracker for reporting operation progress
+    pub progress: Option<Arc<dyn ProgressTracker>>,
+}
+
+impl TransactionOptions {
+    /// Create new transaction options with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the cancel token
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set the progress tracker
+    pub fn with_progress(mut self, progress: Arc<dyn ProgressTracker>) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Check if cancellation has been requested
+    fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .map_or(false, |c| c.load(Ordering::Relaxed))
+    }
+
+    /// Return Cancelled error if cancellation requested
+    fn check_cancelled(&self, operation: &str) -> crate::Result<()> {
+        if self.is_cancelled() {
+            Err(crate::Error::Cancelled(operation.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Report progress if a tracker is available
+    fn report_progress(&self, current: u64, total: u64, message: &str) {
+        if let Some(ref progress) = self.progress {
+            progress.set_position(current);
+            progress.set_length(total);
+            progress.set_message(message);
+        }
+    }
+}
+
 /// Represents an active transaction
 pub struct Transaction<'a> {
     engine: &'a TransactionEngine,
@@ -348,6 +452,8 @@ pub struct Transaction<'a> {
     #[allow(dead_code)]
     description: String,
     lock_file: Option<File>,
+    /// Options for controlling execution (cancel, progress)
+    options: TransactionOptions,
 }
 
 impl<'a> Transaction<'a> {
@@ -364,6 +470,26 @@ impl<'a> Transaction<'a> {
     /// Get the transaction plan (if planned)
     pub fn plan(&self) -> Option<&TransactionPlan> {
         self.plan.as_ref()
+    }
+
+    /// Set execution options (cancel token, progress tracker)
+    pub fn set_options(&mut self, options: TransactionOptions) {
+        self.options = options;
+    }
+
+    /// Set the cancel token for this transaction
+    pub fn set_cancel_token(&mut self, cancel: Arc<AtomicBool>) {
+        self.options.cancel = Some(cancel);
+    }
+
+    /// Set the progress tracker for this transaction
+    pub fn set_progress(&mut self, progress: Arc<dyn ProgressTracker>) {
+        self.options.progress = Some(progress);
+    }
+
+    /// Check if cancellation has been requested
+    pub fn is_cancelled(&self) -> bool {
+        self.options.is_cancelled()
     }
 
     /// Plan the transaction using VfsTree for conflict detection
@@ -439,8 +565,19 @@ impl<'a> Transaction<'a> {
         })?;
 
         let backup_dir = self.engine.txn_work_dir(&self.uuid).join("backup");
+        let total = plan.files_to_backup.len() as u64;
 
-        for backup_info in &plan.files_to_backup {
+        for (i, backup_info) in plan.files_to_backup.iter().enumerate() {
+            // Check for cancellation
+            self.options.check_cancelled("backup")?;
+
+            // Report progress
+            self.options.report_progress(
+                i as u64,
+                total,
+                &format!("Backing up {}", backup_info.path.display()),
+            );
+
             let source = safe_join(&self.engine.config.root, &backup_info.path)?;
             let backup_path = backup_dir.join(backup_info.path.strip_prefix("/").unwrap_or(&backup_info.path));
 
@@ -461,8 +598,8 @@ impl<'a> Transaction<'a> {
                 // For directories, we just note they exist
                 fs::create_dir_all(&backup_path)?;
             } else {
-                // Regular file - rename to backup location
-                fs::rename(&source, &backup_path)?;
+                // Regular file - move to backup location (handles cross-FS)
+                move_file_atomic(&source, &backup_path)?;
             }
 
             self.journal.write(JournalRecord::Backup {
@@ -490,8 +627,19 @@ impl<'a> Transaction<'a> {
         })?;
 
         let stage_dir = self.engine.txn_work_dir(&self.uuid).join("stage");
+        let total = plan.files_to_stage.len() as u64;
 
-        for stage_info in &plan.files_to_stage {
+        for (i, stage_info) in plan.files_to_stage.iter().enumerate() {
+            // Check for cancellation
+            self.options.check_cancelled("stage")?;
+
+            // Report progress
+            self.options.report_progress(
+                i as u64,
+                total,
+                &format!("Staging {}", stage_info.path.display()),
+            );
+
             let relative_path = stage_info.path.strip_prefix("/").unwrap_or(&stage_info.path);
             let stage_path = stage_dir.join(relative_path);
 
@@ -555,8 +703,21 @@ impl<'a> Transaction<'a> {
             dirs_removed: 0,
         };
 
+        // Calculate total operations for progress tracking
+        let total_ops = (plan.dirs_to_create.len()
+            + plan.files_to_stage.len()
+            + plan.operations.iter().filter(|op| {
+                matches!(op.op_type, OperationType::RemoveFile | OperationType::RemoveSymlink)
+            }).count()
+            + plan.dirs_to_remove.len()) as u64;
+        let mut current_op = 0u64;
+
         // Create directories first (parent to child order)
         for dir in &plan.dirs_to_create {
+            self.options.check_cancelled("apply")?;
+            self.options.report_progress(current_op, total_ops, &format!("Creating {}", dir.display()));
+            current_op += 1;
+
             let target = safe_join(&self.engine.config.root, dir)?;
             fs::create_dir_all(&target)?;
             result.dirs_created += 1;
@@ -564,6 +725,13 @@ impl<'a> Transaction<'a> {
 
         // Move staged files to final locations
         for stage_info in &plan.files_to_stage {
+            self.options.check_cancelled("apply")?;
+            self.options.report_progress(
+                current_op,
+                total_ops,
+                &format!("Installing {}", stage_info.path.display()),
+            );
+            current_op += 1;
             let relative_path = stage_info.path.strip_prefix("/").unwrap_or(&stage_info.path);
             let stage_path = stage_dir.join(relative_path);
             let target = safe_join(&self.engine.config.root, &stage_info.path)?;
@@ -573,8 +741,8 @@ impl<'a> Transaction<'a> {
                 fs::create_dir_all(parent)?;
             }
 
-            // Atomic rename
-            fs::rename(&stage_path, &target)?;
+            // Move from stage to final location (handles cross-FS)
+            move_file_atomic(&stage_path, &target)?;
 
             // Count as add or replace based on whether we backed it up
             let was_replaced = plan
@@ -594,6 +762,14 @@ impl<'a> Transaction<'a> {
                 op.op_type,
                 OperationType::RemoveFile | OperationType::RemoveSymlink
             ) {
+                self.options.check_cancelled("apply")?;
+                self.options.report_progress(
+                    current_op,
+                    total_ops,
+                    &format!("Removing {}", op.path.display()),
+                );
+                current_op += 1;
+
                 let target = safe_join(&self.engine.config.root, &op.path)?;
                 if target.exists() || target.symlink_metadata().is_ok() {
                     fs::remove_file(&target)?;
@@ -604,6 +780,10 @@ impl<'a> Transaction<'a> {
 
         // Remove empty directories (child to parent order)
         for dir in plan.dirs_to_remove.iter().rev() {
+            self.options.check_cancelled("apply")?;
+            self.options.report_progress(current_op, total_ops, &format!("Cleanup {}", dir.display()));
+            current_op += 1;
+
             let target = safe_join(&self.engine.config.root, dir)?;
             if target.is_dir() && fs::read_dir(&target)?.next().is_none() {
                 fs::remove_dir(&target)?;
@@ -816,5 +996,38 @@ mod tests {
         };
 
         assert_eq!(result.total_operations(), 11);
+    }
+
+    #[test]
+    fn test_move_file_atomic_same_fs() {
+        let temp_dir = TempDir::new().unwrap();
+        let src = temp_dir.path().join("source.txt");
+        let dst = temp_dir.path().join("dest.txt");
+
+        fs::write(&src, "test content").unwrap();
+        assert!(src.exists());
+
+        move_file_atomic(&src, &dst).unwrap();
+
+        assert!(!src.exists());
+        assert!(dst.exists());
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "test content");
+    }
+
+    #[test]
+    fn test_move_file_atomic_preserves_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let src = temp_dir.path().join("binary_file");
+        let dst = temp_dir.path().join("moved_binary");
+
+        // Create a file with binary content
+        let content: Vec<u8> = (0..=255).collect();
+        fs::write(&src, &content).unwrap();
+
+        move_file_atomic(&src, &dst).unwrap();
+
+        assert!(!src.exists());
+        let read_content = fs::read(&dst).unwrap();
+        assert_eq!(read_content, content);
     }
 }
