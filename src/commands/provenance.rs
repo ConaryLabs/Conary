@@ -3,9 +3,73 @@
 //! Command implementations for Package DNA / Provenance queries
 
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD_ENGINE};
 use chrono::Utc;
-use rusqlite::Connection;
+use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
+use rusqlite::{Connection, params};
+use x509_cert::der::Decode;
+use sigstore::crypto::{CosignVerificationKey, Signature, SigningScheme};
+use sigstore::crypto::signing_key::SigStoreKeyPair;
+use sigstore::fulcio::{FulcioClient, FULCIO_ROOT, TokenProvider};
+use sigstore::fulcio::oauth::OauthTokenProvider;
+use sigstore::rekor::apis::entries_api;
+use sigstore::rekor::models::{
+    hashedrekord, log_entry::Body as RekorBody, LogEntry as RekorLogEntry, ProposedEntry,
+};
+use sigstore::trust::sigstore::SigstoreTrustRoot;
+use sigstore::trust::TrustRoot;
+use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
+use std::str::FromStr;
+use std::time::Duration;
+use thiserror::Error;
 use uuid::Uuid;
+use webpki::{EndEntityCert, KeyUsage};
+
+use conary::provenance::{build_slsa_statement, SlsaContext};
+
+#[derive(Debug, Error)]
+enum SigstoreCommandError {
+    #[error("provenance is missing DNA hash")]
+    MissingDnaHash,
+    #[error("Rekor entry missing hashedrekord data")]
+    MissingHashedRekord,
+    #[error("Rekor entry missing signature data")]
+    MissingSignature,
+    #[error("Rekor entry missing public key data")]
+    MissingPublicKey,
+    #[error("signing key is required unless --keyless is provided")]
+    MissingSigningKey,
+    #[error("Rekor entry contains unsupported public key")]
+    UnsupportedPublicKey,
+    #[error("Fulcio certificate chain verification failed: {0}")]
+    FulcioChain(String),
+    #[error("Base64 decode failed: {0}")]
+    Base64(#[from] base64::DecodeError),
+    #[error("Hex decode failed: {0}")]
+    Hex(#[from] hex::FromHexError),
+    #[error("PEM parse failed: {0}")]
+    Pem(#[from] pem::PemError),
+    #[error("Sigstore error: {0}")]
+    Sigstore(#[from] sigstore::errors::SigstoreError),
+    #[error("Rekor API error: {0}")]
+    RekorApi(#[from] reqwest::Error),
+    #[error("Rekor response parse error: {0}")]
+    RekorParse(#[from] serde_json::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("URL parse error: {0}")]
+    Url(#[from] url::ParseError),
+}
+
+#[derive(Debug)]
+struct RekorVerification {
+    hash_match: bool,
+    signature_valid: bool,
+    cert_chain_valid: bool,
+    entry_uuid: String,
+    entry_index: i64,
+    signer_kind: String,
+}
 
 /// Show provenance information for a package
 pub fn cmd_provenance_show(
@@ -64,7 +128,37 @@ pub fn cmd_provenance_verify(
             // Check Rekor log entry
             if let Some(rekor_index) = prov.rekor_log_index {
                 println!("[CHECKING] Rekor transparency log entry #{}...", rekor_index);
-                println!("[NOT IMPLEMENTED] Would verify against rekor.sigstore.dev");
+                let dna_hash = prov
+                    .dna_hash
+                    .as_deref()
+                    .ok_or(SigstoreCommandError::MissingDnaHash)?;
+                let entry = rekor_get_entry_by_index(rekor_index)?;
+                let report = verify_rekor_entry(&entry, dna_hash)?;
+
+                if report.hash_match {
+                    println!("[OK] DNA hash matches Rekor entry");
+                } else {
+                    println!("[FAIL] DNA hash does not match Rekor entry");
+                }
+
+                if report.signature_valid {
+                    println!("[OK] Rekor signature verified");
+                } else {
+                    println!("[FAIL] Rekor signature verification failed");
+                }
+
+                if report.cert_chain_valid {
+                    println!("[OK] Fulcio certificate chain verified");
+                } else if report.signer_kind == "key" {
+                    println!("[WARN] Fulcio certificate chain not present (key-based signature)");
+                } else {
+                    println!("[FAIL] Fulcio certificate chain verification failed");
+                }
+
+                println!(
+                    "[INFO] Rekor entry: uuid={}, log_index={}",
+                    report.entry_uuid, report.entry_index
+                );
                 println!();
             } else {
                 println!("[WARN] No Rekor transparency log entry found");
@@ -75,11 +169,25 @@ pub fn cmd_provenance_verify(
             // Check signatures
             if let Some(ref sigs) = prov.signatures_json {
                 println!("[CHECKING] Signatures...");
-                let count = sigs.matches("keyid").count();
+                let count = serde_json::from_str::<serde_json::Value>(sigs)
+                    .ok()
+                    .map(|value| {
+                        let builder = value
+                            .get("builder_sig")
+                            .and_then(|v| if v.is_null() { None } else { Some(1) })
+                            .unwrap_or(0);
+                        let reviewers = value
+                            .get("reviewer_sigs")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.len())
+                            .unwrap_or(0);
+                        builder + reviewers
+                    })
+                    .unwrap_or(0);
                 if all_signatures {
-                    println!("[NOT IMPLEMENTED] Would verify {} signature(s)", count);
+                    println!("[INFO] Recorded {} signature(s) in provenance", count);
                 } else {
-                    println!("[NOT IMPLEMENTED] Would verify builder signature");
+                    println!("[INFO] Recorded builder signature in provenance");
                 }
             } else {
                 println!("[WARN] No signatures found in provenance");
@@ -244,6 +352,22 @@ pub fn cmd_provenance_export(
             };
 
             let sbom = match format {
+                "slsa" => {
+                    let statement = build_slsa_statement(SlsaContext {
+                        name: &trove_name,
+                        version: &trove_version,
+                        dna_hash: prov.dna_hash.as_deref(),
+                        upstream_url: prov.upstream_url.as_deref(),
+                        upstream_hash: prov.upstream_hash.as_deref(),
+                        git_commit: prov.git_commit.as_deref(),
+                        recipe_hash: prov.recipe_hash.as_deref(),
+                        build_deps_json: prov.build_deps_json.as_deref(),
+                        host_arch: prov.host_arch.as_deref(),
+                        host_kernel: prov.host_kernel.as_deref(),
+                        dependencies: &deps,
+                    })?;
+                    statement
+                }
                 "cyclonedx" => generate_cyclonedx_sbom(&trove_name, &trove_version, &prov, &deps)?,
                 _ => generate_spdx_sbom(&trove_name, &trove_version, &prov, &deps)?,
             };
@@ -252,7 +376,7 @@ pub fn cmd_provenance_export(
             match output {
                 Some(path) => {
                     std::fs::write(path, &sbom)?;
-                    println!("SBOM written to: {}", path);
+                    println!("Provenance export written to: {}", path);
                 }
                 None => {
                     println!("{}", sbom);
@@ -457,7 +581,8 @@ fn collect_dependencies(conn: &Connection, trove_id: i64) -> Result<Vec<(String,
 pub fn cmd_provenance_register(
     db_path: &str,
     package: &str,
-    key: &str,
+    key: Option<&str>,
+    keyless: bool,
     dry_run: bool,
 ) -> Result<()> {
     let conn = Connection::open(db_path)?;
@@ -466,11 +591,15 @@ pub fn cmd_provenance_register(
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
 
     match trove_info {
-        Some((_trove_id, trove_name, trove_version)) => {
+        Some((trove_id, trove_name, trove_version)) => {
             println!("=== Register Provenance in Transparency Log ===");
             println!();
             println!("Package: {} v{}", trove_name, trove_version);
-            println!("Signing key: {}", key);
+            if keyless {
+                println!("Signing key: keyless (Fulcio)");
+            } else if let Some(key) = key {
+                println!("Signing key: {}", key);
+            }
             println!("Target: rekor.sigstore.dev");
             println!();
 
@@ -483,7 +612,29 @@ pub fn cmd_provenance_register(
                 println!("  - Build provenance");
                 println!("  - Signature");
             } else {
-                println!("[NOT IMPLEMENTED] Would sign and upload to Rekor");
+                let prov = query_provenance(&conn, trove_id)?;
+                let dna_hash = prov
+                    .dna_hash
+                    .as_deref()
+                    .ok_or(SigstoreCommandError::MissingDnaHash)?;
+
+                let signed = if keyless {
+                    sign_dna_keyless(dna_hash)?
+                } else {
+                    let key = key.ok_or(SigstoreCommandError::MissingSigningKey)?;
+                    sign_dna_with_key(dna_hash, key)?
+                };
+
+                let entry = rekor_create_entry(build_rekor_entry(dna_hash, &signed)?)?;
+                println!(
+                    "[OK] Rekor entry created: uuid={}, log_index={}",
+                    entry.uuid, entry.log_index
+                );
+
+                conn.execute(
+                    "UPDATE provenance SET rekor_log_index = ?1 WHERE trove_id = ?2",
+                    params![entry.log_index, trove_id],
+                )?;
             }
         }
         None => {
@@ -570,6 +721,226 @@ pub fn cmd_provenance_audit(
 
     println!();
     println!("Summary: {} complete, {} incomplete", complete, incomplete);
+
+    Ok(())
+}
+
+// === Sigstore helpers ===
+
+#[derive(Debug)]
+struct SignedDna {
+    signature: Vec<u8>,
+    public_key_pem: String,
+    signer_kind: String,
+}
+
+fn rekor_base_url() -> &'static str {
+    "https://rekor.sigstore.dev"
+}
+
+fn rekor_get_entry_by_index(index: i64) -> Result<RekorLogEntry, SigstoreCommandError> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/api/v1/log/entries?logIndex={}", rekor_base_url(), index);
+    let response = client.get(url).send()?.error_for_status()?;
+    let body = response.text()?;
+    let parsed = entries_api::parse_response(body);
+    Ok(RekorLogEntry::from_str(&parsed)?)
+}
+
+fn rekor_create_entry(entry: ProposedEntry) -> Result<RekorLogEntry, SigstoreCommandError> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/api/v1/log/entries", rekor_base_url());
+    let response = client.post(url).json(&entry).send()?.error_for_status()?;
+    let body = response.text()?;
+    let parsed = entries_api::parse_response(body);
+    Ok(RekorLogEntry::from_str(&parsed)?)
+}
+
+fn extract_hashedrekord_spec(entry: &RekorLogEntry) -> Result<hashedrekord::Spec, SigstoreCommandError> {
+    match &entry.body {
+        RekorBody::hashedrekord(payload) => Ok(serde_json::from_value(payload.spec.clone())?),
+        _ => Err(SigstoreCommandError::MissingHashedRekord),
+    }
+}
+
+fn dna_hash_bytes(dna_hash: &str) -> Result<Vec<u8>, SigstoreCommandError> {
+    let stripped = dna_hash.strip_prefix("sha256:").unwrap_or(dna_hash);
+    Ok(hex::decode(stripped)?)
+}
+
+fn sign_dna_with_key(dna_hash: &str, key_path: &str) -> Result<SignedDna, SigstoreCommandError> {
+    let key_bytes = std::fs::read(key_path)?;
+    let keypair = SigStoreKeyPair::from_pem(&key_bytes).or_else(|_| {
+        let password = std::env::var("CONARY_SIGNING_KEY_PASSWORD").unwrap_or_default();
+        if password.is_empty() {
+            Err(sigstore::errors::SigstoreError::KeyParseError(
+                "encrypted key detected but CONARY_SIGNING_KEY_PASSWORD is unset".to_string(),
+            ))
+        } else {
+            SigStoreKeyPair::from_encrypted_pem(&key_bytes, password.as_bytes())
+        }
+    })?;
+
+    let signing_scheme = match &keypair {
+        SigStoreKeyPair::ECDSA(keys) => match keys {
+            sigstore::crypto::signing_key::ecdsa::ECDSAKeys::P256(_) => {
+                SigningScheme::ECDSA_P256_SHA256_ASN1
+            }
+            sigstore::crypto::signing_key::ecdsa::ECDSAKeys::P384(_) => {
+                SigningScheme::ECDSA_P384_SHA384_ASN1
+            }
+        },
+        SigStoreKeyPair::ED25519(_) => SigningScheme::ED25519,
+        SigStoreKeyPair::RSA(_) => SigningScheme::RSA_PSS_SHA256(0),
+    };
+
+    let signer = keypair.to_sigstore_signer(&signing_scheme)?;
+    let signature = signer.sign(&dna_hash_bytes(dna_hash)?)?;
+    let public_key_pem = keypair.public_key_to_pem()?;
+
+    Ok(SignedDna {
+        signature,
+        public_key_pem,
+        signer_kind: "key".to_string(),
+    })
+}
+
+fn sign_dna_keyless(dna_hash: &str) -> Result<SignedDna, SigstoreCommandError> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let fulcio = FulcioClient::new(
+        url::Url::parse(FULCIO_ROOT)?,
+        TokenProvider::Oauth(OauthTokenProvider::default()),
+    );
+    let (signer, cert_chain) = rt.block_on(fulcio.request_cert(SigningScheme::default()))?;
+    let signature = signer.sign(&dna_hash_bytes(dna_hash)?)?;
+    let public_key_pem = cert_chain.to_string();
+
+    Ok(SignedDna {
+        signature,
+        public_key_pem,
+        signer_kind: "keyless".to_string(),
+    })
+}
+
+fn build_rekor_entry(dna_hash: &str, signed: &SignedDna) -> Result<ProposedEntry, SigstoreCommandError> {
+    let signature_b64 = BASE64_STD_ENGINE.encode(&signed.signature);
+    let public_key_b64 = BASE64_STD_ENGINE.encode(signed.public_key_pem.as_bytes());
+    let hash_value = dna_hash.strip_prefix("sha256:").unwrap_or(dna_hash).to_string();
+
+    Ok(ProposedEntry::Hashedrekord {
+        api_version: "0.0.1".to_string(),
+        spec: hashedrekord::Spec::new(
+            hashedrekord::Signature::new(signature_b64, hashedrekord::PublicKey::new(public_key_b64)),
+            hashedrekord::Data::new(hashedrekord::Hash::new(
+                hashedrekord::AlgorithmKind::sha256,
+                hash_value,
+            )),
+        ),
+    })
+}
+
+fn verify_rekor_entry(
+    entry: &RekorLogEntry,
+    dna_hash: &str,
+) -> Result<RekorVerification, SigstoreCommandError> {
+    let spec = extract_hashedrekord_spec(entry)?;
+    let expected = dna_hash.strip_prefix("sha256:").unwrap_or(dna_hash);
+    let hash_match = expected == spec.data.hash.value;
+
+    let signature_b64 = &spec.signature.content;
+    if signature_b64.is_empty() {
+        return Err(SigstoreCommandError::MissingSignature);
+    }
+
+    // public_key.decode() returns the base64-decoded PEM as a String
+    let public_key_pem_str = spec
+        .signature
+        .public_key
+        .decode()
+        .map_err(|_| SigstoreCommandError::MissingPublicKey)?;
+    if public_key_pem_str.is_empty() {
+        return Err(SigstoreCommandError::MissingPublicKey);
+    }
+
+    let signature = BASE64_STD_ENGINE.decode(signature_b64)?;
+    let public_key_pem = public_key_pem_str.as_bytes().to_vec();
+    let parsed_pem = pem::parse(&public_key_pem)?;
+
+    let (verification_key, signer_kind) = if parsed_pem.tag() == "CERTIFICATE" {
+        let cert = x509_cert::Certificate::from_der(parsed_pem.contents())
+            .map_err(|_| SigstoreCommandError::UnsupportedPublicKey)?;
+        let key = CosignVerificationKey::try_from(&cert.tbs_certificate.subject_public_key_info)
+            .map_err(|_| SigstoreCommandError::UnsupportedPublicKey)?;
+        (key, "keyless".to_string())
+    } else {
+        let key = CosignVerificationKey::try_from_pem(&public_key_pem)
+            .map_err(|_| SigstoreCommandError::UnsupportedPublicKey)?;
+        (key, "key".to_string())
+    };
+
+    let signature_valid = verification_key
+        .verify_signature(Signature::Raw(&signature), &dna_hash_bytes(dna_hash)?)
+        .is_ok();
+
+    let cert_chain_valid = if signer_kind == "keyless" {
+        verify_fulcio_chain(&public_key_pem, entry.integrated_time).is_ok()
+    } else {
+        false
+    };
+
+    Ok(RekorVerification {
+        hash_match,
+        signature_valid,
+        cert_chain_valid,
+        entry_uuid: entry.uuid.clone(),
+        entry_index: entry.log_index,
+        signer_kind,
+    })
+}
+
+fn verify_fulcio_chain(cert_pem: &[u8], integrated_time: i64) -> Result<(), SigstoreCommandError> {
+    let pem = pem::parse(cert_pem)?;
+    if pem.tag() != "CERTIFICATE" {
+        return Err(SigstoreCommandError::FulcioChain(
+            "public key is not a certificate".to_string(),
+        ));
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let trust_root = rt.block_on(SigstoreTrustRoot::new(None))?;
+    let fulcio_certs = trust_root.fulcio_certs()?;
+
+    let trust_anchors: Vec<TrustAnchor<'static>> = fulcio_certs
+        .into_iter()
+        .map(|cert| webpki::anchor_from_trusted_cert(&cert).map(|anchor| anchor.to_owned()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
+
+    let cert_der = CertificateDer::from(pem.contents().to_vec());
+    let end_entity = EndEntityCert::try_from(&cert_der)
+        .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
+
+    let verification_time = if integrated_time > 0 {
+        UnixTime::since_unix_epoch(Duration::from_secs(integrated_time as u64))
+    } else {
+        UnixTime::since_unix_epoch(Duration::from_secs(Utc::now().timestamp() as u64))
+    };
+
+    end_entity
+        .verify_for_usage(
+            webpki::ALL_VERIFICATION_ALGS,
+            &trust_anchors,
+            &[],
+            verification_time,
+            KeyUsage::required(ID_KP_CODE_SIGNING.as_bytes()),
+            None,
+            None,
+        )
+        .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
 
     Ok(())
 }
@@ -806,4 +1177,47 @@ fn print_provenance_tree(prov: &ProvenanceData, _section: &str, _recursive: bool
     println!("    └── Merkle: {}", prov.merkle_root.as_deref().unwrap_or("(none)"));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_rekor_entry_uses_dna_hash() {
+        let signed = SignedDna {
+            signature: vec![1, 2, 3],
+            public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----".to_string(),
+            signer_kind: "key".to_string(),
+        };
+
+        let entry = build_rekor_entry("sha256:deadbeef", &signed).unwrap();
+        match entry {
+            ProposedEntry::Hashedrekord { spec, .. } => {
+                assert_eq!(spec.data.hash.value, "deadbeef");
+            }
+            _ => panic!("expected hashedrekord entry"),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn rekor_sign_verify_roundtrip() {
+        let db_path = std::env::var("CONARY_TEST_DB").expect("CONARY_TEST_DB is required");
+        let package = std::env::var("CONARY_TEST_PACKAGE")
+            .expect("CONARY_TEST_PACKAGE is required");
+        let key = std::env::var("CONARY_TEST_KEY").ok();
+        let keyless = std::env::var("CONARY_TEST_KEYLESS").is_ok();
+
+        let _ = cmd_provenance_register(
+            &db_path,
+            &package,
+            key.as_deref(),
+            keyless,
+            false,
+        )
+        .unwrap();
+
+        let _ = cmd_provenance_verify(&db_path, &package, true).unwrap();
+    }
 }

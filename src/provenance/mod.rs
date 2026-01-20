@@ -15,12 +15,14 @@ mod build;
 mod signature;
 mod content;
 mod dna;
+mod slsa;
 
 pub use source::{SourceProvenance, PatchInfo};
 pub use build::{BuildProvenance, BuildDependency, HostAttestation, ReproducibilityInfo};
 pub use signature::{SignatureProvenance, Signature, SignatureScope, TransparencyLog};
 pub use content::{ContentProvenance, ComponentHash};
 pub use dna::{PackageDna, DnaHash};
+pub use slsa::{build_slsa_statement, SlsaContext, SlsaError};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

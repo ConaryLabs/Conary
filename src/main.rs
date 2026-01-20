@@ -765,8 +765,14 @@ fn main() -> Result<()> {
             cli::ProvenanceCommands::Export { package, db, format, output, recursive } => {
                 commands::cmd_provenance_export(&db.db_path, &package, &format, output.as_deref(), recursive)
             }
-            cli::ProvenanceCommands::Register { package, db, key, dry_run } => {
-                commands::cmd_provenance_register(&db.db_path, &package, &key, dry_run)
+            cli::ProvenanceCommands::Register { package, db, key, keyless, dry_run } => {
+                commands::cmd_provenance_register(
+                    &db.db_path,
+                    &package,
+                    key.as_deref(),
+                    keyless,
+                    dry_run,
+                )
             }
             cli::ProvenanceCommands::Audit { db, missing, include_converted } => {
                 commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted)

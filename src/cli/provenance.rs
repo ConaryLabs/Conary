@@ -109,7 +109,7 @@ pub enum ProvenanceCommands {
         #[command(flatten)]
         db: DbArgs,
 
-        /// Output format: spdx, cyclonedx
+        /// Output format: spdx, cyclonedx, slsa
         #[arg(long, default_value = "spdx")]
         format: String,
 
@@ -134,8 +134,12 @@ pub enum ProvenanceCommands {
         db: DbArgs,
 
         /// Signing key ID or path
+        #[arg(long, required_unless_present = "keyless")]
+        key: Option<String>,
+
+        /// Use keyless signing via Fulcio (OIDC)
         #[arg(long)]
-        key: String,
+        keyless: bool,
 
         /// Dry run - show what would be registered
         #[arg(long)]
