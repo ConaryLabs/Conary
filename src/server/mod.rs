@@ -73,6 +73,16 @@ pub struct ServerConfig {
     pub rate_limit_rps: u32,
     /// Rate limit: burst size
     pub rate_limit_burst: u32,
+
+    // === Security (Phase 4) ===
+    /// CORS allowed origins for chunk endpoints (empty = deny all external)
+    pub cors_allowed_origins: Vec<String>,
+    /// Enable audit logging for requests
+    pub enable_audit_log: bool,
+    /// Ban threshold: consecutive failures before temporary ban
+    pub ban_threshold: u32,
+    /// Ban duration in seconds
+    pub ban_duration_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -93,6 +103,11 @@ impl Default for ServerConfig {
             enable_rate_limit: true,
             rate_limit_rps: 100,
             rate_limit_burst: 200,
+            // Security defaults
+            cors_allowed_origins: Vec::new(), // Empty = same-origin only for chunks
+            enable_audit_log: true,
+            ban_threshold: 10,
+            ban_duration_secs: 300, // 5 minutes
         }
     }
 }

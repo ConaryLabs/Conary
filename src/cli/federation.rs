@@ -93,4 +93,19 @@ pub enum FederationCommands {
         #[arg(long, default_value = "5000")]
         timeout: u64,
     },
+
+    /// Scan for peers on the local network using mDNS
+    #[cfg(feature = "server")]
+    Scan {
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Scan duration in seconds
+        #[arg(long, default_value = "3")]
+        duration: u64,
+
+        /// Add discovered peers to the database
+        #[arg(long)]
+        add: bool,
+    },
 }

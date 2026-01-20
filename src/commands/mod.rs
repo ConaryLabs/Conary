@@ -92,6 +92,8 @@ pub use federation::{
     cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_enable_peer,
     cmd_federation_test,
 };
+#[cfg(feature = "server")]
+pub use federation::cmd_federation_scan;
 
 use anyhow::Result;
 use conary::packages::arch::ArchPackage;

@@ -822,6 +822,10 @@ fn main() -> Result<()> {
             cli::FederationCommands::Test { db, peer, timeout } => {
                 commands::cmd_federation_test(&db.db_path, peer.as_deref(), timeout)
             }
+            #[cfg(feature = "server")]
+            cli::FederationCommands::Scan { db, duration, add } => {
+                commands::cmd_federation_scan(&db.db_path, duration, add)
+            }
         }
 
         None => {

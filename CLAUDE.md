@@ -96,6 +96,7 @@ cargo clippy -- -D warnings
 | `src/provenance/` | Package DNA / full provenance tracking (source, build, signatures, content) |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup, AI-assisted operations) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
+| `src/federation/` | CAS federation - peer discovery, chunk routing, manifests, mTLS, mDNS |
 
 ## Database Schema
 
@@ -138,7 +139,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-905 tests total (with --features server).
+875+ tests total (with --features server).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
@@ -173,3 +174,41 @@ conary cook --no-isolation recipe.toml # Unsafe: disable all isolation
 - `DependencyHashes` tracks installed dependency content hashes
 - Cache key changes when any dependency is updated (not just version bump)
 - Use `cache_key_with_deps()` for BuildStream-grade reproducibility
+
+## CAS Federation
+
+Distributed chunk sharing across Conary nodes for bandwidth savings.
+
+**Architecture:**
+- **Region Hub**: WAN-connected central servers (mTLS required)
+- **Cell Hub**: LAN segment coordinators
+- **Leaf**: Individual client nodes
+
+**Key Features:**
+- Hierarchical peer selection (cell → region → upstream)
+- mDNS discovery for LAN peers (`_conary-cas._tcp.local`)
+- Request coalescing (dedupe concurrent identical requests)
+- Circuit breaker pattern for failing peers
+- Signed manifests (Ed25519) for chunk list integrity
+- Per-tier allowlists for access control
+
+**Server Security (Phase 4):**
+- CORS restrictions for chunk/admin endpoints
+- Token-bucket rate limiting per IP
+- Audit logging for federation requests
+- Configurable ban list for misbehaving IPs
+
+**Observability (Phase 5):**
+- Prometheus metrics export (`/v1/admin/metrics/prometheus`)
+- Federation stats command (`conary federation stats`)
+- Per-peer success rates and latency tracking
+
+**CLI Commands:**
+```bash
+conary federation status              # Show federation overview
+conary federation peers               # List configured peers
+conary federation add-peer URL --tier cell_hub
+conary federation test                # Test peer connectivity
+conary federation scan                # mDNS discovery (server feature)
+conary federation stats --days 7      # Show bandwidth savings
+```

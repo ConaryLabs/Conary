@@ -32,14 +32,22 @@
 mod circuit;
 mod coalesce;
 mod config;
+pub mod manifest;
+#[cfg(feature = "server")]
+pub mod mdns;
 mod peer;
 mod router;
 
 pub use circuit::{CircuitBreaker, CircuitBreakerRegistry, CircuitState};
 pub use coalesce::RequestCoalescer;
 pub use config::{FederationConfig, PeerTier};
+pub use manifest::{
+    ChunkRef, FederationManifest, ManifestBuilder, ManifestError, ManifestTrustPolicy,
+};
+#[cfg(feature = "server")]
+pub use mdns::{DiscoveredPeer, MdnsDiscovery, MdnsEvent};
 pub use peer::{Peer, PeerId, PeerRegistry, PeerScore};
-pub use router::RendezvousRouter;
+pub use router::{HierarchicalSelection, RendezvousRouter};
 
 use crate::error::{Error, Result};
 use crate::hash::verify_sha256;
@@ -50,6 +58,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+
+#[cfg(feature = "server")]
+use std::fs;
+
+#[cfg(feature = "server")]
+use std::sync::Mutex;
 
 /// Main Federation coordinator
 ///
@@ -68,18 +82,36 @@ pub struct Federation {
     coalescer: RequestCoalescer,
     /// Per-peer circuit breakers
     circuits: CircuitBreakerRegistry,
-    /// HTTP client for chunk fetching
-    client: reqwest::Client,
+    /// HTTP client for LAN/cell hub connections (no mTLS)
+    lan_client: reqwest::Client,
+    /// HTTP client for WAN/region hub connections (with mTLS if configured)
+    wan_client: Option<reqwest::Client>,
+    /// mDNS discovery manager (server feature only)
+    #[cfg(feature = "server")]
+    mdns: Option<Mutex<MdnsDiscovery>>,
 }
 
 impl Federation {
     /// Create a new Federation coordinator
     pub fn new(config: FederationConfig) -> Result<Self> {
-        let client = reqwest::Client::builder()
+        // Create LAN client (no mTLS, for cell hubs)
+        let lan_client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.request_timeout_ms))
             .pool_max_idle_per_host(config.rendezvous_k)
             .build()
-            .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| Error::InitError(format!("Failed to create LAN HTTP client: {e}")))?;
+
+        // Create WAN client with mTLS if certificates are configured
+        let wan_client = Self::create_mtls_client(&config)?;
+
+        // Validate mTLS requirement
+        if config.require_mtls_wan && !config.region_hubs.is_empty() && wan_client.is_none() {
+            return Err(Error::InitError(
+                "mTLS required for WAN but no certificates configured. \
+                 Set mtls_cert_path, mtls_key_path, and optionally mtls_ca_path."
+                    .to_string(),
+            ));
+        }
 
         let mut peer_registry = PeerRegistry::new();
 
@@ -109,8 +141,95 @@ impl Federation {
             router: RendezvousRouter::new(config.rendezvous_k),
             coalescer: RequestCoalescer::new(),
             circuits,
-            client,
+            lan_client,
+            wan_client,
+            #[cfg(feature = "server")]
+            mdns: None,
         })
+    }
+
+    /// Create an mTLS-enabled HTTP client for WAN connections
+    #[cfg(feature = "server")]
+    fn create_mtls_client(config: &FederationConfig) -> Result<Option<reqwest::Client>> {
+        let (cert_path, key_path) = match (&config.mtls_cert_path, &config.mtls_key_path) {
+            (Some(cert), Some(key)) => (cert, key),
+            _ => return Ok(None), // No mTLS configured
+        };
+
+        // Read certificate and key
+        let cert_pem = fs::read(cert_path).map_err(|e| {
+            Error::InitError(format!("Failed to read mTLS certificate '{}': {}", cert_path, e))
+        })?;
+        let key_pem = fs::read(key_path).map_err(|e| {
+            Error::InitError(format!("Failed to read mTLS key '{}': {}", key_path, e))
+        })?;
+
+        // Create identity from PEM
+        let identity = reqwest::Identity::from_pem(&[cert_pem.clone(), key_pem].concat())
+            .map_err(|e| Error::InitError(format!("Failed to create mTLS identity: {e}")))?;
+
+        let mut builder = reqwest::Client::builder()
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .pool_max_idle_per_host(config.rendezvous_k)
+            .identity(identity);
+
+        // Add custom CA if configured
+        if let Some(ca_path) = &config.mtls_ca_path {
+            let ca_pem = fs::read(ca_path).map_err(|e| {
+                Error::InitError(format!("Failed to read CA certificate '{}': {}", ca_path, e))
+            })?;
+            let ca_cert = reqwest::Certificate::from_pem(&ca_pem)
+                .map_err(|e| Error::InitError(format!("Failed to parse CA certificate: {e}")))?;
+            builder = builder.add_root_certificate(ca_cert);
+        }
+
+        let client = builder
+            .build()
+            .map_err(|e| Error::InitError(format!("Failed to create mTLS HTTP client: {e}")))?;
+
+        info!(
+            "[federation] mTLS client initialized with cert: {}",
+            cert_path
+        );
+        Ok(Some(client))
+    }
+
+    /// Stub for non-server builds (no mTLS support without server feature)
+    #[cfg(not(feature = "server"))]
+    fn create_mtls_client(_config: &FederationConfig) -> Result<Option<reqwest::Client>> {
+        Ok(None)
+    }
+
+    /// Get the appropriate HTTP client for a peer based on its tier
+    ///
+    /// - Cell hubs and leaves use the LAN client (no mTLS)
+    /// - Region hubs use the WAN client with mTLS (if configured)
+    fn client_for_peer(&self, peer: &Peer) -> Result<&reqwest::Client> {
+        match peer.tier {
+            PeerTier::RegionHub => {
+                // Region hubs require mTLS if configured
+                if self.config.require_mtls_wan {
+                    self.wan_client.as_ref().ok_or_else(|| {
+                        Error::Federation(format!(
+                            "mTLS required for region hub {} but not configured",
+                            peer.endpoint
+                        ))
+                    })
+                } else {
+                    // Use WAN client if available, fall back to LAN client
+                    Ok(self.wan_client.as_ref().unwrap_or(&self.lan_client))
+                }
+            }
+            PeerTier::CellHub | PeerTier::Leaf => {
+                // Cell hubs and leaves use LAN client
+                Ok(&self.lan_client)
+            }
+        }
+    }
+
+    /// Check if mTLS is configured and available
+    pub fn has_mtls(&self) -> bool {
+        self.wan_client.is_some()
     }
 
     /// Check if federation is enabled
@@ -141,6 +260,116 @@ impl Federation {
         registry.remove(peer_id);
     }
 
+    /// Start mDNS discovery for cell-local peers
+    ///
+    /// This will:
+    /// 1. Create an mDNS daemon if not already running
+    /// 2. If this node is a hub, register it as a discoverable service
+    /// 3. Start browsing for other Conary CAS services on the LAN
+    /// 4. Automatically add discovered peers to the registry
+    #[cfg(feature = "server")]
+    pub fn start_mdns_discovery(&mut self) -> Result<()> {
+        if !self.config.enable_mdns {
+            return Err(Error::Federation("mDNS discovery is disabled in config".into()));
+        }
+
+        // Create mDNS manager if not exists
+        if self.mdns.is_none() {
+            let mdns = MdnsDiscovery::new()?;
+            self.mdns = Some(Mutex::new(mdns));
+        }
+
+        let mdns_guard = self.mdns.as_ref().unwrap();
+        let mut mdns = mdns_guard.lock().map_err(|e| {
+            Error::Federation(format!("Failed to lock mDNS manager: {e}"))
+        })?;
+
+        // Register this node if it's a hub
+        if matches!(self.config.tier, PeerTier::CellHub | PeerTier::RegionHub) {
+            let node_id = self.config.node_id.clone().unwrap_or_else(|| {
+                // Generate a node ID if not configured - use port + random bytes
+                let seed = format!("{}:{}", self.config.listen_port, std::process::id());
+                crate::hash::sha256(seed.as_bytes())[..12].to_string()
+            });
+
+            let instance_name = format!("conary-{}", &node_id[..8.min(node_id.len())]);
+
+            mdns.register(
+                &instance_name,
+                &node_id,
+                self.config.listen_port,
+                self.config.tier,
+                None,
+            )?;
+        }
+
+        // Start discovery with a callback that adds peers to our registry
+        let peers = Arc::clone(&self.peers);
+        mdns.start_discovery(move |event| {
+            match event {
+                MdnsEvent::PeerFound(discovered) => {
+                    info!(
+                        "[mdns] Discovered peer: {} at {}:{} (tier: {})",
+                        discovered.instance_name,
+                        discovered.addresses.first().map(|a| a.to_string()).unwrap_or_default(),
+                        discovered.port,
+                        discovered.tier
+                    );
+
+                    // Convert to Peer and add to registry
+                    match discovered.to_peer() {
+                        Ok(peer) => {
+                            // Use try_write to avoid blocking in the callback
+                            if let Ok(mut registry) = peers.try_write() {
+                                registry.add(peer);
+                            } else {
+                                debug!("[mdns] Could not acquire write lock, peer will be added later");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("[mdns] Failed to convert discovered peer: {}", e);
+                        }
+                    }
+                }
+                MdnsEvent::PeerLost(peer_id) => {
+                    info!("[mdns] Peer lost: {}", peer_id);
+                    // Optionally remove the peer from registry
+                    // For now, we keep it and let circuit breaker handle failures
+                }
+                _ => {}
+            }
+        })?;
+
+        info!("[mdns] Discovery started");
+        Ok(())
+    }
+
+    /// Stop mDNS discovery
+    #[cfg(feature = "server")]
+    pub fn stop_mdns_discovery(&mut self) {
+        if let Some(ref mdns_mutex) = self.mdns {
+            if let Ok(mut mdns) = mdns_mutex.lock() {
+                mdns.stop_discovery();
+                info!("[mdns] Discovery stopped");
+            }
+        }
+    }
+
+    /// Check if mDNS discovery is running
+    #[cfg(feature = "server")]
+    pub fn is_mdns_running(&self) -> bool {
+        self.mdns.as_ref().is_some_and(|m| {
+            m.lock().is_ok_and(|mdns| mdns.is_running())
+        })
+    }
+
+    /// Perform a one-shot mDNS scan and return discovered peers
+    #[cfg(feature = "server")]
+    pub fn mdns_scan(&self, duration: std::time::Duration) -> Result<Vec<DiscoveredPeer>> {
+        let mdns = MdnsDiscovery::new()?;
+        mdns.scan(duration)
+    }
+
     /// Fetch a chunk from federated peers
     ///
     /// Uses rendezvous hashing to select K candidate peers, then tries
@@ -158,6 +387,8 @@ impl Federation {
     }
 
     /// Inner fetch logic (called via coalescer)
+    ///
+    /// Uses hierarchical routing: cell hubs → region hubs → leaves
     async fn fetch_chunk_inner(&self, hash: &str) -> Result<Vec<u8>> {
         let peers = self.peers.read().await;
         let all_peers = peers.all();
@@ -166,56 +397,60 @@ impl Federation {
             return Err(Error::NotFound("No federation peers available".to_string()));
         }
 
-        // Select K candidate peers using rendezvous hashing
-        let candidates = self.router.select_peers(hash, &all_peers);
+        // Use hierarchical selection: cell hubs first, then region, then leaves
+        let selection = self.router.select_peers_hierarchical(hash, &all_peers);
 
-        // Try cell-local peers first (if prefer_cell is set)
-        if self.config.prefer_cell {
-            for peer in candidates.iter().filter(|p| p.tier == PeerTier::CellHub) {
-                if self.circuits.is_open(&peer.id) {
-                    debug!("Skipping peer {} (circuit open)", peer.id);
-                    continue;
-                }
-
-                match self.try_fetch(peer, hash).await {
-                    Ok(data) => {
-                        self.circuits.record_success(&peer.id);
-                        return Ok(data);
-                    }
-                    Err(e) => {
-                        debug!("Cell peer {} failed: {}", peer.id, e);
-                        self.circuits.record_failure(&peer.id);
-                    }
-                }
-            }
+        if selection.is_empty() {
+            return Err(Error::NotFound("No peers selected".to_string()));
         }
 
-        // Try all candidates (including region hubs)
-        for peer in &candidates {
-            if self.circuits.is_open(&peer.id) {
-                continue;
+        // Track which tier we're currently trying (for logging)
+        let mut last_tier = None;
+
+        // Try each tier in priority order
+        for (peer, tier) in selection.iter_with_tier() {
+            // Log tier transitions
+            if last_tier != Some(tier) {
+                debug!(
+                    "[federation] Trying {} tier ({} candidates)",
+                    tier,
+                    match tier {
+                        PeerTier::CellHub => selection.cell_hubs.len(),
+                        PeerTier::RegionHub => selection.region_hubs.len(),
+                        PeerTier::Leaf => selection.leaves.len(),
+                    }
+                );
+                last_tier = Some(tier);
             }
 
-            // Skip cell hubs if we already tried them
-            if self.config.prefer_cell && peer.tier == PeerTier::CellHub {
+            // Skip if circuit breaker is open
+            if self.circuits.is_open(&peer.id) {
+                debug!("Skipping peer {} (circuit open)", peer.id);
                 continue;
             }
 
             match self.try_fetch(peer, hash).await {
                 Ok(data) => {
                     self.circuits.record_success(&peer.id);
+                    info!(
+                        "[federation] Chunk {} from {} ({})",
+                        &hash[..12.min(hash.len())],
+                        peer.endpoint,
+                        tier
+                    );
                     return Ok(data);
                 }
                 Err(e) => {
-                    debug!("Peer {} failed: {}", peer.id, e);
+                    debug!("Peer {} ({}) failed: {}", peer.id, tier, e);
                     self.circuits.record_failure(&peer.id);
                 }
             }
         }
 
         Err(Error::NotFound(format!(
-            "Chunk {} not available from any federation peer",
-            hash
+            "Chunk {} not available from any federation peer (tried {} peers)",
+            hash,
+            selection.total_count()
         )))
     }
 
@@ -224,8 +459,10 @@ impl Federation {
         let url = format!("{}/v1/chunks/{}", peer.endpoint, hash);
         debug!("Fetching chunk {} from {}", hash, peer.endpoint);
 
-        let response = self
-            .client
+        // Select client based on peer tier
+        let client = self.client_for_peer(peer)?;
+
+        let response = client
             .get(&url)
             .timeout(Duration::from_millis(self.config.request_timeout_ms))
             .send()
@@ -281,8 +518,14 @@ impl Federation {
                 continue;
             }
 
+            // Get appropriate client for peer tier
+            let client = match self.client_for_peer(peer) {
+                Ok(c) => c,
+                Err(_) => continue, // Skip if mTLS required but not configured
+            };
+
             let url = format!("{}/v1/chunks/{}", peer.endpoint, hash);
-            if let Ok(response) = self.client.head(&url).send().await
+            if let Ok(response) = client.head(&url).send().await
                 && response.status().is_success()
             {
                 return true;
@@ -321,6 +564,8 @@ impl Federation {
             region_hubs,
             open_circuits,
             coalesced_requests: self.coalescer.coalesced_count(),
+            mtls_enabled: self.has_mtls(),
+            mtls_required: self.config.require_mtls_wan,
         }
     }
 }
@@ -342,6 +587,10 @@ pub struct FederationStats {
     pub open_circuits: usize,
     /// Number of coalesced (deduplicated) requests
     pub coalesced_requests: u64,
+    /// Whether mTLS client is configured
+    pub mtls_enabled: bool,
+    /// Whether mTLS is required for WAN peers
+    pub mtls_required: bool,
 }
 
 /// Federated chunk fetcher that integrates with the existing ChunkFetcher trait

@@ -101,6 +101,59 @@ impl ServerMetrics {
         }
     }
 
+    /// Export metrics in Prometheus text format
+    pub fn to_prometheus(&self) -> String {
+        let uptime = self
+            .start_time
+            .get()
+            .map(|t| t.elapsed())
+            .unwrap_or(Duration::ZERO);
+
+        let requests = self.requests_total.load(Ordering::Relaxed);
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let bloom_rejects = self.bloom_rejects.load(Ordering::Relaxed);
+        let bytes_served = self.bytes_served.load(Ordering::Relaxed);
+        let upstream_fetches = self.upstream_fetches.load(Ordering::Relaxed);
+        let upstream_errors = self.upstream_errors.load(Ordering::Relaxed);
+
+        format!(
+            r#"# HELP conary_remi_requests_total Total number of requests processed
+# TYPE conary_remi_requests_total counter
+conary_remi_requests_total {requests}
+
+# HELP conary_remi_cache_hits_total Total cache hits
+# TYPE conary_remi_cache_hits_total counter
+conary_remi_cache_hits_total {hits}
+
+# HELP conary_remi_cache_misses_total Total cache misses
+# TYPE conary_remi_cache_misses_total counter
+conary_remi_cache_misses_total {misses}
+
+# HELP conary_remi_bloom_rejects_total Requests rejected by bloom filter (no disk I/O needed)
+# TYPE conary_remi_bloom_rejects_total counter
+conary_remi_bloom_rejects_total {bloom_rejects}
+
+# HELP conary_remi_bytes_served_total Total bytes served to clients
+# TYPE conary_remi_bytes_served_total counter
+conary_remi_bytes_served_total {bytes_served}
+
+# HELP conary_remi_upstream_fetches_total Pull-through fetches from upstream
+# TYPE conary_remi_upstream_fetches_total counter
+conary_remi_upstream_fetches_total {upstream_fetches}
+
+# HELP conary_remi_upstream_errors_total Upstream fetch errors
+# TYPE conary_remi_upstream_errors_total counter
+conary_remi_upstream_errors_total {upstream_errors}
+
+# HELP conary_remi_uptime_seconds Server uptime in seconds
+# TYPE conary_remi_uptime_seconds gauge
+conary_remi_uptime_seconds {}
+"#,
+            uptime.as_secs()
+        )
+    }
+
     /// Reset all counters (for testing)
     #[cfg(test)]
     pub fn reset(&self) {
@@ -186,5 +239,26 @@ mod tests {
         let metrics = ServerMetrics::new();
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.hit_rate, 0.0);
+    }
+
+    #[test]
+    fn test_prometheus_export() {
+        let metrics = ServerMetrics::new();
+        metrics.record_hit();
+        metrics.record_hit();
+        metrics.record_miss();
+        metrics.record_bytes_served(1000);
+        metrics.record_bloom_reject();
+
+        let prom = metrics.to_prometheus();
+
+        // Check that all metrics are present
+        assert!(prom.contains("conary_remi_requests_total 3"));
+        assert!(prom.contains("conary_remi_cache_hits_total 2"));
+        assert!(prom.contains("conary_remi_cache_misses_total 1"));
+        assert!(prom.contains("conary_remi_bytes_served_total 1000"));
+        assert!(prom.contains("conary_remi_bloom_rejects_total 1"));
+        assert!(prom.contains("# TYPE conary_remi_requests_total counter"));
+        assert!(prom.contains("# TYPE conary_remi_uptime_seconds gauge"));
     }
 }
