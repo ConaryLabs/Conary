@@ -198,6 +198,31 @@ impl AuthChecker {
         self
     }
 
+    /// Check PolicyKit authorization for an action
+    #[cfg(feature = "polkit")]
+    fn check_polkit(&self, creds: &PeerCredentials, action: Action) -> Permission {
+        use zbus::Connection;
+
+        // TODO: Implement proper PolicyKit check via DBus
+        // This is a placeholder that always denies
+        log::warn!(
+            "PolicyKit check requested for action {:?} (UID {}), but implementation incomplete",
+            action, creds.uid
+        );
+        Permission::Denied
+    }
+
+    /// Check PolicyKit authorization for an action (stub when polkit feature disabled)
+    #[cfg(not(feature = "polkit"))]
+    fn check_polkit(&self, creds: &PeerCredentials, action: Action) -> Permission {
+        log::warn!(
+            "PolicyKit check required for action {:?} (UID {}), but `polkit` feature not enabled. \
+            Enable the feature and install PolicyKit policy files.",
+            action, creds.uid
+        );
+        Permission::Denied
+    }
+
     /// Check permission for an action
     pub fn check(&self, creds: &PeerCredentials, action: Action) -> Permission {
         // Root always gets full access
@@ -222,9 +247,7 @@ impl AuthChecker {
 
         // For write operations, check PolicyKit
         if self.require_polkit {
-            // TODO: Implement PolicyKit check via zbus
-            // For now, deny non-root write access
-            return Permission::Denied;
+            return self.check_polkit(creds, action);
         }
 
         // If PolicyKit is disabled, allow all authenticated users

@@ -362,6 +362,28 @@ pub struct CreateTransactionResponse {
     pub location: String,
 }
 
+/// Response body for dry-run transaction
+#[derive(Debug, Serialize)]
+pub struct DryRunResponse {
+    /// Operations that would be performed
+    pub operations: Vec<TransactionOperation>,
+    /// Summary of changes (placeholder)
+    pub summary: DryRunSummary,
+}
+
+/// Summary of changes in a dry-run
+#[derive(Debug, Serialize)]
+pub struct DryRunSummary {
+    /// Packages that would be installed
+    pub install: Vec<String>,
+    /// Packages that would be removed
+    pub remove: Vec<String>,
+    /// Packages that would be updated
+    pub update: Vec<String>,
+    /// Total number of packages affected
+    pub total_affected: usize,
+}
+
 /// Extract idempotency key from request headers
 fn get_idempotency_key(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -426,9 +448,8 @@ fn build_v1_router() -> Router<SharedState> {
 /// GET /health
 ///
 /// Returns health status. Used by systemd watchdog and load balancers.
-async fn health_handler(State(_state): State<SharedState>) -> Json<HealthResponse> {
-    // Calculate uptime (approximation - would need to store start time in state)
-    let uptime_secs = 0; // TODO: Track actual uptime
+async fn health_handler(State(state): State<SharedState>) -> Json<HealthResponse> {
+    let uptime_secs = state.uptime_secs();
 
     Json(HealthResponse {
         status: "healthy",
@@ -912,14 +933,45 @@ async fn transaction_stream_handler(
 /// POST /v1/transactions/dry-run
 async fn dry_run_handler(
     State(_state): State<SharedState>,
-) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement
-    Err(ApiError(DaemonError::new(
-        "not_implemented",
-        "Not Implemented",
-        501,
-        "Dry-run not yet implemented",
-    )))
+    Json(request): Json<CreateTransactionRequest>,
+) -> ApiResult<Json<DryRunResponse>> {
+    // Validate request
+    if request.operations.is_empty() {
+        return Err(ApiError(DaemonError::bad_request("At least one operation is required")));
+    }
+
+    // Extract package names from operations (placeholder implementation)
+    let mut install = Vec::new();
+    let mut remove = Vec::new();
+    let mut update = Vec::new();
+
+    for op in &request.operations {
+        match op {
+            TransactionOperation::Install { packages, .. } => {
+                install.extend(packages.iter().cloned());
+            }
+            TransactionOperation::Remove { packages, .. } => {
+                remove.extend(packages.iter().cloned());
+            }
+            TransactionOperation::Update { packages, .. } => {
+                update.extend(packages.iter().cloned());
+            }
+        }
+    }
+
+    let total_affected = install.len() + remove.len() + update.len();
+
+    let response = DryRunResponse {
+        operations: request.operations,
+        summary: DryRunSummary {
+            install,
+            remove,
+            update,
+            total_affected,
+        },
+    };
+
+    Ok(Json(response))
 }
 
 // =============================================================================

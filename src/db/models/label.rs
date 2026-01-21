@@ -89,7 +89,7 @@ impl LabelEntry {
         if let Some(existing) = Self::find_by_spec(conn, &self.repository, &self.namespace, &self.tag)? {
             self.id = existing.id;
             self.created_at = existing.created_at;
-            return Ok(existing.id.unwrap());
+            return Ok(existing.id.expect("Label entry from database should have an id"));
         }
 
         // Insert new

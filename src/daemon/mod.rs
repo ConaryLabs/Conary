@@ -359,6 +359,8 @@ pub struct DaemonState {
     pub metrics: DaemonMetrics,
     /// Database connection pool (path for on-demand connections)
     db_path: PathBuf,
+    /// When the daemon started (for uptime tracking)
+    start_time: std::time::Instant,
 }
 
 impl DaemonState {
@@ -406,7 +408,13 @@ impl DaemonState {
             event_tx,
             metrics: DaemonMetrics::default(),
             db_path,
+            start_time: std::time::Instant::now(),
         }
+    }
+
+    /// Get daemon uptime in seconds
+    pub fn uptime_secs(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
     }
 
     /// Broadcast an event to all subscribers

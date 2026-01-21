@@ -14,7 +14,7 @@ fn test_new_tree_has_root() {
 fn test_mkdir_creates_directory() {
     let mut tree = VfsTree::new();
 
-    let id = tree.mkdir("/usr").unwrap();
+    let id = tree.mkdir("/usr").expect("should create /usr directory");
     assert!(tree.exists("/usr"));
     assert!(tree.get_node(id).is_directory());
 }
@@ -23,9 +23,9 @@ fn test_mkdir_creates_directory() {
 fn test_mkdir_nested() {
     let mut tree = VfsTree::new();
 
-    tree.mkdir("/usr").unwrap();
-    tree.mkdir("/usr/bin").unwrap();
-    tree.mkdir("/usr/lib").unwrap();
+    tree.mkdir("/usr").expect("should create /usr directory");
+    tree.mkdir("/usr/bin").expect("should create /usr/bin directory");
+    tree.mkdir("/usr/lib").expect("should create /usr/lib directory");
 
     assert!(tree.exists("/usr"));
     assert!(tree.exists("/usr/bin"));
