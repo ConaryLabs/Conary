@@ -352,22 +352,19 @@ pub fn cmd_provenance_export(
             };
 
             let sbom = match format {
-                "slsa" => {
-                    let statement = build_slsa_statement(SlsaContext {
-                        name: &trove_name,
-                        version: &trove_version,
-                        dna_hash: prov.dna_hash.as_deref(),
-                        upstream_url: prov.upstream_url.as_deref(),
-                        upstream_hash: prov.upstream_hash.as_deref(),
-                        git_commit: prov.git_commit.as_deref(),
-                        recipe_hash: prov.recipe_hash.as_deref(),
-                        build_deps_json: prov.build_deps_json.as_deref(),
-                        host_arch: prov.host_arch.as_deref(),
-                        host_kernel: prov.host_kernel.as_deref(),
-                        dependencies: &deps,
-                    })?;
-                    statement
-                }
+                "slsa" => build_slsa_statement(SlsaContext {
+                    name: &trove_name,
+                    version: &trove_version,
+                    dna_hash: prov.dna_hash.as_deref(),
+                    upstream_url: prov.upstream_url.as_deref(),
+                    upstream_hash: prov.upstream_hash.as_deref(),
+                    git_commit: prov.git_commit.as_deref(),
+                    recipe_hash: prov.recipe_hash.as_deref(),
+                    build_deps_json: prov.build_deps_json.as_deref(),
+                    host_arch: prov.host_arch.as_deref(),
+                    host_kernel: prov.host_kernel.as_deref(),
+                    dependencies: &deps,
+                })?,
                 "cyclonedx" => generate_cyclonedx_sbom(&trove_name, &trove_version, &prov, &deps)?,
                 _ => generate_spdx_sbom(&trove_name, &trove_version, &prov, &deps)?,
             };
@@ -731,7 +728,6 @@ pub fn cmd_provenance_audit(
 struct SignedDna {
     signature: Vec<u8>,
     public_key_pem: String,
-    signer_kind: String,
 }
 
 fn rekor_base_url() -> &'static str {
@@ -801,7 +797,6 @@ fn sign_dna_with_key(dna_hash: &str, key_path: &str) -> Result<SignedDna, Sigsto
     Ok(SignedDna {
         signature,
         public_key_pem,
-        signer_kind: "key".to_string(),
     })
 }
 
@@ -820,7 +815,6 @@ fn sign_dna_keyless(dna_hash: &str) -> Result<SignedDna, SigstoreCommandError> {
     Ok(SignedDna {
         signature,
         public_key_pem,
-        signer_kind: "keyless".to_string(),
     })
 }
 
@@ -1188,7 +1182,6 @@ mod tests {
         let signed = SignedDna {
             signature: vec![1, 2, 3],
             public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----".to_string(),
-            signer_kind: "key".to_string(),
         };
 
         let entry = build_rekor_entry("sha256:deadbeef", &signed).unwrap();

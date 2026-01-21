@@ -76,11 +76,9 @@ pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
             drop(file);
 
             // fsync the parent directory to ensure directory entry is persisted
-            if let Some(parent) = dst.parent() {
-                if let Ok(dir) = File::open(parent) {
-                    // Ignore errors from fsync on directory - not all filesystems support it
-                    let _ = dir.sync_all();
-                }
+            if let Some(parent) = dst.parent() && let Ok(dir) = File::open(parent) {
+                // Ignore errors from fsync on directory - not all filesystems support it
+                let _ = dir.sync_all();
             }
 
             // Now safe to remove source
@@ -419,7 +417,7 @@ impl TransactionOptions {
     fn is_cancelled(&self) -> bool {
         self.cancel
             .as_ref()
-            .map_or(false, |c| c.load(Ordering::Relaxed))
+            .is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
     /// Return Cancelled error if cancellation requested

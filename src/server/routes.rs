@@ -11,8 +11,10 @@
 //! - CORS restrictions for chunk/admin endpoints
 //! - Rate limiting middleware
 //! - Audit logging for federation requests
+//! - Ban list for misbehaving IPs
 
 use crate::server::handlers::{chunks, federation, index, jobs, packages, recipes};
+use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
 use axum::{
     body::Body,
@@ -23,108 +25,13 @@ use axum::{
     routing::{get, head, post},
     Router,
 };
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
-
-/// Rate limiter state for per-IP tracking
-pub struct RateLimiter {
-    /// Request counts per IP
-    buckets: RwLock<HashMap<String, RateBucket>>,
-    /// Requests per second limit
-    rps: u32,
-    /// Burst size
-    burst: u32,
-}
-
-struct RateBucket {
-    tokens: f64,
-    last_update: Instant,
-}
-
-impl RateLimiter {
-    pub fn new(rps: u32, burst: u32) -> Self {
-        Self {
-            buckets: RwLock::new(HashMap::new()),
-            rps,
-            burst,
-        }
-    }
-
-    /// Check if request should be allowed for this IP
-    pub async fn check(&self, ip: &str) -> bool {
-        let mut buckets = self.buckets.write().await;
-        let now = Instant::now();
-
-        let bucket = buckets.entry(ip.to_string()).or_insert_with(|| RateBucket {
-            tokens: self.burst as f64,
-            last_update: now,
-        });
-
-        // Refill tokens based on elapsed time
-        let elapsed = now.duration_since(bucket.last_update).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * self.rps as f64).min(self.burst as f64);
-        bucket.last_update = now;
-
-        // Try to consume a token
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Clean up old entries (call periodically)
-    pub async fn cleanup(&self, max_age: Duration) {
-        let mut buckets = self.buckets.write().await;
-        let now = Instant::now();
-        buckets.retain(|_, bucket| now.duration_since(bucket.last_update) < max_age);
-    }
-}
-
-/// Ban list for misbehaving IPs
-pub struct BanList {
-    bans: RwLock<HashMap<String, Instant>>,
-    duration: Duration,
-}
-
-impl BanList {
-    pub fn new(duration_secs: u64) -> Self {
-        Self {
-            bans: RwLock::new(HashMap::new()),
-            duration: Duration::from_secs(duration_secs),
-        }
-    }
-
-    /// Check if IP is banned
-    pub async fn is_banned(&self, ip: &str) -> bool {
-        let bans = self.bans.read().await;
-        if let Some(banned_at) = bans.get(ip) {
-            banned_at.elapsed() < self.duration
-        } else {
-            false
-        }
-    }
-
-    /// Ban an IP
-    pub async fn ban(&self, ip: &str) {
-        let mut bans = self.bans.write().await;
-        bans.insert(ip.to_string(), Instant::now());
-        warn!(ip = ip, "IP banned for {} seconds", self.duration.as_secs());
-    }
-
-    /// Cleanup expired bans
-    pub async fn cleanup(&self) {
-        let mut bans = self.bans.write().await;
-        bans.retain(|_, banned_at| banned_at.elapsed() < self.duration);
-    }
-}
 
 /// Create CORS layer based on configuration
 fn create_cors_layer(config: &ServerConfig, restricted: bool) -> CorsLayer {
@@ -209,6 +116,46 @@ async fn rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
+/// Ban list enforcement middleware
+async fn ban_middleware(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::extract::State(state): axum::extract::State<Arc<RwLock<ServerState>>>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let ip = addr.ip().to_string();
+    let path = request.uri().path().to_string();
+    
+    // Get ban list from state
+    let state_guard = state.read().await;
+    let ban_list = state_guard.ban_list.clone();
+    drop(state_guard);
+
+    // Check if banned
+    if ban_list.is_banned(&ip).await {
+        warn!(ip = %ip, "Request rejected (banned)");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Process request
+    let response = next.run(request).await;
+
+    // Check for suspicious failures
+    // 400 Bad Request (often malformed input/hash)
+    // 401/403 (auth failures)
+    // 404 on admin endpoints (probing)
+    if (response.status() == StatusCode::BAD_REQUEST 
+        || response.status() == StatusCode::UNAUTHORIZED 
+        || response.status() == StatusCode::FORBIDDEN 
+        || (response.status() == StatusCode::NOT_FOUND && path.starts_with("/v1/admin")))
+        && ban_list.record_failure(&ip).await
+    {
+        warn!(ip = %ip, "IP banned due to repeated failures");
+    }
+
+    Ok(response)
+}
+
 /// Create the main application router
 pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     // We need to read config synchronously for router setup
@@ -246,6 +193,7 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
 
     // Admin routes - restricted CORS
     let admin_routes = Router::new()
+        // Admin endpoints
         .route("/v1/admin/convert", post(packages::trigger_conversion))
         .route("/v1/admin/cache/stats", get(chunks::cache_stats))
         .route("/v1/admin/evict", post(chunks::trigger_eviction))
@@ -280,7 +228,7 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         )
         .layer(compression)
         .layer(public_cors)
-        .with_state(state);
+        .with_state(state.clone()); // Use state for public routes too
 
     // Build final router with middleware
     let mut app = Router::new()
@@ -296,6 +244,12 @@ pub fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
                 rate_limit_middleware,
             ));
     }
+
+    // Add ban list enforcement (always enabled)
+    app = app.route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        ban_middleware,
+    ));
 
     // Add audit logging if enabled
     if config.enable_audit_log {
@@ -321,81 +275,6 @@ async fn prometheus_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_rate_limiter_basic() {
-        let limiter = RateLimiter::new(10, 5); // 10 rps, burst of 5
-
-        // First 5 requests should succeed (burst)
-        for _ in 0..5 {
-            assert!(limiter.check("192.168.1.1").await);
-        }
-
-        // 6th request should fail (burst exhausted)
-        assert!(!limiter.check("192.168.1.1").await);
-
-        // Different IP should still work
-        assert!(limiter.check("192.168.1.2").await);
-    }
-
-    #[tokio::test]
-    async fn test_rate_limiter_refill() {
-        let limiter = RateLimiter::new(100, 2); // 100 rps, burst of 2
-
-        // Exhaust tokens
-        assert!(limiter.check("test-ip").await);
-        assert!(limiter.check("test-ip").await);
-        assert!(!limiter.check("test-ip").await);
-
-        // Wait a tiny bit for token refill (100 rps = 1 token per 10ms)
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        // Should have refilled at least 1 token
-        assert!(limiter.check("test-ip").await);
-    }
-
-    #[tokio::test]
-    async fn test_ban_list() {
-        let ban_list = BanList::new(1); // 1 second ban
-
-        // Not banned initially
-        assert!(!ban_list.is_banned("bad-actor").await);
-
-        // Ban the IP
-        ban_list.ban("bad-actor").await;
-
-        // Should be banned now
-        assert!(ban_list.is_banned("bad-actor").await);
-
-        // Other IPs unaffected
-        assert!(!ban_list.is_banned("good-actor").await);
-
-        // Wait for ban to expire
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Should no longer be banned
-        assert!(!ban_list.is_banned("bad-actor").await);
-    }
-
-    #[tokio::test]
-    async fn test_ban_list_cleanup() {
-        let ban_list = BanList::new(1); // 1 second ban
-
-        ban_list.ban("ip1").await;
-        ban_list.ban("ip2").await;
-
-        // Both banned
-        assert!(ban_list.is_banned("ip1").await);
-        assert!(ban_list.is_banned("ip2").await);
-
-        // Wait and cleanup
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        ban_list.cleanup().await;
-
-        // Both should be cleaned up
-        let bans = ban_list.bans.read().await;
-        assert!(bans.is_empty());
-    }
 
     #[test]
     fn test_cors_layer_restricted_no_origins() {

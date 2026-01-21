@@ -286,10 +286,8 @@ impl MdnsDiscovery {
         self.browse_receiver = None;
 
         // Wait for thread to finish
-        if let Some(handle) = self.discovery_thread.take() {
-            if let Err(e) = handle.join() {
-                error!("[mdns] Discovery thread panicked: {:?}", e);
-            }
+        if let Some(handle) = self.discovery_thread.take() && let Err(e) = handle.join() {
+            error!("[mdns] Discovery thread panicked: {:?}", e);
         }
 
         info!("[mdns] Discovery stopped");
@@ -435,11 +433,10 @@ fn get_local_hostname() -> Option<String> {
         use std::ffi::CStr;
         let mut buf = [0u8; 256];
         unsafe {
-            if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0 {
-                if let Ok(cstr) = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
-                    // Remove .local or domain suffix if present
-                    return Some(cstr.split('.').next().unwrap_or(cstr).to_string());
-                }
+            if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0
+                && let Ok(cstr) = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
+                // Remove .local or domain suffix if present
+                return Some(cstr.split('.').next().unwrap_or(cstr).to_string());
             }
         }
     }
@@ -454,23 +451,19 @@ fn get_local_addresses() -> Vec<IpAddr> {
     // This is a fallback; in practice, mdns-sd handles this internally
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         // Connect to a public address to determine our local interface
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local_addr) = socket.local_addr() {
-                addrs.push(local_addr.ip());
-            }
+        if socket.connect("8.8.8.8:80").is_ok() && let Ok(local_addr) = socket.local_addr() {
+            addrs.push(local_addr.ip());
         }
     }
 
     // Also try IPv6
-    if let Ok(socket) = std::net::UdpSocket::bind("[::]:0") {
-        if socket.connect("[2001:4860:4860::8888]:80").is_ok() {
-            if let Ok(local_addr) = socket.local_addr() {
-                let ip = local_addr.ip();
-                // Only add if it's not a link-local address
-                if !ip.is_loopback() {
-                    addrs.push(ip);
-                }
-            }
+    if let Ok(socket) = std::net::UdpSocket::bind("[::]:0")
+        && socket.connect("[2001:4860:4860::8888]:80").is_ok()
+        && let Ok(local_addr) = socket.local_addr() {
+        let ip = local_addr.ip();
+        // Only add if it's not a link-local address
+        if !ip.is_loopback() {
+            addrs.push(ip);
         }
     }
 

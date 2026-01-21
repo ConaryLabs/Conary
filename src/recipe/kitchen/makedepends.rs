@@ -82,13 +82,6 @@ mod tests {
             }
         }
 
-        pub fn install_calls(&self) -> Vec<Vec<String>> {
-            self.install_calls.lock().unwrap().clone()
-        }
-
-        pub fn cleanup_calls(&self) -> Vec<Vec<String>> {
-            self.cleanup_calls.lock().unwrap().clone()
-        }
     }
 
     impl MakedependsResolver for MockResolver {

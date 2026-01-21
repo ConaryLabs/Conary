@@ -347,11 +347,9 @@ impl Federation {
     /// Stop mDNS discovery
     #[cfg(feature = "server")]
     pub fn stop_mdns_discovery(&mut self) {
-        if let Some(ref mdns_mutex) = self.mdns {
-            if let Ok(mut mdns) = mdns_mutex.lock() {
-                mdns.stop_discovery();
-                info!("[mdns] Discovery stopped");
-            }
+        if let Some(ref mdns_mutex) = self.mdns && let Ok(mut mdns) = mdns_mutex.lock() {
+            mdns.stop_discovery();
+            info!("[mdns] Discovery stopped");
         }
     }
 

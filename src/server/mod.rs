@@ -23,6 +23,7 @@ mod jobs;
 pub mod metrics;
 mod prewarm;
 mod routes;
+pub mod security;
 
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use cache::ChunkCache;
@@ -32,6 +33,7 @@ pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use prewarm::{run_prewarm, PrewarmConfig, PrewarmResult};
 pub use routes::create_router;
+pub use security::BanList;
 
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -124,6 +126,8 @@ pub struct ServerState {
     pub http_client: reqwest::Client,
     /// Metrics collector
     pub metrics: Arc<ServerMetrics>,
+    /// Ban list for misbehaving IPs
+    pub ban_list: Arc<BanList>,
 }
 
 impl ServerState {
@@ -133,6 +137,7 @@ impl ServerState {
             config.chunk_dir.clone(),
             config.cache_max_bytes,
             config.chunk_ttl_days,
+            config.db_path.clone(),
         );
         let conversion_service = ConversionService::new(
             config.chunk_dir.clone(),
@@ -162,6 +167,7 @@ impl ServerState {
             .expect("Failed to create HTTP client");
 
         let metrics = Arc::new(ServerMetrics::new());
+        let ban_list = Arc::new(BanList::new(config.ban_duration_secs, config.ban_threshold));
 
         Self {
             config,
@@ -171,6 +177,7 @@ impl ServerState {
             bloom_filter,
             http_client,
             metrics,
+            ban_list,
         }
     }
 }
