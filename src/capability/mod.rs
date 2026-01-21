@@ -29,6 +29,7 @@
 //! ```
 
 mod declaration;
+pub mod inference;
 
 pub use declaration::{
     CapabilityDeclaration, CapabilityValidationError, FilesystemCapabilities, NetworkCapabilities,

@@ -1793,3 +1793,88 @@ pub fn migrate_v35(conn: &Connection) -> Result<()> {
     info!("Schema version 35 applied successfully (daemon jobs)");
     Ok(())
 }
+
+/// Version 36: Enhancement framework for converted packages
+///
+/// Extends the converted_packages table to support retroactive enhancement:
+/// - enhancement_version: Track which enhancement version has been applied
+/// - inferred_caps_json: Store raw inference results for audit trail
+/// - extracted_provenance_json: Store extracted provenance before DB insertion
+/// - enhancement_status: Track enhancement progress (pending/in_progress/complete/failed)
+///
+/// Also creates subpackage_relationships table to track RPM/DEB subpackage
+/// relationships (e.g., nginx-devel is a subpackage of nginx).
+///
+/// This enables:
+/// - Retroactive enhancement of already-installed converted packages
+/// - Re-enhancement when inference algorithms improve
+/// - Audit trail of what was inferred vs declared
+/// - Future component merging for subpackages
+pub fn migrate_v36(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 36");
+
+    conn.execute_batch(
+        "
+        -- Extend converted_packages table for enhancement tracking
+        -- Enhancement version: which version of the enhancement algorithm was applied
+        -- 0 = no enhancement applied yet
+        ALTER TABLE converted_packages ADD COLUMN enhancement_version INTEGER DEFAULT 0;
+
+        -- Store raw inference results for audit trail
+        -- This preserves what was inferred even if the capability declaration changes
+        ALTER TABLE converted_packages ADD COLUMN inferred_caps_json TEXT;
+
+        -- Store extracted provenance before it's written to provenance table
+        -- Useful for debugging and understanding conversion fidelity
+        ALTER TABLE converted_packages ADD COLUMN extracted_provenance_json TEXT;
+
+        -- Enhancement status tracking
+        -- pending: needs enhancement
+        -- in_progress: enhancement running
+        -- complete: enhancement finished successfully
+        -- failed: enhancement failed (check error_message)
+        -- skipped: enhancement skipped (e.g., no binaries to analyze)
+        ALTER TABLE converted_packages ADD COLUMN enhancement_status TEXT DEFAULT 'pending';
+
+        -- Error message if enhancement failed
+        ALTER TABLE converted_packages ADD COLUMN enhancement_error TEXT;
+
+        -- When enhancement was last attempted
+        ALTER TABLE converted_packages ADD COLUMN enhancement_attempted_at TEXT;
+
+        -- Index for finding packages needing enhancement
+        CREATE INDEX idx_converted_enhancement_status ON converted_packages(enhancement_status);
+        CREATE INDEX idx_converted_enhancement_version ON converted_packages(enhancement_version);
+
+        -- Subpackage relationships table
+        -- Tracks relationships between base packages and their subpackages
+        -- e.g., nginx-devel (subpackage) -> nginx (base)
+        CREATE TABLE subpackage_relationships (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Base package name (without suffix like -devel, -doc)
+            base_package TEXT NOT NULL,
+            -- Full subpackage name (e.g., nginx-devel)
+            subpackage_name TEXT NOT NULL,
+            -- Component type this subpackage represents
+            -- Common types: devel, doc, debuginfo, libs, common, data, lang
+            component_type TEXT NOT NULL,
+            -- Source format where this relationship was detected
+            source_format TEXT NOT NULL,
+            -- When this relationship was recorded
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            -- Ensure no duplicate relationships
+            UNIQUE(base_package, subpackage_name)
+        );
+
+        -- Index for finding all subpackages of a base package
+        CREATE INDEX idx_subpackage_base ON subpackage_relationships(base_package);
+        -- Index for reverse lookup (find base from subpackage name)
+        CREATE INDEX idx_subpackage_name ON subpackage_relationships(subpackage_name);
+        -- Index for filtering by component type
+        CREATE INDEX idx_subpackage_component ON subpackage_relationships(component_type);
+        ",
+    )?;
+
+    info!("Schema version 36 applied successfully (enhancement framework)");
+    Ok(())
+}

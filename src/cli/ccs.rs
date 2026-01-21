@@ -219,4 +219,46 @@ pub enum CcsCommands {
         #[arg(short, long)]
         env: Vec<String>,
     },
+
+    /// Enhance converted packages with CCS features
+    ///
+    /// Retroactively adds capability inference, provenance extraction,
+    /// and subpackage detection to packages converted from legacy formats.
+    Enhance {
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Specific trove ID to enhance
+        #[arg(long)]
+        trove_id: Option<i64>,
+
+        /// Enhance all pending packages
+        #[arg(long)]
+        all_pending: bool,
+
+        /// Re-enhance packages with outdated enhancement version
+        #[arg(long)]
+        update_outdated: bool,
+
+        /// Enhancement types to run (comma-separated: capabilities,provenance,subpackages)
+        /// Default: all
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+
+        /// Force re-enhancement even if already done
+        #[arg(long)]
+        force: bool,
+
+        /// Show enhancement statistics
+        #[arg(long)]
+        stats: bool,
+
+        /// Show what would be enhanced without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Install root for reading package files (default: /)
+        #[arg(long, default_value = "/")]
+        install_root: String,
+    },
 }

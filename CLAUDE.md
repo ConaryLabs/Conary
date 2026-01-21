@@ -94,7 +94,7 @@ cargo clippy -- -D warnings
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
 | `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter, hermetic builds) |
-| `src/capability/` | Capability declarations for packages (network, filesystem, syscalls) - audit and enforcement |
+| `src/capability/` | Capability declarations for packages (network, filesystem, syscalls) - audit, enforcement, and inference |
 | `src/provenance/` | Package DNA / full provenance tracking (source, build, signatures, content) |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup, AI-assisted operations) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
@@ -103,7 +103,7 @@ cargo clippy -- -D warnings
 
 ## Database Schema
 
-Currently v35. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits, federation_peers, federation_stats, daemon_jobs.
+Currently v36. Tables: troves, changesets, files, flavors, provenance, dependencies, repositories, repository_packages, file_contents, file_history, package_deltas, delta_stats, provides, scriptlets, components, component_dependencies, component_provides, collection_members, triggers, trigger_dependencies, changeset_triggers, system_states, state_members, labels, label_path, config_files, config_backups, converted_packages, derived_packages, chunk_access, redirects, package_resolution, provenance_sources, provenance_builds, provenance_signatures, provenance_content, provenance_verifications, capabilities, capability_audits, federation_peers, federation_stats, daemon_jobs, subpackage_relationships.
 
 Key schema additions:
 - v8: `provides` - capability tracking for dependency resolution
@@ -133,6 +133,7 @@ Key schema additions:
 - v33: `capabilities`, `capability_audits` - package capability declarations (network, filesystem, syscalls)
 - v34: `federation_peers`, `federation_stats` - CAS federation peers and daily stats
 - v35: `daemon_jobs` - persistent job queue for conaryd daemon
+- v36: enhancement columns on `converted_packages`, `subpackage_relationships` - retroactive CCS enhancement framework
 
 ## Testing
 
@@ -143,7 +144,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-980+ tests total (with --features daemon).
+1000+ tests total (with --features daemon).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)

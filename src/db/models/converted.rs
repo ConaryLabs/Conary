@@ -34,6 +34,20 @@ pub struct ConvertedPackage {
     pub detected_hooks: Option<String>,
     /// When the conversion occurred
     pub converted_at: Option<String>,
+
+    // Enhancement fields (v36)
+    /// Enhancement algorithm version (0 = not enhanced yet)
+    pub enhancement_version: i32,
+    /// Raw inferred capabilities JSON (for audit trail)
+    pub inferred_caps_json: Option<String>,
+    /// Extracted provenance JSON (before DB insertion)
+    pub extracted_provenance_json: Option<String>,
+    /// Enhancement status: pending, in_progress, complete, failed, skipped
+    pub enhancement_status: String,
+    /// Error message if enhancement failed
+    pub enhancement_error: Option<String>,
+    /// When enhancement was last attempted
+    pub enhancement_attempted_at: Option<String>,
 }
 
 impl ConvertedPackage {
@@ -52,6 +66,13 @@ impl ConvertedPackage {
             conversion_fidelity,
             detected_hooks: None,
             converted_at: None,
+            // Enhancement starts as pending with version 0
+            enhancement_version: 0,
+            inferred_caps_json: None,
+            extracted_provenance_json: None,
+            enhancement_status: "pending".to_string(),
+            enhancement_error: None,
+            enhancement_attempted_at: None,
         }
     }
 
@@ -66,14 +87,22 @@ impl ConvertedPackage {
             conversion_fidelity: row.get(5)?,
             detected_hooks: row.get(6)?,
             converted_at: row.get(7)?,
+            // Enhancement fields (v36)
+            enhancement_version: row.get(8).unwrap_or(0),
+            inferred_caps_json: row.get(9).ok(),
+            extracted_provenance_json: row.get(10).ok(),
+            enhancement_status: row.get(11).unwrap_or_else(|_| "pending".to_string()),
+            enhancement_error: row.get(12).ok(),
+            enhancement_attempted_at: row.get(13).ok(),
         })
     }
 
     /// Insert this converted package into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks,
+                enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 self.trove_id,
                 &self.original_format,
@@ -81,6 +110,10 @@ impl ConvertedPackage {
                 self.conversion_version,
                 &self.conversion_fidelity,
                 &self.detected_hooks,
+                self.enhancement_version,
+                &self.inferred_caps_json,
+                &self.extracted_provenance_json,
+                &self.enhancement_status,
             ],
         )?;
 
@@ -108,7 +141,8 @@ impl ConvertedPackage {
     pub fn find_by_checksum(conn: &Connection, checksum: &str) -> Result<Option<Self>> {
         let result = conn
             .query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at
+                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
                  FROM converted_packages WHERE original_checksum = ?1",
                 [checksum],
                 Self::from_row,
@@ -122,7 +156,8 @@ impl ConvertedPackage {
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Option<Self>> {
         let result = conn
             .query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at
+                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
                  FROM converted_packages WHERE trove_id = ?1",
                 [trove_id],
                 Self::from_row,
@@ -140,7 +175,8 @@ impl ConvertedPackage {
     /// List all converted packages with a specific fidelity level
     pub fn find_by_fidelity(conn: &Connection, fidelity: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at
+            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
              FROM converted_packages WHERE conversion_fidelity = ?1
              ORDER BY converted_at DESC",
         )?;
@@ -155,7 +191,8 @@ impl ConvertedPackage {
     /// List all converted packages
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at
+            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
              FROM converted_packages ORDER BY converted_at DESC",
         )?;
 
@@ -186,6 +223,72 @@ impl ConvertedPackage {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
+    }
+
+    // Enhancement-related methods (v36)
+
+    /// Update enhancement status for this package
+    pub fn update_enhancement_status(
+        &mut self,
+        conn: &Connection,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::Error::NotFound("Cannot update enhancement status on unsaved package".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE converted_packages SET enhancement_status = ?1, enhancement_error = ?2, enhancement_attempted_at = datetime('now') WHERE id = ?3",
+            rusqlite::params![status, error, id],
+        )?;
+
+        self.enhancement_status = status.to_string();
+        self.enhancement_error = error.map(|s| s.to_string());
+        Ok(())
+    }
+
+    /// Mark enhancement as complete with results
+    pub fn set_enhancement_complete(
+        &mut self,
+        conn: &Connection,
+        version: i32,
+        inferred_caps: Option<&str>,
+        extracted_provenance: Option<&str>,
+    ) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::Error::NotFound("Cannot update enhancement on unsaved package".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE converted_packages SET
+                enhancement_version = ?1,
+                inferred_caps_json = ?2,
+                extracted_provenance_json = ?3,
+                enhancement_status = 'complete',
+                enhancement_error = NULL,
+                enhancement_attempted_at = datetime('now')
+             WHERE id = ?4",
+            rusqlite::params![version, inferred_caps, extracted_provenance, id],
+        )?;
+
+        self.enhancement_version = version;
+        self.inferred_caps_json = inferred_caps.map(|s| s.to_string());
+        self.extracted_provenance_json = extracted_provenance.map(|s| s.to_string());
+        self.enhancement_status = "complete".to_string();
+        self.enhancement_error = None;
+        Ok(())
+    }
+
+    /// Mark enhancement as failed with error message
+    pub fn set_enhancement_failed(&mut self, conn: &Connection, error: &str) -> Result<()> {
+        self.update_enhancement_status(conn, "failed", Some(error))
+    }
+
+    /// Check if this package needs enhancement
+    pub fn needs_enhancement(&self, current_version: i32) -> bool {
+        self.enhancement_status == "pending"
+            || (self.enhancement_status == "complete" && self.enhancement_version < current_version)
     }
 }
 
@@ -317,5 +420,66 @@ mod tests {
         );
         let result = converted2.insert(&conn);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_enhancement_methods() {
+        let (_temp, conn) = create_test_db();
+
+        // Create and insert a converted package
+        let mut converted = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:enhance_test".to_string(),
+            "high".to_string(),
+        );
+        converted.insert(&conn).unwrap();
+
+        // Check initial enhancement state
+        assert_eq!(converted.enhancement_status, "pending");
+        assert_eq!(converted.enhancement_version, 0);
+        assert!(converted.needs_enhancement(1));
+
+        // Mark as complete
+        converted
+            .set_enhancement_complete(&conn, 1, Some(r#"{"network": true}"#), None)
+            .unwrap();
+        assert_eq!(converted.enhancement_status, "complete");
+        assert_eq!(converted.enhancement_version, 1);
+        assert!(!converted.needs_enhancement(1));
+        assert!(converted.needs_enhancement(2)); // outdated
+
+        // Verify persisted in database
+        let found = ConvertedPackage::find_by_checksum(&conn, "sha256:enhance_test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.enhancement_status, "complete");
+        assert_eq!(found.enhancement_version, 1);
+        assert!(found.inferred_caps_json.is_some());
+    }
+
+    #[test]
+    fn test_enhancement_failure() {
+        let (_temp, conn) = create_test_db();
+
+        let mut converted = ConvertedPackage::new(
+            "deb".to_string(),
+            "sha256:fail_test".to_string(),
+            "partial".to_string(),
+        );
+        converted.insert(&conn).unwrap();
+
+        // Mark as failed
+        converted
+            .set_enhancement_failed(&conn, "Test error message")
+            .unwrap();
+        assert_eq!(converted.enhancement_status, "failed");
+        assert_eq!(converted.enhancement_error.as_deref(), Some("Test error message"));
+
+        // Verify persisted
+        let found = ConvertedPackage::find_by_checksum(&conn, "sha256:fail_test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.enhancement_status, "failed");
+        assert!(found.enhancement_error.is_some());
     }
 }

@@ -4,6 +4,10 @@
 //! Takes `PackageMetadata` + extracted files and builds a `CcsManifest` with
 //! component classification, invoking `CcsBuilder` with optional CDC chunking.
 
+use crate::capability::inference::{
+    infer_capabilities, InferenceOptions, InferredCapabilities,
+    PackageFile as InferencePackageFile, PackageMetadataRef,
+};
 use crate::ccs::builder::{write_ccs_package, BuildResult, CcsBuilder};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
 use crate::ccs::convert::capture::ScriptletCapturer;
@@ -32,6 +36,10 @@ pub struct ConversionOptions {
     pub min_fidelity: FidelityLevel,
     /// Enable scriptlet capture (unsafe execution in sandbox)
     pub capture_scriptlets: bool,
+    /// Enable capability inference during conversion
+    pub enable_inference: bool,
+    /// Options for capability inference
+    pub inference_options: InferenceOptions,
 }
 
 impl Default for ConversionOptions {
@@ -42,6 +50,8 @@ impl Default for ConversionOptions {
             auto_classify: true,
             min_fidelity: FidelityLevel::High,
             capture_scriptlets: true, // Default to capture mode for safety
+            enable_inference: true,   // Enable inference by default
+            inference_options: InferenceOptions::fast(), // Use fast inference (tiers 1-2) by default
         }
     }
 }
@@ -61,6 +71,8 @@ pub struct ConversionResult {
     pub original_checksum: String,
     /// Detected hooks extracted from scriptlets
     pub detected_hooks: Hooks,
+    /// Inferred capabilities (if inference was enabled)
+    pub inferred_capabilities: Option<InferredCapabilities>,
 }
 
 /// Converts legacy packages (RPM/DEB/Arch) to CCS format
@@ -206,6 +218,56 @@ impl LegacyConverter {
         let build_result = builder.build()
             .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
 
+        // Step 5.5: Infer capabilities if enabled
+        let inferred_capabilities = if self.options.enable_inference {
+            let inference_files: Vec<InferencePackageFile> = final_files
+                .iter()
+                .map(|f| {
+                    let mut pf = InferencePackageFile::new(&f.path);
+                    pf.size = f.size as u64;
+                    pf.mode = f.mode as u32;
+                    pf.is_executable = f.mode & 0o111 != 0;
+                    pf.content_hash = f.sha256.clone();
+                    pf.content = Some(f.content.clone());
+                    pf
+                })
+                .collect();
+
+            let inference_metadata = PackageMetadataRef {
+                name: final_metadata.name.clone(),
+                version: final_metadata.version.clone(),
+                description: final_metadata.description.clone(),
+                dependencies: final_metadata
+                    .dependencies
+                    .iter()
+                    .map(|d| d.name.clone())
+                    .collect(),
+                provides: Vec::new(),
+            };
+
+            match infer_capabilities(&inference_files, &inference_metadata, &self.options.inference_options) {
+                Ok(caps) => {
+                    tracing::info!(
+                        "Inferred capabilities for '{}' via {} with {} confidence",
+                        final_metadata.name,
+                        caps.source,
+                        caps.confidence.primary
+                    );
+                    Some(caps)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to infer capabilities for '{}': {}",
+                        final_metadata.name,
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Step 6: Write the package file
         std::fs::create_dir_all(&self.options.output_dir)
             .map_err(|e| ConversionError::IoError(format!("Failed to create output dir: {}", e)))?;
@@ -227,6 +289,7 @@ impl LegacyConverter {
             original_format: format.to_string(),
             original_checksum: checksum.to_string(),
             detected_hooks,
+            inferred_capabilities,
         })
     }
 
@@ -424,6 +487,8 @@ mod tests {
             auto_classify: true,
             min_fidelity: FidelityLevel::Low,
             capture_scriptlets: false,
+            enable_inference: false,
+            inference_options: InferenceOptions::fast(),
         };
         let converter = LegacyConverter::new(options);
 

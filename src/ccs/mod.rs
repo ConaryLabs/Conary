@@ -13,6 +13,7 @@ pub mod binary_manifest;
 pub mod builder;
 pub mod chunking;
 pub mod convert;
+pub mod enhancement;
 pub mod export;
 pub mod hooks;
 pub mod inspector;
@@ -27,6 +28,10 @@ pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
 pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry, FileType};
 pub use chunking::{Chunk, ChunkedFile, Chunker, ChunkStore, DeltaStats, StoreStats};
 pub use convert::{ConversionOptions, ConversionResult, FidelityLevel, FidelityReport, LegacyConverter};
+pub use enhancement::{
+    EnhancementContext, EnhancementEngine, EnhancementError, EnhancementRegistry,
+    EnhancementRunner, EnhancementStatus, EnhancementType, ENHANCEMENT_VERSION,
+};
 pub use hooks::{AppliedHook, HookExecutor};
 pub use inspector::InspectedPackage;
 pub use manifest::CcsManifest;

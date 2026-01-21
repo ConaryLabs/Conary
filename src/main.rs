@@ -597,6 +597,10 @@ fn main() -> Result<()> {
             cli::CcsCommands::Run { package, command, db, env } => {
                 commands::ccs::cmd_ccs_run(&package, &command, &db.db_path, &env)
             }
+
+            cli::CcsCommands::Enhance { db, trove_id, all_pending, update_outdated, types, force, stats, dry_run, install_root } => {
+                commands::ccs::cmd_ccs_enhance(&db.db_path, trove_id, all_pending, update_outdated, types, force, stats, dry_run, &install_root)
+            }
         }
 
         // =====================================================================

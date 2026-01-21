@@ -7,6 +7,7 @@
 
 use super::PackageFormatType;
 use anyhow::{Context, Result};
+use conary::capability::inference::InferenceOptions;
 use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::packages::common::PackageMetadata;
 use conary::packages::PackageFormat;
@@ -106,6 +107,8 @@ pub fn try_convert_to_ccs(
         auto_classify: true,
         min_fidelity: FidelityLevel::Partial,
         capture_scriptlets,
+        enable_inference: true,
+        inference_options: InferenceOptions::fast(),
     };
 
     let converter = LegacyConverter::new(options);
@@ -140,6 +143,10 @@ pub fn try_convert_to_ccs(
     let hooks_json = serde_json::to_string(&conversion_result.detected_hooks)
         .unwrap_or_else(|_| "{}".to_string());
 
+    // Serialize inferred capabilities to JSON for audit trail
+    let inferred_caps_json = conversion_result.inferred_capabilities.as_ref()
+        .and_then(|caps| serde_json::to_string(caps).ok());
+
     // Create conversion record
     let mut converted_pkg = conary::db::models::ConvertedPackage::new(
         conversion_result.original_format.clone(),
@@ -147,6 +154,7 @@ pub fn try_convert_to_ccs(
         conversion_result.fidelity.level.to_string(),
     );
     converted_pkg.detected_hooks = Some(hooks_json);
+    converted_pkg.inferred_caps_json = inferred_caps_json;
     converted_pkg.insert(&conn)?;
 
     let ccs_path = ccs_package_path.to_string_lossy().to_string();
