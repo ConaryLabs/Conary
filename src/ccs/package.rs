@@ -6,7 +6,7 @@
 //! enabling them to be installed using the same infrastructure as RPM/DEB/Arch.
 
 use crate::ccs::builder::{ComponentData, FileEntry, FileType as CcsFileType};
-use crate::ccs::manifest::CcsManifest;
+use crate::ccs::manifest::{CcsManifest, Redirects};
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
@@ -164,6 +164,7 @@ pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryM
         policy: BuildPolicyConfig::default(),
         provenance: None,
         capabilities: None,
+        redirects: Redirects::default(),
     }
 }
 

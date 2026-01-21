@@ -30,10 +30,16 @@
 
 mod declaration;
 pub mod inference;
+pub mod resolver;
 
 pub use declaration::{
     CapabilityDeclaration, CapabilityValidationError, FilesystemCapabilities, NetworkCapabilities,
     SyscallCapabilities, SyscallProfile,
+};
+pub use resolver::{
+    CapabilityProvider, CapabilityRequirement, CapabilityResolver, CapabilitySpec,
+    FilesystemCapabilitySpec, FilesystemCapType, NetworkCapabilitySpec, NetworkCapType,
+    ResolvedCapability, ResolverPreferences, parse_capability_spec,
 };
 
 use crate::ccs::manifest::CcsManifest;

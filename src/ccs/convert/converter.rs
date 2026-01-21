@@ -16,7 +16,7 @@ use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
-    Requires, Suggests, User, Service, ServiceAction,
+    Redirects, Requires, Suggests, User, Service, ServiceAction,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::packages::common::PackageMetadata;
@@ -389,6 +389,7 @@ impl LegacyConverter {
             policy: BuildPolicyConfig::default(),
             provenance: None,
             capabilities: None,
+            redirects: Redirects::default(),
         };
 
         Ok(manifest)

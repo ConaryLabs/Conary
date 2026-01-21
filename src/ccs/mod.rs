@@ -18,6 +18,7 @@ pub mod export;
 pub mod hooks;
 pub mod inspector;
 pub mod legacy;
+pub mod lockfile;
 pub mod manifest;
 pub mod package;
 pub mod policy;
@@ -32,7 +33,8 @@ pub use enhancement::{
     EnhancementContext, EnhancementEngine, EnhancementError, EnhancementRegistry,
     EnhancementRunner, EnhancementStatus, EnhancementType, ENHANCEMENT_VERSION,
 };
-pub use hooks::{AppliedHook, HookExecutor};
+pub use hooks::{AppliedHook, HookExecutionResults, HookExecutor, HookResult, HookType};
+pub use lockfile::{DependencyKind, LockedDependency, Lockfile, LockfileError, LOCKFILE_NAME, LOCKFILE_VERSION};
 pub use inspector::InspectedPackage;
 pub use manifest::CcsManifest;
 pub use package::CcsPackage;

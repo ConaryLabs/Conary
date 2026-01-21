@@ -66,6 +66,13 @@ pub struct CcsManifest {
     /// Capability declarations for sandboxing/enforcement
     #[serde(default)]
     pub capabilities: Option<CapabilityDeclaration>,
+
+    /// Redirect declarations for package evolution
+    ///
+    /// Allows packages to declare that they rename, obsolete, or supersede
+    /// other packages. This enables clean package evolution over time.
+    #[serde(default)]
+    pub redirects: Redirects,
 }
 
 impl CcsManifest {
@@ -117,6 +124,7 @@ impl CcsManifest {
             policy: BuildPolicyConfig::default(),
             provenance: None,
             capabilities: None,
+            redirects: Redirects::default(),
         }
     }
 
@@ -522,6 +530,117 @@ pub struct ArchLegacy {
     pub groups: Vec<String>,
 }
 
+/// Package redirects / supersedes declarations
+///
+/// Allows packages to declare relationships to other packages they
+/// rename, obsolete, or supersede. Used for clean package evolution.
+///
+/// # Example
+/// ```toml
+/// [[redirects.obsoletes]]
+/// package = "old-nginx"
+/// message = "Replaced by nginx, which provides the same functionality"
+///
+/// [[redirects.renames]]
+/// old_name = "libfoo"
+/// version = "<2.0"  # Only for versions before 2.0
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Redirects {
+    /// Packages this package renames (old names that now point to this)
+    #[serde(default)]
+    pub renames: Vec<RedirectRename>,
+
+    /// Packages this package obsoletes (deprecated packages this replaces)
+    #[serde(default)]
+    pub obsoletes: Vec<RedirectObsolete>,
+
+    /// Packages that have been merged into this one
+    #[serde(default)]
+    pub merges: Vec<RedirectMerge>,
+
+    /// Packages this was split from (for split subpackages)
+    #[serde(default)]
+    pub splits: Vec<RedirectSplit>,
+}
+
+impl Redirects {
+    /// Check if any redirects are declared
+    pub fn is_empty(&self) -> bool {
+        self.renames.is_empty()
+            && self.obsoletes.is_empty()
+            && self.merges.is_empty()
+            && self.splits.is_empty()
+    }
+
+    /// Get total number of redirects
+    pub fn len(&self) -> usize {
+        self.renames.len() + self.obsoletes.len() + self.merges.len() + self.splits.len()
+    }
+}
+
+/// A package rename redirect (old-name -> this package)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectRename {
+    /// The old package name that should redirect to this package
+    pub old_name: String,
+
+    /// Optional version constraint for when this rename applies
+    /// e.g., "<2.0" means only versions before 2.0 are renamed
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Optional message explaining the rename
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// A package obsolete redirect (deprecated package -> this package)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectObsolete {
+    /// The deprecated package name that this package replaces
+    pub package: String,
+
+    /// Optional version constraint
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Explanation of why the package is obsoleted
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// A merge redirect (multiple packages merged into this one)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectMerge {
+    /// Package that was merged into this one
+    pub package: String,
+
+    /// Optional version constraint
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Explanation of the merge
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// A split redirect (this package was split from another)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectSplit {
+    /// The original monolithic package this was split from
+    pub from_package: String,
+
+    /// Which component of the original this represents
+    /// e.g., "devel", "libs", "docs"
+    #[serde(default)]
+    pub component: Option<String>,
+
+    /// Explanation of the split
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 /// Package DNA / Full provenance information in manifest
 ///
 /// This section tracks the complete lineage of a package:
@@ -732,5 +851,74 @@ files = ["/etc/myapp/config.toml"]
         let toml = manifest.to_toml().unwrap();
         assert!(toml.contains("name = \"test\""));
         assert!(toml.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn test_redirects_section_parsing() {
+        let toml = r#"
+[package]
+name = "nginx"
+version = "1.24.0"
+description = "High-performance HTTP server"
+
+[[redirects.renames]]
+old_name = "nginx-mainline"
+message = "Consolidated with mainline"
+
+[[redirects.obsoletes]]
+package = "nginx-legacy"
+version = "<1.20"
+message = "Legacy branch no longer supported"
+"#;
+        let manifest = CcsManifest::parse(toml).unwrap();
+        assert_eq!(manifest.redirects.renames.len(), 1);
+        assert_eq!(manifest.redirects.renames[0].old_name, "nginx-mainline");
+
+        assert_eq!(manifest.redirects.obsoletes.len(), 1);
+        assert_eq!(manifest.redirects.obsoletes[0].package, "nginx-legacy");
+        assert_eq!(manifest.redirects.obsoletes[0].version, Some("<1.20".to_string()));
+    }
+
+    #[test]
+    fn test_redirects_merge_split() {
+        let toml = r#"
+[package]
+name = "foo-combined"
+version = "2.0.0"
+description = "Combined package"
+
+[[redirects.merges]]
+package = "foo-core"
+message = "Merged foo-core into main package"
+
+[[redirects.merges]]
+package = "foo-extras"
+message = "Merged foo-extras into main package"
+
+[[redirects.splits]]
+from_package = "monolithic-foo"
+component = "core"
+"#;
+        let manifest = CcsManifest::parse(toml).unwrap();
+        assert_eq!(manifest.redirects.merges.len(), 2);
+        assert_eq!(manifest.redirects.splits.len(), 1);
+        assert_eq!(manifest.redirects.splits[0].from_package, "monolithic-foo");
+        assert_eq!(manifest.redirects.splits[0].component, Some("core".to_string()));
+    }
+
+    #[test]
+    fn test_redirects_is_empty() {
+        let redirects = Redirects::default();
+        assert!(redirects.is_empty());
+        assert_eq!(redirects.len(), 0);
+
+        let toml = r#"
+[package]
+name = "simple"
+version = "1.0.0"
+description = "No redirects"
+"#;
+        let manifest = CcsManifest::parse(toml).unwrap();
+        assert!(manifest.redirects.is_empty());
     }
 }
