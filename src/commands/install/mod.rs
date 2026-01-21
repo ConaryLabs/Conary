@@ -14,7 +14,7 @@ use conversion::{install_converted_ccs, try_convert_to_ccs, ConversionResult};
 use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
-use resolve::{check_provides_dependencies, resolve_package_path};
+use resolve::{check_provides_dependencies, resolve_package_path, ResolvedSourceType};
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
@@ -136,6 +136,15 @@ pub fn cmd_install(
         repo.as_deref(),
         &progress,
     )?;
+
+    // If resolved from Remi, it's already CCS format - install directly
+    if resolved.source_type == ResolvedSourceType::Remi {
+        info!("Package from Remi is already CCS format, installing directly");
+        let ccs_path = resolved.path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
+        return install_converted_ccs(ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
+    }
 
     // Detect format and parse
     let path_str = resolved.path

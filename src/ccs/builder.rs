@@ -362,6 +362,13 @@ impl CcsBuilder {
                 continue;
             }
 
+            // Skip manifest files - these are metadata, not package content
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name == "ccs.toml" || file_name == "MANIFEST.toml" {
+                    continue;
+                }
+            }
+
             // We only collect files and symlinks (directories are handled by their children)
             if metadata.is_file() || metadata.file_type().is_symlink() {
                 files.push(path.to_path_buf());
