@@ -838,6 +838,30 @@ fn main() -> Result<()> {
             }
         }
 
+        // =====================================================================
+        // Daemon Command
+        // =====================================================================
+        #[cfg(feature = "daemon")]
+        Some(cli::Commands::Daemon { db, socket, tcp, foreground: _ }) => {
+            use conary::daemon::{run_daemon, DaemonConfig};
+            use std::path::PathBuf;
+
+            let config = DaemonConfig {
+                db_path: PathBuf::from(db.db_path),
+                socket_path: PathBuf::from(socket),
+                enable_tcp: tcp.is_some(),
+                tcp_bind: tcp,
+                ..Default::default()
+            };
+
+            // Run the async daemon
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(async {
+                    run_daemon(config).await.map_err(|e| anyhow::anyhow!("{}", e))
+                })
+        }
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

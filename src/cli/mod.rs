@@ -395,4 +395,27 @@ pub enum Commands {
     /// nearby peers instead of the origin server.
     #[command(subcommand)]
     Federation(FederationCommands),
+
+    /// Run the conaryd daemon
+    ///
+    /// The daemon provides a REST API for package operations with
+    /// SSE for progress streaming and job queue management.
+    #[cfg(feature = "daemon")]
+    Daemon {
+        /// Database path
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Unix socket path
+        #[arg(long, default_value = "/run/conary/conaryd.sock")]
+        socket: String,
+
+        /// Optional TCP bind address (e.g., 127.0.0.1:7890)
+        #[arg(long)]
+        tcp: Option<String>,
+
+        /// Run in foreground (don't daemonize)
+        #[arg(long)]
+        foreground: bool,
+    },
 }
