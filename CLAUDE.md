@@ -144,7 +144,7 @@ cargo test --test '*'        # Integration tests only
 cargo test --test database   # Run specific test module
 ```
 
-1000+ tests total (with --features daemon).
+1150+ tests total (with --features daemon).
 
 Integration tests are organized in `tests/`:
 - `database.rs` - DB init, transactions (6 tests)
@@ -152,6 +152,8 @@ Integration tests are organized in `tests/`:
 - `query.rs` - Queries, dependencies, provides (9 tests)
 - `component.rs` - Component classification (7 tests)
 - `features.rs` - Language deps, collections, state, config (9 tests)
+- `conversion_integration.rs` - Legacy to CCS conversion (19 tests)
+- `enhancement_integration.rs` - Retroactive enhancement (26 tests)
 - `common/mod.rs` - Shared test helpers
 
 ## Hermetic Builds

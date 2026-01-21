@@ -634,4 +634,348 @@ mod tests {
         assert_eq!(decl.filesystem.write, vec!["/var/log/nginx"]);
         assert_eq!(decl.syscalls.profile, Some("network-server".to_string()));
     }
+
+    // =========================================================================
+    // Inference Merging Tests (Task 537)
+    // =========================================================================
+
+    #[test]
+    fn test_merge_prefers_higher_confidence_network() {
+        let mut base = InferredCapabilities {
+            network: InferredNetwork {
+                listen_ports: vec!["80".to_string()],
+                confidence: Confidence::Low,
+                ..Default::default()
+            },
+            confidence: ConfidenceScore::new(Confidence::Low),
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            network: InferredNetwork {
+                listen_ports: vec!["443".to_string()],
+                confidence: Confidence::High,
+                ..Default::default()
+            },
+            confidence: ConfidenceScore::new(Confidence::High),
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        // Higher confidence network replaces lower
+        assert_eq!(base.network.listen_ports, vec!["443"]);
+        assert_eq!(base.network.confidence, Confidence::High);
+    }
+
+    #[test]
+    fn test_merge_combines_ports_when_equal_confidence() {
+        let mut base = InferredCapabilities {
+            network: InferredNetwork {
+                listen_ports: vec!["80".to_string()],
+                outbound_ports: vec!["443".to_string()],
+                confidence: Confidence::Medium,
+                ..Default::default()
+            },
+            confidence: ConfidenceScore::new(Confidence::Medium),
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            network: InferredNetwork {
+                listen_ports: vec!["8080".to_string()],
+                outbound_ports: vec!["5432".to_string()],
+                confidence: Confidence::Low, // Lower, so ports are added
+                ..Default::default()
+            },
+            confidence: ConfidenceScore::new(Confidence::Low),
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        // Ports are combined since base confidence is higher
+        assert!(base.network.listen_ports.contains(&"80".to_string()));
+        assert!(base.network.listen_ports.contains(&"8080".to_string()));
+        assert!(base.network.outbound_ports.contains(&"443".to_string()));
+        assert!(base.network.outbound_ports.contains(&"5432".to_string()));
+    }
+
+    #[test]
+    fn test_merge_combines_filesystem_paths() {
+        let mut base = InferredCapabilities {
+            filesystem: InferredFilesystem {
+                read_paths: vec!["/etc/nginx".to_string()],
+                write_paths: vec!["/var/log/nginx".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            filesystem: InferredFilesystem {
+                read_paths: vec!["/etc/ssl".to_string()],
+                write_paths: vec!["/var/cache/nginx".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        assert_eq!(base.filesystem.read_paths.len(), 2);
+        assert!(base.filesystem.read_paths.contains(&"/etc/nginx".to_string()));
+        assert!(base.filesystem.read_paths.contains(&"/etc/ssl".to_string()));
+        assert_eq!(base.filesystem.write_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_no_duplicate_paths() {
+        let mut base = InferredCapabilities {
+            filesystem: InferredFilesystem {
+                read_paths: vec!["/etc/nginx".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            filesystem: InferredFilesystem {
+                read_paths: vec!["/etc/nginx".to_string()], // Same path
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        // Should not duplicate
+        assert_eq!(base.filesystem.read_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_syscall_profile_prefers_higher_confidence() {
+        let mut base = InferredCapabilities {
+            syscall_profile: Some("basic".to_string()),
+            confidence: ConfidenceScore::new(Confidence::Low),
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            syscall_profile: Some("network-server".to_string()),
+            confidence: ConfidenceScore::new(Confidence::High),
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        assert_eq!(base.syscall_profile, Some("network-server".to_string()));
+    }
+
+    #[test]
+    fn test_merge_keeps_syscall_profile_if_other_is_none() {
+        let mut base = InferredCapabilities {
+            syscall_profile: Some("system-daemon".to_string()),
+            confidence: ConfidenceScore::new(Confidence::Medium),
+            ..Default::default()
+        };
+
+        let other = InferredCapabilities {
+            syscall_profile: None,
+            confidence: ConfidenceScore::new(Confidence::High),
+            ..Default::default()
+        };
+
+        base.merge(&other);
+
+        // Keep existing since other has None
+        assert_eq!(base.syscall_profile, Some("system-daemon".to_string()));
+    }
+
+    // =========================================================================
+    // Multi-tier Inference Tests
+    // =========================================================================
+
+    #[test]
+    fn test_multi_tier_inference_wellknown_plus_heuristic() {
+        // Simulate nginx inference which would hit wellknown first
+        let files = vec![
+            PackageFile::new("/usr/sbin/nginx"),
+            PackageFile::new("/etc/nginx/nginx.conf"),
+            PackageFile::new("/var/log/nginx/access.log"),
+        ];
+
+        let metadata = PackageMetadataRef {
+            name: "nginx".to_string(),
+            version: "1.24.0".to_string(),
+            ..Default::default()
+        };
+
+        let options = InferenceOptions {
+            max_tier: 2,
+            use_cache: false,
+            ..Default::default()
+        };
+
+        let result = infer_capabilities(&files, &metadata, &options).unwrap();
+
+        // Should use wellknown (tier 1) since nginx is a known package
+        assert_eq!(result.tier_used, 1);
+        assert_eq!(result.source, InferenceSource::WellKnown);
+        // nginx profile should have network capabilities
+        assert!(!result.network.no_network);
+    }
+
+    #[test]
+    fn test_multi_tier_inference_heuristic_only() {
+        // Unknown package, should fall through to heuristics
+        let files = vec![
+            PackageFile::new("/usr/sbin/myunknownservice"),
+            PackageFile::new("/etc/myunknownservice/config.conf"),
+        ];
+
+        let metadata = PackageMetadataRef {
+            name: "myunknownservice".to_string(),
+            version: "1.0.0".to_string(),
+            dependencies: vec!["libssl3".to_string()],
+            ..Default::default()
+        };
+
+        let options = InferenceOptions {
+            max_tier: 2,
+            use_cache: false,
+            ..Default::default()
+        };
+
+        let result = infer_capabilities(&files, &metadata, &options).unwrap();
+
+        // Should use heuristics since package is unknown
+        assert_eq!(result.tier_used, 2);
+        // Has sbin executable and ssl dependency
+        assert!(result.syscall_profile.is_some());
+    }
+
+    #[test]
+    fn test_inference_with_config_scanning() {
+        let config_content = b"listen 8080\nlog_path /var/log/myapp/app.log";
+        let files = vec![
+            PackageFile::new("/usr/bin/myapp"),
+            PackageFile::with_content("/etc/myapp/config.conf", config_content.to_vec()),
+        ];
+
+        let metadata = PackageMetadataRef {
+            name: "myapp".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let options = InferenceOptions {
+            max_tier: 3, // Enable config scanning
+            use_cache: false,
+            ..Default::default()
+        };
+
+        let result = infer_capabilities(&files, &metadata, &options).unwrap();
+
+        // Should extract port from config
+        assert!(result.network.listen_ports.contains(&"8080".to_string()));
+    }
+
+    #[test]
+    fn test_inference_tier_limit() {
+        let files = vec![PackageFile::new("/usr/bin/test")];
+
+        let metadata = PackageMetadataRef {
+            name: "testpkg".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        // Limit to tier 1 only (wellknown)
+        let options = InferenceOptions {
+            max_tier: 1,
+            use_cache: false,
+            ..Default::default()
+        };
+
+        let result = infer_capabilities(&files, &metadata, &options).unwrap();
+
+        // Unknown package with tier 1 only = no inference
+        assert_eq!(result.tier_used, 0);
+    }
+
+    // =========================================================================
+    // Edge Case Tests
+    // =========================================================================
+
+    #[test]
+    fn test_empty_files_inference() {
+        let files: Vec<PackageFile> = vec![];
+
+        let metadata = PackageMetadataRef {
+            name: "empty-pkg".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let options = InferenceOptions {
+            use_cache: false,
+            ..Default::default()
+        };
+
+        let result = infer_capabilities(&files, &metadata, &options).unwrap();
+
+        // Should succeed with default/empty capabilities
+        assert!(result.network.listen_ports.is_empty());
+        assert!(result.filesystem.read_paths.is_empty());
+    }
+
+    #[test]
+    fn test_inference_source_display() {
+        assert_eq!(format!("{}", InferenceSource::WellKnown), "well-known profile");
+        assert_eq!(format!("{}", InferenceSource::Heuristic), "heuristic analysis");
+        assert_eq!(format!("{}", InferenceSource::BinaryAnalysis), "binary analysis");
+        assert_eq!(format!("{}", InferenceSource::Combined), "combined analysis");
+    }
+
+    #[test]
+    fn test_inferred_network_default() {
+        let network = InferredNetwork::default();
+        assert!(network.listen_ports.is_empty());
+        assert!(network.outbound_ports.is_empty());
+        assert!(!network.no_network); // Default is false (might need network)
+    }
+
+    #[test]
+    fn test_generate_rationale_with_ports() {
+        let result = InferredCapabilities {
+            network: InferredNetwork {
+                listen_ports: vec!["80".to_string(), "443".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let metadata = PackageMetadataRef {
+            name: "webserver".to_string(),
+            ..Default::default()
+        };
+
+        let rationale = generate_rationale(&result, &metadata);
+        assert!(rationale.contains("80"));
+        assert!(rationale.contains("443"));
+    }
+
+    #[test]
+    fn test_generate_rationale_empty() {
+        let result = InferredCapabilities::default();
+        let metadata = PackageMetadataRef {
+            name: "minimal".to_string(),
+            ..Default::default()
+        };
+
+        let rationale = generate_rationale(&result, &metadata);
+        assert!(rationale.contains("minimal"));
+        assert!(rationale.contains("confidence"));
+    }
 }
