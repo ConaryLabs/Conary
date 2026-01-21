@@ -37,6 +37,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod enhance;
 pub mod jobs;
 pub mod lock;
 pub mod routes;
@@ -54,6 +55,10 @@ pub use auth::{
     Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission,
 };
 pub use client::{DaemonClient, should_forward_to_daemon, try_connect};
+pub use enhance::{
+    enhancement_background_worker, execute_enhance_job, EnhanceJobResult, EnhanceJobSpec,
+    EnhancedPackageResult,
+};
 pub use jobs::{DaemonJob, JobPriority, OperationQueue, QueuedJob};
 pub use lock::SystemLock;
 pub use systemd::{
@@ -174,6 +179,8 @@ pub enum JobKind {
     Verify,
     /// Garbage collection
     GarbageCollect,
+    /// Enhance converted packages (background capability inference)
+    Enhance,
 }
 
 /// A job in the queue
@@ -342,6 +349,31 @@ pub enum DaemonEvent {
     /// Automation check complete
     AutomationCheckComplete {
         pending_actions: usize,
+    },
+    /// Enhancement started for a package
+    EnhancementStarted {
+        trove_id: i64,
+        package_name: String,
+    },
+    /// Enhancement progress for a package
+    EnhancementProgress {
+        trove_id: i64,
+        package_name: String,
+        current: u32,
+        total: u32,
+        phase: String,
+    },
+    /// Enhancement completed for a package
+    EnhancementCompleted {
+        trove_id: i64,
+        package_name: String,
+        capabilities_inferred: bool,
+    },
+    /// Enhancement failed for a package
+    EnhancementFailed {
+        trove_id: i64,
+        package_name: String,
+        error: String,
     },
 }
 

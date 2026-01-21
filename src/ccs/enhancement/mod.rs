@@ -56,7 +56,11 @@ pub mod runner;
 pub use context::EnhancementContext;
 pub use error::{EnhancementError, EnhancementResult};
 pub use registry::EnhancementRegistry;
-pub use runner::EnhancementRunner;
+pub use runner::{
+    check_enhancement_window, get_pending_by_priority, schedule_for_enhancement,
+    EnhancementMode, EnhancementOptions, EnhancementPriority, EnhancementRunner,
+    EnhancementSummary, EnhancementWindowStatus,
+};
 
 use serde::{Deserialize, Serialize};
 

@@ -1431,6 +1431,10 @@ async fn events_handler(
                                 DaemonEvent::PackageRemoved { .. } => "package_removed",
                                 DaemonEvent::StateCreated { .. } => "state_created",
                                 DaemonEvent::AutomationCheckComplete { .. } => "automation_check",
+                                DaemonEvent::EnhancementStarted { .. } => "enhancement_started",
+                                DaemonEvent::EnhancementProgress { .. } => "enhancement_progress",
+                                DaemonEvent::EnhancementCompleted { .. } => "enhancement_completed",
+                                DaemonEvent::EnhancementFailed { .. } => "enhancement_failed",
                             };
                             Some(Ok(Event::default().event(event_type).data(json)))
                         }

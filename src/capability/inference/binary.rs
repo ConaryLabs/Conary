@@ -8,12 +8,14 @@
 //! - Section hints (presence of certain sections)
 //!
 //! Binary analysis is the slowest but most accurate tier.
+//! Uses rayon for parallel processing when analyzing multiple binaries.
 
 use super::confidence::{Confidence, ConfidenceBuilder};
 use super::error::InferenceError;
 use super::{InferenceResult, InferenceSource, InferredCapabilities, PackageFile};
 use goblin::elf::Elf;
 use goblin::Object;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::HashSet;
 
 /// ELF binary analyzer using goblin
@@ -21,7 +23,22 @@ pub struct BinaryAnalyzer;
 
 impl BinaryAnalyzer {
     /// Analyze multiple executables and combine results
+    ///
+    /// Uses rayon for parallel processing when there are multiple binaries.
+    /// Results are merged in a thread-safe manner.
     pub fn analyze_all(files: &[&PackageFile]) -> InferenceResult<InferredCapabilities> {
+        Self::analyze_all_with_parallelism(files, true)
+    }
+
+    /// Analyze multiple executables with optional parallelism
+    ///
+    /// # Arguments
+    /// * `files` - Slice of package files to analyze
+    /// * `parallel` - Whether to use parallel processing
+    pub fn analyze_all_with_parallelism(
+        files: &[&PackageFile],
+        parallel: bool,
+    ) -> InferenceResult<InferredCapabilities> {
         let mut combined = InferredCapabilities {
             source: InferenceSource::BinaryAnalysis,
             tier_used: 4,
@@ -33,39 +50,70 @@ impl BinaryAnalyzer {
             ..Default::default()
         };
 
+        // Collect analysis results - either in parallel or sequentially
+        let analyses: Vec<(String, Result<BinaryAnalysis, String>)> = if parallel && files.len() > 1
+        {
+            // Parallel processing for multiple files
+            files
+                .par_iter()
+                .filter_map(|file| {
+                    file.content.as_ref().map(|content| {
+                        let path = file.path.clone();
+                        let result = Self::analyze_binary(content)
+                            .map_err(|e| e.to_string());
+                        (path, result)
+                    })
+                })
+                .collect()
+        } else {
+            // Sequential processing for single file or when parallelism disabled
+            files
+                .iter()
+                .filter_map(|file| {
+                    file.content.as_ref().map(|content| {
+                        let path = file.path.clone();
+                        let result = Self::analyze_binary(content)
+                            .map_err(|e| e.to_string());
+                        (path, result)
+                    })
+                })
+                .collect()
+        };
+
+        // Merge results
         let mut all_libs = HashSet::new();
         let mut all_symbols = HashSet::new();
         let mut confidence_builder = ConfidenceBuilder::new();
 
-        for file in files {
-            if let Some(ref content) = file.content {
-                match Self::analyze_binary(content) {
-                    Ok(analysis) => {
-                        all_libs.extend(analysis.libraries);
-                        all_symbols.extend(analysis.symbols);
+        for (path, result) in analyses {
+            match result {
+                Ok(analysis) => {
+                    all_libs.extend(analysis.libraries);
+                    all_symbols.extend(analysis.symbols);
 
-                        // Merge network findings
-                        if analysis.uses_sockets {
-                            combined.network.no_network = false;
-                            confidence_builder
-                                .add_network_evidence(&file.path, Confidence::High);
-                        }
+                    // Merge network findings
+                    if analysis.uses_sockets {
+                        combined.network.no_network = false;
+                        confidence_builder.add_network_evidence(&path, Confidence::High);
+                    }
 
-                        // Merge filesystem findings
-                        for path in analysis.filesystem_hints {
-                            if path.contains("log") || path.contains("cache") || path.contains("tmp") {
-                                if !combined.filesystem.write_paths.contains(&path) {
-                                    combined.filesystem.write_paths.push(path);
-                                }
-                            } else if !combined.filesystem.read_paths.contains(&path) {
-                                combined.filesystem.read_paths.push(path);
+                    // Merge filesystem findings
+                    for fs_path in analysis.filesystem_hints {
+                        if fs_path.contains("log")
+                            || fs_path.contains("cache")
+                            || fs_path.contains("tmp")
+                        {
+                            if !combined.filesystem.write_paths.contains(&fs_path) {
+                                combined.filesystem.write_paths.push(fs_path);
                             }
+                        } else if !combined.filesystem.read_paths.contains(&fs_path) {
+                            combined.filesystem.read_paths.push(fs_path);
                         }
                     }
-                    Err(e) => {
-                        // Log but continue - some binaries may fail to parse
-                        tracing::debug!("Failed to analyze {}: {}", file.path, e);
-                    }
+                }
+                Err(e) => {
+                    // Log but continue - some binaries may fail to parse
+                    tracing::debug!("Failed to analyze {}: {}", path, e);
                 }
             }
         }
@@ -460,5 +508,21 @@ mod tests {
         assert!(result.is_ok());
         let caps = result.unwrap();
         assert!(caps.network.no_network); // Default assumption
+    }
+
+    #[test]
+    fn test_parallel_vs_sequential() {
+        // Both modes should produce the same results for empty input
+        let parallel = BinaryAnalyzer::analyze_all_with_parallelism(&[], true);
+        let sequential = BinaryAnalyzer::analyze_all_with_parallelism(&[], false);
+
+        assert!(parallel.is_ok());
+        assert!(sequential.is_ok());
+
+        let par_caps = parallel.unwrap();
+        let seq_caps = sequential.unwrap();
+
+        assert_eq!(par_caps.network.no_network, seq_caps.network.no_network);
+        assert_eq!(par_caps.source, seq_caps.source);
     }
 }

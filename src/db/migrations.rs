@@ -1878,3 +1878,23 @@ pub fn migrate_v36(conn: &Connection) -> Result<()> {
     info!("Schema version 36 applied successfully (enhancement framework)");
     Ok(())
 }
+
+pub fn migrate_v37(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 37");
+
+    conn.execute_batch(
+        "
+        -- Add enhancement priority for lazy enhancement scheduling
+        -- Higher priority packages are processed first
+        -- 0=low, 1=normal (default), 2=high, 3=critical
+        ALTER TABLE converted_packages ADD COLUMN enhancement_priority INTEGER DEFAULT 1;
+
+        -- Index for efficient priority-ordered processing
+        CREATE INDEX idx_converted_enhancement_priority
+            ON converted_packages(enhancement_status, enhancement_priority DESC);
+        ",
+    )?;
+
+    info!("Schema version 37 applied successfully (enhancement priority)");
+    Ok(())
+}

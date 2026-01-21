@@ -55,6 +55,9 @@ pub fn cmd_ccs_enhance(
         force,
         install_root: PathBuf::from(install_root),
         fail_fast: false,
+        parallel: true,
+        parallel_workers: 0, // auto-detect
+        cancel_token: None,
     };
 
     let runner = EnhancementRunner::with_options(&conn, options);
