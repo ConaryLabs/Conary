@@ -88,13 +88,13 @@ cargo clippy -- -D warnings
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
 | `src/model/` | System Model - declarative OS state (parser, diff, state capture, remote includes, publishing) |
-| `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
+| `src/ccs/` | CCS native package format, builder, policy engine, OCI export, lockfile, redirects |
 | `src/server/` | Remi server - on-demand CCS conversion proxy (feature-gated: `--features server`) |
 | `src/cli/` | CLI definitions (primary commands at root; system/query with nested state/trigger/redirect/label) |
 | `src/commands/` | Command implementations |
 | `src/commands/install/` | Package installation (resolve, prepare, execute submodules) |
 | `src/recipe/` | Recipe system for building packages from source (kitchen, parser, format, pkgbuild converter, hermetic builds) |
-| `src/capability/` | Capability declarations for packages (network, filesystem, syscalls) - audit, enforcement, and inference |
+| `src/capability/` | Capability declarations for packages (network, filesystem, syscalls) - audit, enforcement, inference, and resolver |
 | `src/provenance/` | Package DNA / full provenance tracking (source, build, signatures, content) |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup, AI-assisted operations) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |

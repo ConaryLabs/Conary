@@ -282,13 +282,35 @@ The `[include]` directive enables composable system definitions - a base server 
 
 #### [redirects] Section (Optional)
 
-Declare that this package replaces or obsoletes other packages:
+Declare package evolution - renames, deprecations, merges, and splits:
 
 ```toml
 [redirects]
-replaces = ["old-package-name"]      # This package replaces these
-obsoletes = ["deprecated-package"]   # These should be removed
-splits_from = "monolithic-package"   # This was split from a larger package
+# Package renames (old name → this package)
+[[redirects.renames]]
+old_name = "python3-foo"
+version = ">=2.0"  # optional: only applies to versions >= 2.0
+message = "Renamed for consistency"
+
+# Obsoleted packages (should be removed, optionally replaced)
+[[redirects.obsoletes]]
+name = "deprecated-tool"
+version = "<3.0"  # optional: only obsoletes versions before 3.0
+replaced_by = "modern-tool"  # optional: suggest replacement
+message = "This package is deprecated"
+
+# Merge from multiple packages into this one
+[[redirects.merges]]
+packages = ["libfoo", "libfoo-utils"]
+since_version = "2.0.0"
+message = "Libraries consolidated"
+
+# Split from a monolithic package
+[[redirects.splits]]
+from_package = "monolithic-app"
+since_version = "3.0.0"
+components = ["core", "plugins"]  # which parts this package contains
+message = "Split for modularity"
 ```
 
 #### [package.platform] Section (Optional)
@@ -649,6 +671,8 @@ When generating `.deb`, `.rpm`, or `.pkg.tar.zst`:
 
 For V1, capabilities use simple names. Future versions will use URIs.
 
+### Named Capabilities
+
 | Namespace | Example | Description |
 |-----------|---------|-------------|
 | (none) | `tls-1.3` | General capability |
@@ -656,3 +680,106 @@ For V1, capabilities use simple names. Future versions will use URIs.
 | `soname:` | `soname:libssl.so.3` | Shared library |
 | `bin:` | `bin:python3` | Executable |
 | `pkgconfig:` | `pkgconfig:openssl` | pkg-config module |
+
+### Network Capabilities
+
+Declare what network access a package requires:
+
+| Capability | Example | Description |
+|------------|---------|-------------|
+| `network.listen` | `network.listen:443` | Can bind/listen on port |
+| `network.outbound` | `network.outbound:443` | Can connect to remote port |
+
+Port ranges supported: `network.listen:8000-9000`
+
+### Filesystem Capabilities
+
+Declare what filesystem access a package requires:
+
+| Capability | Example | Description |
+|------------|---------|-------------|
+| `filesystem.read` | `filesystem.read:/etc/ssl` | Can read from path |
+| `filesystem.write` | `filesystem.write:/var/cache/nginx` | Can write to path |
+| `filesystem.execute` | `filesystem.execute:/usr/lib/cgi-bin` | Can execute from path |
+
+Glob patterns supported: `/var/cache/*`
+
+### Capability Resolution
+
+The capability resolver matches requirements to providers:
+
+```
+ssl                      → Named capability lookup in provides table
+soname(libssl.so.3)      → Typed capability lookup (kind=soname)
+network.listen:443       → Network capability from [capabilities] section
+filesystem.read:/etc/ssl → Filesystem capability from [capabilities] section
+```
+
+## Appendix D: ccs.lock Lockfile Format
+
+The `ccs.lock` file records exact dependency versions for reproducible builds.
+
+### Location
+
+- `ccs.lock` in the same directory as `ccs.toml`
+
+### Format
+
+```toml
+# Auto-generated lockfile - do not edit manually
+# Generated: 2026-01-21T15:30:00Z
+
+[metadata]
+version = 1
+generated_by = "conary 0.2.0"
+manifest_hash = "sha256:abc123..."  # Hash of ccs.toml
+
+[[dependencies]]
+name = "openssl"
+version = "3.0.12"
+content_hash = "sha256:def456..."
+source = "https://repo.example.com/packages"
+kind = "runtime"  # runtime, build, optional, dev
+dna_hash = "sha256:789abc..."  # Full provenance hash (optional)
+
+[[dependencies]]
+name = "zlib"
+version = "1.3.1"
+content_hash = "sha256:ghi789..."
+kind = "runtime"
+
+# Platform-specific dependencies
+[platform_deps.x86_64-linux-gnu]
+[[platform_deps.x86_64-linux-gnu.dependencies]]
+name = "glibc"
+version = "2.38"
+content_hash = "sha256:..."
+kind = "runtime"
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| name | string | yes | Package name |
+| version | string | yes | Exact version |
+| content_hash | string | yes | SHA-256 of package content |
+| source | string | no | Repository URL |
+| kind | string | yes | runtime, build, optional, dev |
+| dna_hash | string | no | Full provenance (Package DNA) hash |
+
+### Usage
+
+```bash
+# Generate lockfile from resolved dependencies
+conary lock
+
+# Install using lockfile (reproducible)
+conary install --locked
+
+# Update lockfile
+conary lock --update
+
+# Verify lockfile matches resolved deps
+conary lock --verify
+```
