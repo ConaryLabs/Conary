@@ -26,8 +26,10 @@ mod analyzer;
 pub mod capture;
 mod converter;
 mod fidelity;
+pub mod legacy_provenance;
 pub mod mock;
 
 pub use analyzer::{DetectedHook, ScriptletAnalyzer};
 pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};
 pub use fidelity::{FidelityLevel, FidelityReport};
+pub use legacy_provenance::LegacyProvenance;

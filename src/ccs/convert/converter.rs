@@ -12,6 +12,7 @@ use crate::ccs::builder::{write_ccs_package, BuildResult, CcsBuilder};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
 use crate::ccs::convert::capture::ScriptletCapturer;
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
+use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
@@ -73,6 +74,8 @@ pub struct ConversionResult {
     pub detected_hooks: Hooks,
     /// Inferred capabilities (if inference was enabled)
     pub inferred_capabilities: Option<InferredCapabilities>,
+    /// Provenance information extracted from the legacy package
+    pub legacy_provenance: Option<LegacyProvenance>,
 }
 
 /// Converts legacy packages (RPM/DEB/Arch) to CCS format
@@ -282,6 +285,28 @@ impl LegacyConverter {
         write_ccs_package(&build_result, &package_path)
             .map_err(|e| ConversionError::BuildError(format!("Failed to write package: {}", e)))?;
 
+        // Step 7: Extract legacy provenance information
+        let legacy_provenance = if metadata.package_path.exists() {
+            let prov = LegacyProvenance::extract_from_path(format, checksum, &metadata.package_path);
+            if prov.has_content() {
+                tracing::info!(
+                    "Extracted provenance from {} package: {}",
+                    format,
+                    prov.summary()
+                );
+                Some(prov)
+            } else {
+                tracing::debug!("No meaningful provenance extracted from {} package", format);
+                Some(prov) // Still include for audit trail
+            }
+        } else {
+            tracing::debug!(
+                "Package path does not exist for provenance extraction: {:?}",
+                metadata.package_path
+            );
+            None
+        };
+
         Ok(ConversionResult {
             build_result,
             package_path: Some(package_path),
@@ -290,6 +315,7 @@ impl LegacyConverter {
             original_checksum: checksum.to_string(),
             detected_hooks,
             inferred_capabilities,
+            legacy_provenance,
         })
     }
 

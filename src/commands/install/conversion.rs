@@ -147,6 +147,19 @@ pub fn try_convert_to_ccs(
     let inferred_caps_json = conversion_result.inferred_capabilities.as_ref()
         .and_then(|caps| serde_json::to_string(caps).ok());
 
+    // Serialize extracted provenance to JSON for audit trail
+    let provenance_json = conversion_result.legacy_provenance.as_ref()
+        .and_then(|prov| prov.to_json().ok());
+
+    if let Some(ref prov) = conversion_result.legacy_provenance {
+        if prov.has_content() {
+            info!(
+                "Provenance extracted: {}",
+                prov.summary()
+            );
+        }
+    }
+
     // Create conversion record
     let mut converted_pkg = conary::db::models::ConvertedPackage::new(
         conversion_result.original_format.clone(),
@@ -155,6 +168,7 @@ pub fn try_convert_to_ccs(
     );
     converted_pkg.detected_hooks = Some(hooks_json);
     converted_pkg.inferred_caps_json = inferred_caps_json;
+    converted_pkg.extracted_provenance_json = provenance_json;
     converted_pkg.insert(&conn)?;
 
     let ccs_path = ccs_package_path.to_string_lossy().to_string();
