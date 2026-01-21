@@ -1,0 +1,131 @@
+# /etc/conary/remi.toml
+# Conary Remi Server Configuration
+#
+# See https://github.com/conaryos/conary for documentation
+
+[server]
+# Public API bind address (behind Cloudflare proxy)
+bind = "0.0.0.0:8080"
+
+# Admin API bind address (localhost only - access via SSH tunnel)
+admin_bind = "127.0.0.1:8081"
+
+# Number of worker threads (0 = auto-detect based on CPU cores)
+workers = 0
+
+# Enable Prometheus metrics endpoint
+metrics = true
+
+# Enable audit logging for federation and admin requests
+audit_log = true
+
+[storage]
+# Root directory for all storage
+root = "/conary"
+
+# Eviction threshold (0.0-1.0, e.g., 0.90 = evict when 90% full)
+eviction_threshold = 0.90
+
+# Minimum age before a chunk can be evicted
+eviction_min_age = "1h"
+
+# TTL for negative cache entries (404 responses)
+negative_cache_ttl = "15m"
+
+# Maximum cache size (optional, defaults to 90% of disk)
+# max_cache_size = "1.5TB"
+
+[upstream.fedora]
+# Fedora upstream configuration
+metalink = "https://mirrors.fedoraproject.org/metalink"
+releases = ["43"]
+arches = ["x86_64"]
+metadata_refresh = "6h"
+priority = 100
+
+# Uncomment to add more upstreams:
+# [upstream.epel]
+# base_url = "https://dl.fedoraproject.org/pub/epel"
+# releases = ["9"]
+# arches = ["x86_64"]
+
+[conversion]
+# Enable content-defined chunking for deduplication
+chunking = true
+
+# Chunk size parameters (bytes)
+chunk_min = 16384    # 16 KB
+chunk_avg = 65536    # 64 KB
+chunk_max = 262144   # 256 KB
+
+# Strip debug symbols from binaries (reduces size)
+strip_debug = false
+
+# Maximum concurrent conversions
+max_concurrent = 4
+
+[federation]
+# Enable CAS federation for chunk sharing
+enabled = false
+
+# Federation tier: region_hub, cell_hub, or leaf
+tier = "leaf"
+
+# mTLS configuration (required for region_hub)
+# cert_path = "/conary/keys/server.crt"
+# key_path = "/conary/keys/server.key"
+# ca_path = "/conary/keys/ca.crt"
+
+# Ed25519 signing key for manifest signatures
+# signing_key = "/conary/keys/manifest.key"
+
+# Peer URLs (for non-mDNS discovery)
+# peers = ["https://peer1.example.com:8080", "https://peer2.example.com:8080"]
+
+[security]
+# Enable rate limiting
+rate_limit = true
+
+# Requests per second per IP
+rate_limit_rps = 100
+
+# Rate limit burst size
+rate_limit_burst = 200
+
+# CORS allowed origins (empty = same-origin only)
+# cors_origins = ["https://packages.example.com"]
+
+# Ban threshold (failures before temporary ban)
+ban_threshold = 10
+
+# Ban duration
+ban_duration = "5m"
+
+# Trusted proxy header for real IP extraction
+# (Required when behind Cloudflare or other reverse proxy)
+trusted_proxy_header = "CF-Connecting-IP"
+
+# Cloudflare IPs file (for validation)
+# cloudflare_ips_file = "/etc/conary/cloudflare-ips.txt"
+
+[builder]
+# Enable builder service (requires remi-builder.service)
+enabled = false
+
+# Build work directory (ephemeral)
+work_dir = "/conary/build"
+
+# Maximum concurrent builds
+max_concurrent = 2
+
+# Enable container isolation for builds
+isolation = true
+
+# Block network during build phase (hermetic builds)
+network_blocked = true
+
+# Bootstrap image output directory
+bootstrap_dir = "/conary/bootstrap"
+
+# Auto-chunk bootstrap images into CAS
+chunk_bootstrap = true

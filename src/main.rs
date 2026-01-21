@@ -862,6 +862,86 @@ fn main() -> Result<()> {
                 })
         }
 
+        // =====================================================================
+        // Remi Server Command
+        // =====================================================================
+        #[cfg(feature = "server")]
+        Some(cli::Commands::Remi { config, bind, admin_bind, storage, init, validate }) => {
+            use conary::server::{run_server_from_config, RemiConfig};
+            use std::path::PathBuf;
+
+            // Check if only --init was provided (before moving values)
+            let only_init = init && bind.is_none() && admin_bind.is_none() && storage.is_none() && config.is_none();
+
+            // Load or create configuration
+            let mut remi_config = if let Some(config_path) = config {
+                RemiConfig::load(&PathBuf::from(&config_path))?
+            } else {
+                // Look for default config locations
+                let default_paths = [
+                    PathBuf::from("/etc/conary/remi.toml"),
+                    PathBuf::from("remi.toml"),
+                ];
+
+                let mut found_config = None;
+                for path in &default_paths {
+                    if path.exists() {
+                        println!("Using config: {}", path.display());
+                        found_config = Some(RemiConfig::load(path)?);
+                        break;
+                    }
+                }
+                found_config.unwrap_or_else(RemiConfig::new)
+            };
+
+            // Apply CLI overrides
+            if let Some(bind_addr) = bind {
+                remi_config.server.bind = bind_addr;
+            }
+            if let Some(admin_addr) = admin_bind {
+                remi_config.server.admin_bind = admin_addr;
+            }
+            if let Some(storage_path) = storage {
+                remi_config.storage.root = PathBuf::from(storage_path);
+            }
+
+            // Validate configuration
+            if let Err(e) = remi_config.validate() {
+                eprintln!("Configuration error: {}", e);
+                std::process::exit(1);
+            }
+
+            if validate {
+                println!("Configuration is valid.");
+                println!("  Public API:   {}", remi_config.server.bind);
+                println!("  Admin API:    {}", remi_config.server.admin_bind);
+                println!("  Storage root: {}", remi_config.storage.root.display());
+                return Ok(());
+            }
+
+            // Initialize directories if requested
+            if init {
+                println!("Initializing Remi storage directories...");
+                for dir in remi_config.storage_dirs() {
+                    if !dir.exists() {
+                        println!("  Creating: {}", dir.display());
+                        std::fs::create_dir_all(&dir)?;
+                    }
+                }
+                println!("Storage directories initialized.");
+
+                // If only init was requested, exit
+                if only_init {
+                    return Ok(());
+                }
+            }
+
+            // Run the async server
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(run_server_from_config(&remi_config))
+        }
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

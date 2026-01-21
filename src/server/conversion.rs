@@ -445,22 +445,186 @@ impl ConversionService {
         })
     }
 
-    /// Fetch content from a URL
+    /// Fetch content from a URL (with security validation)
+    ///
+    /// SECURITY: This function validates URLs and blocks requests to:
+    /// - Private IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x)
+    /// - Link-local addresses (169.254.x)
+    /// - Loopback addresses
+    /// - IPv6 private/local addresses
+    ///
+    /// This prevents SSRF attacks where a malicious recipe URL could be used
+    /// to probe internal services.
     async fn fetch_url(url: &str) -> Result<String> {
-        use tokio::process::Command;
+        // Parse URL to validate scheme and extract host
+        let parsed_url = url::Url::parse(url)
+            .map_err(|e| anyhow!("Invalid URL '{}': {}", url, e))?;
 
-        let output = Command::new("curl")
-            .args(["--fail", "--silent", "--show-error", "--location", url])
-            .output()
-            .await
-            .context("Failed to execute curl")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Failed to fetch {}: {}", url, stderr));
+        // Only allow https (http redirects to https, but we reject http-only)
+        let scheme = parsed_url.scheme();
+        if scheme != "https" && scheme != "http" {
+            return Err(anyhow!("Only http/https URLs are allowed, got: {}", scheme));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|e| anyhow!("Invalid UTF-8 in response: {}", e))
+        // Extract host
+        let host = parsed_url
+            .host_str()
+            .ok_or_else(|| anyhow!("URL '{}' has no host", url))?;
+
+        // Check for prohibited hosts
+        Self::validate_host(host)?;
+
+        // Resolve DNS and validate the resolved IP
+        let resolved_ips = tokio::net::lookup_host(format!(
+            "{}:{}",
+            host,
+            parsed_url.port().unwrap_or(if scheme == "https" { 443 } else { 80 })
+        ))
+        .await
+        .map_err(|e| anyhow!("Failed to resolve '{}': {}", host, e))?;
+
+        // Check all resolved IPs - if ANY is private, reject
+        for addr in resolved_ips {
+            Self::validate_ip(&addr.ip())?;
+        }
+
+        // Now safe to fetch - use a controlled HTTP client
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .user_agent("conary-remi/0.1")
+            .build()
+            .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch '{}': {}", url, e))?;
+
+        // Check for redirect to private IP (double-check final URL)
+        let final_url = response.url();
+        if let Some(final_host) = final_url.host_str() {
+            if final_host != host {
+                // URL was redirected - validate the new host
+                Self::validate_host(final_host)?;
+            }
+        }
+
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "HTTP {} fetching '{}': {}",
+                response.status().as_u16(),
+                url,
+                response.status().canonical_reason().unwrap_or("Unknown")
+            ));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| anyhow!("Failed to read response body: {}", e))
+    }
+
+    /// Validate a hostname is not a private/internal address
+    fn validate_host(host: &str) -> Result<()> {
+        // Check for localhost aliases
+        let lower_host = host.to_lowercase();
+        if lower_host == "localhost"
+            || lower_host.ends_with(".localhost")
+            || lower_host == "127.0.0.1"
+            || lower_host == "::1"
+            || lower_host == "0.0.0.0"
+        {
+            return Err(anyhow!("Localhost URLs are not allowed"));
+        }
+
+        // Check for AWS/cloud metadata endpoints
+        if lower_host == "169.254.169.254"
+            || lower_host.contains("metadata")
+            || lower_host == "metadata.google.internal"
+        {
+            return Err(anyhow!("Cloud metadata endpoints are not allowed"));
+        }
+
+        // Check for internal domain suffixes
+        let internal_suffixes = [".internal", ".local", ".lan", ".home", ".corp"];
+        for suffix in internal_suffixes {
+            if lower_host.ends_with(suffix) {
+                return Err(anyhow!("Internal domain '{}' is not allowed", host));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate an IP address is not private/internal
+    fn validate_ip(ip: &std::net::IpAddr) -> Result<()> {
+        match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+
+                // Loopback: 127.0.0.0/8
+                if octets[0] == 127 {
+                    return Err(anyhow!("Loopback addresses are not allowed"));
+                }
+
+                // Private: 10.0.0.0/8
+                if octets[0] == 10 {
+                    return Err(anyhow!("Private IP range 10.x.x.x is not allowed"));
+                }
+
+                // Private: 172.16.0.0/12
+                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                    return Err(anyhow!("Private IP range 172.16-31.x.x is not allowed"));
+                }
+
+                // Private: 192.168.0.0/16
+                if octets[0] == 192 && octets[1] == 168 {
+                    return Err(anyhow!("Private IP range 192.168.x.x is not allowed"));
+                }
+
+                // Link-local: 169.254.0.0/16 (includes AWS metadata)
+                if octets[0] == 169 && octets[1] == 254 {
+                    return Err(anyhow!("Link-local addresses are not allowed"));
+                }
+
+                // Broadcast: 255.255.255.255
+                if octets == [255, 255, 255, 255] {
+                    return Err(anyhow!("Broadcast addresses are not allowed"));
+                }
+
+                // Unspecified: 0.0.0.0
+                if octets == [0, 0, 0, 0] {
+                    return Err(anyhow!("Unspecified addresses are not allowed"));
+                }
+
+                Ok(())
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                // Loopback: ::1
+                if ipv6.is_loopback() {
+                    return Err(anyhow!("IPv6 loopback is not allowed"));
+                }
+
+                // Unspecified: ::
+                if ipv6.is_unspecified() {
+                    return Err(anyhow!("IPv6 unspecified is not allowed"));
+                }
+
+                // Private/ULA: fc00::/7
+                let segments = ipv6.segments();
+                if (segments[0] & 0xfe00) == 0xfc00 {
+                    return Err(anyhow!("IPv6 unique local addresses are not allowed"));
+                }
+
+                // Link-local: fe80::/10
+                if (segments[0] & 0xffc0) == 0xfe80 {
+                    return Err(anyhow!("IPv6 link-local addresses are not allowed"));
+                }
+
+                Ok(())
+            }
+        }
     }
 }

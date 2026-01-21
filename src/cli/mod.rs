@@ -418,4 +418,39 @@ pub enum Commands {
         #[arg(long)]
         foreground: bool,
     },
+
+    /// Run the Remi server (CCS conversion proxy)
+    ///
+    /// Remi is a server that proxies upstream package repositories and converts
+    /// legacy packages (RPM/DEB/Arch) to CCS format on-demand. It handles:
+    /// - Package metadata serving
+    /// - On-demand CCS conversion with caching
+    /// - Chunk storage and LRU eviction
+    /// - Rate limiting and DoS protection
+    #[cfg(feature = "server")]
+    Remi {
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+
+        /// Override bind address (default from config or 0.0.0.0:8080)
+        #[arg(long)]
+        bind: Option<String>,
+
+        /// Override admin bind address (default from config or 127.0.0.1:8081)
+        #[arg(long)]
+        admin_bind: Option<String>,
+
+        /// Storage root directory (default from config or /conary)
+        #[arg(long)]
+        storage: Option<String>,
+
+        /// Initialize storage directories if they don't exist
+        #[arg(long)]
+        init: bool,
+
+        /// Validate configuration and exit
+        #[arg(long)]
+        validate: bool,
+    },
 }

@@ -1,0 +1,57 @@
+# /etc/systemd/system/remi.service
+# Conary Remi Server - CCS conversion proxy
+#
+# Install:
+#   cp remi.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now remi
+
+[Unit]
+Description=Conary Remi Server (CCS Conversion Proxy)
+Documentation=https://github.com/conaryos/conary
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conary
+Group=conary
+
+# Main process
+ExecStart=/usr/local/bin/conary remi --config /etc/conary/remi.toml
+Restart=on-failure
+RestartSec=5s
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Allow access to storage
+ReadWritePaths=/conary
+ReadOnlyPaths=/etc/conary
+
+# Network
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressAllow=any
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=remi
+
+[Install]
+WantedBy=multi-user.target

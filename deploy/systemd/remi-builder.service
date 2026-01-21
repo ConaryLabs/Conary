@@ -1,0 +1,55 @@
+# /etc/systemd/system/remi-builder.service
+# Conary Remi Builder - Package build service
+#
+# This is a separate service for building packages and bootstrap images.
+# Isolates build workload from the main serving path.
+#
+# Install:
+#   cp remi-builder.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now remi-builder
+
+[Unit]
+Description=Conary Remi Builder (Package Build Service)
+Documentation=https://github.com/conaryos/conary
+After=network.target remi.service
+Wants=remi.service
+
+[Service]
+Type=simple
+User=conary
+Group=conary
+
+# Main process (uses builder section of remi.toml)
+ExecStart=/usr/local/bin/conary remi-builder --config /etc/conary/remi.toml
+Restart=on-failure
+RestartSec=10s
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Resource limits - builds can be resource intensive
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=32G
+CPUQuota=80%
+
+# Security - needs more privileges for container builds
+AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID
+NoNewPrivileges=no
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+# Allow access to storage and build directories
+ReadWritePaths=/conary
+ReadOnlyPaths=/etc/conary
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=remi-builder
+
+[Install]
+WantedBy=multi-user.target

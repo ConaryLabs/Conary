@@ -16,23 +16,27 @@
 
 mod bloom;
 mod cache;
+pub mod config;
 mod conversion;
 mod handlers;
 mod index_gen;
 mod jobs;
 pub mod metrics;
+mod negative_cache;
 mod prewarm;
 mod routes;
 pub mod security;
 
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use cache::ChunkCache;
+pub use config::RemiConfig;
 pub use conversion::{ConversionService, ServerConversionResult};
 pub use index_gen::{generate_indices, IndexGenConfig, IndexGenResult};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
+pub use negative_cache::NegativeCache;
 pub use prewarm::{run_prewarm, PrewarmConfig, PrewarmResult};
-pub use routes::create_router;
+pub use routes::{create_admin_router, create_router};
 pub use security::BanList;
 
 use anyhow::Result;
@@ -128,10 +132,22 @@ pub struct ServerState {
     pub metrics: Arc<ServerMetrics>,
     /// Ban list for misbehaving IPs
     pub ban_list: Arc<BanList>,
+    /// Negative cache for "not found" responses
+    pub negative_cache: Arc<NegativeCache>,
+    /// Trusted proxy header for real IP extraction (e.g., "CF-Connecting-IP")
+    pub trusted_proxy_header: Option<String>,
 }
 
 impl ServerState {
     pub fn new(config: ServerConfig) -> Self {
+        Self::with_options(config, None, Duration::from_secs(15 * 60))
+    }
+
+    pub fn with_options(
+        config: ServerConfig,
+        trusted_proxy_header: Option<String>,
+        negative_cache_ttl: Duration,
+    ) -> Self {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
@@ -168,6 +184,7 @@ impl ServerState {
 
         let metrics = Arc::new(ServerMetrics::new());
         let ban_list = Arc::new(BanList::new(config.ban_duration_secs, config.ban_threshold));
+        let negative_cache = Arc::new(NegativeCache::new(negative_cache_ttl));
 
         Self {
             config,
@@ -178,11 +195,104 @@ impl ServerState {
             http_client,
             metrics,
             ban_list,
+            negative_cache,
+            trusted_proxy_header,
         }
     }
 }
 
-/// Start the Remi server
+/// Start the Remi server from a configuration file
+pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
+    let server_config = remi_config.to_server_config()?;
+    let admin_bind = remi_config.admin_bind_addr()?;
+    let negative_cache_ttl = remi_config.negative_cache_duration()?;
+    let trusted_proxy_header = remi_config.trusted_proxy_header().map(String::from);
+
+    tracing::info!("Starting Conary Remi server");
+    tracing::info!("  Public API: {}", server_config.bind_addr);
+    tracing::info!("  Admin API:  {} (localhost only)", admin_bind);
+    tracing::info!("  Storage root: {:?}", remi_config.storage_root());
+    tracing::info!("  Database: {:?}", server_config.db_path);
+    tracing::info!("  Max concurrent conversions: {}", server_config.max_concurrent_conversions);
+
+    if server_config.enable_bloom_filter {
+        tracing::info!("  Bloom filter: enabled ({} expected chunks)", server_config.bloom_expected_chunks);
+    }
+    if let Some(ref upstream) = server_config.upstream_url {
+        tracing::info!("  Pull-through caching: enabled (upstream: {})", upstream);
+    }
+    if server_config.enable_rate_limit {
+        tracing::info!(
+            "  Rate limiting: {} rps, {} burst",
+            server_config.rate_limit_rps,
+            server_config.rate_limit_burst
+        );
+    }
+    if let Some(ref header) = trusted_proxy_header {
+        tracing::info!("  Trusted proxy header: {}", header);
+    }
+
+    // Ensure storage directories exist
+    for dir in remi_config.storage_dirs() {
+        if !dir.exists() {
+            tracing::info!("Creating directory: {:?}", dir);
+            std::fs::create_dir_all(&dir)?;
+        }
+    }
+
+    let state = Arc::new(RwLock::new(ServerState::with_options(
+        server_config.clone(),
+        trusted_proxy_header,
+        negative_cache_ttl,
+    )));
+
+    // Initialize Bloom filter from existing chunks
+    if server_config.enable_bloom_filter {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = initialize_bloom_filter(state_clone).await {
+                tracing::error!("Failed to initialize Bloom filter: {}", e);
+            }
+        });
+    }
+
+    // Create routers
+    let public_app = create_router(state.clone()).await;
+    let admin_app = create_admin_router(state.clone());
+
+    // Start background LRU eviction task
+    let eviction_state = state.clone();
+    tokio::spawn(async move {
+        cache::run_eviction_loop(eviction_state).await;
+    });
+
+    // Start negative cache cleanup task
+    let neg_cache_state = state.clone();
+    tokio::spawn(async move {
+        negative_cache::run_cleanup_loop(neg_cache_state).await;
+    });
+
+    // Bind listeners
+    let public_listener = tokio::net::TcpListener::bind(server_config.bind_addr).await?;
+    let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
+
+    tracing::info!("Remi is ready to serve");
+
+    // Run both servers concurrently
+    // Use into_make_service_with_connect_info to provide ConnectInfo to handlers
+    tokio::select! {
+        result = axum::serve(public_listener, public_app.into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
+            result?;
+        }
+        result = axum::serve(admin_listener, admin_app.into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
+            result?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Start the Remi server (legacy single-port mode)
 pub async fn run_server(config: ServerConfig) -> Result<()> {
     tracing::info!("Starting Conary Remi server on {}", config.bind_addr);
     tracing::info!("Database: {:?}", config.db_path);
@@ -215,7 +325,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
         });
     }
 
-    let app = create_router(state.clone());
+    let app = create_router(state.clone()).await;
 
     // Start background LRU eviction task
     let eviction_state = state.clone();
@@ -226,7 +336,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!("Remi is ready to serve");
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
     Ok(())
 }
 
