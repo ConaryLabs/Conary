@@ -25,6 +25,7 @@ mod repository;
 mod resolution;
 mod scriptlet_entry;
 mod state;
+mod subpackage;
 mod trigger;
 mod trove;
 
@@ -48,6 +49,7 @@ pub use repository::{Repository, RepositoryPackage};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
 pub use scriptlet_entry::ScriptletEntry;
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
+pub use subpackage::{show_subpackage_guidance, RelatedPackages, SubpackageRelationship};
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerEngine, TriggerStatus};
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 

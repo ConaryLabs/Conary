@@ -250,18 +250,30 @@ impl EnhancementEngine for SubpackageEnhancer {
             _ => &[],
         };
 
-        let name = &ctx.metadata.name;
+        let name = &ctx.metadata.name.clone();
 
         for (suffix, component_type) in suffixes {
             if name.ends_with(suffix) {
                 let base = name.trim_end_matches(suffix);
+
+                // 1. Store the relationship in subpackage_relationships table
                 ctx.store_subpackage_relationship(base, component_type)?;
 
+                // 2. Add implicit dependency: subpackage depends on base package
+                // e.g., nginx-devel depends on nginx
+                ctx.add_implicit_dependency(base)?;
+
+                // 3. Add virtual provide: subpackage provides base:component
+                // e.g., nginx-devel provides nginx:devel
+                let virtual_provide = format!("{}:{}", base, component_type);
+                ctx.add_virtual_provide(&virtual_provide)?;
+
                 tracing::info!(
-                    "Detected subpackage relationship: {} is {} of {}",
+                    "Detected subpackage relationship: {} is {} of {} (provides {})",
                     name,
                     component_type,
-                    base
+                    base,
+                    virtual_provide
                 );
                 return Ok(());
             }

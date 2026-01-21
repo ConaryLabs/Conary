@@ -230,6 +230,68 @@ impl<'a> EnhancementContext<'a> {
         )?;
         Ok(())
     }
+
+    /// Add an implicit dependency on a package (used for subpackage->base dependencies)
+    ///
+    /// This adds a runtime dependency without a version constraint.
+    /// The kind is set to 'implicit' to distinguish from declared dependencies.
+    pub fn add_implicit_dependency(&self, depends_on: &str) -> EnhancementResult<()> {
+        // Check if dependency already exists
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM dependencies WHERE trove_id = ?1 AND depends_on_name = ?2)",
+                rusqlite::params![self.trove_id, depends_on],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !exists {
+            // Use kind='implicit' to mark auto-generated dependencies
+            self.conn.execute(
+                "INSERT INTO dependencies (trove_id, depends_on_name, dependency_type, kind)
+                 VALUES (?1, ?2, 'runtime', 'implicit')",
+                rusqlite::params![self.trove_id, depends_on],
+            )?;
+            tracing::debug!(
+                "Added implicit dependency: {} -> {}",
+                self.metadata.name,
+                depends_on
+            );
+        }
+        Ok(())
+    }
+
+    /// Add a virtual provide for this package
+    ///
+    /// Virtual provides allow packages to be requested by alternate names.
+    /// For subpackages, this enables requesting "base:component" syntax.
+    pub fn add_virtual_provide(&self, capability: &str) -> EnhancementResult<()> {
+        // Check if provide already exists
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM provides WHERE trove_id = ?1 AND capability = ?2)",
+                rusqlite::params![self.trove_id, capability],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !exists {
+            // Use kind='virtual' to mark auto-generated provides
+            self.conn.execute(
+                "INSERT INTO provides (trove_id, capability, kind)
+                 VALUES (?1, ?2, 'virtual')",
+                rusqlite::params![self.trove_id, capability],
+            )?;
+            tracing::debug!(
+                "Added virtual provide: {} provides {}",
+                self.metadata.name,
+                capability
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Information about a converted package for enhancement
