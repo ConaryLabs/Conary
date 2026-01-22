@@ -139,15 +139,57 @@ pub async fn get_package(
 }
 
 /// Check if a package has already been converted
+///
+/// Queries the converted_packages table for a matching distro/name/version.
+/// Returns the manifest if found and the CCS file still exists.
 fn check_converted(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
     version: Option<&str>,
 ) -> Result<Option<PackageManifest>, anyhow::Error> {
-    // TODO: Query converted_packages table
-    // For now, return None (not converted)
-    let _ = (db_path, distro, name, version);
+    use crate::db::models::ConvertedPackage;
+
+    // Open database connection
+    let conn = crate::db::open(db_path)?;
+
+    // Query for existing conversion
+    let existing = ConvertedPackage::find_by_package_identity(&conn, distro, name, version)?;
+
+    if let Some(converted) = existing {
+        // Check if the CCS file still exists
+        if let Some(ccs_path_str) = &converted.ccs_path {
+            let ccs_path = std::path::Path::new(ccs_path_str);
+            if ccs_path.exists() {
+                // Build manifest from stored data
+                let chunk_hashes: Vec<String> = converted
+                    .chunk_hashes_json
+                    .as_ref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .unwrap_or_default();
+
+                let chunks: Vec<ChunkRef> = chunk_hashes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hash)| ChunkRef {
+                        hash: hash.clone(),
+                        size: 0, // Size per chunk not stored, use 0
+                        offset: i as u64,
+                    })
+                    .collect();
+
+                return Ok(Some(PackageManifest {
+                    name: converted.package_name.unwrap_or_else(|| name.to_string()),
+                    version: converted.package_version.unwrap_or_else(|| "unknown".to_string()),
+                    distro: converted.distro.unwrap_or_else(|| distro.to_string()),
+                    chunks,
+                    total_size: converted.total_size.unwrap_or(0) as u64,
+                    content_hash: converted.content_hash.unwrap_or_default(),
+                }));
+            }
+        }
+    }
+
     Ok(None)
 }
 
@@ -206,6 +248,8 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
                     chunk_hashes: conversion_result.chunk_hashes,
                     total_size: conversion_result.total_size,
                     content_hash: conversion_result.content_hash,
+                    ccs_path: conversion_result.ccs_path,
+                    actual_version: conversion_result.version,
                 };
                 state_guard.job_manager.complete_with_result(&job_id, job_result);
             }
@@ -237,11 +281,6 @@ pub async fn download_package(
     Path((distro, name)): Path<(String, String)>,
     Query(query): Query<PackageQuery>,
 ) -> Response {
-    use axum::body::Body;
-    use axum::http::header;
-    use tokio::fs::File;
-    use tokio_util::io::ReaderStream;
-
     let state_guard = state.read().await;
 
     // Validate distro
@@ -249,25 +288,49 @@ pub async fn download_package(
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
-    // Check for in-progress conversion
+    // Check for conversion job (in-progress or completed)
     let job_key = format!("{}:{}:{}", distro, name, query.version.as_deref().unwrap_or("latest"));
-    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key)
-        && let Some(job) = state_guard.job_manager.get_job(&existing_job)
-        && !matches!(job.status, crate::server::jobs::JobStatus::Ready)
-    {
-        return (
-            StatusCode::ACCEPTED,
-            Json(ConversionAccepted {
-                status: "converting",
-                job_id: existing_job.to_string(),
-                poll_url: format!("/v1/jobs/{}", existing_job),
-                eta_seconds: None,
-            }),
-        )
-            .into_response();
+    let job_info = state_guard.job_manager.get_job_by_key(&job_key)
+        .and_then(|id| state_guard.job_manager.get_job(&id).map(|j| (id, j.clone())));
+
+    // If job exists, check its status
+    if let Some((job_id, job)) = &job_info {
+        match &job.status {
+            crate::server::jobs::JobStatus::Ready => {
+                // Job completed - use the CCS path from the result
+                if let Some(result) = &job.result {
+                    if result.ccs_path.exists() {
+                        // Use the path from the job result (guaranteed to be correct)
+                        let ccs_path = result.ccs_path.clone();
+                        drop(state_guard);
+                        return stream_ccs_file(ccs_path).await;
+                    }
+                }
+                // Result missing or file deleted - fall through to filesystem lookup
+            }
+            crate::server::jobs::JobStatus::Failed(error) => {
+                // Conversion failed - return error
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Conversion failed: {}", error),
+                ).into_response();
+            }
+            _ => {
+                // Still converting/pending - return 202
+                return (
+                    StatusCode::ACCEPTED,
+                    Json(ConversionAccepted {
+                        status: "converting",
+                        job_id: job_id.to_string(),
+                        poll_url: format!("/v1/jobs/{}", job_id),
+                        eta_seconds: None,
+                    }),
+                ).into_response();
+            }
+        }
     }
 
-    // Look for the CCS package file
+    // No job found - look for the CCS package file on disk
     // The conversion service stores it at: {cache_dir}/packages/{name}-{version}.ccs
     let packages_dir = state_guard.config.cache_dir.join("packages");
 
@@ -302,6 +365,35 @@ pub async fn download_package(
         )
         .await;
     }
+
+    drop(state_guard);
+
+    // Use helper function to stream the file
+    stream_ccs_file(ccs_path).await
+}
+
+/// Find the latest version of a package in the packages directory
+fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let prefix = format!("{}-", name);
+
+    std::fs::read_dir(packages_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_name().to_str()
+                .map(|n| n.starts_with(&prefix) && n.ends_with(".ccs"))
+                .unwrap_or(false)
+        })
+        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
+        .map(|entry| entry.path())
+}
+
+/// Stream a CCS file as a response
+async fn stream_ccs_file(ccs_path: std::path::PathBuf) -> Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use tokio::fs::File;
+    use tokio_util::io::ReaderStream;
 
     // Open file for streaming
     let file = match File::open(&ccs_path).await {
@@ -340,22 +432,6 @@ pub async fn download_package(
         .header(header::CACHE_CONTROL, "public, max-age=3600")
         .body(body)
         .unwrap()
-}
-
-/// Find the latest version of a package in the packages directory
-fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    let prefix = format!("{}-", name);
-
-    std::fs::read_dir(packages_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.file_name().to_str()
-                .map(|n| n.starts_with(&prefix) && n.ends_with(".ccs"))
-                .unwrap_or(false)
-        })
-        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
-        .map(|entry| entry.path())
 }
 
 /// POST /v1/admin/convert

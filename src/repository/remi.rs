@@ -419,19 +419,39 @@ impl RemiClient {
                 let _manifest = self.poll_for_completion(&accepted.job_id)?;
 
                 // Retry download after conversion completes
+                // Small delay + retry loop to handle server propagation timing
                 info!("Conversion complete, downloading CCS package");
-                let retry_response = self.client.get(&url).send().map_err(|e| {
-                    Error::DownloadError(format!("Failed to retry download: {e}"))
-                })?;
 
-                if retry_response.status().as_u16() != 200 {
-                    return Err(Error::DownloadError(format!(
-                        "Download after conversion returned HTTP {}",
-                        retry_response.status()
-                    )));
+                let max_retries = 5;
+                let mut last_status = 0;
+
+                for attempt in 1..=max_retries {
+                    // Brief delay before retry (increases with each attempt)
+                    std::thread::sleep(Duration::from_millis(200 * attempt as u64));
+
+                    let retry_response = self.client.get(&url).send().map_err(|e| {
+                        Error::DownloadError(format!("Failed to retry download: {e}"))
+                    })?;
+
+                    last_status = retry_response.status().as_u16();
+
+                    if last_status == 200 {
+                        return self.download_ccs_response(retry_response, name, output_dir);
+                    } else if last_status != 202 {
+                        // Unexpected status - fail immediately
+                        return Err(Error::DownloadError(format!(
+                            "Download after conversion returned HTTP {}",
+                            retry_response.status()
+                        )));
+                    }
+
+                    debug!("Download returned 202, retrying ({}/{})", attempt, max_retries);
                 }
 
-                self.download_ccs_response(retry_response, name, output_dir)
+                Err(Error::DownloadError(format!(
+                    "Download after conversion still returned HTTP {} after {} retries",
+                    last_status, max_retries
+                )))
             }
             404 => {
                 Err(Error::NotFound(format!(

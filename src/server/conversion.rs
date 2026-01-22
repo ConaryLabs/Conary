@@ -148,18 +148,7 @@ impl ConversionService {
         let content_hash = Self::calculate_checksum(ccs_path)?;
         let total_size = std::fs::metadata(ccs_path)?.len();
 
-        // Create and insert the converted package record
-        let mut converted = ConvertedPackage::new(
-            format.to_string(),
-            original_checksum,
-            conversion_result.fidelity.level.to_string(),
-        );
-        converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
-        converted.insert(&conn)?;
-
-        info!("Recorded conversion in database");
-
-        // Copy CCS package to persistent location
+        // Copy CCS package to persistent location first (need path for DB record)
         let ccs_filename = Self::safe_ccs_filename(&metadata.name, &metadata.version)?;
         let final_ccs_path = self.cache_dir
             .join("packages")
@@ -169,6 +158,24 @@ impl ConversionService {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(ccs_path, &final_ccs_path)?;
+
+        // Create and insert the converted package record with server-side fields
+        let mut converted = ConvertedPackage::new_server(
+            distro.to_string(),
+            metadata.name.clone(),
+            metadata.version.clone(),
+            format.to_string(),
+            original_checksum,
+            conversion_result.fidelity.level.to_string(),
+            &chunk_hashes,
+            total_size as i64,
+            content_hash.clone(),
+            final_ccs_path.to_string_lossy().to_string(),
+        );
+        converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
+        converted.insert(&conn)?;
+
+        info!("Recorded conversion in database (distro={}, name={}, version={})", distro, metadata.name, metadata.version);
 
         Ok(ServerConversionResult {
             name: metadata.name,
@@ -359,16 +366,33 @@ impl ConversionService {
         distro: &str,
         repo_pkg: &RepositoryPackage,
     ) -> Result<ServerConversionResult> {
-        // Use repo package info since ConvertedPackage doesn't store name/version
-        let ccs_filename = Self::safe_ccs_filename(&repo_pkg.name, &repo_pkg.version)?;
+        // Use server-side fields from ConvertedPackage if available, else fallback to repo_pkg
+        let name = existing.package_name.clone().unwrap_or_else(|| repo_pkg.name.clone());
+        let version = existing.package_version.clone().unwrap_or_else(|| repo_pkg.version.clone());
+
+        // Prefer stored CCS path if available
+        let ccs_path = if let Some(stored_path) = &existing.ccs_path {
+            PathBuf::from(stored_path)
+        } else {
+            let ccs_filename = Self::safe_ccs_filename(&name, &version)?;
+            self.cache_dir.join("packages").join(&ccs_filename)
+        };
+
+        // Parse chunk hashes from JSON if stored
+        let chunk_hashes: Vec<String> = existing
+            .chunk_hashes_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+
         Ok(ServerConversionResult {
-            name: repo_pkg.name.clone(),
-            version: repo_pkg.version.clone(),
-            distro: distro.to_string(),
-            chunk_hashes: vec![], // Would need to read from CCS package
-            total_size: repo_pkg.size as u64,
-            content_hash: existing.original_checksum.clone(),
-            ccs_path: self.cache_dir.join("packages").join(&ccs_filename),
+            name,
+            version,
+            distro: existing.distro.clone().unwrap_or_else(|| distro.to_string()),
+            chunk_hashes,
+            total_size: existing.total_size.unwrap_or(repo_pkg.size) as u64,
+            content_hash: existing.content_hash.clone().unwrap_or_else(|| existing.original_checksum.clone()),
+            ccs_path,
         })
     }
 

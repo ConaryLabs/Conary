@@ -146,10 +146,17 @@ pub fn cmd_install(
         return install_converted_ccs(ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
     }
 
-    // Detect format and parse
     let path_str = resolved.path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
+
+    // Check if it's a CCS package by extension (from update command or local file)
+    if path_str.ends_with(".ccs") {
+        info!("Detected CCS package from path extension, installing directly");
+        return install_converted_ccs(path_str, db_path, root, dry_run, sandbox_mode, no_deps);
+    }
+
+    // Detect format and parse legacy packages
     let format = detect_package_format(path_str)
         .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);

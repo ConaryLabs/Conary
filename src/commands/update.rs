@@ -7,9 +7,8 @@ use anyhow::Result;
 use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
 use conary::db::paths::objects_dir;
 use conary::delta::DeltaApplier;
-use conary::repository::{self, DownloadOptions};
-use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use conary::repository::{self, resolve_package, DownloadOptions, PackageSource, ResolutionOptions};
+use std::path::Path;
 use tracing::{info, warn};
 
 /// Pin a package to prevent updates and removal
@@ -83,15 +82,6 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
     println!("\nTotal: {} pinned package(s)", pinned.len());
 
     Ok(())
-}
-
-/// Result of a download attempt for an update
-#[derive(Debug)]
-enum DownloadResult {
-    /// Full package was downloaded
-    Full { trove: Trove, pkg_path: PathBuf },
-    /// Download failed completely
-    Failed { name: String, error: String },
 }
 
 /// Check for and apply package updates
@@ -295,30 +285,26 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
         }
     }
 
-    // Phase 3 & 4: Download and install full packages with progress tracking
+    // Phase 3 & 4: Resolve and install full packages using unified resolution
+    // This respects per-repo routing strategies (remi, binary, etc.)
     if !full_updates.is_empty() {
         let total_to_install = full_updates.len() as u64;
         let mut progress = UpdateProgress::new(total_to_install);
 
-        // Download full packages in parallel
-        progress.set_status("Downloading packages...");
+        progress.set_status("Resolving and downloading packages...");
 
-        // Pre-create progress bars for all downloads
-        let progress_bars: Vec<_> = full_updates
-            .iter()
-            .map(|(trove, repo_pkg, _)| {
-                progress.add_download_progress(&trove.name, repo_pkg.size as u64)
-            })
-            .collect();
+        // Process packages sequentially (resolution requires DB access)
+        for (trove, repo_pkg, repo) in full_updates {
+            info!("Resolving {} from {}", trove.name, repo.name);
+            progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-        let download_results: Vec<_> = full_updates
-            .par_iter()
-            .zip(progress_bars.par_iter())
-            .map(|((trove, repo_pkg, repo), pb)| {
-                info!("Downloading {}", trove.name);
-
-                // Build GPG options if enabled
-                let gpg_options = if repo.gpg_check {
+            // Build resolution options
+            let options = ResolutionOptions {
+                version: Some(repo_pkg.version.clone()),
+                repository: Some(repo.name.clone()),
+                architecture: repo_pkg.architecture.clone(),
+                output_dir: Some(temp_dir.clone()),
+                gpg_options: if repo.gpg_check {
                     Some(DownloadOptions {
                         gpg_check: true,
                         gpg_strict: repo.gpg_strict,
@@ -327,70 +313,60 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
                     })
                 } else {
                     None
-                };
+                },
+                skip_cas: false,
+            };
 
-                match repository::download_package_verified_with_progress(
-                    repo_pkg,
-                    &temp_dir,
-                    gpg_options.as_ref(),
-                    Some(pb),
-                ) {
-                    Ok(pkg_path) => {
-                        pb.finish_with_message(format!("{} [done]", trove.name));
-                        DownloadResult::Full {
-                            trove: trove.clone(),
-                            pkg_path,
-                        }
-                    }
-                    Err(e) => {
-                        pb.abandon_with_message(format!("{} [FAILED]", trove.name));
-                        DownloadResult::Failed {
-                            name: trove.name.clone(),
-                            error: e.to_string(),
-                        }
-                    }
+            // Use unified resolver - respects remi/binary/recipe strategies
+            let source = match resolve_package(&conn, &trove.name, &options) {
+                Ok(source) => source,
+                Err(e) => {
+                    progress.fail_package(&trove.name, &e.to_string());
+                    warn!("Failed to resolve {}: {}", trove.name, e);
+                    continue;
                 }
-            })
-            .collect();
+            };
 
-        // Install downloaded packages sequentially
-        for result in download_results {
-            match result {
-                DownloadResult::Full { trove, pkg_path } => {
-                    progress.set_phase(&trove.name, UpdatePhase::Installing);
-
-                    let path_str = pkg_path.to_string_lossy().to_string();
-                    
-                    if let Err(e) = cmd_install(
-                        &path_str,
-                        db_path,
-                        root,
-                        None,
-                        None,
-                        false,
-                        false,
-                        false,
-                        None,
-                        SandboxMode::None,
-                        false,
-                        false,
-                        false
-                    ) {
-                        progress.fail_package(&trove.name, &e.to_string());
-                        warn!("  Package installation failed: {}", e);
-                        let _ = std::fs::remove_file(&pkg_path);
-                        continue;
-                    }
-
-                    full_downloads += 1;
-                    progress.complete_package(&trove.name);
-                    let _ = std::fs::remove_file(pkg_path);
+            // Get path from source
+            let pkg_path = match &source {
+                PackageSource::Binary { path, .. } => path.clone(),
+                PackageSource::Ccs { path, .. } => path.clone(),
+                PackageSource::Delta { delta_path, .. } => delta_path.clone(),
+                PackageSource::LocalCas { hash } => {
+                    progress.fail_package(&trove.name, "LocalCas not yet supported");
+                    warn!("LocalCas resolution not yet implemented for {}: {}", trove.name, hash);
+                    continue;
                 }
-                DownloadResult::Failed { name, error } => {
-                    progress.fail_package(&name, &error);
-                    warn!("  Failed to download {}: {}", name, error);
-                }
+            };
+
+            progress.set_phase(&trove.name, UpdatePhase::Installing);
+
+            let path_str = pkg_path.to_string_lossy().to_string();
+
+            if let Err(e) = cmd_install(
+                &path_str,
+                db_path,
+                root,
+                None,
+                None,
+                false,
+                false,
+                false,
+                None,
+                SandboxMode::None,
+                false,
+                false,
+                false
+            ) {
+                progress.fail_package(&trove.name, &e.to_string());
+                warn!("  Package installation failed: {}", e);
+                let _ = std::fs::remove_file(&pkg_path);
+                continue;
             }
+
+            full_downloads += 1;
+            progress.complete_package(&trove.name);
+            let _ = std::fs::remove_file(&pkg_path);
         }
 
         progress.finish(&format!(

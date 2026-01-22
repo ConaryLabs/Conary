@@ -1898,3 +1898,36 @@ pub fn migrate_v37(conn: &Connection) -> Result<()> {
     info!("Schema version 37 applied successfully (enhancement priority)");
     Ok(())
 }
+
+/// Migration 38: Add server-side conversion tracking columns
+///
+/// For Remi server to cache converted packages across restarts, we need to store:
+/// - Package identity (name, version, distro)
+/// - Chunk manifest (JSON array of hashes)
+/// - CCS file location
+pub fn migrate_v38(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 38");
+
+    conn.execute_batch(
+        "
+        -- Server-side conversion tracking columns (nullable for client-side records)
+        -- Package identity
+        ALTER TABLE converted_packages ADD COLUMN package_name TEXT;
+        ALTER TABLE converted_packages ADD COLUMN package_version TEXT;
+        ALTER TABLE converted_packages ADD COLUMN distro TEXT;
+
+        -- Chunk manifest and CCS file info
+        ALTER TABLE converted_packages ADD COLUMN chunk_hashes_json TEXT;
+        ALTER TABLE converted_packages ADD COLUMN total_size INTEGER;
+        ALTER TABLE converted_packages ADD COLUMN content_hash TEXT;
+        ALTER TABLE converted_packages ADD COLUMN ccs_path TEXT;
+
+        -- Index for server-side lookups by package identity
+        CREATE INDEX idx_converted_packages_identity
+            ON converted_packages(distro, package_name, package_version);
+        ",
+    )?;
+
+    info!("Schema version 38 applied successfully (server-side conversion tracking)");
+    Ok(())
+}

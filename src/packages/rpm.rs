@@ -188,6 +188,13 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to get package version: {}", e)))?
             .to_string();
 
+        // Combine version and release (e.g., "2.2.1" + "2.fc43" -> "2.2.1-2.fc43")
+        let version = if let Ok(release) = pkg.metadata.get_release() {
+            format!("{}-{}", version, release)
+        } else {
+            version
+        };
+
         let architecture = pkg.metadata.get_arch().ok().map(|s| s.to_string());
         let description = pkg.metadata.get_description().ok().map(|s| s.to_string());
 

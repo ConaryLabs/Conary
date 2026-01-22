@@ -61,6 +61,10 @@ pub struct ConversionResult {
     pub total_size: u64,
     /// SHA-256 of the complete content
     pub content_hash: String,
+    /// Path to the converted CCS package file
+    pub ccs_path: std::path::PathBuf,
+    /// Actual package version (from repo metadata, may differ from requested)
+    pub actual_version: String,
 }
 
 /// A conversion job

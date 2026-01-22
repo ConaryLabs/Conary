@@ -48,6 +48,22 @@ pub struct ConvertedPackage {
     pub enhancement_error: Option<String>,
     /// When enhancement was last attempted
     pub enhancement_attempted_at: Option<String>,
+
+    // Server-side conversion tracking fields (v38)
+    /// Package name (for server-side lookups)
+    pub package_name: Option<String>,
+    /// Package version (for server-side lookups)
+    pub package_version: Option<String>,
+    /// Distribution (fedora, arch, ubuntu, debian)
+    pub distro: Option<String>,
+    /// JSON array of chunk hashes
+    pub chunk_hashes_json: Option<String>,
+    /// Total size of the CCS package
+    pub total_size: Option<i64>,
+    /// Content hash of the CCS package
+    pub content_hash: Option<String>,
+    /// Path to the CCS package file
+    pub ccs_path: Option<String>,
 }
 
 impl ConvertedPackage {
@@ -73,6 +89,52 @@ impl ConvertedPackage {
             enhancement_status: "pending".to_string(),
             enhancement_error: None,
             enhancement_attempted_at: None,
+            // Server-side fields start as None
+            package_name: None,
+            package_version: None,
+            distro: None,
+            chunk_hashes_json: None,
+            total_size: None,
+            content_hash: None,
+            ccs_path: None,
+        }
+    }
+
+    /// Create a new server-side converted package record (for Remi)
+    pub fn new_server(
+        distro: String,
+        package_name: String,
+        package_version: String,
+        original_format: String,
+        original_checksum: String,
+        conversion_fidelity: String,
+        chunk_hashes: &[String],
+        total_size: i64,
+        content_hash: String,
+        ccs_path: String,
+    ) -> Self {
+        Self {
+            id: None,
+            trove_id: None,
+            original_format,
+            original_checksum,
+            conversion_version: CONVERSION_VERSION,
+            conversion_fidelity,
+            detected_hooks: None,
+            converted_at: None,
+            enhancement_version: 0,
+            inferred_caps_json: None,
+            extracted_provenance_json: None,
+            enhancement_status: "pending".to_string(),
+            enhancement_error: None,
+            enhancement_attempted_at: None,
+            package_name: Some(package_name),
+            package_version: Some(package_version),
+            distro: Some(distro),
+            chunk_hashes_json: Some(serde_json::to_string(chunk_hashes).unwrap_or_default()),
+            total_size: Some(total_size),
+            content_hash: Some(content_hash),
+            ccs_path: Some(ccs_path),
         }
     }
 
@@ -94,6 +156,14 @@ impl ConvertedPackage {
             enhancement_status: row.get(11).unwrap_or_else(|_| "pending".to_string()),
             enhancement_error: row.get(12).ok(),
             enhancement_attempted_at: row.get(13).ok(),
+            // Server-side fields (v38)
+            package_name: row.get(14).ok(),
+            package_version: row.get(15).ok(),
+            distro: row.get(16).ok(),
+            chunk_hashes_json: row.get(17).ok(),
+            total_size: row.get(18).ok(),
+            content_hash: row.get(19).ok(),
+            ccs_path: row.get(20).ok(),
         })
     }
 
@@ -101,8 +171,9 @@ impl ConvertedPackage {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks,
-                enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status,
+                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 self.trove_id,
                 &self.original_format,
@@ -114,6 +185,13 @@ impl ConvertedPackage {
                 &self.inferred_caps_json,
                 &self.extracted_provenance_json,
                 &self.enhancement_status,
+                &self.package_name,
+                &self.package_version,
+                &self.distro,
+                &self.chunk_hashes_json,
+                self.total_size,
+                &self.content_hash,
+                &self.ccs_path,
             ],
         )?;
 
@@ -142,7 +220,8 @@ impl ConvertedPackage {
         let result = conn
             .query_row(
                 "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
                  FROM converted_packages WHERE original_checksum = ?1",
                 [checksum],
                 Self::from_row,
@@ -157,7 +236,8 @@ impl ConvertedPackage {
         let result = conn
             .query_row(
                 "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
                  FROM converted_packages WHERE trove_id = ?1",
                 [trove_id],
                 Self::from_row,
@@ -176,7 +256,8 @@ impl ConvertedPackage {
     pub fn find_by_fidelity(conn: &Connection, fidelity: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
+                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                    package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
              FROM converted_packages WHERE conversion_fidelity = ?1
              ORDER BY converted_at DESC",
         )?;
@@ -192,7 +273,8 @@ impl ConvertedPackage {
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at
+                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                    package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
              FROM converted_packages ORDER BY converted_at DESC",
         )?;
 
@@ -201,6 +283,42 @@ impl ConvertedPackage {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
+    }
+
+    /// Find a converted package by distro, name, and version (server-side lookup)
+    pub fn find_by_package_identity(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<Option<Self>> {
+        let result = if let Some(ver) = version {
+            conn.query_row(
+                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
+                 FROM converted_packages
+                 WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3",
+                params![distro, name, ver],
+                Self::from_row,
+            )
+            .optional()?
+        } else {
+            // Find latest version for this package
+            conn.query_row(
+                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
+                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
+                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
+                 FROM converted_packages
+                 WHERE distro = ?1 AND package_name = ?2
+                 ORDER BY converted_at DESC LIMIT 1",
+                params![distro, name],
+                Self::from_row,
+            )
+            .optional()?
+        };
+
+        Ok(result)
     }
 
     /// Delete a converted package record by checksum
