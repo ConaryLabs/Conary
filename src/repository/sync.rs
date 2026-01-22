@@ -86,9 +86,6 @@ fn sync_repository_native(
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
-    // Delete old package entries for this repository
-    RepositoryPackage::delete_by_repository(conn, repo_id)?;
-
     // Check if we need to rebase download URLs (reference mirror pattern)
     let needs_rebase = repo.content_url.is_some();
     if needs_rebase {
@@ -99,54 +96,67 @@ fn sync_repository_native(
         );
     }
 
-    // Convert and insert package metadata
-    let mut count = 0;
-    for pkg_meta in packages {
-        // Convert parsers::Dependency to Vec<String>
-        let deps_json = if !pkg_meta.dependencies.is_empty() {
-            let dep_strings: Vec<String> = pkg_meta
-                .dependencies
-                .iter()
-                .map(|dep| {
-                    if let Some(constraint) = &dep.constraint {
-                        format!("{} {constraint}", dep.name)
-                    } else {
-                        dep.name.clone()
-                    }
-                })
-                .collect();
-            Some(serde_json::to_string(&dep_strings).unwrap_or_default())
-        } else {
-            None
-        };
+    // Convert package metadata to RepositoryPackage structs
+    let repo_packages: Vec<RepositoryPackage> = packages
+        .into_iter()
+        .map(|pkg_meta| {
+            // Convert parsers::Dependency to Vec<String>
+            let deps_json = if !pkg_meta.dependencies.is_empty() {
+                let dep_strings: Vec<String> = pkg_meta
+                    .dependencies
+                    .iter()
+                    .map(|dep| {
+                        if let Some(constraint) = &dep.constraint {
+                            format!("{} {constraint}", dep.name)
+                        } else {
+                            dep.name.clone()
+                        }
+                    })
+                    .collect();
+                Some(serde_json::to_string(&dep_strings).unwrap_or_default())
+            } else {
+                None
+            };
 
-        // Rebase download URL if content_url is configured (reference mirror)
-        let download_url = rebase_download_url(
-            &pkg_meta.download_url,
-            &repo.url,
-            repo.content_url.as_deref(),
-        );
+            // Rebase download URL if content_url is configured (reference mirror)
+            let download_url = rebase_download_url(
+                &pkg_meta.download_url,
+                &repo.url,
+                repo.content_url.as_deref(),
+            );
 
-        let mut repo_pkg = RepositoryPackage::new(
-            repo_id,
-            pkg_meta.name,
-            pkg_meta.version,
-            pkg_meta.checksum,
-            pkg_meta.size as i64,
-            download_url,
-        );
+            let mut repo_pkg = RepositoryPackage::new(
+                repo_id,
+                pkg_meta.name,
+                pkg_meta.version,
+                pkg_meta.checksum,
+                pkg_meta.size as i64,
+                download_url,
+            );
 
-        repo_pkg.architecture = pkg_meta.architecture;
-        repo_pkg.description = pkg_meta.description;
-        repo_pkg.dependencies = deps_json;
+            repo_pkg.architecture = pkg_meta.architecture;
+            repo_pkg.description = pkg_meta.description;
+            repo_pkg.dependencies = deps_json;
+            repo_pkg
+        })
+        .collect();
 
-        repo_pkg.insert(conn)?;
-        count += 1;
-    }
+    let count = repo_packages.len();
+
+    // Use a transaction for bulk operations (much faster than individual inserts)
+    let tx = conn.unchecked_transaction()?;
+
+    // Delete old package entries for this repository
+    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
+
+    // Batch insert all packages using prepared statement
+    RepositoryPackage::batch_insert(&tx, &repo_packages)?;
 
     // Update last_sync timestamp
     repo.last_sync = Some(current_timestamp());
-    repo.update(conn)?;
+    repo.update(&tx)?;
+
+    tx.commit()?;
 
     info!(
         "Synchronized {} packages from repository {}",
