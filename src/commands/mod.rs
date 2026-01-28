@@ -58,7 +58,7 @@ pub use derived::{
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
-pub use install::cmd_install;
+pub use install::{cmd_install, InstallOptions};
 pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot};
 pub use provenance::{
     cmd_provenance_show, cmd_provenance_verify, cmd_provenance_diff, cmd_provenance_find_by_dep,

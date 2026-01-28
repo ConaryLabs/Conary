@@ -194,6 +194,29 @@ impl<'a> TransactionPlanner<'a> {
         }
     }
 
+    /// Compute hash for a file (handles symlinks specially)
+    fn compute_file_hash(&self, file: &ExtractedFile) -> Option<String> {
+        if file.is_symlink {
+            file.symlink_target
+                .as_ref()
+                .map(|t| CasStore::compute_symlink_hash(t))
+        } else {
+            Some(self.cas.compute_hash(&file.content))
+        }
+    }
+
+    /// Compute hash for staging (returns empty string for symlinks without target)
+    fn compute_stage_hash(&self, file: &ExtractedFile) -> String {
+        if file.is_symlink {
+            file.symlink_target
+                .as_ref()
+                .map(|t| CasStore::compute_symlink_hash(t))
+                .unwrap_or_default()
+        } else {
+            self.cas.compute_hash(&file.content)
+        }
+    }
+
     /// Plan an install/upgrade operation
     pub fn plan_install(
         &mut self,
@@ -262,12 +285,7 @@ impl<'a> TransactionPlanner<'a> {
                         } else {
                             OperationType::ReplaceFile
                         },
-                        new_hash: if file.is_symlink {
-                            // Use consistent symlink hash computation
-                            file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
-                        } else {
-                            Some(self.cas.compute_hash(&file.content))
-                        },
+                        new_hash: self.compute_file_hash(file),
                         new_mode: Some(file.mode),
                         symlink_target: file.symlink_target.as_ref().map(PathBuf::from),
                     });
@@ -292,12 +310,7 @@ impl<'a> TransactionPlanner<'a> {
                         } else {
                             OperationType::ReplaceFile
                         },
-                        new_hash: if file.is_symlink {
-                            // Use consistent symlink hash computation
-                            file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
-                        } else {
-                            Some(self.cas.compute_hash(&file.content))
-                        },
+                        new_hash: self.compute_file_hash(file),
                         new_mode: Some(file.mode),
                         symlink_target: file.symlink_target.as_ref().map(PathBuf::from),
                     });
@@ -317,12 +330,7 @@ impl<'a> TransactionPlanner<'a> {
                     } else {
                         OperationType::AddFile
                     },
-                    new_hash: if file.is_symlink {
-                        // Use consistent symlink hash computation
-                        file.symlink_target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
-                    } else {
-                        Some(self.cas.compute_hash(&file.content))
-                    },
+                    new_hash: self.compute_file_hash(file),
                     new_mode: Some(file.mode),
                     symlink_target: file.symlink_target.as_ref().map(PathBuf::from),
                 });
@@ -331,14 +339,7 @@ impl<'a> TransactionPlanner<'a> {
             // Add to staging list
             plan.files_to_stage.push(StageInfo {
                 path: path.to_path_buf(),
-                hash: if file.is_symlink {
-                    // Use consistent symlink hash computation
-                    file.symlink_target.as_ref()
-                        .map(|t| CasStore::compute_symlink_hash(t))
-                        .unwrap_or_default()
-                } else {
-                    self.cas.compute_hash(&file.content)
-                },
+                hash: self.compute_stage_hash(file),
                 mode: file.mode,
                 file_type: if file.is_symlink {
                     FileType::Symlink

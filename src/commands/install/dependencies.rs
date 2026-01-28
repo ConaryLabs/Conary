@@ -161,21 +161,14 @@ fn handle_downloadable_deps(
                 println!("Installing dependency: {}", dep_name);
                 let reason = format!("Required by {}", parent_name);
                 let path_str = dep_path.to_string_lossy().to_string();
-                if let Err(e) = cmd_install(
-                    &path_str,
+                if let Err(e) = cmd_install(&path_str, super::InstallOptions {
                     db_path,
                     root,
-                    None,
-                    None,
                     dry_run,
-                    false, // no_deps - dependencies of dependencies?
-                    false, // no_scripts
-                    Some(&reason),
-                    SandboxMode::None,
-                    false, // allow_downgrade
-                    false, // convert_to_ccs
-                    false  // no_capture
-                ) {
+                    selection_reason: Some(&reason),
+                    sandbox_mode: SandboxMode::None,
+                    ..Default::default()
+                }) {
                     return Err(anyhow::anyhow!(
                         "Failed to install dependency {}: {}",
                         dep_name,

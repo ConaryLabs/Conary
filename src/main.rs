@@ -42,7 +42,20 @@ fn main() -> Result<()> {
                 let name = package.trim_start_matches('@');
                 commands::cmd_collection_install(name, &common.db.db_path, &common.root, dry_run, skip_optional, sandbox_mode)
             } else {
-                commands::cmd_install(&package, &common.db.db_path, &common.root, version, repo, dry_run, no_deps, no_scripts, None, sandbox_mode, allow_downgrade, convert_to_ccs, no_capture)
+                commands::cmd_install(&package, commands::InstallOptions {
+                    db_path: &common.db.db_path,
+                    root: &common.root,
+                    version,
+                    repo,
+                    dry_run,
+                    no_deps,
+                    no_scripts,
+                    selection_reason: None,
+                    sandbox_mode,
+                    allow_downgrade,
+                    convert_to_ccs,
+                    no_capture,
+                })
             }
         }
 

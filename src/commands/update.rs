@@ -350,21 +350,12 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
 
             let path_str = pkg_path.to_string_lossy().to_string();
 
-            if let Err(e) = cmd_install(
-                &path_str,
+            if let Err(e) = cmd_install(&path_str, super::InstallOptions {
                 db_path,
                 root,
-                None,
-                None,
-                false,
-                false,
-                false,
-                None,
-                SandboxMode::None,
-                false,
-                false,
-                false
-            ) {
+                sandbox_mode: SandboxMode::None,
+                ..Default::default()
+            }) {
                 progress.fail_package(&trove.name, &e.to_string());
                 warn!("  Package installation failed: {}", e);
                 let _ = std::fs::remove_file(&pkg_path);

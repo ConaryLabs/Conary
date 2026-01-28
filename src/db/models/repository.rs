@@ -5,6 +5,11 @@
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+/// Column list for Repository SELECT queries (avoids repetition across methods)
+const REPOSITORY_COLUMNS: &str = "id, name, url, content_url, enabled, priority, gpg_check, \
+    gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, \
+    default_strategy_endpoint, default_strategy_distro";
+
 /// Repository represents a remote package source
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -110,53 +115,43 @@ impl Repository {
 
     /// Find a repository by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
-             FROM repositories WHERE id = ?1",
-        )?;
-
+        let sql = format!("SELECT {} FROM repositories WHERE id = ?1", REPOSITORY_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let repo = stmt.query_row([id], Self::from_row).optional()?;
-
         Ok(repo)
     }
 
     /// Find a repository by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
-             FROM repositories WHERE name = ?1",
-        )?;
-
+        let sql = format!("SELECT {} FROM repositories WHERE name = ?1", REPOSITORY_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let repo = stmt.query_row([name], Self::from_row).optional()?;
-
         Ok(repo)
     }
 
     /// List all repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
-             FROM repositories ORDER BY priority DESC, name",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM repositories ORDER BY priority DESC, name",
+            REPOSITORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let repos = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(repos)
     }
 
     /// List enabled repositories
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, default_strategy_endpoint, default_strategy_distro
-             FROM repositories WHERE enabled = 1 ORDER BY priority DESC, name",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM repositories WHERE enabled = 1 ORDER BY priority DESC, name",
+            REPOSITORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let repos = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(repos)
     }
 

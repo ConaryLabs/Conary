@@ -295,21 +295,14 @@ pub fn cmd_collection_install(
 
         println!("\nInstalling {}...", member.member_name);
         let reason = format!("Installed via @{}", name);
-        match super::cmd_install(
-            &member.member_name,
+        match super::cmd_install(&member.member_name, super::InstallOptions {
             db_path,
             root,
-            member.member_version.clone(),
-            None,
-            false,
-            false,
-            false,
-            Some(&reason),
+            version: member.member_version.clone(),
+            selection_reason: Some(&reason),
             sandbox_mode,
-            false,  // allow_downgrade
-            false,  // convert_to_ccs
-            false,  // no_capture
-        ) {
+            ..Default::default()
+        }) {
             Ok(_) => {
                 installed_count += 1;
             }

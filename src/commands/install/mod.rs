@@ -45,41 +45,100 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
+/// Options for package installation
+#[derive(Debug, Clone, Default)]
+pub struct InstallOptions<'a> {
+    /// Path to the package database
+    pub db_path: &'a str,
+    /// Filesystem root for installation
+    pub root: &'a str,
+    /// Specific version to install
+    pub version: Option<String>,
+    /// Specific repository to use
+    pub repo: Option<String>,
+    /// Preview without installing
+    pub dry_run: bool,
+    /// Skip dependency resolution
+    pub no_deps: bool,
+    /// Skip scriptlet execution
+    pub no_scripts: bool,
+    /// Human-readable reason for installation
+    pub selection_reason: Option<&'a str>,
+    /// Sandbox mode for scriptlet execution
+    pub sandbox_mode: SandboxMode,
+    /// Allow installing older versions
+    pub allow_downgrade: bool,
+    /// Convert legacy packages to CCS format
+    pub convert_to_ccs: bool,
+    /// Skip state capture after install
+    pub no_capture: bool,
+}
+
+/// Check if missing dependencies can be satisfied by tracked packages.
+/// Prints status and returns error if any dependencies cannot be satisfied.
+fn report_provides_check(
+    conn: &rusqlite::Connection,
+    missing: &[conary::resolver::MissingDependency],
+    package_name: &str,
+) -> Result<()> {
+    let (satisfied, unsatisfied) = check_provides_dependencies(conn, missing);
+
+    if !satisfied.is_empty() {
+        println!(
+            "\nDependencies satisfied by tracked packages ({}):",
+            satisfied.len()
+        );
+        for (name, provider, version) in &satisfied {
+            if let Some(v) = version {
+                println!("  {} -> {} ({})", name, provider, v);
+            } else {
+                println!("  {} -> {}", name, provider);
+            }
+        }
+    }
+
+    if !unsatisfied.is_empty() {
+        println!("\nMissing dependencies:");
+        for dep in &unsatisfied {
+            println!(
+                "  {} {} (required by: {})",
+                dep.name,
+                dep.constraint,
+                dep.required_by.join(", ")
+            );
+        }
+        println!("\nHint: Run 'conary adopt-system' to track all installed packages");
+        return Err(anyhow::anyhow!(
+            "Cannot install {}: {} unresolvable dependencies",
+            package_name,
+            unsatisfied.len()
+        ));
+    }
+
+    println!("All dependencies satisfied by tracked packages");
+    Ok(())
+}
+
 /// Install a package
 ///
 /// Uses the unified resolution flow with per-package routing strategies.
 /// Packages can be resolved from binary repos, on-demand converters, or recipes
 /// based on their routing table entries.
-///
-/// # Arguments
-/// * `package` - Package name or path
-/// * `db_path` - Path to the database
-/// * `root` - Filesystem root for installation
-/// * `version` - Specific version to install (optional)
-/// * `repo` - Specific repository to use (optional)
-/// * `dry_run` - Preview without installing
-/// * `no_deps` - Skip dependency resolution
-/// * `no_scripts` - Skip scriptlet execution
-/// * `selection_reason` - Human-readable reason for installation (e.g., "Installed via @server")
-/// * `sandbox_mode` - Sandbox mode for scriptlet execution
-/// * `allow_downgrade` - Allow installing older versions
-/// * `convert_to_ccs` - Convert legacy packages to CCS format during install
-#[allow(clippy::too_many_arguments)]
-pub fn cmd_install(
-    package: &str,
-    db_path: &str,
-    root: &str,
-    version: Option<String>,
-    repo: Option<String>,
-    dry_run: bool,
-    no_deps: bool,
-    no_scripts: bool,
-    selection_reason: Option<&str>,
-    sandbox_mode: SandboxMode,
-    allow_downgrade: bool,
-    convert_to_ccs: bool,
-    no_capture: bool,
-) -> Result<()> {
+pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+    let InstallOptions {
+        db_path,
+        root,
+        version,
+        repo,
+        dry_run,
+        no_deps,
+        no_scripts,
+        selection_reason,
+        sandbox_mode,
+        allow_downgrade,
+        convert_to_ccs,
+        no_capture,
+    } = opts;
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
         let selection = if comp == "all" {
@@ -344,84 +403,13 @@ pub fn cmd_install(
                         }
                     } else {
                         // Dependencies not found in Conary repos - check provides table
-                        let (satisfied, unsatisfied) =
-                            check_provides_dependencies(&conn, &plan.missing);
-
-                        if !satisfied.is_empty() {
-                            println!(
-                                "\nDependencies satisfied by tracked packages ({}):",
-                                satisfied.len()
-                            );
-                            for (name, provider, version) in &satisfied {
-                                if let Some(v) = version {
-                                    println!("  {} -> {} ({})", name, provider, v);
-                                } else {
-                                    println!("  {} -> {}", name, provider);
-                                }
-                            }
-                        }
-
-                        if !unsatisfied.is_empty() {
-                            println!("\nMissing dependencies:");
-                            for missing in &unsatisfied {
-                                println!(
-                                    "  {} {} (required by: {})",
-                                    missing.name,
-                                    missing.constraint,
-                                    missing.required_by.join(", ")
-                                );
-                            }
-                            println!("\nHint: Run 'conary adopt-system' to track all installed packages");
-                            return Err(anyhow::anyhow!(
-                                "Cannot install {}: {} unresolvable dependencies",
-                                pkg.name(),
-                                unsatisfied.len()
-                            ));
-                        }
-
-                        // All dependencies satisfied by tracked packages
-                        println!("All dependencies satisfied by tracked packages");
+                        report_provides_check(&conn, &plan.missing, pkg.name())?;
                     }
                 }
                 Err(e) => {
                     debug!("Repository lookup failed: {}", e);
                     // Check provides table for dependencies
-                    let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &plan.missing);
-
-                    if !satisfied.is_empty() {
-                        println!(
-                            "\nDependencies satisfied by tracked packages ({}):",
-                            satisfied.len()
-                        );
-                        for (name, provider, version) in &satisfied {
-                            if let Some(v) = version {
-                                println!("  {} -> {} ({})", name, provider, v);
-                            } else {
-                                println!("  {} -> {}", name, provider);
-                            }
-                        }
-                    }
-
-                    if !unsatisfied.is_empty() {
-                        println!("\nMissing dependencies:");
-                        for missing in &unsatisfied {
-                            println!(
-                                "  {} {} (required by: {})",
-                                missing.name,
-                                missing.constraint,
-                                missing.required_by.join(", ")
-                            );
-                        }
-                        println!("\nHint: Run 'conary adopt-system' to track all installed packages");
-                        return Err(anyhow::anyhow!(
-                            "Cannot install {}: {} unresolvable dependencies",
-                            pkg.name(),
-                            unsatisfied.len()
-                        ));
-                    }
-
-                    // All dependencies satisfied by tracked packages
-                    println!("All dependencies satisfied by tracked packages");
+                    report_provides_check(&conn, &plan.missing, pkg.name())?;
                 }
             }
         } else {
