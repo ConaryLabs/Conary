@@ -271,17 +271,18 @@ impl VfsTree {
 
     /// Get the full path of a node by traversing up to root
     pub fn get_path(&self, id: NodeId) -> PathBuf {
-        // Collect references (no String cloning) and use rev() instead of reverse()
         let mut components: Vec<&str> = Vec::new();
         let mut current = id;
 
         loop {
             let node = self.get_node(current);
-            if node.parent.is_none() {
-                break;
+            match node.parent {
+                None => break,
+                Some(parent_id) => {
+                    components.push(&node.name);
+                    current = parent_id;
+                }
             }
-            components.push(&node.name);
-            current = node.parent.unwrap();
         }
 
         let mut path = PathBuf::from("/");
@@ -548,7 +549,9 @@ impl VfsTree {
         to_remove.push(node_id);
 
         // Remove from parent's children list
-        let parent_id = self.get_node(node_id).parent.unwrap();
+        let parent_id = self.get_node(node_id).parent.ok_or_else(|| {
+            Error::InternalError("non-root node has no parent (corrupted VFS tree)".into())
+        })?;
         let parent = self.get_node_mut(parent_id);
         parent.children.retain(|&id| id != node_id);
 
@@ -633,7 +636,9 @@ impl VfsTree {
         }
 
         // Get old parent ID
-        let old_parent_id = self.get_node(source_id).parent.unwrap();
+        let old_parent_id = self.get_node(source_id).parent.ok_or_else(|| {
+            Error::InternalError("non-root node has no parent (corrupted VFS tree)".into())
+        })?;
 
         // Collect all nodes in the subtree for path index updates
         let mut subtree_nodes = vec![source_id];
@@ -727,7 +732,9 @@ impl VfsTree {
         }
 
         // Get old parent ID
-        let old_parent_id = self.get_node(source_id).parent.unwrap();
+        let old_parent_id = self.get_node(source_id).parent.ok_or_else(|| {
+            Error::InternalError("non-root node has no parent (corrupted VFS tree)".into())
+        })?;
 
         // Collect all nodes in the subtree for path index updates
         let mut subtree_nodes = vec![source_id];

@@ -1931,3 +1931,32 @@ pub fn migrate_v38(conn: &Connection) -> Result<()> {
     info!("Schema version 38 applied successfully (server-side conversion tracking)");
     Ok(())
 }
+
+/// Migration 39: Add orphan_since column for orphan cleanup grace period
+///
+/// Tracks when a package became orphaned (no longer required by any explicit package).
+/// This enables grace period policies: "don't remove orphans until they've been
+/// orphaned for N days", preventing accidental removal of recently-orphaned packages.
+///
+/// - NULL: Package is not orphaned (either explicit or still required)
+/// - Timestamp: When the package became orphaned
+///
+/// The column is cleared when a package becomes required again.
+pub fn migrate_v39(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 39");
+
+    conn.execute_batch(
+        "
+        -- Add orphan_since column for tracking when packages became orphaned
+        -- NULL means not orphaned, timestamp means when it became orphaned
+        ALTER TABLE troves ADD COLUMN orphan_since TEXT;
+
+        -- Index for efficient orphan queries with grace period filtering
+        CREATE INDEX idx_troves_orphan_since ON troves(orphan_since)
+            WHERE orphan_since IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 39 applied successfully (orphan tracking)");
+    Ok(())
+}

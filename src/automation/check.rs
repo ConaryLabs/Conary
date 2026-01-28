@@ -14,10 +14,13 @@ use super::action::{
 };
 use super::PendingAction;
 use crate::error::Result;
+use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::collections::HashSet;
+use std::path::Path;
+use tracing::{debug, trace, warn};
 
 /// Results from an automation check run
 #[derive(Debug, Default)]
@@ -237,15 +240,93 @@ impl<'a> AutomationChecker<'a> {
     }
 
     /// Filter orphan packages by grace period
+    ///
+    /// This uses the `orphan_since` column in the troves table to track when
+    /// packages first became orphaned. Packages are only returned for cleanup
+    /// if they've been orphaned longer than the grace period.
+    ///
+    /// For packages that just became orphaned (no `orphan_since` set), this
+    /// function sets the timestamp to now and excludes them from cleanup.
     fn filter_by_grace_period(
         &self,
         packages: &[String],
-        _grace: std::time::Duration,
+        grace: std::time::Duration,
     ) -> Result<Vec<String>> {
-        // In a real implementation, we'd track when packages became orphaned
-        // For now, return all packages (assume they've been orphaned long enough)
-        // TODO: Add orphan_since tracking to troves table
-        Ok(packages.to_vec())
+        if packages.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now();
+        let grace_duration = Duration::seconds(grace.as_secs() as i64);
+        let cutoff = now - grace_duration;
+        let cutoff_str = cutoff.to_rfc3339();
+        let now_str = now.to_rfc3339();
+
+        let mut ready_for_cleanup = Vec::new();
+
+        for name in packages {
+            // Query the orphan_since timestamp for this package
+            let orphan_since: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT orphan_since FROM troves WHERE name = ?1 LIMIT 1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+
+            match orphan_since {
+                Some(timestamp) => {
+                    // Package was already marked as orphan - check if grace period passed
+                    if timestamp <= cutoff_str {
+                        debug!(
+                            "Package {} orphaned since {}, past grace period (cutoff: {})",
+                            name, timestamp, cutoff_str
+                        );
+                        ready_for_cleanup.push(name.clone());
+                    } else {
+                        debug!(
+                            "Package {} orphaned since {}, still in grace period",
+                            name, timestamp
+                        );
+                    }
+                }
+                None => {
+                    // First time this package is detected as orphan - mark it
+                    debug!("Marking package {} as orphaned at {}", name, now_str);
+                    if let Err(e) = self.conn.execute(
+                        "UPDATE troves SET orphan_since = ?1 WHERE name = ?2",
+                        [&now_str, name],
+                    ) {
+                        warn!("Failed to set orphan_since for {}: {}", name, e);
+                    }
+                    // Don't include in cleanup yet - grace period starts now
+                }
+            }
+        }
+
+        Ok(ready_for_cleanup)
+    }
+
+    /// Clear orphan_since for packages that are no longer orphaned
+    ///
+    /// Call this when a package gains a new dependent, so the grace period
+    /// resets if it becomes orphaned again later.
+    pub fn clear_orphan_status(&self, packages: &[String]) -> Result<()> {
+        if packages.is_empty() {
+            return Ok(());
+        }
+
+        for name in packages {
+            self.conn.execute(
+                "UPDATE troves SET orphan_since = NULL WHERE name = ?1",
+                [name],
+            )?;
+            debug!("Cleared orphan status for {}", name);
+        }
+
+        Ok(())
     }
 
     /// Check for available updates
@@ -310,10 +391,71 @@ impl<'a> AutomationChecker<'a> {
     }
 
     /// Find files that have been corrupted (hash mismatch)
+    ///
+    /// Queries all managed files from the database and verifies each one:
+    /// - File exists on disk
+    /// - File hash matches expected SHA-256 hash
+    ///
+    /// Returns paths of files that are missing or have hash mismatches.
     fn find_corrupted_files(&self) -> Result<Vec<String>> {
-        // Placeholder - would actually verify file hashes
-        // For now, return empty (no corruption detected)
-        Ok(Vec::new())
+        // Query all managed files with their expected hashes
+        let mut stmt = self.conn.prepare(
+            "SELECT path, sha256_hash FROM files ORDER BY path",
+        )?;
+
+        let files: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                let path: String = row.get(0)?;
+                let hash: String = row.get(1)?;
+                Ok((path, hash))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        debug!("Checking integrity of {} managed files", files.len());
+
+        let mut corrupted = Vec::new();
+
+        for (path, expected_hash) in files {
+            let file_path = Path::new(&path);
+
+            // Check if file exists
+            if !file_path.exists() {
+                // File is missing - only report if it's not a symlink target issue
+                if !file_path.is_symlink() {
+                    trace!("Missing file: {}", path);
+                    corrupted.push(path);
+                }
+                continue;
+            }
+
+            // Skip directories - they don't have content hashes
+            if file_path.is_dir() {
+                continue;
+            }
+
+            // Skip symlinks - hash is of link target path, not content
+            if file_path.is_symlink() {
+                continue;
+            }
+
+            // Verify hash matches
+            match verify_file_sha256(file_path, &expected_hash) {
+                Ok(()) => {
+                    trace!("Verified: {}", path);
+                }
+                Err(e) => {
+                    warn!("Integrity check failed for {}: {}", path, e);
+                    corrupted.push(path);
+                }
+            }
+        }
+
+        if !corrupted.is_empty() {
+            debug!("Found {} corrupted/missing files", corrupted.len());
+        }
+
+        Ok(corrupted)
     }
 }
 
@@ -360,5 +502,234 @@ mod tests {
             "high",
         ));
         assert_eq!(results.total(), 1);
+    }
+
+    #[test]
+    fn test_find_corrupted_files_empty_db() {
+        // Create in-memory database with schema
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                sha256_hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                permissions INTEGER NOT NULL,
+                trove_id INTEGER NOT NULL
+            );
+            CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL
+            );",
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        // No files = no corruption
+        let corrupted = checker.find_corrupted_files().unwrap();
+        assert!(corrupted.is_empty());
+    }
+
+    #[test]
+    fn test_find_corrupted_files_detects_mismatch() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create in-memory database
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                sha256_hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                permissions INTEGER NOT NULL,
+                trove_id INTEGER NOT NULL
+            );",
+        ).unwrap();
+
+        // Create a temp file with known content
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "hello world").unwrap();
+        temp_file.flush().unwrap();
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        // The correct hash for "hello world" is:
+        let correct_hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        // Insert file with WRONG hash - should be detected as corrupted
+        conn.execute(
+            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
+             VALUES (?1, ?2, 11, 644, 1)",
+            [temp_path, wrong_hash],
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        let corrupted = checker.find_corrupted_files().unwrap();
+        assert_eq!(corrupted.len(), 1);
+        assert_eq!(corrupted[0], temp_path);
+
+        // Now update with correct hash - should NOT be detected
+        conn.execute(
+            "UPDATE files SET sha256_hash = ?1 WHERE path = ?2",
+            [correct_hash, temp_path],
+        ).unwrap();
+
+        let corrupted = checker.find_corrupted_files().unwrap();
+        assert!(corrupted.is_empty());
+    }
+
+    #[test]
+    fn test_find_corrupted_files_missing_file() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                sha256_hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                permissions INTEGER NOT NULL,
+                trove_id INTEGER NOT NULL
+            );",
+        ).unwrap();
+
+        // Insert a file that doesn't exist
+        conn.execute(
+            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
+             VALUES ('/nonexistent/file/path/abc123.txt', 'abc123', 100, 644, 1)",
+            [],
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        let corrupted = checker.find_corrupted_files().unwrap();
+        assert_eq!(corrupted.len(), 1);
+        assert_eq!(corrupted[0], "/nonexistent/file/path/abc123.txt");
+    }
+
+    #[test]
+    fn test_filter_by_grace_period_empty() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                orphan_since TEXT
+            );",
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        // Empty list returns empty
+        let result = checker
+            .filter_by_grace_period(&[], std::time::Duration::from_secs(3600))
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_filter_by_grace_period_marks_new_orphans() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                orphan_since TEXT
+            );
+            INSERT INTO troves (name) VALUES ('libfoo');",
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        // First time detecting orphan - should mark it but not return it
+        let result = checker
+            .filter_by_grace_period(&["libfoo".to_string()], std::time::Duration::from_secs(3600))
+            .unwrap();
+        assert!(result.is_empty(), "New orphan should not be returned immediately");
+
+        // Verify orphan_since was set
+        let orphan_since: Option<String> = conn
+            .query_row("SELECT orphan_since FROM troves WHERE name = 'libfoo'", [], |row| row.get(0))
+            .unwrap();
+        assert!(orphan_since.is_some(), "orphan_since should be set");
+    }
+
+    #[test]
+    fn test_filter_by_grace_period_respects_grace() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                orphan_since TEXT
+            );",
+        ).unwrap();
+
+        // Insert package that was orphaned 2 hours ago
+        let two_hours_ago = Utc::now() - Duration::hours(2);
+        conn.execute(
+            "INSERT INTO troves (name, orphan_since) VALUES ('libold', ?1)",
+            [two_hours_ago.to_rfc3339()],
+        ).unwrap();
+
+        // Insert package that was orphaned 30 minutes ago
+        let thirty_mins_ago = Utc::now() - Duration::minutes(30);
+        conn.execute(
+            "INSERT INTO troves (name, orphan_since) VALUES ('libnew', ?1)",
+            [thirty_mins_ago.to_rfc3339()],
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        // With 1 hour grace period, only libold should be returned
+        let result = checker
+            .filter_by_grace_period(
+                &["libold".to_string(), "libnew".to_string()],
+                std::time::Duration::from_secs(3600), // 1 hour
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "libold");
+    }
+
+    #[test]
+    fn test_clear_orphan_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                orphan_since TEXT
+            );",
+        ).unwrap();
+
+        // Insert package with orphan_since set
+        let yesterday = Utc::now() - Duration::days(1);
+        conn.execute(
+            "INSERT INTO troves (name, orphan_since) VALUES ('libfoo', ?1)",
+            [yesterday.to_rfc3339()],
+        ).unwrap();
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+
+        // Clear orphan status
+        checker.clear_orphan_status(&["libfoo".to_string()]).unwrap();
+
+        // Verify orphan_since is now NULL
+        let orphan_since: Option<String> = conn
+            .query_row("SELECT orphan_since FROM troves WHERE name = 'libfoo'", [], |row| row.get(0))
+            .unwrap();
+        assert!(orphan_since.is_none(), "orphan_since should be cleared");
     }
 }

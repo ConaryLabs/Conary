@@ -46,7 +46,9 @@ mod state;
 mod system;
 mod trigger;
 
-pub use automation::{AutomationCommands, AiCommands};
+pub use automation::AutomationCommands;
+#[cfg(feature = "experimental")]
+pub use automation::AiCommands;
 pub use bootstrap::BootstrapCommands;
 pub use capability::CapabilityCommands;
 pub use ccs::CcsCommands;

@@ -693,6 +693,7 @@ fn main() -> Result<()> {
                 commands::cmd_automation_history(&db.db_path, limit, category, status, since)
             }
 
+            #[cfg(feature = "experimental")]
             cli::AutomationCommands::Ai(ai_cmd) => match ai_cmd {
                 cli::AiCommands::Find { intent, db, limit, verbose } => {
                     commands::cmd_ai_find(&db.db_path, &intent, limit, verbose)

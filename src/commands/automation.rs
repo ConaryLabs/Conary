@@ -433,6 +433,7 @@ pub fn cmd_automation_history(
 }
 
 /// AI-assisted package finding by intent
+#[cfg(feature = "experimental")]
 pub fn cmd_ai_find(_db_path: &str, intent: &str, _limit: usize, _verbose: bool) -> Result<()> {
     println!("=== AI-Assisted Package Search ===\n");
     println!("Intent: \"{}\"\n", intent);
@@ -450,6 +451,7 @@ pub fn cmd_ai_find(_db_path: &str, intent: &str, _limit: usize, _verbose: bool) 
 }
 
 /// AI-assisted scriptlet translation
+#[cfg(feature = "experimental")]
 pub fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<()> {
     println!("=== AI-Assisted Scriptlet Translation ===\n");
     println!("Source: {}", source);
@@ -465,6 +467,7 @@ pub fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<(
 }
 
 /// AI-assisted natural language query
+#[cfg(feature = "experimental")]
 pub fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
     println!("=== AI-Assisted System Query ===\n");
     println!("Question: \"{}\"\n", question);
@@ -477,6 +480,7 @@ pub fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
 }
 
 /// AI-assisted action explanation
+#[cfg(feature = "experimental")]
 pub fn cmd_ai_explain(_db_path: &str, command: &str) -> Result<()> {
     println!("=== AI-Assisted Command Explanation ===\n");
     println!("Command: \"{}\"\n", command);

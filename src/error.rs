@@ -128,6 +128,10 @@ pub enum Error {
     /// Operation was cancelled
     #[error("Operation cancelled: {0}")]
     Cancelled(String),
+
+    /// Internal error (invariant violation, corrupted state)
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 /// Result type alias using Conary's Error type

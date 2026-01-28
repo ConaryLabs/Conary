@@ -285,7 +285,19 @@ impl PackageFormat for RpmPackage {
         // Get the compressed payload from the Package struct
         let payload = &pkg.content;
         if payload.is_empty() {
-            debug!("RPM has empty payload");
+            // Check if we expected files from metadata
+            let expected_file_count = self.meta.files.iter()
+                .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
+                .count();
+            if expected_file_count > 0 {
+                tracing::warn!(
+                    "RPM {} has empty payload but metadata declares {} files - package may be corrupted",
+                    self.meta.name,
+                    expected_file_count
+                );
+            } else {
+                debug!("RPM {} has empty payload (meta-package with no files)", self.meta.name);
+            }
             return Ok(Vec::new());
         }
 
@@ -332,6 +344,22 @@ impl PackageFormat for RpmPackage {
                     sha256: meta.sha256.clone(),
                 });
             }
+        }
+
+        // Validate extraction completeness
+        let expected_regular_files = self.meta.files.iter()
+            .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
+            .count();
+
+        if extracted_files.len() < expected_regular_files {
+            let missing = expected_regular_files - extracted_files.len();
+            tracing::warn!(
+                "RPM {} extracted {} files but metadata declares {} regular files ({} missing)",
+                self.meta.name,
+                extracted_files.len(),
+                expected_regular_files,
+                missing
+            );
         }
 
         debug!("Extracted {} files from RPM", extracted_files.len());

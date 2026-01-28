@@ -53,7 +53,7 @@
 
 use crate::db::models::{
     LabelEntry, PackageResolution, PrimaryStrategy, Repository, RepositoryPackage,
-    ResolutionStrategy,
+    ResolutionStrategy, Trove,
 };
 use crate::label::Label;
 use crate::error::{Error, Result};
@@ -209,20 +209,21 @@ impl<'a> PackageResolver<'a> {
     /// Resolve a package to its source
     ///
     /// This is the main entry point for package resolution. It performs:
-    /// 1. Repository selection (using existing priority logic)
-    /// 2. Strategy lookup from routing table (with implicit legacy fallback)
-    /// 3. Strategy execution in priority order
+    /// 1. Check if package is already installed locally (skip with skip_cas option)
+    /// 2. Repository selection (using existing priority logic)
+    /// 3. Strategy lookup from routing table (with implicit legacy fallback)
+    /// 4. Strategy execution in priority order
     pub fn resolve(
         &self,
         name: &str,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        // TODO: Check local CAS first (when implemented)
-        // if !options.skip_cas {
-        //     if let Some(cached) = self.check_cas(name, options)? {
-        //         return Ok(PackageSource::LocalCas { hash: cached });
-        //     }
-        // }
+        // Step 0: Check if already installed locally
+        if !options.skip_cas {
+            if let Some(installed) = self.check_installed(name, options)? {
+                return Ok(installed);
+            }
+        }
 
         // Step 1: Repository selection
         let pkg_with_repo = PackageSelector::find_best_package(
@@ -422,6 +423,57 @@ impl<'a> PackageResolver<'a> {
                 self.try_legacy(*repository_package_id, pkg_with_repo, options)
             }
         }
+    }
+
+    /// Check if package is already installed locally
+    ///
+    /// Returns `Some(LocalCas)` if the package is installed with a matching version,
+    /// `None` if not installed or version doesn't match.
+    fn check_installed(
+        &self,
+        name: &str,
+        options: &ResolutionOptions,
+    ) -> Result<Option<PackageSource>> {
+        let installed = Trove::find_by_name(self.conn, name)?;
+
+        if installed.is_empty() {
+            debug!("Package {} not installed locally", name);
+            return Ok(None);
+        }
+
+        // Check if any installed version matches the requested version
+        for trove in &installed {
+            let version_matches = match &options.version {
+                // Specific version requested - must match exactly
+                Some(requested) => &trove.version == requested,
+                // No specific version - any installed version counts
+                None => true,
+            };
+
+            if version_matches {
+                info!(
+                    "Package {} {} already installed locally (trove_id: {:?})",
+                    trove.name, trove.version, trove.id
+                );
+
+                // Return a LocalCas source with identifier for the installed package
+                // Format: "installed:{name}:{version}" allows downstream to identify this
+                let hash = format!("installed:{}:{}", trove.name, trove.version);
+                return Ok(Some(PackageSource::LocalCas { hash }));
+            }
+        }
+
+        // Package is installed but with a different version
+        if let Some(requested) = &options.version {
+            debug!(
+                "Package {} installed but version {} requested (have: {:?})",
+                name,
+                requested,
+                installed.iter().map(|t| &t.version).collect::<Vec<_>>()
+            );
+        }
+
+        Ok(None)
     }
 
     /// Try binary download strategy
@@ -863,5 +915,93 @@ mod tests {
             hash: "sha256:abc".to_string(),
         };
         assert_eq!(cas.path(), None);
+    }
+
+    #[test]
+    fn test_check_installed_not_installed() {
+        let (_temp, conn) = create_test_db();
+        let resolver = PackageResolver::new(&conn);
+        let options = ResolutionOptions::default();
+
+        // Package not installed - should return None
+        let result = resolver.check_installed("nginx", &options).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_check_installed_matching_version() {
+        let (_temp, conn) = create_test_db();
+
+        // Insert an installed trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, install_source, install_reason)
+             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
+            [],
+        ).unwrap();
+
+        let resolver = PackageResolver::new(&conn);
+
+        // No version specified - should match
+        let options = ResolutionOptions::default();
+        let result = resolver.check_installed("nginx", &options).unwrap();
+        assert!(result.is_some());
+        if let Some(PackageSource::LocalCas { hash }) = result {
+            assert!(hash.starts_with("installed:nginx:1.24.0"));
+        } else {
+            panic!("Expected LocalCas source");
+        }
+
+        // Matching version specified - should match
+        let options = ResolutionOptions {
+            version: Some("1.24.0".to_string()),
+            ..Default::default()
+        };
+        let result = resolver.check_installed("nginx", &options).unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_check_installed_different_version() {
+        let (_temp, conn) = create_test_db();
+
+        // Insert an installed trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, install_source, install_reason)
+             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
+            [],
+        ).unwrap();
+
+        let resolver = PackageResolver::new(&conn);
+
+        // Different version requested - should NOT match
+        let options = ResolutionOptions {
+            version: Some("1.25.0".to_string()),
+            ..Default::default()
+        };
+        let result = resolver.check_installed("nginx", &options).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_check_installed_skip_cas() {
+        let (_temp, conn) = create_test_db();
+
+        // Insert an installed trove
+        conn.execute(
+            "INSERT INTO troves (name, version, type, install_source, install_reason)
+             VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
+            [],
+        ).unwrap();
+
+        let resolver = PackageResolver::new(&conn);
+
+        // With skip_cas=true, check_installed is not called (tested at resolve level)
+        // But we can verify the method itself still works when called directly
+        let options = ResolutionOptions {
+            skip_cas: true, // Note: this doesn't affect check_installed directly
+            ..Default::default()
+        };
+        let result = resolver.check_installed("nginx", &options).unwrap();
+        assert!(result.is_some()); // Method still finds it
     }
 }

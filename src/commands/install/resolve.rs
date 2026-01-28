@@ -201,8 +201,29 @@ fn convert_source_to_resolved(
         }
 
         PackageSource::LocalCas { hash } => {
-            // Package is in local CAS - need to extract to temp location
-            // For now, this is a placeholder - CAS integration is future work
+            // Check if this is an "already installed" marker from the resolver
+            if let Some(rest) = hash.strip_prefix("installed:") {
+                // Format is "installed:{name}:{version}"
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                let (name, version) = if parts.len() == 2 {
+                    (parts[0], parts[1])
+                } else {
+                    (package, "unknown")
+                };
+
+                info!(
+                    "Package {} {} is already installed, skipping download",
+                    name, version
+                );
+
+                // Return a specific error that callers can recognize
+                return Err(anyhow::anyhow!(
+                    "ALREADY_INSTALLED:{}:{}",
+                    name, version
+                ));
+            }
+
+            // Future: handle actual CAS content hashes
             info!("Resolved {} from local CAS: {}", package, hash);
             Err(anyhow::anyhow!(
                 "Local CAS resolution not yet implemented (hash: {})",

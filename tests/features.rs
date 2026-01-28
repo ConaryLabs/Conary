@@ -312,6 +312,7 @@ fn test_install_reason_queries() {
                 pinned: false,
                 flavor_spec: None,
                 label_id: None,
+                orphan_since: None,
             })
         })
         .unwrap()

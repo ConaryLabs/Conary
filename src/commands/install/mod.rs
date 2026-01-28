@@ -129,13 +129,30 @@ pub fn cmd_install(
     progress.set_phase(&package_name, InstallPhase::Downloading);
 
     // Resolve package path (download if needed)
-    let resolved = resolve_package_path(
+    let resolved = match resolve_package_path(
         &package_name,
         db_path,
         version.as_deref(),
         repo.as_deref(),
         &progress,
-    )?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            // Check if this is an "already installed" response from the resolver
+            let err_str = e.to_string();
+            if let Some(rest) = err_str.strip_prefix("ALREADY_INSTALLED:") {
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                let (name, ver) = if parts.len() == 2 {
+                    (parts[0], parts[1])
+                } else {
+                    (&package_name as &str, "unknown")
+                };
+                println!("{} {} is already installed (skipping download)", name, ver);
+                return Ok(());
+            }
+            return Err(e);
+        }
+    };
 
     // If resolved from Remi, it's already CCS format - install directly
     if resolved.source_type == ResolvedSourceType::Remi {

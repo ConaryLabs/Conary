@@ -333,6 +333,13 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
                 PackageSource::Ccs { path, .. } => path.clone(),
                 PackageSource::Delta { delta_path, .. } => delta_path.clone(),
                 PackageSource::LocalCas { hash } => {
+                    // Check if this is an "already installed" marker
+                    if hash.starts_with("installed:") {
+                        info!("{} is already at the latest version (skipping)", trove.name);
+                        progress.complete_package(&trove.name);
+                        continue;
+                    }
+                    // Future: handle actual CAS content hashes
                     progress.fail_package(&trove.name, "LocalCas not yet supported");
                     warn!("LocalCas resolution not yet implemented for {}: {}", trove.name, hash);
                     continue;

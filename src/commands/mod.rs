@@ -36,8 +36,9 @@ pub use capability::{
 pub use automation::{
     cmd_automation_status, cmd_automation_check, cmd_automation_apply,
     cmd_automation_configure, cmd_automation_daemon, cmd_automation_history,
-    cmd_ai_find, cmd_ai_translate, cmd_ai_query, cmd_ai_explain,
 };
+#[cfg(feature = "experimental")]
+pub use automation::{cmd_ai_find, cmd_ai_translate, cmd_ai_query, cmd_ai_explain};
 pub use bootstrap::{
     cmd_bootstrap_base, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_image,
     cmd_bootstrap_init, cmd_bootstrap_resume, cmd_bootstrap_stage0, cmd_bootstrap_stage1,

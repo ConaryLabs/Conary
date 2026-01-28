@@ -135,6 +135,9 @@ pub struct Trove {
     pub selection_reason: Option<String>,
     /// Label ID for package provenance tracking (repository@namespace:tag)
     pub label_id: Option<i64>,
+    /// When this package became orphaned (no longer required by any explicit package).
+    /// NULL means not orphaned. Used for grace period policies.
+    pub orphan_since: Option<String>,
 }
 
 impl Trove {
@@ -155,6 +158,7 @@ impl Trove {
             pinned: false,
             selection_reason: Some("Explicitly installed".to_string()),
             label_id: None,
+            orphan_since: None,
         }
     }
 
@@ -180,6 +184,7 @@ impl Trove {
             pinned: false,
             selection_reason: Some("Explicitly installed".to_string()),
             label_id: None,
+            orphan_since: None,
         }
     }
 
@@ -205,6 +210,7 @@ impl Trove {
             pinned: false,
             selection_reason: Some(format!("Required by {}", required_by)),
             label_id: None,
+            orphan_since: None,
         }
     }
 
@@ -230,6 +236,7 @@ impl Trove {
             pinned: false,
             selection_reason: Some(format!("Installed via @{}", collection_name)),
             label_id: None,
+            orphan_since: None,
         }
     }
 
@@ -262,7 +269,7 @@ impl Trove {
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE id = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since FROM troves WHERE id = ?1")?;
 
         let trove = stmt.query_row([id], Self::from_row).optional()?;
 
@@ -272,7 +279,7 @@ impl Trove {
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE name = ?1")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since FROM troves WHERE name = ?1")?;
 
         let troves = stmt
             .query_map([name], Self::from_row)?
@@ -284,7 +291,7 @@ impl Trove {
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt =
-            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves ORDER BY name, version")?;
+            conn.prepare("SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since FROM troves ORDER BY name, version")?;
 
         let troves = stmt
             .query_map([], Self::from_row)?
@@ -357,6 +364,9 @@ impl Trove {
         // Handle label_id (added in v20)
         let label_id: Option<i64> = row.get(13).unwrap_or(None);
 
+        // Handle orphan_since (added in v39)
+        let orphan_since: Option<String> = row.get(14).unwrap_or(None);
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -372,6 +382,7 @@ impl Trove {
             pinned: pinned != 0,
             selection_reason,
             label_id,
+            orphan_since,
         })
     }
 
@@ -407,7 +418,7 @@ impl Trove {
     /// Find all pinned packages
     pub fn find_pinned(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id FROM troves WHERE pinned = 1 ORDER BY name, version"
+            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since FROM troves WHERE pinned = 1 ORDER BY name, version"
         )?;
 
         let troves = stmt

@@ -157,10 +157,14 @@ pub enum AutomationCommands {
     ///
     /// Use AI assistance for package management tasks.
     /// Requires AI assistance to be enabled in configuration.
+    ///
+    /// Note: This is an experimental feature. Build with --features experimental to enable.
+    #[cfg(feature = "experimental")]
     #[command(subcommand)]
     Ai(AiCommands),
 }
 
+#[cfg(feature = "experimental")]
 #[derive(Subcommand)]
 pub enum AiCommands {
     /// Find packages by intent (what you want to accomplish)

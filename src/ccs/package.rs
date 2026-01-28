@@ -511,6 +511,7 @@ impl PackageFormat for CcsPackage {
             pinned: false,
             selection_reason: None,
             label_id: None,
+            orphan_since: None,
         }
     }
 }

@@ -325,9 +325,33 @@ impl PackageBuilder {
             .parse()
             .map_err(|e| Error::ParseError(format!("Invalid size: {}", e)))?;
 
+        // Validate size - reject unreasonably large packages (>5GB)
+        const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024; // 5GB
+        if size > MAX_PACKAGE_SIZE {
+            return Err(Error::ParseError(format!(
+                "Package size {} exceeds maximum allowed (5GB)",
+                size
+            )));
+        }
+
         let location = self
             .location
             .ok_or_else(|| Error::ParseError("Missing location".to_string()))?;
+
+        // Validate location to prevent path traversal attacks
+        // Location should be a relative path within the repository
+        if location.contains("..") {
+            return Err(Error::ParseError(format!(
+                "Invalid location (path traversal): {}",
+                location
+            )));
+        }
+        if location.starts_with('/') || location.contains("://") {
+            return Err(Error::ParseError(format!(
+                "Invalid location (not relative path): {}",
+                location
+            )));
+        }
 
         let download_url = format!("{}/{}", base_url.trim_end_matches('/'), location);
 
@@ -398,8 +422,7 @@ impl RepositoryParser for FedoraParser {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_package_builder() {
+    fn valid_builder() -> PackageBuilder {
         let mut builder = PackageBuilder::new();
         builder.name = Some("test-package".to_string());
         builder.epoch = Some("1".to_string());
@@ -410,10 +433,51 @@ mod tests {
         builder.checksum_type = Some("sha256".to_string());
         builder.size = Some("1024".to_string());
         builder.location = Some("Packages/t/test-package-2.3.4-5.fc43.x86_64.rpm".to_string());
+        builder
+    }
 
+    #[test]
+    fn test_package_builder() {
+        let builder = valid_builder();
         let pkg = builder.build("https://example.com").unwrap();
         assert_eq!(pkg.name, "test-package");
         assert_eq!(pkg.version, "1:2.3.4-5.fc43");
         assert_eq!(pkg.size, 1024);
+    }
+
+    #[test]
+    fn test_package_builder_rejects_path_traversal() {
+        let mut builder = valid_builder();
+        builder.location = Some("../../../etc/passwd".to_string());
+        let result = builder.build("https://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn test_package_builder_rejects_absolute_path() {
+        let mut builder = valid_builder();
+        builder.location = Some("/etc/passwd".to_string());
+        let result = builder.build("https://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not relative"));
+    }
+
+    #[test]
+    fn test_package_builder_rejects_url_scheme() {
+        let mut builder = valid_builder();
+        builder.location = Some("https://evil.com/malware.rpm".to_string());
+        let result = builder.build("https://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not relative"));
+    }
+
+    #[test]
+    fn test_package_builder_rejects_oversized() {
+        let mut builder = valid_builder();
+        builder.size = Some("10000000000000".to_string()); // 10TB
+        let result = builder.build("https://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
     }
 }
