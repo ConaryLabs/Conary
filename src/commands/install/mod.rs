@@ -1,12 +1,15 @@
 // src/commands/install/mod.rs
 //! Package installation commands
 
+mod batch;
 mod conversion;
 mod dependencies;
 mod execute;
 mod prepare;
 mod resolve;
 mod scriptlets;
+
+pub use batch::{prepare_package_for_batch, BatchInstaller};
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
@@ -267,36 +270,68 @@ pub fn cmd_install(
                             let keyring_dir = keyring_dir(db_path);
                             match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
                                 Ok(downloaded) => {
-                                    // Capture parent package name for selection reason
+                                    // Use batch installer for atomic dependency installation
+                                    // This ensures all dependencies are installed in a single
+                                    // transaction - if any fails, all are rolled back.
                                     let parent_name = pkg.name().to_string();
-                                    for (dep_name, dep_path) in downloaded {
-                                        progress.set_status(&format!("Installing dependency: {}", dep_name));
-                                        info!("Installing dependency: {}", dep_name);
-                                        println!("Installing dependency: {}", dep_name);
+                                    let mut prepared_packages = Vec::with_capacity(downloaded.len());
+
+                                    // Prepare all dependencies
+                                    for (dep_name, dep_path) in &downloaded {
+                                        progress.set_status(&format!("Preparing dependency: {}", dep_name));
+                                        info!("Preparing dependency: {}", dep_name);
                                         let reason = format!("Required by {}", parent_name);
-                                        let path_str = dep_path.to_string_lossy().to_string();
-                                        if let Err(e) = cmd_install(
-                                            &path_str,
+                                        match prepare_package_for_batch(
+                                            dep_path,
+                                            db_path,
+                                            &reason,
+                                            allow_downgrade,
+                                        ) {
+                                            Ok(prepared) => {
+                                                prepared_packages.push(prepared);
+                                            }
+                                            Err(e) => {
+                                                // Check for "already installed" error
+                                                let err_str = e.to_string();
+                                                if err_str.contains("already installed") {
+                                                    info!("Dependency {} already installed, skipping", dep_name);
+                                                    continue;
+                                                }
+                                                return Err(anyhow::anyhow!(
+                                                    "Failed to prepare dependency {}: {}",
+                                                    dep_name,
+                                                    e
+                                                ));
+                                            }
+                                        }
+                                    }
+
+                                    // Install all dependencies atomically
+                                    if !prepared_packages.is_empty() {
+                                        progress.set_status(&format!(
+                                            "Installing {} dependencies atomically...",
+                                            prepared_packages.len()
+                                        ));
+                                        info!(
+                                            "Installing {} dependencies atomically",
+                                            prepared_packages.len()
+                                        );
+
+                                        let installer = BatchInstaller::new(
                                             db_path,
                                             root,
-                                            None,
-                                            None,
-                                            dry_run,
-                                            no_deps,
-                                            no_scripts,
-                                            Some(&reason),
                                             sandbox_mode,
-                                            allow_downgrade,
-                                            convert_to_ccs,
-                                            no_capture,
-                                        ) {
+                                            no_scripts,
+                                        );
+
+                                        if let Err(e) = installer.install_batch(prepared_packages) {
                                             return Err(anyhow::anyhow!(
-                                                "Failed to install dependency {}: {}",
-                                                dep_name,
+                                                "Failed to install dependencies atomically: {}",
                                                 e
                                             ));
                                         }
-                                        println!("  [OK] Installed {}", dep_name);
+
+                                        println!("  [OK] Installed {} dependencies atomically", downloaded.len());
                                     }
                                 }
                                 Err(e) => {
