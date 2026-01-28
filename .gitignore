@@ -18,7 +18,10 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+
+# Claude Code
 .mcp.json
+CLAUDE.local.md
 
 # Bootstrap build artifacts
 /bootstrap/
