@@ -107,6 +107,10 @@ hex = "0.4"                      # Hex encoding for chunk hashes
 # Regex for scriptlet analysis
 regex = "1.10"
 
+# Enum string conversion macros
+strum = "0.26"
+strum_macros = "0.26"
+
 # Sigstore integration
 sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "sigstore-trust-root", "rustls-tls"] }
 const-oid = "0.9"

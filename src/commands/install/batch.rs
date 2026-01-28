@@ -506,6 +506,42 @@ impl<'a> BatchInstaller<'a> {
         txn.mark_post_scripts_complete()
             .context("Failed to mark post-scripts complete")?;
 
+        // Phase 7: Execute triggers for all installed files
+        let all_file_paths: Vec<String> = packages
+            .iter()
+            .flat_map(|pkg| pkg.extracted_files.iter().map(|f| f.path.clone()))
+            .collect();
+
+        let trigger_executor = conary::trigger::TriggerExecutor::new(&conn, Path::new(self.root));
+        let triggered = trigger_executor
+            .record_triggers(changeset_id, &all_file_paths)
+            .unwrap_or_else(|e| {
+                warn!("Failed to record triggers: {}", e);
+                Vec::new()
+            });
+
+        if !triggered.is_empty() {
+            info!("Recorded {} trigger(s) for execution", triggered.len());
+            match trigger_executor.execute_pending(changeset_id) {
+                Ok(results) => {
+                    if results.total() > 0 {
+                        info!(
+                            "Triggers: {} succeeded, {} failed, {} skipped",
+                            results.succeeded, results.failed, results.skipped
+                        );
+                        if !results.all_succeeded() {
+                            for error in &results.errors {
+                                warn!("Trigger error: {}", error);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Trigger execution failed: {}", e);
+                }
+            }
+        }
+
         // Phase 8: Finish transaction
         let tx_result = txn.finish().context("Failed to finish batch transaction")?;
 
@@ -719,6 +755,97 @@ pub fn prepare_package_for_batch(
     let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
     let classified_files = ComponentClassifier::classify_all(&file_paths);
     let installed_components: Vec<ComponentType> = classified_files.keys().copied().collect();
+
+    // Detect language provides
+    let installed_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let language_provides = LanguageDepDetector::detect_all_provides(&installed_paths);
+
+    Ok(PreparedPackage {
+        name: pkg.name().to_string(),
+        version: pkg.version().to_string(),
+        format,
+        architecture: pkg.architecture().map(|s| s.to_string()),
+        description: pkg.description().map(|s| s.to_string()),
+        extracted_files,
+        dependencies: pkg.dependencies().to_vec(),
+        scriptlets: pkg.scriptlets().to_vec(),
+        install_reason: install_reason.to_string(),
+        is_upgrade,
+        old_trove,
+        old_files,
+        installed_components,
+        classified_files,
+        language_provides,
+    })
+}
+
+/// Prepare a package for batch installation from an already-parsed package
+///
+/// This is useful when the package has already been parsed (e.g., in cmd_install)
+/// and we want to use BatchInstaller for atomicity.
+///
+/// # Arguments
+/// * `pkg` - Already parsed package
+/// * `format` - Package format type
+/// * `db_path` - Path to the database
+/// * `install_reason` - Why this package is being installed
+/// * `allow_downgrade` - Whether to allow downgrades
+/// * `component_filter` - Optional filter for which components to install
+#[allow(dead_code)] // Available for future unification of install paths
+pub fn prepare_from_parsed(
+    pkg: &dyn conary::packages::PackageFormat,
+    format: PackageFormatType,
+    db_path: &str,
+    install_reason: &str,
+    allow_downgrade: bool,
+    component_filter: Option<&[ComponentType]>,
+) -> Result<PreparedPackage> {
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+
+    // Check for existing installation
+    let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg, allow_downgrade)? {
+        UpgradeCheck::FreshInstall => (false, None),
+        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
+    };
+
+    // Get files to remove for upgrades
+    let old_files = if let Some(ref old_trove) = old_trove {
+        if let Some(old_id) = old_trove.id {
+            let new_paths: HashSet<&str> = pkg.files().iter().map(|f| f.path.as_str()).collect();
+            super::execute::get_files_to_remove(&conn, old_id, &new_paths)?
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Extract files
+    info!("Extracting files from {}...", pkg.name());
+    let all_extracted_files = pkg
+        .extract_file_contents()
+        .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
+
+    // Classify files into components
+    let file_paths: Vec<String> = all_extracted_files.iter().map(|f| f.path.clone()).collect();
+    let classified_files = ComponentClassifier::classify_all(&file_paths);
+
+    // Filter by components if specified
+    let (extracted_files, installed_components) = if let Some(filter) = component_filter {
+        let filter_set: HashSet<_> = filter.iter().collect();
+        let filtered: Vec<_> = all_extracted_files
+            .into_iter()
+            .filter(|f| {
+                let comp = ComponentClassifier::classify(Path::new(&f.path));
+                filter_set.contains(&comp)
+            })
+            .collect();
+        let comps: Vec<_> = filter.to_vec();
+        (filtered, comps)
+    } else {
+        let comps: Vec<ComponentType> = classified_files.keys().copied().collect();
+        (all_extracted_files, comps)
+    };
 
     // Detect language provides
     let installed_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();

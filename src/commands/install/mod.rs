@@ -17,7 +17,7 @@ use conversion::{install_converted_ccs, try_convert_to_ccs, ConversionResult};
 use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
-use resolve::{check_provides_dependencies, resolve_package_path, ResolvedSourceType};
+use resolve::{check_provides_dependencies, resolve_package_path, ResolutionOutcome, ResolvedSourceType};
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
@@ -197,23 +197,12 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         version.as_deref(),
         repo.as_deref(),
         &progress,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            // Check if this is an "already installed" response from the resolver
-            let err_str = e.to_string();
-            if let Some(rest) = err_str.strip_prefix("ALREADY_INSTALLED:") {
-                let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                let (name, ver) = if parts.len() == 2 {
-                    (parts[0], parts[1])
-                } else {
-                    (&package_name as &str, "unknown")
-                };
-                println!("{} {} is already installed (skipping download)", name, ver);
-                return Ok(());
-            }
-            return Err(e);
+    )? {
+        ResolutionOutcome::AlreadyInstalled { name, version } => {
+            println!("{} {} is already installed (skipping download)", name, version);
+            return Ok(());
         }
+        ResolutionOutcome::Resolved(pkg) => pkg,
     };
 
     // If resolved from Remi, it's already CCS format - install directly

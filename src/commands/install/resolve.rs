@@ -34,6 +34,14 @@ pub struct ResolvedPackage {
     pub source_type: ResolvedSourceType,
 }
 
+/// Outcome of package resolution - either resolved to a path or already installed
+pub enum ResolutionOutcome {
+    /// Package resolved to a downloadable/local path
+    Resolved(ResolvedPackage),
+    /// Package is already installed at the requested version
+    AlreadyInstalled { name: String, version: String },
+}
+
 /// Type of source the package was resolved from
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // Variants for future phases
@@ -74,22 +82,25 @@ impl ResolvedSourceType {
 ///
 /// This is the main entry point for package resolution. It uses the unified
 /// resolution flow with per-package routing strategies.
+///
+/// Returns `ResolutionOutcome::AlreadyInstalled` if the package is already
+/// installed at the requested version, avoiding unnecessary downloads.
 pub fn resolve_package_path(
     package: &str,
     db_path: &str,
     version: Option<&str>,
     repo: Option<&str>,
     progress: &InstallProgress,
-) -> Result<ResolvedPackage> {
+) -> Result<ResolutionOutcome> {
     // Check if package is a local file
     if Path::new(package).exists() {
         info!("Installing from local file: {}", package);
         progress.set_status(&format!("Loading local file: {}", package));
-        return Ok(ResolvedPackage {
+        return Ok(ResolutionOutcome::Resolved(ResolvedPackage {
             path: PathBuf::from(package),
             _temp_dir: None,
             source_type: ResolvedSourceType::LocalFile,
-        });
+        }));
     }
 
     info!("Searching repositories for package: {}", package);
@@ -159,31 +170,31 @@ fn resolve_redirects(
     }
 }
 
-/// Convert a PackageSource to a ResolvedPackage
+/// Convert a PackageSource to a ResolutionOutcome
 fn convert_source_to_resolved(
     source: PackageSource,
     package: &str,
     progress: &InstallProgress,
-) -> Result<ResolvedPackage> {
+) -> Result<ResolutionOutcome> {
     match source {
         PackageSource::Binary { path, _temp_dir } => {
             info!("Resolved {} from binary source: {}", package, path.display());
             progress.set_phase(package, InstallPhase::Downloading);
-            Ok(ResolvedPackage {
+            Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Binary,
-            })
+            }))
         }
 
         PackageSource::Ccs { path, _temp_dir } => {
             info!("Resolved {} from Remi: {}", package, path.display());
             progress.set_phase(package, InstallPhase::Downloading);
-            Ok(ResolvedPackage {
+            Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Remi,
-            })
+            }))
         }
 
         PackageSource::Delta { base_version, delta_path, _temp_dir } => {
@@ -193,11 +204,11 @@ fn convert_source_to_resolved(
             );
             progress.set_phase(package, InstallPhase::Downloading);
             // For now, treat delta as binary - the installer will handle it
-            Ok(ResolvedPackage {
+            Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path: delta_path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Binary,
-            })
+            }))
         }
 
         PackageSource::LocalCas { hash } => {
@@ -206,9 +217,9 @@ fn convert_source_to_resolved(
                 // Format is "installed:{name}:{version}"
                 let parts: Vec<&str> = rest.splitn(2, ':').collect();
                 let (name, version) = if parts.len() == 2 {
-                    (parts[0], parts[1])
+                    (parts[0].to_string(), parts[1].to_string())
                 } else {
-                    (package, "unknown")
+                    (package.to_string(), "unknown".to_string())
                 };
 
                 info!(
@@ -216,11 +227,7 @@ fn convert_source_to_resolved(
                     name, version
                 );
 
-                // Return a specific error that callers can recognize
-                return Err(anyhow::anyhow!(
-                    "ALREADY_INSTALLED:{}:{}",
-                    name, version
-                ));
+                return Ok(ResolutionOutcome::AlreadyInstalled { name, version });
             }
 
             // Future: handle actual CAS content hashes
