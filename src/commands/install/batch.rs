@@ -34,6 +34,7 @@ use conary::transaction::{
 };
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -214,7 +215,7 @@ impl<'a> BatchInstaller<'a> {
             let conflict_msgs: Vec<String> = batch_plan
                 .conflicts
                 .iter()
-                .map(|c| format!("{:?}", c))
+                .map(|c| c.to_string())
                 .collect();
             txn.abort()
                 .context("Failed to abort transaction after conflicts")?;
@@ -277,7 +278,7 @@ impl<'a> BatchInstaller<'a> {
             // Check for conflicts (shouldn't happen after batch planning, but double-check)
             if !plan.conflicts.is_empty() {
                 let conflict_msgs: Vec<String> =
-                    plan.conflicts.iter().map(|c| format!("{:?}", c)).collect();
+                    plan.conflicts.iter().map(|c| c.to_string()).collect();
                 txn.abort()
                     .context("Failed to abort transaction after package conflicts")?;
                 return Err(anyhow::anyhow!(
@@ -651,6 +652,18 @@ enum BatchConflict {
         package1: String,
         package2: String,
     },
+}
+
+impl fmt::Display for BatchConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BatchConflict::CrossPackageConflict {
+                path,
+                package1,
+                package2,
+            } => write!(f, "{}: conflict between {} and {}", path, package1, package2),
+        }
+    }
 }
 
 /// Prepare a package for batch installation

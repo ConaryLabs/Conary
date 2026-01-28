@@ -12,6 +12,7 @@ use crate::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use super::{ExtractedFile, FileToRemove, FileType, OperationType};
@@ -59,6 +60,33 @@ pub enum ConflictInfo {
     FileBlocksDirectory { path: PathBuf },
     /// Parent directory doesn't exist and can't be created
     ParentMissing { path: PathBuf, parent: PathBuf },
+}
+
+impl fmt::Display for ConflictInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConflictInfo::FileOwnedByOther { path, owner } => {
+                write!(f, "{}: already owned by {}", path.display(), owner)
+            }
+            ConflictInfo::UntrackedFileExists { path } => {
+                write!(f, "{}: untracked file exists", path.display())
+            }
+            ConflictInfo::DirectoryBlocksFile { path } => {
+                write!(f, "{}: directory exists where file expected", path.display())
+            }
+            ConflictInfo::FileBlocksDirectory { path } => {
+                write!(f, "{}: file exists where directory expected", path.display())
+            }
+            ConflictInfo::ParentMissing { path, parent } => {
+                write!(
+                    f,
+                    "{}: parent directory {} missing",
+                    path.display(),
+                    parent.display()
+                )
+            }
+        }
+    }
 }
 
 /// The complete transaction plan
