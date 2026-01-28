@@ -5,30 +5,239 @@ This project uses **Mira** for persistent memory and code intelligence.
 ## Session Start
 
 ```
-session_start(project_path="/home/peter/Conary")
+project(action="start", project_path="/home/peter/Conary")
 ```
 
 Then `recall("architecture")` and `recall("progress")` before making changes.
 
+---
+
+## CRITICAL: Tool Selection
+
+STOP before using Grep or Glob. Use Mira tools instead.
+
+### When to Use Mira Tools
+
+Use Mira tools proactively in these scenarios:
+
+1. **Searching for code by intent** - Use `semantic_code_search` instead of Grep
+2. **Understanding file structure** - Use `get_symbols` instead of grepping for definitions
+3. **Tracing call relationships** - Use `find_callers` / `find_callees` instead of grepping function names
+4. **Checking if a feature exists** - Use `check_capability` instead of exploratory grep
+5. **Recalling past decisions** - Use `recall` before making architectural changes
+6. **Storing decisions for future sessions** - Use `remember` after important choices
+
+### When NOT to Use Mira Tools
+
+Use Grep/Glob directly only when:
+
+1. Searching for **literal strings** (error messages, UUIDs, specific constants)
+2. Finding files by **exact filename pattern** when you know the name
+3. The search is a simple one-off that doesn't need semantic understanding
+
+### Wrong vs Right
+
+| Task | Wrong | Right |
+|------|-------|-------|
+| Find authentication code | `grep -r "auth"` | `semantic_code_search("authentication")` |
+| What calls this function? | `grep -r "function_name"` | `find_callers("function_name")` |
+| List functions in file | `grep "fn " file.rs` | `get_symbols(file_path="file.rs")` |
+| Check if feature exists | `grep -r "feature"` | `check_capability("feature description")` |
+| Use external library | Guess from training data | Context7: `resolve-library-id` → `query-docs` |
+| Find config files | `find . -name "*.toml"` | `glob("**/*.toml")` - OK, exact pattern |
+| Find error message | `semantic_code_search("error 404")` | `grep "error 404"` - OK, literal string |
+
+---
+
 ## External Documentation (Context7)
 
-Always use Context7 MCP when you need library/API documentation, code generation, setup or configuration steps for external libraries (Rust crates, etc.) without the user having to explicitly ask. This retrieves current, version-specific documentation instead of relying on potentially outdated training data.
+### CRITICAL: Use Context7 for Library Questions
 
-## Code Navigation (Use These First)
+Before guessing at library APIs or using potentially outdated knowledge, check Context7.
 
-**Always prefer Mira tools over Grep/Glob for code exploration:**
+**Proactive triggers - use Context7 when:**
+1. **Implementing with external libraries** - Check current API before writing code
+2. **Debugging library errors** - Verify correct usage patterns
+3. **User asks "how do I use X"** - Get up-to-date examples
+4. **Uncertain about library API** - Don't guess, look it up
+5. **Library version matters** - Context7 has version-specific docs
 
-| Need | Tool | Why |
-|------|------|-----|
-| Search by meaning | `semantic_code_search` | Understands intent, not just keywords |
-| File structure | `get_symbols` | Functions, structs, traits in a file |
-| Check past decisions | `recall` | What we decided and why |
-| Find callers | `find_callers` | What calls a function |
-| Find callees | `find_callees` | What a function calls |
+**Workflow:**
+```
+resolve-library-id(libraryName="tokio", query="async runtime spawn tasks")
+query-docs(libraryId="/tokio-rs/tokio", query="how to spawn async tasks")
+```
 
-**When to use Grep:** Only for literal string searches (error messages, specific constants).
+### When NOT to Use Context7
 
-**When to use Glob:** Only for finding files by exact name pattern.
+- Standard library features (Rust std, Python builtins, etc.)
+- You're confident in the API from recent experience
+- Simple operations with well-known patterns
+
+---
+
+## Task and Goal Management
+
+### Session Workflow: Use Claude's Built-in Tasks
+
+For current session work, use Claude Code's native task system:
+- `TaskCreate` - Create tasks for multi-step work
+- `TaskUpdate` - Mark in_progress/completed, set dependencies
+- `TaskList` - View current session tasks
+
+These are session-scoped and optimized for real-time workflow tracking.
+
+### Cross-Session Planning: Use Mira Goals
+
+For work spanning multiple sessions, use Mira's `goal` tool with milestones:
+
+```
+goal(action="create", title="Implement auth system", priority="high")
+goal(action="add_milestone", goal_id="1", milestone_title="Design API", weight=2)
+goal(action="add_milestone", goal_id="1", milestone_title="Implement endpoints", weight=3)
+goal(action="complete_milestone", milestone_id="1")  # Auto-updates progress
+goal(action="list")  # Shows goals with progress %
+goal(action="get", goal_id="1")  # Shows goal details with milestones
+```
+
+**When to use goals:**
+- Multi-session objectives (features, refactors, migrations)
+- Tracking progress over time
+- Breaking large work into weighted milestones
+
+**Goal statuses:** planning, in_progress, blocked, completed, abandoned
+
+**Priorities:** low, medium, high, critical
+
+### Quick Reference
+
+| Need | Tool |
+|------|------|
+| Track work in THIS session | Claude's `TaskCreate` |
+| Track work across sessions | Mira's `goal` |
+| Add sub-items to goal | `goal(action="add_milestone")` |
+| Check long-term progress | `goal(action="list")` |
+
+---
+
+## Memory System
+
+Use `remember` to store decisions and context. Use `recall` to retrieve them.
+
+### Evidence Threshold
+
+**Don't store one-off observations.** A pattern seen once is not yet a pattern. Only use `remember` for:
+- Patterns observed **multiple times** across sessions
+- Decisions **explicitly requested** by the user to remember
+- Mistakes that caused **real problems** (not hypothetical issues)
+
+When uncertain, don't store it. Memories accumulate and dilute recall quality.
+
+### When to Use Memory
+
+1. **After architectural decisions** - Store the decision and reasoning
+2. **User preferences discovered** - Store for future sessions
+3. **Mistakes made and corrected** - Remember to avoid repeating
+4. **Before making changes** - Recall past decisions in that area
+5. **Workflows that worked** - Store successful patterns
+
+---
+
+## Sub-Agent Context Injection
+
+When spawning sub-agents (Task tool with Explore, Plan, etc.), they do NOT automatically have access to Mira memories. You must inject relevant context into the prompt.
+
+### Pattern: Recall Before Task
+
+Before launching a sub-agent for significant work:
+
+1. Use `recall()` to get relevant context
+2. Include key information in the Task prompt
+3. Be explicit about project conventions
+
+---
+
+## Expert Consultation
+
+Use the unified `consult_experts` tool for second opinions before major decisions:
+
+```
+consult_experts(roles=["architect"], context="...", question="...")
+consult_experts(roles=["code_reviewer", "security"], context="...")  # Multiple experts
+```
+
+**Available expert roles:**
+- `architect` - system design, patterns, tradeoffs
+- `plan_reviewer` - validate plans before coding
+- `code_reviewer` - find bugs, quality issues
+- `security` - vulnerabilities, hardening
+- `scope_analyst` - missing requirements, edge cases
+
+### When to Consult Experts
+
+1. **Before major refactoring** - `consult_experts(roles=["architect"], ...)`
+2. **After writing implementation plan** - `consult_experts(roles=["plan_reviewer"], ...)`
+3. **Before merging significant changes** - `consult_experts(roles=["code_reviewer"], ...)`
+4. **When handling user input or auth** - `consult_experts(roles=["security"], ...)`
+5. **When requirements seem incomplete** - `consult_experts(roles=["scope_analyst"], ...)`
+
+---
+
+## Code Navigation Quick Reference
+
+| Need | Tool |
+|------|------|
+| Search by meaning | `semantic_code_search` |
+| File structure | `get_symbols` |
+| What calls X? | `find_callers` |
+| What does X call? | `find_callees` |
+| Past decisions | `recall` |
+| Feature exists? | `check_capability` |
+| Codebase overview | `project(action="start")` output |
+| External library API | Context7: `resolve-library-id` → `query-docs` |
+| Literal string search | `Grep` (OK for this) |
+| Exact filename pattern | `Glob` (OK for this) |
+
+---
+
+## Consolidated Tools Reference
+
+Mira uses action-based tools. Here are the key ones:
+
+### `project` - Project/Session Management
+```
+project(action="start", project_path="...", name="...")  # Initialize session
+project(action="set", project_path="...", name="...")    # Change active project
+project(action="get")                                     # Show current project
+```
+
+### `goal` - Cross-Session Goals
+```
+goal(action="create", title="...", priority="high")       # Create goal
+goal(action="list")                                       # List goals
+goal(action="add_milestone", goal_id="1", milestone_title="...", weight=2)
+goal(action="complete_milestone", milestone_id="1")       # Mark done
+```
+
+### `finding` - Code Review Findings
+```
+finding(action="list", status="pending")                  # List findings
+finding(action="review", finding_id=123, status="accepted", feedback="...")
+finding(action="stats")                                   # Get statistics
+```
+
+### `documentation` - Documentation Tasks
+```
+documentation(action="list", status="pending")            # List doc tasks
+documentation(action="skip", task_id=123, reason="...")   # Skip a task
+documentation(action="inventory")                         # Show doc inventory
+```
+
+### `consult_experts` - Expert Consultation
+```
+consult_experts(roles=["architect"], context="...", question="...")
+consult_experts(roles=["code_reviewer", "security"], context="...")
+```
 
 ## Build & Test
 
