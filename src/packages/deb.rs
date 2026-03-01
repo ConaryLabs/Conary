@@ -131,8 +131,8 @@ impl DebPackage {
         let mut archive = ar::Archive::new(file);
 
         while let Some(entry) = archive.next_entry() {
-            let mut entry = entry
-                .map_err(|e| Error::InitError(format!("Failed to read AR entry: {}", e)))?;
+            let mut entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read AR entry: {}", e)))?;
 
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
 
@@ -155,28 +155,35 @@ impl DebPackage {
     /// Decompress and extract control.tar.* to get control file
     fn extract_control_file(path: &str) -> Result<String> {
         // Try different compression formats
-        for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
+        for ext in &[
+            "control.tar.gz",
+            "control.tar.xz",
+            "control.tar.zst",
+            "control.tar",
+        ] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
                 let reader = Self::create_tar_decoder(&tar_data, ext)?;
                 let mut archive = Archive::new(reader);
 
                 // Find control file in tar
-                for entry in archive.entries()
+                for entry in archive
+                    .entries()
                     .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
                 {
                     let mut entry = entry
                         .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-                    let entry_path = entry.path()
+                    let entry_path = entry
+                        .path()
                         .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                         .to_string_lossy()
                         .to_string();
 
                     if entry_path == "./control" || entry_path == "control" {
                         let mut content = String::new();
-                        entry
-                            .read_to_string(&mut content)
-                            .map_err(|e| Error::InitError(format!("Failed to read control file: {}", e)))?;
+                        entry.read_to_string(&mut content).map_err(|e| {
+                            Error::InitError(format!("Failed to read control file: {}", e))
+                        })?;
                         return Ok(content);
                     }
                 }
@@ -193,7 +200,12 @@ impl DebPackage {
         let mut scriptlets = Vec::new();
 
         // Try different compression formats
-        for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
+        for ext in &[
+            "control.tar.gz",
+            "control.tar.xz",
+            "control.tar.zst",
+            "control.tar",
+        ] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
                 let reader = match Self::create_tar_decoder(&tar_data, ext) {
                     Ok(r) => r,
@@ -207,7 +219,10 @@ impl DebPackage {
                         let entry = match entry_result {
                             Ok(e) => e,
                             Err(e) => {
-                                warn!("Skipping corrupted control archive entry in {}: {}", path, e);
+                                warn!(
+                                    "Skipping corrupted control archive entry in {}: {}",
+                                    path, e
+                                );
                                 continue;
                             }
                         };
@@ -261,7 +276,12 @@ impl DebPackage {
     /// (like RPM's noreplace behavior).
     fn extract_conffiles(path: &str) -> Vec<ConfigFileInfo> {
         // Try different compression formats
-        for ext in &["control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"] {
+        for ext in &[
+            "control.tar.gz",
+            "control.tar.xz",
+            "control.tar.zst",
+            "control.tar",
+        ] {
             if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
                 let reader = match Self::create_tar_decoder(&tar_data, ext) {
                     Ok(r) => r,
@@ -275,7 +295,10 @@ impl DebPackage {
                         let entry = match entry_result {
                             Ok(e) => e,
                             Err(e) => {
-                                warn!("Skipping corrupted control archive entry in {}: {}", path, e);
+                                warn!(
+                                    "Skipping corrupted control archive entry in {}: {}",
+                                    path, e
+                                );
                                 continue;
                             }
                         };
@@ -320,13 +343,15 @@ impl DebPackage {
                 let mut archive = Archive::new(reader);
                 let mut files = Vec::new();
 
-                for entry in archive.entries()
+                for entry in archive
+                    .entries()
                     .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
                 {
                     let entry = entry
                         .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-                    let entry_path = entry.path()
+                    let entry_path = entry
+                        .path()
                         .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                         .to_string_lossy()
                         .to_string();
@@ -336,14 +361,20 @@ impl DebPackage {
                         continue;
                     }
 
-                    let size = entry.header().size()
+                    let size = entry
+                        .header()
+                        .size()
                         .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
-                    let mode = entry.header().mode()
+                    let mode = entry
+                        .header()
+                        .mode()
                         .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
                     files.push(PackageFile {
-                        path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                        path: normalize_path(&entry_path).map_err(|e| {
+                            Error::InitError(format!("Path normalization failed: {}", e))
+                        })?,
                         size: size as i64,
                         mode: mode as i32,
                         sha256: None,
@@ -401,23 +432,35 @@ impl PackageFormat for DebPackage {
         let control_content = Self::extract_control_file(path)?;
         let control = Self::parse_control(&control_content)?;
 
-        let name = control
-            .name
-            .ok_or_else(|| Error::InitError("Package name not found in control file".to_string()))?;
+        let name = control.name.ok_or_else(|| {
+            Error::InitError("Package name not found in control file".to_string())
+        })?;
 
-        let version = control
-            .version
-            .ok_or_else(|| Error::InitError("Package version not found in control file".to_string()))?;
+        let version = control.version.ok_or_else(|| {
+            Error::InitError("Package version not found in control file".to_string())
+        })?;
 
         // Extract file list
         let files = Self::extract_file_list(path)?;
 
         // Convert dependencies
         let mut dependencies = Vec::new();
-        dependencies.extend(Self::convert_dependencies(&control.dependencies, DependencyType::Runtime));
-        dependencies.extend(Self::convert_dependencies(&control.recommends, DependencyType::Optional));
-        dependencies.extend(Self::convert_dependencies(&control.suggests, DependencyType::Optional));
-        dependencies.extend(Self::convert_dependencies(&control.build_depends, DependencyType::Build));
+        dependencies.extend(Self::convert_dependencies(
+            &control.dependencies,
+            DependencyType::Runtime,
+        ));
+        dependencies.extend(Self::convert_dependencies(
+            &control.recommends,
+            DependencyType::Optional,
+        ));
+        dependencies.extend(Self::convert_dependencies(
+            &control.suggests,
+            DependencyType::Optional,
+        ));
+        dependencies.extend(Self::convert_dependencies(
+            &control.build_depends,
+            DependencyType::Build,
+        ));
 
         // Extract maintainer scripts and conffiles
         let scriptlets = Self::extract_maintainer_scripts(path);
@@ -480,26 +523,35 @@ impl PackageFormat for DebPackage {
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        debug!("Extracting file contents from Debian package: {:?}", self.meta.package_path());
+        debug!(
+            "Extracting file contents from Debian package: {:?}",
+            self.meta.package_path()
+        );
 
         // Try different compression formats
         for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
             let path_str = match self.meta.package_path().to_str() {
                 Some(s) => s,
-                None => return Err(Error::InitError("Package path contains invalid UTF-8".to_string())),
+                None => {
+                    return Err(Error::InitError(
+                        "Package path contains invalid UTF-8".to_string(),
+                    ));
+                }
             };
             if let Ok(tar_data) = Self::extract_ar_file(path_str, ext) {
                 let reader = Self::create_tar_decoder(&tar_data, ext)?;
                 let mut archive = Archive::new(reader);
                 let mut extracted_files = Vec::new();
 
-                for entry in archive.entries()
+                for entry in archive
+                    .entries()
                     .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
                 {
                     let mut entry = entry
                         .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-                    let entry_path = entry.path()
+                    let entry_path = entry
+                        .path()
                         .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                         .to_string_lossy()
                         .to_string();
@@ -509,7 +561,9 @@ impl PackageFormat for DebPackage {
                         continue;
                     }
 
-                    let size = entry.header().size()
+                    let size = entry
+                        .header()
+                        .size()
                         .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
                     // Check file size using shared utility
@@ -517,20 +571,24 @@ impl PackageFormat for DebPackage {
                         continue;
                     }
 
-                    let mode = entry.header().mode()
+                    let mode = entry
+                        .header()
+                        .mode()
                         .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
                     // Read file content
                     let mut content = Vec::new();
-                    entry
-                        .read_to_end(&mut content)
-                        .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
+                    entry.read_to_end(&mut content).map_err(|e| {
+                        Error::InitError(format!("Failed to read file content: {}", e))
+                    })?;
 
                     // Compute SHA-256 using shared utility
                     let hash = hash::sha256(&content);
 
                     extracted_files.push(ExtractedFile {
-                        path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                        path: normalize_path(&entry_path).map_err(|e| {
+                            Error::InitError(format!("Path normalization failed: {}", e))
+                        })?,
                         content,
                         size: size as i64,
                         mode: mode as i32,
@@ -614,7 +672,10 @@ Recommends: python3
         assert_eq!(control.version, Some("1.0.0-1".to_string()));
         assert_eq!(control.architecture, Some("amd64".to_string()));
         assert_eq!(control.description, Some("A test package".to_string()));
-        assert_eq!(control.maintainer, Some("Test User <test@example.com>".to_string()));
+        assert_eq!(
+            control.maintainer,
+            Some("Test User <test@example.com>".to_string())
+        );
         assert_eq!(control.section, Some("utils".to_string()));
         assert_eq!(control.priority, Some("optional".to_string()));
         assert_eq!(control.homepage, Some("https://example.com".to_string()));

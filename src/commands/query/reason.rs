@@ -20,23 +20,32 @@ pub fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     let (troves, filter_desc) = match pattern {
-        Some("explicit") | Some("explicitly") => {
-            (conary::db::models::Trove::find_explicitly_installed(&conn)?, "explicitly installed")
-        }
-        Some("dependency") | Some("required") | Some("dep") => {
-            (conary::db::models::Trove::find_dependencies_installed(&conn)?, "installed as dependencies")
-        }
-        Some("collection") | Some("@") => {
-            (conary::db::models::Trove::find_collection_installed(&conn)?, "installed via collections")
-        }
+        Some("explicit") | Some("explicitly") => (
+            conary::db::models::Trove::find_explicitly_installed(&conn)?,
+            "explicitly installed",
+        ),
+        Some("dependency") | Some("required") | Some("dep") => (
+            conary::db::models::Trove::find_dependencies_installed(&conn)?,
+            "installed as dependencies",
+        ),
+        Some("collection") | Some("@") => (
+            conary::db::models::Trove::find_collection_installed(&conn)?,
+            "installed via collections",
+        ),
         Some(custom) if custom.starts_with("@") => {
             // Pattern like "@server" - find packages from specific collection
             let pattern = format!("Installed via {}", custom);
-            (conary::db::models::Trove::find_by_reason(&conn, &pattern)?, &*format!("installed via {}", custom))
+            (
+                conary::db::models::Trove::find_by_reason(&conn, &pattern)?,
+                &*format!("installed via {}", custom),
+            )
         }
         Some(custom) => {
             // Custom pattern
-            (conary::db::models::Trove::find_by_reason(&conn, custom)?, custom)
+            (
+                conary::db::models::Trove::find_by_reason(&conn, custom)?,
+                custom,
+            )
         }
         None => {
             // Show all with their reasons grouped
@@ -108,7 +117,10 @@ fn print_all_with_reasons(conn: &rusqlite::Connection) -> Result<()> {
     if !other.is_empty() {
         println!("Other ({}):", other.len());
         for t in &other {
-            let reason = t.selection_reason.as_deref().unwrap_or("(no reason recorded)");
+            let reason = t
+                .selection_reason
+                .as_deref()
+                .unwrap_or("(no reason recorded)");
             println!("  {} {} - {}", t.name, t.version, reason);
         }
         println!();

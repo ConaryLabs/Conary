@@ -117,7 +117,9 @@ impl AutomationPrompt {
 
         match input.trim().to_lowercase().as_str() {
             "a" | "apply" | "yes" | "y" => Ok(SummaryResponse::ApplyAll),
-            "s" | "security" => Ok(SummaryResponse::ReviewCategory(AutomationCategory::Security)),
+            "s" | "security" => Ok(SummaryResponse::ReviewCategory(
+                AutomationCategory::Security,
+            )),
             "d" | "details" => Ok(SummaryResponse::ShowDetails),
             "c" | "config" | "configure" => Ok(SummaryResponse::Configure),
             "n" | "no" | "exit" | "q" | "" => Ok(SummaryResponse::Exit),
@@ -175,7 +177,11 @@ impl AutomationPrompt {
 
         // Show affected packages
         if !action.packages.is_empty() {
-            writeln!(stdout, "  Packages affected: {}", action.packages.join(", "))?;
+            writeln!(
+                stdout,
+                "  Packages affected: {}",
+                action.packages.join(", ")
+            )?;
         }
 
         // Show risk level

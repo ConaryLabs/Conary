@@ -61,8 +61,7 @@ impl<R: Read> CpioReader<R> {
         let parse_hex = |start: usize, len: usize| -> io::Result<u32> {
             let s = std::str::from_utf8(&header_buf[start..start + len])
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            u32::from_str_radix(s, 16)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            u32::from_str_radix(s, 16).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         };
 
         let mode = parse_hex(14, 8)?;
@@ -159,20 +158,20 @@ mod tests {
         // magic(6) ino(8) mode(8) uid(8) gid(8) nlink(8) mtime(8) filesize(8)
         // devmajor(8) devminor(8) rdevmajor(8) rdevminor(8) namesize(8) check(8)
         let mut h = Vec::new();
-        h.extend_from_slice(b"070701");          // magic
-        h.extend_from_slice(b"00000000");        // ino
-        h.extend_from_slice(b"00000000");        // mode
-        h.extend_from_slice(b"00000000");        // uid
-        h.extend_from_slice(b"00000000");        // gid
-        h.extend_from_slice(b"00000001");        // nlink
-        h.extend_from_slice(b"00000000");        // mtime
+        h.extend_from_slice(b"070701"); // magic
+        h.extend_from_slice(b"00000000"); // ino
+        h.extend_from_slice(b"00000000"); // mode
+        h.extend_from_slice(b"00000000"); // uid
+        h.extend_from_slice(b"00000000"); // gid
+        h.extend_from_slice(b"00000001"); // nlink
+        h.extend_from_slice(b"00000000"); // mtime
         h.extend_from_slice(filesize_hex.as_bytes()); // filesize
-        h.extend_from_slice(b"00000000");        // devmajor
-        h.extend_from_slice(b"00000000");        // devminor
-        h.extend_from_slice(b"00000000");        // rdevmajor
-        h.extend_from_slice(b"00000000");        // rdevminor
+        h.extend_from_slice(b"00000000"); // devmajor
+        h.extend_from_slice(b"00000000"); // devminor
+        h.extend_from_slice(b"00000000"); // rdevmajor
+        h.extend_from_slice(b"00000000"); // rdevminor
         h.extend_from_slice(namesize_hex.as_bytes()); // namesize
-        h.extend_from_slice(b"00000000");        // check
+        h.extend_from_slice(b"00000000"); // check
         assert_eq!(h.len(), HEADER_SIZE);
         h
     }

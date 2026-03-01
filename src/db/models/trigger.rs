@@ -90,7 +90,7 @@ impl Trigger {
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, pattern, handler, priority, enabled, builtin, created_at
-             FROM triggers WHERE id = ?1"
+             FROM triggers WHERE id = ?1",
         )?;
 
         let trigger = stmt.query_row([id], Self::from_row).optional()?;
@@ -101,7 +101,7 @@ impl Trigger {
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, pattern, handler, priority, enabled, builtin, created_at
-             FROM triggers WHERE name = ?1"
+             FROM triggers WHERE name = ?1",
         )?;
 
         let trigger = stmt.query_row([name], Self::from_row).optional()?;
@@ -112,7 +112,7 @@ impl Trigger {
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, pattern, handler, priority, enabled, builtin, created_at
-             FROM triggers ORDER BY priority, name"
+             FROM triggers ORDER BY priority, name",
         )?;
 
         let triggers = stmt
@@ -126,7 +126,7 @@ impl Trigger {
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, pattern, handler, priority, enabled, builtin, created_at
-             FROM triggers WHERE enabled = 1 ORDER BY priority, name"
+             FROM triggers WHERE enabled = 1 ORDER BY priority, name",
         )?;
 
         let triggers = stmt
@@ -140,7 +140,7 @@ impl Trigger {
     pub fn list_builtin(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, pattern, handler, priority, enabled, builtin, created_at
-             FROM triggers WHERE builtin = 1 ORDER BY priority, name"
+             FROM triggers WHERE builtin = 1 ORDER BY priority, name",
         )?;
 
         let triggers = stmt
@@ -164,10 +164,7 @@ impl Trigger {
 
     /// Delete a trigger (only non-builtin)
     pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
-        let rows = conn.execute(
-            "DELETE FROM triggers WHERE id = ?1 AND builtin = 0",
-            [id],
-        )?;
+        let rows = conn.execute("DELETE FROM triggers WHERE id = ?1 AND builtin = 0", [id])?;
         Ok(rows > 0)
     }
 
@@ -205,13 +202,17 @@ impl Trigger {
 
     /// Get dependencies for this trigger
     pub fn get_dependencies(&self, conn: &Connection) -> Result<Vec<String>> {
-        let id = self.id.ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
+        let id = self
+            .id
+            .ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
         TriggerDependency::get_dependencies(conn, id)
     }
 
     /// Add a dependency (this trigger must run after `depends_on`)
     pub fn add_dependency(&self, conn: &Connection, depends_on: &str) -> Result<()> {
-        let id = self.id.ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
+        let id = self
+            .id
+            .ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
         TriggerDependency::add(conn, id, depends_on)
     }
 }
@@ -227,9 +228,8 @@ pub struct TriggerDependency {
 impl TriggerDependency {
     /// Get all dependencies for a trigger
     pub fn get_dependencies(conn: &Connection, trigger_id: i64) -> Result<Vec<String>> {
-        let mut stmt = conn.prepare(
-            "SELECT depends_on FROM trigger_dependencies WHERE trigger_id = ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT depends_on FROM trigger_dependencies WHERE trigger_id = ?1")?;
 
         let deps = stmt
             .query_map([trigger_id], |row| row.get(0))?
@@ -360,7 +360,12 @@ impl ChangesetTrigger {
     }
 
     /// Update status to completed with output
-    pub fn mark_completed(conn: &Connection, changeset_id: i64, trigger_id: i64, output: Option<&str>) -> Result<()> {
+    pub fn mark_completed(
+        conn: &Connection,
+        changeset_id: i64,
+        trigger_id: i64,
+        output: Option<&str>,
+    ) -> Result<()> {
         conn.execute(
             "UPDATE changeset_triggers SET status = 'completed', completed_at = datetime('now'), output = ?3
              WHERE changeset_id = ?1 AND trigger_id = ?2",
@@ -370,7 +375,12 @@ impl ChangesetTrigger {
     }
 
     /// Update status to failed with error message
-    pub fn mark_failed(conn: &Connection, changeset_id: i64, trigger_id: i64, error: &str) -> Result<()> {
+    pub fn mark_failed(
+        conn: &Connection,
+        changeset_id: i64,
+        trigger_id: i64,
+        error: &str,
+    ) -> Result<()> {
         conn.execute(
             "UPDATE changeset_triggers SET status = 'failed', completed_at = datetime('now'), output = ?3
              WHERE changeset_id = ?1 AND trigger_id = ?2",
@@ -433,7 +443,10 @@ impl<'a> TriggerEngine<'a> {
     }
 
     /// Find all triggers that match the given file paths
-    pub fn find_matching_triggers(&self, file_paths: &[String]) -> Result<Vec<(Trigger, Vec<String>)>> {
+    pub fn find_matching_triggers(
+        &self,
+        file_paths: &[String],
+    ) -> Result<Vec<(Trigger, Vec<String>)>> {
         let triggers = Trigger::list_enabled(self.conn)?;
         let mut matches: HashMap<i64, (Trigger, Vec<String>)> = HashMap::new();
 
@@ -454,7 +467,11 @@ impl<'a> TriggerEngine<'a> {
     }
 
     /// Record triggered handlers for a changeset
-    pub fn record_triggers(&self, changeset_id: i64, file_paths: &[String]) -> Result<Vec<Trigger>> {
+    pub fn record_triggers(
+        &self,
+        changeset_id: i64,
+        file_paths: &[String],
+    ) -> Result<Vec<Trigger>> {
         let matching = self.find_matching_triggers(file_paths)?;
         let mut triggered = Vec::new();
 
@@ -508,7 +525,10 @@ impl<'a> TriggerEngine<'a> {
                 // Only count edges to triggers we're actually running
                 if triggers.contains_key(&dep) {
                     *in_degree.entry(trigger.name.clone()).or_insert(0) += 1;
-                    dependents.entry(dep).or_default().push(trigger.name.clone());
+                    dependents
+                        .entry(dep)
+                        .or_default()
+                        .push(trigger.name.clone());
                 }
             }
         }
@@ -601,8 +621,9 @@ mod tests {
                 output TEXT,
                 UNIQUE(changeset_id, trigger_id)
             );
-            "
-        ).unwrap();
+            ",
+        )
+        .unwrap();
 
         (temp_file, conn)
     }
@@ -668,8 +689,16 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create triggers
-        let mut trigger1 = Trigger::new("sysusers".to_string(), "/usr/lib/sysusers.d/*".to_string(), "systemd-sysusers".to_string());
-        let mut trigger2 = Trigger::new("tmpfiles".to_string(), "/usr/lib/tmpfiles.d/*".to_string(), "systemd-tmpfiles".to_string());
+        let mut trigger1 = Trigger::new(
+            "sysusers".to_string(),
+            "/usr/lib/sysusers.d/*".to_string(),
+            "systemd-sysusers".to_string(),
+        );
+        let mut trigger2 = Trigger::new(
+            "tmpfiles".to_string(),
+            "/usr/lib/tmpfiles.d/*".to_string(),
+            "systemd-tmpfiles".to_string(),
+        );
 
         trigger1.insert(&conn).unwrap();
         let id2 = trigger2.insert(&conn).unwrap();
@@ -686,7 +715,8 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create a changeset
-        conn.execute("INSERT INTO changesets (description) VALUES ('test')", []).unwrap();
+        conn.execute("INSERT INTO changesets (description) VALUES ('test')", [])
+            .unwrap();
         let changeset_id = conn.last_insert_rowid();
 
         // Create trigger
@@ -719,8 +749,16 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create triggers
-        let mut t1 = Trigger::new("ldconfig".to_string(), "/usr/lib/*.so*".to_string(), "/sbin/ldconfig".to_string());
-        let mut t2 = Trigger::new("icons".to_string(), "/usr/share/icons/*".to_string(), "gtk-update-icon-cache".to_string());
+        let mut t1 = Trigger::new(
+            "ldconfig".to_string(),
+            "/usr/lib/*.so*".to_string(),
+            "/sbin/ldconfig".to_string(),
+        );
+        let mut t2 = Trigger::new(
+            "icons".to_string(),
+            "/usr/share/icons/*".to_string(),
+            "gtk-update-icon-cache".to_string(),
+        );
         t1.insert(&conn).unwrap();
         t2.insert(&conn).unwrap();
 

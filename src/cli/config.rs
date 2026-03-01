@@ -1,8 +1,8 @@
 // src/cli/config.rs
 //! Configuration file management commands
 
+use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
-use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {

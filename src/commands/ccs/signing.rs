@@ -8,11 +8,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Generate an Ed25519 signing key pair
-pub fn cmd_ccs_keygen(
-    output: &str,
-    key_id: Option<String>,
-    force: bool,
-) -> Result<()> {
+pub fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -> Result<()> {
     use conary::ccs::SigningKeyPair;
 
     let private_path = Path::new(output).with_extension("private");
@@ -36,21 +32,31 @@ pub fn cmd_ccs_keygen(
     }
 
     // Save to files
-    keypair.save_to_files(&private_path, &public_path)
+    keypair
+        .save_to_files(&private_path, &public_path)
         .context("Failed to save key files")?;
 
     println!();
     println!("Key pair generated successfully!");
     println!();
     println!("Files created:");
-    println!("  Private key: {} (keep this secret!)", private_path.display());
-    println!("  Public key:  {} (share for verification)", public_path.display());
+    println!(
+        "  Private key: {} (keep this secret!)",
+        private_path.display()
+    );
+    println!(
+        "  Public key:  {} (share for verification)",
+        public_path.display()
+    );
     println!();
     println!("Public key (base64):");
     println!("  {}", keypair.public_key_base64());
     println!();
     println!("To sign a package:");
-    println!("  conary ccs-sign package.ccs --key {}", private_path.display());
+    println!(
+        "  conary ccs-sign package.ccs --key {}",
+        private_path.display()
+    );
     println!();
     println!("Add the public key to trust policies for verification.");
 
@@ -58,15 +64,11 @@ pub fn cmd_ccs_keygen(
 }
 
 /// Sign a CCS package with an Ed25519 key
-pub fn cmd_ccs_sign(
-    package: &str,
-    key_path: &str,
-    output: Option<String>,
-) -> Result<()> {
+pub fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>) -> Result<()> {
     use conary::ccs::signing::SigningKeyPair;
+    use flate2::Compression;
     use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;
-    use flate2::Compression;
     use std::fs::File;
     use tar::{Archive, Builder as TarBuilder};
 
@@ -83,8 +85,8 @@ pub fn cmd_ccs_sign(
 
     // Load signing key
     println!("Loading signing key from {}...", key_path.display());
-    let signing_key = SigningKeyPair::load_from_file(key_path)
-        .context("Failed to load signing key")?;
+    let signing_key =
+        SigningKeyPair::load_from_file(key_path).context("Failed to load signing key")?;
 
     println!("Signing package: {}", package_path.display());
 
@@ -116,8 +118,8 @@ pub fn cmd_ccs_sign(
         }
     }
 
-    let manifest_bytes = manifest_bytes
-        .ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST"))?;
+    let manifest_bytes =
+        manifest_bytes.ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST"))?;
 
     // Sign the manifest (CBOR or TOML bytes)
     println!("Creating signature...");
@@ -150,7 +152,10 @@ pub fn cmd_ccs_sign(
     if let Some(key_id) = signing_key.key_id() {
         println!("  Key ID: {}", key_id);
     }
-    println!("  Timestamp: {}", signature.timestamp.as_deref().unwrap_or("none"));
+    println!(
+        "  Timestamp: {}",
+        signature.timestamp.as_deref().unwrap_or("none")
+    );
 
     Ok(())
 }

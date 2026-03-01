@@ -65,12 +65,7 @@ impl DerivedSpec {
     }
 
     /// Add a file override with permissions
-    pub fn add_override_with_perms(
-        mut self,
-        target: String,
-        content: Vec<u8>,
-        perms: u32,
-    ) -> Self {
+    pub fn add_override_with_perms(mut self, target: String, content: Vec<u8>, perms: u32) -> Self {
         self.overrides.push((target, content, Some(perms)));
         self
     }
@@ -157,7 +152,9 @@ impl<'a> DerivedBuilder<'a> {
         info!("Derived version: {}", derived_version);
 
         // Get parent files
-        let parent_id = parent.id.ok_or_else(|| Error::InitError("Parent trove missing ID".to_string()))?;
+        let parent_id = parent
+            .id
+            .ok_or_else(|| Error::InitError("Parent trove missing ID".to_string()))?;
         let parent_files = FileEntry::find_by_trove(self.conn, parent_id)?;
         debug!("Parent has {} files", parent_files.len());
 
@@ -347,8 +344,9 @@ impl<'a> DerivedBuilder<'a> {
 
         // Read original file content (or empty if new file)
         let original = if full_path.exists() {
-            std::fs::read_to_string(&full_path)
-                .map_err(|e| Error::InitError(format!("Failed to read {}: {}", full_path.display(), e)))?
+            std::fs::read_to_string(&full_path).map_err(|e| {
+                Error::InitError(format!("Failed to read {}: {}", full_path.display(), e))
+            })?
         } else {
             // Ensure parent directory exists for new files
             if let Some(parent) = full_path.parent() {
@@ -359,12 +357,14 @@ impl<'a> DerivedBuilder<'a> {
         };
 
         // Apply the patch
-        let patched = diffy::apply(&original, &patch)
-            .map_err(|e| Error::InitError(format!("Failed to apply patch to {}: {}", stripped_path, e)))?;
+        let patched = diffy::apply(&original, &patch).map_err(|e| {
+            Error::InitError(format!("Failed to apply patch to {}: {}", stripped_path, e))
+        })?;
 
         // Write the result
-        std::fs::write(&full_path, patched)
-            .map_err(|e| Error::InitError(format!("Failed to write {}: {}", full_path.display(), e)))?;
+        std::fs::write(&full_path, patched).map_err(|e| {
+            Error::InitError(format!("Failed to write {}: {}", full_path.display(), e))
+        })?;
 
         Ok(())
     }
@@ -398,7 +398,8 @@ impl<'a> DerivedBuilder<'a> {
 
     /// Save the derived package definition to the database
     pub fn save_definition(&self) -> Result<DerivedPackage> {
-        let mut derived = DerivedPackage::new(self.spec.name.clone(), self.spec.parent_name.clone());
+        let mut derived =
+            DerivedPackage::new(self.spec.name.clone(), self.spec.parent_name.clone());
         derived.parent_version = self.spec.parent_version.clone();
         derived.version_policy = self.spec.version_policy.clone();
         derived.description = self.spec.description.clone();
@@ -409,12 +410,8 @@ impl<'a> DerivedBuilder<'a> {
         // Save patches
         for (idx, (patch_name, patch_content)) in self.spec.patches.iter().enumerate() {
             let patch_hash = hash::sha256(patch_content);
-            let mut patch = DerivedPatch::new(
-                derived_id,
-                (idx + 1) as i32,
-                patch_name.clone(),
-                patch_hash,
-            );
+            let mut patch =
+                DerivedPatch::new(derived_id, (idx + 1) as i32, patch_name.clone(), patch_hash);
             patch.insert(self.conn)?;
         }
 
@@ -442,16 +439,19 @@ pub fn build_from_definition(
     derived: &DerivedPackage,
     cas: &CasStore,
 ) -> Result<DerivedResult> {
-    info!("Building derived package '{}' from definition", derived.name);
+    info!(
+        "Building derived package '{}' from definition",
+        derived.name
+    );
 
     // Load patches
     let patches = derived.patches(conn)?;
     let mut patch_data = Vec::new();
     for patch in patches {
         // Get patch content from CAS
-        let content = cas
-            .retrieve(&patch.patch_hash)
-            .map_err(|_| Error::InitError(format!("Patch content not found: {}", patch.patch_name)))?;
+        let content = cas.retrieve(&patch.patch_hash).map_err(|_| {
+            Error::InitError(format!("Patch content not found: {}", patch.patch_name))
+        })?;
         patch_data.push((patch.patch_name, content));
     }
 
@@ -464,9 +464,9 @@ pub fn build_from_definition(
         if ov.is_removal() {
             removal_data.push(ov.target_path);
         } else if let Some(hash) = ov.source_hash {
-            let content = cas
-                .retrieve(&hash)
-                .map_err(|_| Error::InitError(format!("Override content not found: {}", ov.target_path)))?;
+            let content = cas.retrieve(&hash).map_err(|_| {
+                Error::InitError(format!("Override content not found: {}", ov.target_path))
+            })?;
             override_data.push((ov.target_path, content, ov.permissions.map(|p| p as u32)));
         }
     }
@@ -577,7 +577,10 @@ mod tests {
     fn test_derived_spec_builder() {
         let spec = DerivedSpec::new("nginx-custom".to_string(), "nginx".to_string())
             .add_patch("fix.patch".to_string(), b"patch content".to_vec())
-            .add_override("/etc/nginx/nginx.conf".to_string(), b"custom config".to_vec())
+            .add_override(
+                "/etc/nginx/nginx.conf".to_string(),
+                b"custom config".to_vec(),
+            )
             .add_removal("/etc/nginx/default.conf".to_string());
 
         assert_eq!(spec.name, "nginx-custom");

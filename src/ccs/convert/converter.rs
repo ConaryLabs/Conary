@@ -5,10 +5,10 @@
 //! component classification, invoking `CcsBuilder` with optional CDC chunking.
 
 use crate::capability::inference::{
-    infer_capabilities, InferenceOptions, InferredCapabilities,
-    PackageFile as InferencePackageFile, PackageMetadataRef,
+    InferenceOptions, InferredCapabilities, PackageFile as InferencePackageFile,
+    PackageMetadataRef, infer_capabilities,
 };
-use crate::ccs::builder::{write_ccs_package, BuildResult, CcsBuilder};
+use crate::ccs::builder::{BuildResult, CcsBuilder, write_ccs_package};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
 use crate::ccs::convert::capture::ScriptletCapturer;
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
@@ -16,7 +16,7 @@ use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
-    Redirects, Requires, Suggests, User, Service, ServiceAction,
+    Redirects, Requires, Service, ServiceAction, Suggests, User,
 };
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::packages::common::PackageMetadata;
@@ -129,9 +129,12 @@ impl LegacyConverter {
                 // We only capture post-install for now as it's the most common for state setup
                 if script.phase == ScriptletPhase::PostInstall {
                     tracing::info!("Capturing PostInstall scriptlet for {}", metadata.name);
-                    
-                    let result = capturer.capture(&script.content, &script.interpreter, files)
-                        .map_err(|e| ConversionError::BuildError(format!("Capture failed: {}", e)))?;
+
+                    let result = capturer
+                        .capture(&script.content, &script.interpreter, files)
+                        .map_err(|e| {
+                            ConversionError::BuildError(format!("Capture failed: {}", e))
+                        })?;
 
                     // Add new files
                     final_files.extend(result.new_files);
@@ -143,32 +146,32 @@ impl LegacyConverter {
                                 // Simplified: assume args[0] is user name if no flags, or parse flags
                                 // This is a placeholder for real arg parsing
                                 if let Some(name) = args.last() {
-                                     captured_hooks.users.push(User {
-                                         name: name.clone(),
-                                         system: true,
-                                         home: None,
-                                         shell: None,
-                                         group: None,
-                                     });
+                                    captured_hooks.users.push(User {
+                                        name: name.clone(),
+                                        system: true,
+                                        home: None,
+                                        shell: None,
+                                        group: None,
+                                    });
                                 }
-                            },
+                            }
                             CapturedIntent::SystemdEnable(svc) => {
                                 captured_hooks.services.push(Service {
                                     name: svc,
                                     action: ServiceAction::Enable,
                                 });
-                            },
+                            }
                             CapturedIntent::SystemdDisable(svc) => {
                                 captured_hooks.services.push(Service {
                                     name: svc,
                                     action: ServiceAction::Disable,
                                 });
-                            },
+                            }
                             _ => tracing::debug!("Ignored captured intent: {:?}", intent),
                         }
                     }
                     // Mark as processed (don't include in final metadata)
-                    continue; 
+                    continue;
                 }
                 processed_scriptlets.push(script.clone());
             }
@@ -206,8 +209,9 @@ impl LegacyConverter {
 
         // Write manifest
         let manifest_path = temp_dir.path().join("ccs.toml");
-        let manifest_toml = toml::to_string_pretty(&manifest)
-            .map_err(|e| ConversionError::ManifestError(format!("Failed to serialize manifest: {}", e)))?;
+        let manifest_toml = toml::to_string_pretty(&manifest).map_err(|e| {
+            ConversionError::ManifestError(format!("Failed to serialize manifest: {}", e))
+        })?;
         std::fs::write(&manifest_path, manifest_toml)
             .map_err(|e| ConversionError::IoError(format!("Failed to write manifest: {}", e)))?;
 
@@ -218,7 +222,8 @@ impl LegacyConverter {
             builder = builder.with_chunking();
         }
 
-        let build_result = builder.build()
+        let build_result = builder
+            .build()
             .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
 
         // Step 5.5: Infer capabilities if enabled
@@ -248,7 +253,11 @@ impl LegacyConverter {
                 provides: Vec::new(),
             };
 
-            match infer_capabilities(&inference_files, &inference_metadata, &self.options.inference_options) {
+            match infer_capabilities(
+                &inference_files,
+                &inference_metadata,
+                &self.options.inference_options,
+            ) {
                 Ok(caps) => {
                     tracing::info!(
                         "Inferred capabilities for '{}' via {} with {} confidence",
@@ -277,8 +286,7 @@ impl LegacyConverter {
 
         let package_filename = format!(
             "{}-{}.ccs",
-            build_result.manifest.package.name,
-            build_result.manifest.package.version
+            build_result.manifest.package.name, build_result.manifest.package.version
         );
         let package_path = self.options.output_dir.join(&package_filename);
 
@@ -287,7 +295,8 @@ impl LegacyConverter {
 
         // Step 7: Extract legacy provenance information
         let legacy_provenance = if metadata.package_path.exists() {
-            let prov = LegacyProvenance::extract_from_path(format, checksum, &metadata.package_path);
+            let prov =
+                LegacyProvenance::extract_from_path(format, checksum, &metadata.package_path);
             if prov.has_content() {
                 tracing::info!(
                     "Extracted provenance from {} package: {}",
@@ -354,7 +363,8 @@ impl LegacyConverter {
         }
 
         // Build config file list
-        let config_files: Vec<String> = metadata.config_files
+        let config_files: Vec<String> = metadata
+            .config_files
             .iter()
             .map(|c| c.path.clone())
             .collect();
@@ -396,7 +406,11 @@ impl LegacyConverter {
     }
 
     /// Write extracted files to a temporary directory
-    fn write_files_to_temp(&self, files: &[ExtractedFile], temp_dir: &Path) -> Result<(), ConversionError> {
+    fn write_files_to_temp(
+        &self,
+        files: &[ExtractedFile],
+        temp_dir: &Path,
+    ) -> Result<(), ConversionError> {
         for file in files {
             // Create relative path from absolute path
             let rel_path = file.path.strip_prefix('/').unwrap_or(&file.path);
@@ -404,19 +418,24 @@ impl LegacyConverter {
 
             // Create parent directories
             if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| ConversionError::IoError(format!("Failed to create directory: {}", e)))?;
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ConversionError::IoError(format!("Failed to create directory: {}", e))
+                })?;
             }
 
             // Write file content
-            std::fs::write(&full_path, &file.content)
-                .map_err(|e| ConversionError::IoError(format!("Failed to write file {}: {}", file.path, e)))?;
+            std::fs::write(&full_path, &file.content).map_err(|e| {
+                ConversionError::IoError(format!("Failed to write file {}: {}", file.path, e))
+            })?;
 
             // Set permissions (best effort on Unix)
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&full_path, std::fs::Permissions::from_mode(file.mode as u32));
+                let _ = std::fs::set_permissions(
+                    &full_path,
+                    std::fs::Permissions::from_mode(file.mode as u32),
+                );
             }
         }
 
@@ -452,44 +471,36 @@ mod tests {
             version: "1.0.0".to_string(),
             architecture: Some("x86_64".to_string()),
             description: Some("Test package".to_string()),
-            files: vec![
-                PackageFile {
-                    path: "/usr/bin/test".to_string(),
-                    size: 100,
-                    mode: 0o755,
-                    sha256: Some("abc123".to_string()),
-                },
-            ],
-            dependencies: vec![
-                Dependency {
-                    name: "libc".to_string(),
-                    version: Some(">= 2.17".to_string()),
-                    dep_type: DependencyType::Runtime,
-                    description: None,
-                },
-            ],
-            scriptlets: vec![
-                Scriptlet {
-                    phase: ScriptletPhase::PreInstall,
-                    interpreter: "/bin/sh".to_string(),
-                    content: "getent passwd testuser || useradd -r testuser".to_string(),
-                    flags: None,
-                },
-            ],
+            files: vec![PackageFile {
+                path: "/usr/bin/test".to_string(),
+                size: 100,
+                mode: 0o755,
+                sha256: Some("abc123".to_string()),
+            }],
+            dependencies: vec![Dependency {
+                name: "libc".to_string(),
+                version: Some(">= 2.17".to_string()),
+                dep_type: DependencyType::Runtime,
+                description: None,
+            }],
+            scriptlets: vec![Scriptlet {
+                phase: ScriptletPhase::PreInstall,
+                interpreter: "/bin/sh".to_string(),
+                content: "getent passwd testuser || useradd -r testuser".to_string(),
+                flags: None,
+            }],
             config_files: vec![],
         }
     }
 
     fn make_test_files() -> Vec<ExtractedFile> {
-        vec![
-            ExtractedFile {
-                path: "/usr/bin/test".to_string(),
-                content: b"#!/bin/sh\necho test".to_vec(),
-                size: 20,
-                mode: 0o755,
-                sha256: Some("abc123".to_string()),
-            },
-        ]
+        vec![ExtractedFile {
+            path: "/usr/bin/test".to_string(),
+            content: b"#!/bin/sh\necho test".to_vec(),
+            size: 20,
+            mode: 0o755,
+            sha256: Some("abc123".to_string()),
+        }]
     }
 
     #[test]
@@ -542,7 +553,9 @@ mod tests {
         let (hooks, report) = converter.analyzer.analyze(&metadata.scriptlets);
 
         // Should detect useradd
-        assert!(hooks.iter().any(|h| matches!(h, super::super::analyzer::DetectedHook::User(u) if u.name == "testuser")));
+        assert!(hooks.iter().any(
+            |h| matches!(h, super::super::analyzer::DetectedHook::User(u) if u.name == "testuser")
+        ));
 
         // Should have good fidelity (simple scripts)
         assert!(report.level >= FidelityLevel::High);
@@ -557,7 +570,9 @@ mod tests {
         let files = make_test_files();
 
         let temp_dir = TempDir::new().unwrap();
-        converter.write_files_to_temp(&files, temp_dir.path()).unwrap();
+        converter
+            .write_files_to_temp(&files, temp_dir.path())
+            .unwrap();
 
         // Check files were written
         assert!(temp_dir.path().join("usr/bin/test").exists());

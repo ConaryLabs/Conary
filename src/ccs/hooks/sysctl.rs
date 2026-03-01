@@ -29,7 +29,10 @@ impl HookExecutor {
             let config_path = sysctl_dir.join(&filename);
 
             let config = if only_if_lower {
-                format!("# Only apply if current value is lower\n{}={}\n", key, value)
+                format!(
+                    "# Only apply if current value is lower\n{}={}\n",
+                    key, value
+                )
             } else {
                 format!("{}={}\n", key, value)
             };

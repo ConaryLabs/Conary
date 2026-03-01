@@ -15,14 +15,14 @@
 //! 5. **Scriptlet ordering** - Pre-scripts in topo order before FS changes, post-scripts after
 
 use super::execute::convert_extracted_files;
-use super::prepare::{check_upgrade_status, parse_package, UpgradeCheck};
+use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
 };
-use super::{detect_package_format, PackageFormatType};
+use super::{PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
-use conary::components::{should_run_scriptlets, ComponentClassifier, ComponentType};
+use conary::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
 use conary::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, ProvideEntry, ScriptletEntry, Trove,
 };
@@ -163,7 +163,10 @@ impl<'a> BatchInstaller<'a> {
         }
 
         let package_count = packages.len();
-        let main_pkg_name = packages.last().map(|p| p.name.as_str()).unwrap_or("unknown");
+        let main_pkg_name = packages
+            .last()
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
 
         info!(
             "Starting batch install: {} packages (main: {})",
@@ -212,11 +215,8 @@ impl<'a> BatchInstaller<'a> {
 
         // Check for conflicts
         if !batch_plan.conflicts.is_empty() {
-            let conflict_msgs: Vec<String> = batch_plan
-                .conflicts
-                .iter()
-                .map(|c| c.to_string())
-                .collect();
+            let conflict_msgs: Vec<String> =
+                batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
             txn.abort()
                 .context("Failed to abort transaction after conflicts")?;
             return Err(anyhow::anyhow!(
@@ -326,14 +326,14 @@ impl<'a> BatchInstaller<'a> {
 
             for pkg in &packages {
                 // Remove old trove if upgrading
-                if let Some(ref old_trove) = pkg.old_trove {
-                    if let Some(old_id) = old_trove.id {
-                        info!(
-                            "Removing old version {} of {} before upgrade",
-                            old_trove.version, pkg.name
-                        );
-                        Trove::delete(tx, old_id)?;
-                    }
+                if let Some(ref old_trove) = pkg.old_trove
+                    && let Some(old_id) = old_trove.id
+                {
+                    info!(
+                        "Removing old version {} of {} before upgrade",
+                        old_trove.version, pkg.name
+                    );
+                    Trove::delete(tx, old_id)?;
                 }
 
                 // Insert new trove
@@ -365,7 +365,10 @@ impl<'a> BatchInstaller<'a> {
                     let hash = file.sha256.clone().unwrap_or_default();
 
                     if hash.len() < 3 {
-                        warn!("Skipping file_contents insert for '{}': hash too short ('{}')", file.path, hash);
+                        warn!(
+                            "Skipping file_contents insert for '{}': hash too short ('{}')",
+                            file.path, hash
+                        );
                         continue;
                     }
 
@@ -569,18 +572,19 @@ impl<'a> BatchInstaller<'a> {
             trove_ids.len()
         );
         for pkg in &packages {
-            println!("  {} {} ({} files)", pkg.name, pkg.version, pkg.extracted_files.len());
+            println!(
+                "  {} {} ({} files)",
+                pkg.name,
+                pkg.version,
+                pkg.extracted_files.len()
+            );
         }
 
         Ok(())
     }
 
     /// Plan the batch installation, detecting cross-package conflicts
-    fn plan_batch(
-        &self,
-        packages: &[PreparedPackage],
-        _conn: &Connection,
-    ) -> Result<BatchPlan> {
+    fn plan_batch(&self, packages: &[PreparedPackage], _conn: &Connection) -> Result<BatchPlan> {
         let mut all_paths: HashSet<String> = HashSet::new();
         let mut conflicts: Vec<BatchConflict> = Vec::new();
         let mut total_files = 0;
@@ -702,7 +706,11 @@ impl fmt::Display for BatchConflict {
                 path,
                 package1,
                 package2,
-            } => write!(f, "{}: conflict between {} and {}", path, package1, package2),
+            } => write!(
+                f,
+                "{}: conflict between {} and {}",
+                path, package1, package2
+            ),
         }
     }
 }

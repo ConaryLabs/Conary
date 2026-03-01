@@ -221,7 +221,7 @@ impl ChunkCache {
 
         tokio::task::spawn_blocking(move || {
             let conn = crate::db::open(&db_path)?;
-            
+
             let mut freed = 0u64;
             let mut evicted = 0usize;
             let mut skipped = 0usize;
@@ -235,24 +235,30 @@ impl ChunkCache {
             let cutoff_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
 
             let stale_chunks = ChunkAccess::get_stale_chunks(&conn, &cutoff_str)?;
-            
+
             if !stale_chunks.is_empty() {
-                reason = format!("TTL eviction ({} chunks older than {} days)", stale_chunks.len(), ttl_days);
-                
+                reason = format!(
+                    "TTL eviction ({} chunks older than {} days)",
+                    stale_chunks.len(),
+                    ttl_days
+                );
+
                 for chunk in stale_chunks {
                     // Delete file first
                     let path = self_clone.chunk_path(&chunk.hash);
-                    if path.exists() && let Err(e) = std::fs::remove_file(&path) {
+                    if path.exists()
+                        && let Err(e) = std::fs::remove_file(&path)
+                    {
                         tracing::warn!("Failed to delete chunk file {}: {}", chunk.hash, e);
                         skipped += 1;
                         continue;
                     }
-                    
+
                     // Delete from DB
                     if let Err(e) = ChunkAccess::delete(&conn, &chunk.hash) {
-                         tracing::warn!("Failed to delete chunk db record {}: {}", chunk.hash, e);
-                         // If file is gone but DB record remains, it's a "ghost" record.
-                         // Ideally we should handle this, but for now just warn.
+                        tracing::warn!("Failed to delete chunk db record {}: {}", chunk.hash, e);
+                        // If file is gone but DB record remains, it's a "ghost" record.
+                        // Ideally we should handle this, but for now just warn.
                     } else {
                         freed += chunk.size_bytes as u64;
                         evicted += 1;
@@ -273,7 +279,10 @@ impl ChunkCache {
                     human_bytes(bytes_to_free)
                 );
 
-                let size_reason = format!("Size limit exceeded (need {} freed)", human_bytes(bytes_to_free));
+                let size_reason = format!(
+                    "Size limit exceeded (need {} freed)",
+                    human_bytes(bytes_to_free)
+                );
                 if reason.is_empty() {
                     reason = size_reason;
                 } else {
@@ -282,9 +291,13 @@ impl ChunkCache {
 
                 // Get LRU chunks - fetch enough to cover the deficit + buffer
                 // Estimate count based on avg chunk size (say 64KB)
-                let avg_size = if stats.total_chunks > 0 { current_size / stats.total_chunks as u64 } else { 65536 };
+                let avg_size = if stats.total_chunks > 0 {
+                    current_size / stats.total_chunks as u64
+                } else {
+                    65536
+                };
                 let chunks_needed = (bytes_to_free / avg_size) as usize + 100;
-                
+
                 let lru_chunks = ChunkAccess::get_lru_chunks(&conn, chunks_needed)?;
                 let mut size_freed_phase2 = 0u64;
 
@@ -294,7 +307,9 @@ impl ChunkCache {
                     }
 
                     let path = self_clone.chunk_path(&chunk.hash);
-                    if path.exists() && let Err(e) = std::fs::remove_file(&path) {
+                    if path.exists()
+                        && let Err(e) = std::fs::remove_file(&path)
+                    {
                         tracing::warn!("Failed to delete chunk file {}: {}", chunk.hash, e);
                         skipped += 1;
                         continue;
@@ -321,7 +336,8 @@ impl ChunkCache {
                 reason,
                 chunks_skipped: skipped,
             })
-        }).await?
+        })
+        .await?
     }
 }
 
@@ -384,8 +400,8 @@ pub async fn run_eviction_loop(state: Arc<RwLock<ServerState>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use crate::db::schema;
+    use tempfile::NamedTempFile;
 
     fn create_test_db() -> NamedTempFile {
         let temp_file = NamedTempFile::new().unwrap();
@@ -403,12 +419,12 @@ mod tests {
             temp_dir.path().to_path_buf(),
             1024 * 1024,
             30,
-            db_file.path().to_path_buf()
+            db_file.path().to_path_buf(),
         );
 
         let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
         let data = b"test chunk data";
-        
+
         cache.store_chunk(hash, data).await.unwrap();
 
         let stats = cache.stats().await.unwrap();

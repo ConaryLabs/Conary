@@ -7,10 +7,10 @@
 //! "capture" the intent of imperative scriptlets and convert them to declarative
 //! CCS hooks.
 
+use crate::error::Result;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use crate::error::Result;
 
 /// Sets up mock tools in the given root directory
 pub fn setup_mock_tools(root: &Path) -> Result<()> {
@@ -32,14 +32,25 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
     // List of tools to mock
     let tools = [
         // User/Group management
-        "useradd", "userdel", "groupadd", "groupdel", "usermod", "groupmod",
+        "useradd",
+        "userdel",
+        "groupadd",
+        "groupdel",
+        "usermod",
+        "groupmod",
         // Service management
-        "systemctl", "service", "chkconfig",
+        "systemctl",
+        "service",
+        "chkconfig",
         // System updates
-        "ldconfig", "update-alternatives", "update-desktop-database",
-        "gtk-update-icon-cache", "glib-compile-schemas",
+        "ldconfig",
+        "update-alternatives",
+        "update-desktop-database",
+        "gtk-update-icon-cache",
+        "glib-compile-schemas",
         // Shells (often invoked directly)
-        "sh", "bash",
+        "sh",
+        "bash",
     ];
 
     for tool in tools {
@@ -55,14 +66,25 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
     // and only mocking the *tools* called by the script.
     // Wait, if we mock 'sh', we break the scriptlet itself if it calls `sh -c`.
     // We should NOT mock shells, only utilities.
-    
+
     // Removing shells from the loop above...
     let utils = [
-        "useradd", "userdel", "groupadd", "groupdel", "usermod", "groupmod",
-        "systemctl", "service", "chkconfig",
-        "ldconfig", "update-alternatives", "update-desktop-database",
-        "gtk-update-icon-cache", "glib-compile-schemas",
-        "update-mime-database", "install-info"
+        "useradd",
+        "userdel",
+        "groupadd",
+        "groupdel",
+        "usermod",
+        "groupmod",
+        "systemctl",
+        "service",
+        "chkconfig",
+        "ldconfig",
+        "update-alternatives",
+        "update-desktop-database",
+        "gtk-update-icon-cache",
+        "glib-compile-schemas",
+        "update-mime-database",
+        "install-info",
     ];
 
     for tool in utils {
@@ -86,7 +108,7 @@ exit 0
     );
 
     fs::write(&path, content)?;
-    
+
     // Make executable (rwxr-xr-x)
     let mut perms = fs::metadata(&path)?.permissions();
     perms.set_mode(0o755);
@@ -132,7 +154,9 @@ pub fn parse_capture_log(root: &Path) -> Result<Vec<CapturedIntent>> {
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("CALL:") {
             let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.is_empty() { continue; }
+            if parts.is_empty() {
+                continue;
+            }
 
             let tool = parts[0];
             let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
@@ -156,22 +180,22 @@ fn parse_systemctl(args: &[String]) -> CapturedIntent {
     if args.is_empty() {
         return CapturedIntent::Unknown("systemctl".into(), args.to_vec());
     }
-    
+
     match args[0].as_str() {
         "enable" => {
-             if args.len() > 1 {
-                 CapturedIntent::SystemdEnable(args[1].clone())
-             } else {
-                 CapturedIntent::Unknown("systemctl".into(), args.to_vec())
-             }
-        },
+            if args.len() > 1 {
+                CapturedIntent::SystemdEnable(args[1].clone())
+            } else {
+                CapturedIntent::Unknown("systemctl".into(), args.to_vec())
+            }
+        }
         "disable" => {
-             if args.len() > 1 {
-                 CapturedIntent::SystemdDisable(args[1].clone())
-             } else {
-                 CapturedIntent::Unknown("systemctl".into(), args.to_vec())
-             }
-        },
+            if args.len() > 1 {
+                CapturedIntent::SystemdDisable(args[1].clone())
+            } else {
+                CapturedIntent::Unknown("systemctl".into(), args.to_vec())
+            }
+        }
         _ => CapturedIntent::Unknown("systemctl".into(), args.to_vec()),
     }
 }

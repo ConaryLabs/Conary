@@ -12,7 +12,7 @@
 
 use crate::components::ComponentType;
 use crate::error::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// A Component represents an installable unit within a package
 #[derive(Debug, Clone)]

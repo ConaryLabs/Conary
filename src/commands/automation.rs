@@ -4,10 +4,14 @@
 
 use anyhow::Result;
 use conary::automation::{
-    check::AutomationChecker, prompt::{AutomationPrompt, SummaryResponse},
-    scheduler::AutomationDaemon, AutomationManager, AutomationSummary,
+    AutomationManager, AutomationSummary,
+    check::AutomationChecker,
+    prompt::{AutomationPrompt, SummaryResponse},
+    scheduler::AutomationDaemon,
 };
-use conary::model::{load_model, model_exists, AutomationCategory, AutomationConfig, DEFAULT_MODEL_PATH};
+use conary::model::{
+    AutomationCategory, AutomationConfig, DEFAULT_MODEL_PATH, load_model, model_exists,
+};
 use rusqlite::Connection;
 
 /// Show automation status
@@ -211,7 +215,11 @@ pub fn cmd_automation_apply(
     if dry_run {
         println!("Dry run - would apply {} action(s):", results.total());
         for action in &all_actions {
-            println!("  - [{}] {}", action.category.display_name(), action.summary);
+            println!(
+                "  - [{}] {}",
+                action.category.display_name(),
+                action.summary
+            );
         }
         return Ok(());
     }
@@ -275,7 +283,14 @@ pub fn cmd_automation_configure(
     enable_ai: bool,
     disable_ai: bool,
 ) -> Result<()> {
-    if show || (mode.is_none() && enable.is_none() && disable.is_none() && interval.is_none() && !enable_ai && !disable_ai) {
+    if show
+        || (mode.is_none()
+            && enable.is_none()
+            && disable.is_none()
+            && interval.is_none()
+            && !enable_ai
+            && !disable_ai)
+    {
         println!("=== Automation Configuration ===\n");
         println!("Configuration file: {}\n", DEFAULT_MODEL_PATH);
 
@@ -366,8 +381,10 @@ pub fn cmd_automation_daemon(
     println!("Daemon running. Waiting for scheduled checks...\n");
     loop {
         if daemon.scheduler().should_run() && daemon.scheduler().within_window() {
-            println!("[{}] Running scheduled automation check...",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+            println!(
+                "[{}] Running scheduled automation check...",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            );
 
             // Run the actual check
             let checker = AutomationChecker::new(&_conn, &config);

@@ -499,12 +499,18 @@ mod tests {
 
     #[test]
     fn test_component_type_parse() {
-        assert_eq!(ComponentType::parse("runtime"), Some(ComponentType::Runtime));
+        assert_eq!(
+            ComponentType::parse("runtime"),
+            Some(ComponentType::Runtime)
+        );
         assert_eq!(ComponentType::parse("lib"), Some(ComponentType::Lib));
         assert_eq!(ComponentType::parse("devel"), Some(ComponentType::Devel));
         assert_eq!(ComponentType::parse("doc"), Some(ComponentType::Doc));
         assert_eq!(ComponentType::parse("config"), Some(ComponentType::Config));
-        assert_eq!(ComponentType::parse("debuginfo"), Some(ComponentType::Debuginfo));
+        assert_eq!(
+            ComponentType::parse("debuginfo"),
+            Some(ComponentType::Debuginfo)
+        );
         assert_eq!(ComponentType::parse("test"), Some(ComponentType::Test));
         assert_eq!(ComponentType::parse("invalid"), None);
     }
@@ -531,11 +537,26 @@ mod tests {
 
         let classified = ComponentClassifier::classify_all(&paths);
 
-        assert_eq!(classified.get(&ComponentType::Runtime).map(|v| v.len()), Some(1));
-        assert_eq!(classified.get(&ComponentType::Lib).map(|v| v.len()), Some(1));
-        assert_eq!(classified.get(&ComponentType::Config).map(|v| v.len()), Some(1));
-        assert_eq!(classified.get(&ComponentType::Doc).map(|v| v.len()), Some(1));
-        assert_eq!(classified.get(&ComponentType::Devel).map(|v| v.len()), Some(1));
+        assert_eq!(
+            classified.get(&ComponentType::Runtime).map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classified.get(&ComponentType::Lib).map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classified.get(&ComponentType::Config).map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classified.get(&ComponentType::Doc).map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classified.get(&ComponentType::Devel).map(|v| v.len()),
+            Some(1)
+        );
     }
 
     // ===================
@@ -603,7 +624,9 @@ mod tests {
     fn test_classify_test_libexec_tests() {
         // Test executables in libexec
         assert_eq!(
-            ComponentClassifier::classify(Path::new("/usr/libexec/gnome-settings-daemon/tests/test-input")),
+            ComponentClassifier::classify(Path::new(
+                "/usr/libexec/gnome-settings-daemon/tests/test-input"
+            )),
             ComponentType::Test
         );
     }
@@ -612,7 +635,9 @@ mod tests {
     fn test_classify_test_installed_tests() {
         // GNOME-style installed tests
         assert_eq!(
-            ComponentClassifier::classify(Path::new("/usr/libexec/installed-tests/glib/test-spawn")),
+            ComponentClassifier::classify(Path::new(
+                "/usr/libexec/installed-tests/glib/test-spawn"
+            )),
             ComponentType::Test
         );
     }

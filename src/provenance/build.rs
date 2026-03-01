@@ -193,7 +193,7 @@ impl HostAttestation {
             arch: std::env::consts::ARCH.to_string(),
             kernel: get_kernel_version(),
             distro: get_distro_info(),
-            tpm_quote: None,  // Would require TPM integration
+            tpm_quote: None, // Would require TPM integration
             secure_boot: check_secure_boot(),
             hostname: get_hostname(),
         }
@@ -231,9 +231,11 @@ fn get_distro_info() -> Option<String> {
         .and_then(|content| {
             for line in content.lines() {
                 if line.starts_with("PRETTY_NAME=") {
-                    return Some(line.trim_start_matches("PRETTY_NAME=")
-                        .trim_matches('"')
-                        .to_string());
+                    return Some(
+                        line.trim_start_matches("PRETTY_NAME=")
+                            .trim_matches('"')
+                            .to_string(),
+                    );
                 }
             }
             None
@@ -330,7 +332,7 @@ mod tests {
         let mut repro = ReproducibilityInfo::new("sha256:content");
 
         repro.add_verifier("builder1", true);
-        assert!(!repro.consensus);  // Need at least 2
+        assert!(!repro.consensus); // Need at least 2
 
         repro.add_verifier("builder2", true);
         assert!(repro.consensus);

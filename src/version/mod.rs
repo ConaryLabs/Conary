@@ -38,9 +38,9 @@ impl RpmVersion {
         let epoch = if epoch_str.is_empty() {
             0 // Empty epoch (e.g., ":1.0.0") defaults to 0
         } else {
-            epoch_str.parse::<u64>().map_err(|e| {
-                Error::InitError(format!("Invalid epoch in version '{}': {}", s, e))
-            })?
+            epoch_str
+                .parse::<u64>()
+                .map_err(|e| Error::InitError(format!("Invalid epoch in version '{}': {}", s, e)))?
         };
 
         let (version, release) = if let Some(dash_pos) = rest.find('-') {
@@ -77,9 +77,18 @@ impl RpmVersion {
 
         // Try to extract numbers and create a semver-compliant version
         let parts: Vec<&str> = self.version.split('.').collect();
-        let major = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let minor = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let patch = parts.get(2).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let major = parts
+            .first()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let minor = parts
+            .get(1)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let patch = parts
+            .get(2)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
 
         Ok(Version::new(major, minor, patch))
     }

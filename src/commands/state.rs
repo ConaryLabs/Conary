@@ -9,8 +9,7 @@ use tracing::info;
 pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
     info!("Listing system states...");
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let states = if let Some(n) = limit {
         SystemState::list_recent(&conn, n)?
@@ -25,22 +24,25 @@ pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
     }
 
     println!("System States:");
-    println!("{:>6}  {:>8}  {:20}  SUMMARY", "STATE", "PACKAGES", "CREATED");
+    println!(
+        "{:>6}  {:>8}  {:20}  SUMMARY",
+        "STATE", "PACKAGES", "CREATED"
+    );
     println!("{}", "-".repeat(70));
 
     for state in &states {
         let active_marker = if state.is_active { "*" } else { " " };
         let created = state.created_at.as_deref().unwrap_or("unknown");
         // Truncate to date/time portion
-        let created_short = if created.len() > 19 { &created[..19] } else { created };
+        let created_short = if created.len() > 19 {
+            &created[..19]
+        } else {
+            created
+        };
 
         println!(
             "{:>5}{} {:>8}  {:20}  {}",
-            state.state_number,
-            active_marker,
-            state.package_count,
-            created_short,
-            state.summary
+            state.state_number, active_marker, state.package_count, created_short, state.summary
         );
     }
 
@@ -55,8 +57,7 @@ pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
 pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
     info!("Showing state {}...", state_number);
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let state = SystemState::find_by_number(&conn, state_number)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", state_number))?;
@@ -67,9 +68,15 @@ pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
     if let Some(desc) = &state.description {
         println!("Description: {}", desc);
     }
-    println!("Created:     {}", state.created_at.as_deref().unwrap_or("unknown"));
+    println!(
+        "Created:     {}",
+        state.created_at.as_deref().unwrap_or("unknown")
+    );
     println!("Packages:    {}", state.package_count);
-    println!("Active:      {}", if state.is_active { "Yes" } else { "No" });
+    println!(
+        "Active:      {}",
+        if state.is_active { "Yes" } else { "No" }
+    );
     if let Some(cs_id) = state.changeset_id {
         println!("Changeset:   {}", cs_id);
     }
@@ -82,7 +89,10 @@ pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
             let arch = member.architecture.as_deref().unwrap_or("");
             let reason = member.install_reason.as_str();
             let marker = if reason == "dependency" { " (dep)" } else { "" };
-            println!("  {} {} [{}]{}", member.trove_name, member.trove_version, arch, marker);
+            println!(
+                "  {} {} [{}]{}",
+                member.trove_name, member.trove_version, arch, marker
+            );
         }
     }
 
@@ -93,8 +103,7 @@ pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
 pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<()> {
     info!("Comparing states {} -> {}...", from_state, to_state);
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let from = SystemState::find_by_number(&conn, from_state)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", from_state))?;
@@ -131,7 +140,10 @@ pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<(
     if !diff.upgraded.is_empty() {
         println!("\nChanged ({}):", diff.upgraded.len());
         for (old, new) in &diff.upgraded {
-            println!("  ~ {} {} -> {}", old.trove_name, old.trove_version, new.trove_version);
+            println!(
+                "  ~ {} {} -> {}",
+                old.trove_name, old.trove_version, new.trove_version
+            );
         }
     }
 
@@ -144,13 +156,14 @@ pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<(
 pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Result<()> {
     info!("Restoring to state {}...", state_number);
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let target = SystemState::find_by_number(&conn, state_number)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", state_number))?;
 
-    let target_id = target.id.ok_or_else(|| anyhow::anyhow!("State has no ID"))?;
+    let target_id = target
+        .id
+        .ok_or_else(|| anyhow::anyhow!("State has no ID"))?;
 
     let engine = StateEngine::new(&conn);
     let plan = engine.plan_restore(target_id)?;
@@ -160,7 +173,10 @@ pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Res
         return Ok(());
     }
 
-    println!("Restore Plan: State {} -> State {}", plan.from_state.state_number, plan.to_state.state_number);
+    println!(
+        "Restore Plan: State {} -> State {}",
+        plan.from_state.state_number, plan.to_state.state_number
+    );
     println!("{}", "=".repeat(50));
 
     if !plan.to_remove.is_empty() {
@@ -180,7 +196,10 @@ pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Res
     if !plan.to_upgrade.is_empty() {
         println!("\nPackages to change ({}):", plan.to_upgrade.len());
         for (old, new) in &plan.to_upgrade {
-            println!("  ~ {} {} -> {}", old.trove_name, old.trove_version, new.trove_version);
+            println!(
+                "  ~ {} {} -> {}",
+                old.trove_name, old.trove_version, new.trove_version
+            );
         }
     }
 
@@ -209,8 +228,7 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
         return Err(anyhow::anyhow!("Must keep at least 1 state"));
     }
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let all_states = SystemState::list_all(&conn)?;
     let total_count = all_states.len() as i64;
@@ -225,9 +243,9 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
     // Show states that would be pruned
     let prune_candidates: Vec<_> = all_states
         .iter()
-        .rev()  // Oldest first
+        .rev() // Oldest first
         .take(to_prune as usize)
-        .filter(|s| !s.is_active)  // Never prune active state
+        .filter(|s| !s.is_active) // Never prune active state
         .collect();
 
     if prune_candidates.is_empty() {
@@ -237,8 +255,12 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
 
     println!("States to prune ({}):", prune_candidates.len());
     for state in &prune_candidates {
-        println!("  State {}: {} ({})", state.state_number, state.summary,
-            state.created_at.as_deref().unwrap_or("unknown"));
+        println!(
+            "  State {}: {} ({})",
+            state.state_number,
+            state.summary,
+            state.created_at.as_deref().unwrap_or("unknown")
+        );
     }
 
     if dry_run {
@@ -249,7 +271,10 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
     let engine = StateEngine::new(&conn);
     let deleted = engine.prune(keep_count)?;
 
-    println!("\nPruned {} state(s). Keeping {} most recent.", deleted, keep_count);
+    println!(
+        "\nPruned {} state(s). Keeping {} most recent.",
+        deleted, keep_count
+    );
 
     Ok(())
 }
@@ -258,8 +283,7 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
 pub fn cmd_state_create(db_path: &str, summary: &str, description: Option<&str>) -> Result<()> {
     info!("Creating manual state snapshot...");
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let engine = StateEngine::new(&conn);
     let state = engine.create_snapshot(summary, description, None)?;

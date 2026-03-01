@@ -61,7 +61,9 @@ impl TierAllowlists {
 
         match allowlist {
             None => true, // No allowlist = allow all
-            Some(patterns) => patterns.iter().any(|pattern| endpoint_matches(endpoint, pattern)),
+            Some(patterns) => patterns
+                .iter()
+                .any(|pattern| endpoint_matches(endpoint, pattern)),
         }
     }
 
@@ -106,11 +108,14 @@ fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
         let pattern_without_wildcard = pattern_for_parsing.replace("*.", "");
 
         // Extract the domain part from both
-        if let (Some(endpoint_domain), Some(pattern_domain)) =
-            (extract_domain(endpoint), extract_domain(&pattern_without_wildcard))
-        {
+        if let (Some(endpoint_domain), Some(pattern_domain)) = (
+            extract_domain(endpoint),
+            extract_domain(&pattern_without_wildcard),
+        ) {
             // Check if endpoint's domain ends with pattern's domain
-            if endpoint_domain == pattern_domain || endpoint_domain.ends_with(&format!(".{}", pattern_domain)) {
+            if endpoint_domain == pattern_domain
+                || endpoint_domain.ends_with(&format!(".{}", pattern_domain))
+            {
                 // Also verify scheme matches
                 let endpoint_scheme = endpoint.split("://").next().unwrap_or("");
                 let pattern_scheme = pattern.split("://").next().unwrap_or("");
@@ -406,54 +411,120 @@ mod tests {
 
     #[test]
     fn test_endpoint_matches_exact() {
-        assert!(endpoint_matches("https://remi.conary.io:7891", "https://remi.conary.io:7891"));
-        assert!(!endpoint_matches("https://remi.conary.io:7891", "https://other.conary.io:7891"));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:7891",
+            "https://remi.conary.io:7891"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io:7891",
+            "https://other.conary.io:7891"
+        ));
     }
 
     #[test]
     fn test_endpoint_matches_port_wildcard() {
-        assert!(endpoint_matches("https://remi.conary.io:7891", "https://remi.conary.io:*"));
-        assert!(endpoint_matches("https://remi.conary.io:8080", "https://remi.conary.io:*"));
-        assert!(endpoint_matches("https://remi.conary.io:443", "https://remi.conary.io:*"));
-        assert!(!endpoint_matches("https://other.conary.io:7891", "https://remi.conary.io:*"));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:7891",
+            "https://remi.conary.io:*"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:8080",
+            "https://remi.conary.io:*"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:443",
+            "https://remi.conary.io:*"
+        ));
+        assert!(!endpoint_matches(
+            "https://other.conary.io:7891",
+            "https://remi.conary.io:*"
+        ));
     }
 
     #[test]
     fn test_endpoint_matches_subdomain_wildcard() {
-        assert!(endpoint_matches("https://remi.conary.io:7891", "https://*.conary.io:7891"));
-        assert!(endpoint_matches("https://cell1.conary.io:7891", "https://*.conary.io:7891"));
-        assert!(endpoint_matches("https://region.west.conary.io:7891", "https://*.conary.io:7891"));
-        assert!(endpoint_matches("https://conary.io:7891", "https://*.conary.io:7891"));
-        assert!(!endpoint_matches("https://remi.conary.io:8080", "https://*.conary.io:7891"));
-        assert!(!endpoint_matches("http://remi.conary.io:7891", "https://*.conary.io:7891"));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:7891",
+            "https://*.conary.io:7891"
+        ));
+        assert!(endpoint_matches(
+            "https://cell1.conary.io:7891",
+            "https://*.conary.io:7891"
+        ));
+        assert!(endpoint_matches(
+            "https://region.west.conary.io:7891",
+            "https://*.conary.io:7891"
+        ));
+        assert!(endpoint_matches(
+            "https://conary.io:7891",
+            "https://*.conary.io:7891"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io:8080",
+            "https://*.conary.io:7891"
+        ));
+        assert!(!endpoint_matches(
+            "http://remi.conary.io:7891",
+            "https://*.conary.io:7891"
+        ));
     }
 
     #[test]
     fn test_endpoint_matches_default_ports() {
         // HTTPS defaults to 443
-        assert!(endpoint_matches("https://remi.conary.io", "https://*.conary.io:443"));
-        assert!(endpoint_matches("https://remi.conary.io:443", "https://*.conary.io"));
-        assert!(endpoint_matches("https://remi.conary.io", "https://*.conary.io"));
+        assert!(endpoint_matches(
+            "https://remi.conary.io",
+            "https://*.conary.io:443"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:443",
+            "https://*.conary.io"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io",
+            "https://*.conary.io"
+        ));
 
         // HTTP defaults to 80
         assert!(endpoint_matches("http://cell.local", "http://*.local:80"));
         assert!(endpoint_matches("http://cell.local:80", "http://*.local"));
 
         // Mismatched ports should fail
-        assert!(!endpoint_matches("https://remi.conary.io:8080", "https://*.conary.io"));
-        assert!(!endpoint_matches("https://remi.conary.io", "https://*.conary.io:8080"));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io:8080",
+            "https://*.conary.io"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io",
+            "https://*.conary.io:8080"
+        ));
     }
 
     #[test]
     fn test_endpoint_matches_combined_wildcards() {
         // Subdomain + port wildcard: https://*.conary.io:*
-        assert!(endpoint_matches("https://remi.conary.io", "https://*.conary.io:*"));
-        assert!(endpoint_matches("https://remi.conary.io:443", "https://*.conary.io:*"));
-        assert!(endpoint_matches("https://remi.conary.io:7891", "https://*.conary.io:*"));
-        assert!(endpoint_matches("https://cell.conary.io:8080", "https://*.conary.io:*"));
+        assert!(endpoint_matches(
+            "https://remi.conary.io",
+            "https://*.conary.io:*"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:443",
+            "https://*.conary.io:*"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io:7891",
+            "https://*.conary.io:*"
+        ));
+        assert!(endpoint_matches(
+            "https://cell.conary.io:8080",
+            "https://*.conary.io:*"
+        ));
 
         // Scheme must still match
-        assert!(!endpoint_matches("http://remi.conary.io:7891", "https://*.conary.io:*"));
+        assert!(!endpoint_matches(
+            "http://remi.conary.io:7891",
+            "https://*.conary.io:*"
+        ));
     }
 
     #[test]

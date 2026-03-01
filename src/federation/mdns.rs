@@ -38,8 +38,8 @@ use crate::error::{Error, Result};
 use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -202,9 +202,9 @@ impl MdnsDiscovery {
     /// Unregister the service
     pub fn unregister(&mut self) -> Result<()> {
         if let Some(fullname) = self.registered_service.take() {
-            self.daemon
-                .unregister(&fullname)
-                .map_err(|e| Error::Federation(format!("Failed to unregister mDNS service: {e}")))?;
+            self.daemon.unregister(&fullname).map_err(|e| {
+                Error::Federation(format!("Failed to unregister mDNS service: {e}"))
+            })?;
             info!("[mdns] Unregistered service: {}", fullname);
         }
         Ok(())
@@ -286,7 +286,9 @@ impl MdnsDiscovery {
         self.browse_receiver = None;
 
         // Wait for thread to finish
-        if let Some(handle) = self.discovery_thread.take() && let Err(e) = handle.join() {
+        if let Some(handle) = self.discovery_thread.take()
+            && let Err(e) = handle.join()
+        {
             error!("[mdns] Discovery thread panicked: {:?}", e);
         }
 
@@ -434,7 +436,8 @@ fn get_local_hostname() -> Option<String> {
         let mut buf = [0u8; 256];
         unsafe {
             if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0
-                && let Ok(cstr) = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
+                && let Ok(cstr) = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str()
+            {
                 // Remove .local or domain suffix if present
                 return Some(cstr.split('.').next().unwrap_or(cstr).to_string());
             }
@@ -451,7 +454,9 @@ fn get_local_addresses() -> Vec<IpAddr> {
     // This is a fallback; in practice, mdns-sd handles this internally
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         // Connect to a public address to determine our local interface
-        if socket.connect("8.8.8.8:80").is_ok() && let Ok(local_addr) = socket.local_addr() {
+        if socket.connect("8.8.8.8:80").is_ok()
+            && let Ok(local_addr) = socket.local_addr()
+        {
             addrs.push(local_addr.ip());
         }
     }
@@ -459,7 +464,8 @@ fn get_local_addresses() -> Vec<IpAddr> {
     // Also try IPv6
     if let Ok(socket) = std::net::UdpSocket::bind("[::]:0")
         && socket.connect("[2001:4860:4860::8888]:80").is_ok()
-        && let Ok(local_addr) = socket.local_addr() {
+        && let Ok(local_addr) = socket.local_addr()
+    {
         let ip = local_addr.ip();
         // Only add if it's not a link-local address
         if !ip.is_loopback() {
@@ -499,10 +505,7 @@ mod tests {
             id: "test-id".to_string(),
             instance_name: "test-instance".to_string(),
             hostname: "test-host.local.".to_string(),
-            addresses: vec![
-                "fe80::1".parse().unwrap(),
-                "192.168.1.100".parse().unwrap(),
-            ],
+            addresses: vec!["fe80::1".parse().unwrap(), "192.168.1.100".parse().unwrap()],
             port: 7891,
             tier: PeerTier::Leaf,
             version: "1".to_string(),
@@ -515,8 +518,7 @@ mod tests {
 
     #[test]
     fn test_peer_tier_from_string() {
-        let props: HashMap<String, String> =
-            [("tier".to_string(), "cell_hub".to_string())].into();
+        let props: HashMap<String, String> = [("tier".to_string(), "cell_hub".to_string())].into();
 
         let tier = props
             .get("tier")

@@ -44,7 +44,7 @@ impl HookExecutor {
         owner: &str,
         group: &str,
     ) -> Result<()> {
-        use std::os::unix::fs::{chown, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, chown};
 
         // Parse mode string (e.g., "0755" or "755") as octal
         let mode_val = u32::from_str_radix(mode.trim_start_matches('0'), 8)

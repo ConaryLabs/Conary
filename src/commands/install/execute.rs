@@ -24,17 +24,15 @@ pub fn deploy_files(
     // Phase 1: Check file conflicts BEFORE any changes
     for file in extracted_files {
         if deployer.file_exists(&file.path) {
-            if let Some(existing) =
-                conary::db::models::FileEntry::find_by_path(conn, &file.path)?
-            {
-                let owner_trove =
-                    conary::db::models::Trove::find_by_id(conn, existing.trove_id)?;
+            if let Some(existing) = conary::db::models::FileEntry::find_by_path(conn, &file.path)? {
+                let owner_trove = conary::db::models::Trove::find_by_id(conn, existing.trove_id)?;
                 if let Some(owner) = owner_trove
                     && owner.name != pkg_name
                 {
                     return Err(anyhow::anyhow!(
                         "File conflict: {} is owned by package {}",
-                        file.path, owner.name
+                        file.path,
+                        owner.name
                     ));
                 }
             } else if !is_upgrade {
@@ -47,7 +45,8 @@ pub fn deploy_files(
     }
 
     // Phase 2: Store content in CAS and pre-compute hashes
-    let mut file_hashes: Vec<(String, String, i64, i32)> = Vec::with_capacity(extracted_files.len());
+    let mut file_hashes: Vec<(String, String, i64, i32)> =
+        Vec::with_capacity(extracted_files.len());
     for file in extracted_files {
         let hash = deployer.cas().store(&file.content)?;
         file_hashes.push((file.path.clone(), hash, file.size, file.mode));
@@ -83,7 +82,10 @@ pub fn deploy_files(
 
 /// Rollback deployed files on failure (legacy - kept for non-transaction code paths)
 #[allow(dead_code)]
-pub fn rollback_deployed_files(deployer: &conary::filesystem::FileDeployer, files: &[(String, String, i64, i32)]) {
+pub fn rollback_deployed_files(
+    deployer: &conary::filesystem::FileDeployer,
+    files: &[(String, String, i64, i32)],
+) {
     warn!("Rolling back {} deployed files", files.len());
     for (path, _, _, _) in files {
         if let Err(e) = deployer.remove_file(path) {

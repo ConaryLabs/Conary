@@ -5,14 +5,14 @@
 //! Adopts all installed system packages into Conary tracking.
 
 use super::super::create_state_snapshot;
+use super::super::progress::{AdoptPhase, AdoptProgress};
 use anyhow::Result;
 use conary::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
     ProvideEntry, Trove, TroveType,
 };
-use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
+use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::path::PathBuf;
-use super::super::progress::{AdoptPhase, AdoptProgress};
 use tracing::{debug, warn};
 
 /// Match a package name against a glob pattern using the `glob` crate.
@@ -24,7 +24,15 @@ fn glob_match(pattern: &str, name: &str) -> bool {
 }
 
 /// File info tuple: (path, size, mode, digest, user, group, link_target)
-pub type FileInfoTuple = (String, i64, i32, Option<String>, Option<String>, Option<String>, Option<String>);
+pub type FileInfoTuple = (
+    String,
+    i64,
+    i32,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Adopt all installed system packages
 ///
@@ -60,24 +68,39 @@ pub fn cmd_adopt_system(
 
     // Get all installed packages based on package manager
     let installed: Vec<(String, String, String, Option<String>)> = match pkg_mgr {
-        SystemPackageManager::Rpm => {
-            rpm_query::query_all_packages()?
-                .into_iter()
-                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone().or(info.summary.clone())))
-                .collect()
-        }
-        SystemPackageManager::Dpkg => {
-            dpkg_query::query_all_packages()?
-                .into_iter()
-                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone()))
-                .collect()
-        }
-        SystemPackageManager::Pacman => {
-            pacman_query::query_all_packages()?
-                .into_iter()
-                .map(|(name, info)| (name, info.version_only(), info.arch.clone(), info.description.clone()))
-                .collect()
-        }
+        SystemPackageManager::Rpm => rpm_query::query_all_packages()?
+            .into_iter()
+            .map(|(name, info)| {
+                (
+                    name,
+                    info.version_only(),
+                    info.arch.clone(),
+                    info.description.clone().or(info.summary.clone()),
+                )
+            })
+            .collect(),
+        SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
+            .into_iter()
+            .map(|(name, info)| {
+                (
+                    name,
+                    info.version_only(),
+                    info.arch.clone(),
+                    info.description.clone(),
+                )
+            })
+            .collect(),
+        SystemPackageManager::Pacman => pacman_query::query_all_packages()?
+            .into_iter()
+            .map(|(name, info)| {
+                (
+                    name,
+                    info.version_only(),
+                    info.arch.clone(),
+                    info.description.clone(),
+                )
+            })
+            .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
 
@@ -85,15 +108,24 @@ pub fn cmd_adopt_system(
     // Failures are non-fatal: we fall back to marking everything as Explicit.
     let user_installed: std::collections::HashSet<String> = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_user_installed().unwrap_or_else(|e| {
-            warn!("Could not determine RPM install reasons ({}); marking all as explicit", e);
+            warn!(
+                "Could not determine RPM install reasons ({}); marking all as explicit",
+                e
+            );
             std::collections::HashSet::new()
         }),
         SystemPackageManager::Dpkg => dpkg_query::query_user_installed().unwrap_or_else(|e| {
-            warn!("Could not determine dpkg install reasons ({}); marking all as explicit", e);
+            warn!(
+                "Could not determine dpkg install reasons ({}); marking all as explicit",
+                e
+            );
             std::collections::HashSet::new()
         }),
         SystemPackageManager::Pacman => pacman_query::query_user_installed().unwrap_or_else(|e| {
-            warn!("Could not determine pacman install reasons ({}); marking all as explicit", e);
+            warn!(
+                "Could not determine pacman install reasons ({}); marking all as explicit",
+                e
+            );
             std::collections::HashSet::new()
         }),
         _ => std::collections::HashSet::new(),
@@ -106,15 +138,15 @@ pub fn cmd_adopt_system(
     let installed: Vec<_> = installed
         .into_iter()
         .filter(|(name, _version, _arch, _desc)| {
-            if let Some(pat) = pattern {
-                if !glob_match(pat, name) {
-                    return false;
-                }
+            if let Some(pat) = pattern
+                && !glob_match(pat, name)
+            {
+                return false;
             }
-            if let Some(exc) = exclude {
-                if glob_match(exc, name) {
-                    return false;
-                }
+            if let Some(exc) = exclude
+                && glob_match(exc, name)
+            {
+                return false;
             }
             if explicit_only && has_install_reason_data && !user_installed.contains(name) {
                 return false;
@@ -125,10 +157,7 @@ pub fn cmd_adopt_system(
     let total = installed.len();
 
     if total < pre_filter_count {
-        println!(
-            "Filtered: {} -> {} packages",
-            pre_filter_count, total
-        );
+        println!("Filtered: {} -> {} packages", pre_filter_count, total);
     }
 
     if dry_run {
@@ -158,7 +187,14 @@ pub fn cmd_adopt_system(
             println!("    Dependency: {}", dep_count);
         }
         println!("  Already tracked: {} packages", already_tracked);
-        println!("  Mode: {}", if full { "full (CAS storage)" } else { "track (metadata only)" });
+        println!(
+            "  Mode: {}",
+            if full {
+                "full (CAS storage)"
+            } else {
+                "track (metadata only)"
+            }
+        );
         return Ok(());
     }
 
@@ -220,7 +256,8 @@ pub fn cmd_adopt_system(
             trove.installed_by_changeset_id = Some(changeset_id);
             if has_install_reason_data && !user_installed.contains(name) {
                 trove.install_reason = InstallReason::Dependency;
-                trove.selection_reason = Some("Auto-installed dependency (from system package manager)".to_string());
+                trove.selection_reason =
+                    Some("Auto-installed dependency (from system package manager)".to_string());
             } else {
                 trove.selection_reason = Some("Adopted from system".to_string());
             }
@@ -239,31 +276,64 @@ pub fn cmd_adopt_system(
 
             // Query and insert files based on package manager
             let files: Vec<FileInfoTuple> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_files(name)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_files(name)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_files(name)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
+                SystemPackageManager::Rpm => rpm_query::query_package_files(name)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
+                SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
+                SystemPackageManager::Pacman => pacman_query::query_package_files(name)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
                 _ => Vec::new(),
             };
 
-            for (file_path, file_size, file_mode, file_digest, file_user, file_group, link_target) in &files {
+            for (
+                file_path,
+                file_size,
+                file_mode,
+                file_digest,
+                file_user,
+                file_group,
+                link_target,
+            ) in &files
+            {
                 let hash = compute_file_hash(
                     file_path,
                     *file_mode,
@@ -273,13 +343,8 @@ pub fn cmd_adopt_system(
                     cas.as_ref(),
                 );
 
-                let mut file_entry = FileEntry::new(
-                    file_path.clone(),
-                    hash,
-                    *file_size,
-                    *file_mode,
-                    trove_id,
-                );
+                let mut file_entry =
+                    FileEntry::new(file_path.clone(), hash, *file_size, *file_mode, trove_id);
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
 
@@ -391,9 +456,7 @@ pub fn compute_file_hash(
     let is_symlink = (file_mode & 0o170000) == 0o120000;
     let is_directory = (file_mode & 0o170000) == 0o040000;
 
-    if full
-        && let Some(cas_store) = cas
-    {
+    if full && let Some(cas_store) = cas {
         if is_symlink {
             // Store symlink target in CAS
             if let Some(target) = link_target {
@@ -440,9 +503,9 @@ pub fn compute_file_hash(
     }
 
     // Fallback: use digest or generate a placeholder
-    file_digest.map(String::from).unwrap_or_else(|| {
-        format!("adopted-{}", file_path.replace('/', "_"))
-    })
+    file_digest
+        .map(String::from)
+        .unwrap_or_else(|| format!("adopted-{}", file_path.replace('/', "_")))
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 // src/cli/collection.rs
 //! Package collection/group management commands
 
-use clap::Subcommand;
 use super::DbArgs;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum CollectionCommands {

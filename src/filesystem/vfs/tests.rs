@@ -24,8 +24,10 @@ fn test_mkdir_nested() {
     let mut tree = VfsTree::new();
 
     tree.mkdir("/usr").expect("should create /usr directory");
-    tree.mkdir("/usr/bin").expect("should create /usr/bin directory");
-    tree.mkdir("/usr/lib").expect("should create /usr/lib directory");
+    tree.mkdir("/usr/bin")
+        .expect("should create /usr/bin directory");
+    tree.mkdir("/usr/lib")
+        .expect("should create /usr/lib directory");
 
     assert!(tree.exists("/usr"));
     assert!(tree.exists("/usr/bin"));
@@ -99,7 +101,8 @@ fn test_add_symlink() {
 fn test_o1_lookup() {
     let mut tree = VfsTree::new();
 
-    tree.mkdir_p("/very/deep/nested/directory/structure").unwrap();
+    tree.mkdir_p("/very/deep/nested/directory/structure")
+        .unwrap();
     tree.add_file(
         "/very/deep/nested/directory/structure/file.txt",
         "hash",
@@ -150,7 +153,8 @@ fn test_remove() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/usr/local/bin").unwrap();
-    tree.add_file("/usr/local/bin/app", "hash", 100, 0o755).unwrap();
+    tree.add_file("/usr/local/bin/app", "hash", 100, 0o755)
+        .unwrap();
 
     assert!(tree.exists("/usr/local/bin/app"));
     tree.remove("/usr/local/bin/app").unwrap();
@@ -162,8 +166,10 @@ fn test_remove_directory_with_children() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/usr/local/bin").unwrap();
-    tree.add_file("/usr/local/bin/app1", "hash1", 100, 0o755).unwrap();
-    tree.add_file("/usr/local/bin/app2", "hash2", 100, 0o755).unwrap();
+    tree.add_file("/usr/local/bin/app1", "hash1", 100, 0o755)
+        .unwrap();
+    tree.add_file("/usr/local/bin/app2", "hash2", 100, 0o755)
+        .unwrap();
 
     tree.remove("/usr/local").unwrap();
 
@@ -211,7 +217,8 @@ fn test_stats() {
     tree.mkdir("/usr").unwrap();
     tree.add_file("/etc/passwd", "hash1", 1000, 0o644).unwrap();
     tree.add_file("/etc/shadow", "hash2", 500, 0o600).unwrap();
-    tree.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC").unwrap();
+    tree.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC")
+        .unwrap();
 
     let stats = tree.stats();
 
@@ -279,12 +286,15 @@ fn test_reparent_directory_with_children() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/project/src/components").unwrap();
-    tree.add_file("/project/src/components/button.rs", "hash1", 100, 0o644).unwrap();
-    tree.add_file("/project/src/components/input.rs", "hash2", 100, 0o644).unwrap();
+    tree.add_file("/project/src/components/button.rs", "hash1", 100, 0o644)
+        .unwrap();
+    tree.add_file("/project/src/components/input.rs", "hash2", 100, 0o644)
+        .unwrap();
     tree.mkdir("/project/lib").unwrap();
 
     // Move entire components directory to lib
-    tree.reparent("/project/src/components", "/project/lib").unwrap();
+    tree.reparent("/project/src/components", "/project/lib")
+        .unwrap();
 
     // Old paths should not exist
     assert!(!tree.exists("/project/src/components"));
@@ -302,7 +312,8 @@ fn test_reparent_to_root() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/deep/nested/dir").unwrap();
-    tree.add_file("/deep/nested/dir/file.txt", "hash", 100, 0o644).unwrap();
+    tree.add_file("/deep/nested/dir/file.txt", "hash", 100, 0o644)
+        .unwrap();
 
     tree.reparent("/deep/nested/dir", "/").unwrap();
 
@@ -339,7 +350,8 @@ fn test_reparent_name_collision() {
     tree.mkdir("/src").unwrap();
     tree.mkdir("/dest").unwrap();
     tree.add_file("/src/file.txt", "hash1", 100, 0o644).unwrap();
-    tree.add_file("/dest/file.txt", "hash2", 200, 0o644).unwrap();
+    tree.add_file("/dest/file.txt", "hash2", 200, 0o644)
+        .unwrap();
 
     // Cannot move - name collision
     let result = tree.reparent("/src/file.txt", "/dest");
@@ -351,7 +363,8 @@ fn test_reparent_to_non_directory() {
     let mut tree = VfsTree::new();
 
     tree.mkdir("/src").unwrap();
-    tree.add_file("/src/file1.txt", "hash1", 100, 0o644).unwrap();
+    tree.add_file("/src/file1.txt", "hash1", 100, 0o644)
+        .unwrap();
     tree.add_file("/dest.txt", "hash2", 100, 0o644).unwrap();
 
     // Cannot move to a file
@@ -365,7 +378,8 @@ fn test_reparent_with_rename() {
 
     tree.mkdir("/src").unwrap();
     tree.mkdir("/dest").unwrap();
-    tree.add_file("/src/old_name.txt", "hash", 100, 0o644).unwrap();
+    tree.add_file("/src/old_name.txt", "hash", 100, 0o644)
+        .unwrap();
 
     tree.reparent_with_rename("/src/old_name.txt", "/dest", "new_name.txt")
         .unwrap();
@@ -379,7 +393,8 @@ fn test_reparent_with_rename_directory() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/project/old_module").unwrap();
-    tree.add_file("/project/old_module/mod.rs", "hash", 100, 0o644).unwrap();
+    tree.add_file("/project/old_module/mod.rs", "hash", 100, 0o644)
+        .unwrap();
     tree.mkdir("/lib").unwrap();
 
     tree.reparent_with_rename("/project/old_module", "/lib", "new_module")
@@ -397,9 +412,7 @@ fn test_reparent_preserves_node_ids() {
 
     tree.mkdir("/src").unwrap();
     tree.mkdir("/dest").unwrap();
-    let file_id = tree
-        .add_file("/src/file.txt", "hash", 100, 0o644)
-        .unwrap();
+    let file_id = tree.add_file("/src/file.txt", "hash", 100, 0o644).unwrap();
 
     tree.reparent("/src/file.txt", "/dest").unwrap();
 
@@ -414,7 +427,8 @@ fn test_reparent_updates_path_index() {
     let mut tree = VfsTree::new();
 
     tree.mkdir_p("/a/b/c").unwrap();
-    tree.add_file("/a/b/c/file.txt", "hash", 100, 0o644).unwrap();
+    tree.add_file("/a/b/c/file.txt", "hash", 100, 0o644)
+        .unwrap();
     tree.mkdir("/x").unwrap();
 
     // Get the file ID before reparenting

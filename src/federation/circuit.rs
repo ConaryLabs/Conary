@@ -130,10 +130,7 @@ impl CircuitBreaker {
 
     /// Open the circuit with jitter-based cooldown
     fn open(&mut self) {
-        debug!(
-            "Circuit breaker opening (failures: {})",
-            self.failure_count
-        );
+        debug!("Circuit breaker opening (failures: {})", self.failure_count);
         self.state = CircuitState::Open;
         self.opened_at = Some(Instant::now());
 
@@ -189,9 +186,16 @@ impl CircuitBreakerRegistry {
     }
 
     /// Get or create a circuit breaker for a peer
-    fn get_or_create(&self, peer_id: &PeerId) -> dashmap::mapref::one::RefMut<'_, PeerId, CircuitBreaker> {
+    fn get_or_create(
+        &self,
+        peer_id: &PeerId,
+    ) -> dashmap::mapref::one::RefMut<'_, PeerId, CircuitBreaker> {
         self.breakers.entry(peer_id.clone()).or_insert_with(|| {
-            CircuitBreaker::new(self.failure_threshold, self.base_cooldown, self.jitter_factor)
+            CircuitBreaker::new(
+                self.failure_threshold,
+                self.base_cooldown,
+                self.jitter_factor,
+            )
         })
     }
 

@@ -13,7 +13,7 @@ use crate::packages::deb::DebPackage;
 use crate::packages::rpm::RpmPackage;
 use crate::packages::traits::PackageFormat;
 use crate::repository::download_package;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -83,17 +83,23 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
     ) -> Result<ServerConversionResult> {
-        info!("Converting package: {}:{} (version: {:?})", distro, package_name, version);
+        info!(
+            "Converting package: {}:{} (version: {:?})",
+            distro, package_name, version
+        );
 
         // Step 1: Find package in repository
         let conn = crate::db::open(&self.db_path)?;
 
         let repo_pkg = self.find_package(&conn, distro, package_name, version)?;
-        info!("Found package: {} {} from repo {}", repo_pkg.name, repo_pkg.version, repo_pkg.repository_id);
+        info!(
+            "Found package: {} {} from repo {}",
+            repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
+        );
 
         // Step 2: Download package
-        let temp_dir = TempDir::new_in(&self.cache_dir)
-            .context("Failed to create temp directory")?;
+        let temp_dir =
+            TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
         let pkg_path = download_package(&repo_pkg, temp_dir.path())
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
@@ -107,18 +113,28 @@ impl ConversionService {
             let ccs_filename = Self::safe_ccs_filename(&repo_pkg.name, &repo_pkg.version)?;
             let ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
             if !existing.needs_reconversion() && ccs_path.exists() {
-                info!("Package already converted (checksum: {})", original_checksum);
+                info!(
+                    "Package already converted (checksum: {})",
+                    original_checksum
+                );
                 // Return cached result
                 return self.build_result_from_existing(&existing, distro, &repo_pkg);
             }
             // Delete stale conversion record and proceed with fresh conversion
-            info!("Stale conversion record (CCS file missing or needs reconversion), re-converting");
+            info!(
+                "Stale conversion record (CCS file missing or needs reconversion), re-converting"
+            );
             ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
         }
 
         // Step 3: Parse package based on distro
         let (metadata, files, format) = self.parse_package(&pkg_path, distro)?;
-        info!("Parsed: {} v{} ({} files)", metadata.name, metadata.version, files.len());
+        info!(
+            "Parsed: {} v{} ({} files)",
+            metadata.name,
+            metadata.version,
+            files.len()
+        );
 
         // Step 4: Convert to CCS
         let output_dir = temp_dir.path().join("output");
@@ -132,17 +148,23 @@ impl ConversionService {
         };
 
         let converter = LegacyConverter::new(options);
-        let conversion_result = converter.convert(&metadata, &files, format, &original_checksum)
+        let conversion_result = converter
+            .convert(&metadata, &files, format, &original_checksum)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
 
-        info!("Conversion complete: fidelity={}", conversion_result.fidelity.level);
+        info!(
+            "Conversion complete: fidelity={}",
+            conversion_result.fidelity.level
+        );
 
         // Step 5: Store chunks in CAS
         let chunk_hashes = self.store_chunks(&conversion_result).await?;
         info!("Stored {} chunks/blobs", chunk_hashes.len());
 
         // Step 6: Record in database
-        let ccs_path = conversion_result.package_path.as_ref()
+        let ccs_path = conversion_result
+            .package_path
+            .as_ref()
             .ok_or_else(|| anyhow!("No CCS package path"))?;
 
         let content_hash = Self::calculate_checksum(ccs_path)?;
@@ -150,9 +172,7 @@ impl ConversionService {
 
         // Copy CCS package to persistent location first (need path for DB record)
         let ccs_filename = Self::safe_ccs_filename(&metadata.name, &metadata.version)?;
-        let final_ccs_path = self.cache_dir
-            .join("packages")
-            .join(&ccs_filename);
+        let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
 
         if let Some(parent) = final_ccs_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -175,7 +195,10 @@ impl ConversionService {
         converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
         converted.insert(&conn)?;
 
-        info!("Recorded conversion in database (distro={}, name={}, version={})", distro, metadata.name, metadata.version);
+        info!(
+            "Recorded conversion in database (distro={}, name={}, version={})",
+            distro, metadata.name, metadata.version
+        );
 
         Ok(ServerConversionResult {
             name: metadata.name,
@@ -216,38 +239,44 @@ impl ConversionService {
              AND r.name LIKE ?2
              AND (?3 IS NULL OR rp.version = ?3)
              ORDER BY rp.version DESC
-             LIMIT 1"
+             LIMIT 1",
         )?;
 
-        let pkg = stmt.query_row(
-            rusqlite::params![package_name, repo_pattern, version],
-            |row| {
-                Ok(RepositoryPackage {
-                    id: row.get(0)?,
-                    repository_id: row.get(1)?,
-                    name: row.get(2)?,
-                    version: row.get(3)?,
-                    architecture: row.get(4)?,
-                    description: row.get(5)?,
-                    checksum: row.get(6)?,
-                    size: row.get(7)?,
-                    download_url: row.get(8)?,
-                    dependencies: row.get(9)?,
-                    metadata: row.get(10)?,
-                    synced_at: row.get(11)?,
-                    is_security_update: row.get(12)?,
-                    severity: row.get(13)?,
-                    cve_ids: row.get(14)?,
-                    advisory_id: row.get(15)?,
-                    advisory_url: row.get(16)?,
-                })
-            },
-        ).map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                anyhow!("Package '{}' not found in {} repositories. Run 'conary repo-sync' first.", package_name, distro)
-            }
-            _ => anyhow!("Database error: {}", e),
-        })?;
+        let pkg = stmt
+            .query_row(
+                rusqlite::params![package_name, repo_pattern, version],
+                |row| {
+                    Ok(RepositoryPackage {
+                        id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        name: row.get(2)?,
+                        version: row.get(3)?,
+                        architecture: row.get(4)?,
+                        description: row.get(5)?,
+                        checksum: row.get(6)?,
+                        size: row.get(7)?,
+                        download_url: row.get(8)?,
+                        dependencies: row.get(9)?,
+                        metadata: row.get(10)?,
+                        synced_at: row.get(11)?,
+                        is_security_update: row.get(12)?,
+                        severity: row.get(13)?,
+                        cve_ids: row.get(14)?,
+                        advisory_id: row.get(15)?,
+                        advisory_url: row.get(16)?,
+                    })
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    anyhow!(
+                        "Package '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                        package_name,
+                        distro
+                    )
+                }
+                _ => anyhow!("Database error: {}", e),
+            })?;
 
         Ok(pkg)
     }
@@ -257,14 +286,19 @@ impl ConversionService {
         &self,
         path: &Path,
         distro: &str,
-    ) -> Result<(PackageMetadata, Vec<crate::packages::traits::ExtractedFile>, &'static str)> {
+    ) -> Result<(
+        PackageMetadata,
+        Vec<crate::packages::traits::ExtractedFile>,
+        &'static str,
+    )> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
 
         match distro {
             "arch" => {
                 let pkg = ArchPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse Arch package: {}", e))?;
-                let files = pkg.extract_file_contents()
+                let files = pkg
+                    .extract_file_contents()
                     .map_err(|e| anyhow!("Failed to extract Arch package contents: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "arch"))
@@ -272,7 +306,8 @@ impl ConversionService {
             "fedora" => {
                 let pkg = RpmPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse RPM package: {}", e))?;
-                let files = pkg.extract_file_contents()
+                let files = pkg
+                    .extract_file_contents()
                     .map_err(|e| anyhow!("Failed to extract RPM package contents: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "rpm"))
@@ -280,7 +315,8 @@ impl ConversionService {
             "ubuntu" | "debian" => {
                 let pkg = DebPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse DEB package: {}", e))?;
-                let files = pkg.extract_file_contents()
+                let files = pkg
+                    .extract_file_contents()
                     .map_err(|e| anyhow!("Failed to extract DEB package contents: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "deb"))
@@ -297,18 +333,26 @@ impl ConversionService {
             version: pkg.version().to_string(),
             architecture: pkg.architecture().map(String::from),
             description: pkg.description().map(String::from),
-            files: pkg.files().iter().map(|f| crate::packages::traits::PackageFile {
-                path: f.path.clone(),
-                size: f.size,
-                mode: f.mode,
-                sha256: f.sha256.clone(),
-            }).collect(),
-            dependencies: pkg.dependencies().iter().map(|d| crate::packages::traits::Dependency {
-                name: d.name.clone(),
-                version: d.version.clone(),
-                dep_type: d.dep_type,
-                description: d.description.clone(),
-            }).collect(),
+            files: pkg
+                .files()
+                .iter()
+                .map(|f| crate::packages::traits::PackageFile {
+                    path: f.path.clone(),
+                    size: f.size,
+                    mode: f.mode,
+                    sha256: f.sha256.clone(),
+                })
+                .collect(),
+            dependencies: pkg
+                .dependencies()
+                .iter()
+                .map(|d| crate::packages::traits::Dependency {
+                    name: d.name.clone(),
+                    version: d.version.clone(),
+                    dep_type: d.dep_type,
+                    description: d.description.clone(),
+                })
+                .collect(),
             scriptlets: pkg.scriptlets(),
             config_files: pkg.config_files(),
         }
@@ -333,15 +377,18 @@ impl ConversionService {
 
             // Create parent directory
             if let Some(parent) = chunk_path.parent() {
-                tokio::fs::create_dir_all(parent).await
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .context("Failed to create chunk directory")?;
             }
 
             // Write chunk atomically
             let temp_path = chunk_path.with_extension("tmp");
-            tokio::fs::write(&temp_path, data).await
+            tokio::fs::write(&temp_path, data)
+                .await
                 .context("Failed to write chunk")?;
-            tokio::fs::rename(&temp_path, &chunk_path).await
+            tokio::fs::rename(&temp_path, &chunk_path)
+                .await
                 .context("Failed to rename chunk")?;
 
             debug!("Stored chunk: {} ({} bytes)", hash, data.len());
@@ -367,8 +414,14 @@ impl ConversionService {
         repo_pkg: &RepositoryPackage,
     ) -> Result<ServerConversionResult> {
         // Use server-side fields from ConvertedPackage if available, else fallback to repo_pkg
-        let name = existing.package_name.clone().unwrap_or_else(|| repo_pkg.name.clone());
-        let version = existing.package_version.clone().unwrap_or_else(|| repo_pkg.version.clone());
+        let name = existing
+            .package_name
+            .clone()
+            .unwrap_or_else(|| repo_pkg.name.clone());
+        let version = existing
+            .package_version
+            .clone()
+            .unwrap_or_else(|| repo_pkg.version.clone());
 
         // Prefer stored CCS path if available
         let ccs_path = if let Some(stored_path) = &existing.ccs_path {
@@ -388,10 +441,16 @@ impl ConversionService {
         Ok(ServerConversionResult {
             name,
             version,
-            distro: existing.distro.clone().unwrap_or_else(|| distro.to_string()),
+            distro: existing
+                .distro
+                .clone()
+                .unwrap_or_else(|| distro.to_string()),
             chunk_hashes,
             total_size: existing.total_size.unwrap_or(repo_pkg.size) as u64,
-            content_hash: existing.content_hash.clone().unwrap_or_else(|| existing.original_checksum.clone()),
+            content_hash: existing
+                .content_hash
+                .clone()
+                .unwrap_or_else(|| existing.original_checksum.clone()),
             ccs_path,
         })
     }
@@ -404,7 +463,7 @@ impl ConversionService {
     /// 4. Store chunks in CAS
     /// 5. Return the result
     pub async fn build_from_recipe(&self, recipe_url: &str) -> Result<ServerConversionResult> {
-        use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
+        use crate::recipe::{Kitchen, KitchenConfig, parse_recipe};
 
         info!("Building package from recipe: {}", recipe_url);
 
@@ -413,14 +472,17 @@ impl ConversionService {
         info!("Fetched recipe ({} bytes)", recipe_content.len());
 
         // Step 2: Parse and validate recipe
-        let recipe = parse_recipe(&recipe_content)
-            .map_err(|e| anyhow!("Failed to parse recipe: {}", e))?;
+        let recipe =
+            parse_recipe(&recipe_content).map_err(|e| anyhow!("Failed to parse recipe: {}", e))?;
 
-        info!("Recipe: {} version {}", recipe.package.name, recipe.package.version);
+        info!(
+            "Recipe: {} version {}",
+            recipe.package.name, recipe.package.version
+        );
 
         // Step 3: Cook the recipe
-        let temp_dir = TempDir::new_in(&self.cache_dir)
-            .context("Failed to create temp directory")?;
+        let temp_dir =
+            TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
         let config = KitchenConfig {
             source_cache: self.cache_dir.join("sources"),
@@ -429,13 +491,19 @@ impl ConversionService {
         };
 
         let kitchen = Kitchen::new(config);
-        let cook_result = kitchen.cook(&recipe, temp_dir.path())
+        let cook_result = kitchen
+            .cook(&recipe, temp_dir.path())
             .map_err(|e| anyhow!("Recipe cooking failed: {}", e))?;
 
-        info!("Cooked: {} ({} warnings)", cook_result.package_path.display(), cook_result.warnings.len());
+        info!(
+            "Cooked: {} ({} warnings)",
+            cook_result.package_path.display(),
+            cook_result.warnings.len()
+        );
 
         // Step 4: Store chunks
-        let ccs_data = tokio::fs::read(&cook_result.package_path).await
+        let ccs_data = tokio::fs::read(&cook_result.package_path)
+            .await
             .context("Failed to read cooked CCS package")?;
 
         let content_hash = {
@@ -481,8 +549,8 @@ impl ConversionService {
     /// to probe internal services.
     async fn fetch_url(url: &str) -> Result<String> {
         // Parse URL to validate scheme and extract host
-        let parsed_url = url::Url::parse(url)
-            .map_err(|e| anyhow!("Invalid URL '{}': {}", url, e))?;
+        let parsed_url =
+            url::Url::parse(url).map_err(|e| anyhow!("Invalid URL '{}': {}", url, e))?;
 
         // Only allow https (http redirects to https, but we reject http-only)
         let scheme = parsed_url.scheme();
@@ -502,7 +570,9 @@ impl ConversionService {
         let resolved_ips = tokio::net::lookup_host(format!(
             "{}:{}",
             host,
-            parsed_url.port().unwrap_or(if scheme == "https" { 443 } else { 80 })
+            parsed_url
+                .port()
+                .unwrap_or(if scheme == "https" { 443 } else { 80 })
         ))
         .await
         .map_err(|e| anyhow!("Failed to resolve '{}': {}", host, e))?;
@@ -528,11 +598,11 @@ impl ConversionService {
 
         // Check for redirect to private IP (double-check final URL)
         let final_url = response.url();
-        if let Some(final_host) = final_url.host_str() {
-            if final_host != host {
-                // URL was redirected - validate the new host
-                Self::validate_host(final_host)?;
-            }
+        if let Some(final_host) = final_url.host_str()
+            && final_host != host
+        {
+            // URL was redirected - validate the new host
+            Self::validate_host(final_host)?;
         }
 
         if !response.status().is_success() {

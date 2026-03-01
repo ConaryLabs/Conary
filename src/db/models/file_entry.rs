@@ -185,9 +185,13 @@ impl FileEntry {
     /// Format permissions as rwx string (e.g., -rw-r--r--)
     pub fn format_permissions(&self) -> String {
         let mode = self.permissions as u32;
-        let file_type = if mode & 0o40000 != 0 { 'd' }
-        else if mode & 0o120000 == 0o120000 { 'l' }
-        else { '-' };
+        let file_type = if mode & 0o40000 != 0 {
+            'd'
+        } else if mode & 0o120000 == 0o120000 {
+            'l'
+        } else {
+            '-'
+        };
 
         let owner_r = if mode & 0o400 != 0 { 'r' } else { '-' };
         let owner_w = if mode & 0o200 != 0 { 'w' } else { '-' };
@@ -201,9 +205,16 @@ impl FileEntry {
 
         format!(
             "{}{}{}{}{}{}{}{}{}{}",
-            file_type, owner_r, owner_w, owner_x,
-            group_r, group_w, group_x,
-            other_r, other_w, other_x
+            file_type,
+            owner_r,
+            owner_w,
+            owner_x,
+            group_r,
+            group_w,
+            group_x,
+            other_r,
+            other_w,
+            other_x
         )
     }
 

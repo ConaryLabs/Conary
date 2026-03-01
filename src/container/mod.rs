@@ -235,7 +235,7 @@ impl ContainerConfig {
             isolate_mount: true,
             isolate_network: true, // Pristine mode includes network isolation for hermetic builds
             memory_limit: DEFAULT_MEMORY_LIMIT,
-            cpu_time_limit: 0, // No CPU limit for long builds
+            cpu_time_limit: 0,  // No CPU limit for long builds
             file_size_limit: 0, // No file size limit for builds
             nproc_limit: DEFAULT_NPROC_LIMIT,
             timeout: Duration::from_secs(3600), // 1 hour for builds
@@ -323,8 +323,13 @@ impl ContainerConfig {
     pub fn allow_network(&mut self) {
         self.isolate_network = false;
         // Add resolv.conf mount when network is allowed
-        if !self.bind_mounts.iter().any(|m| m.target.to_string_lossy().contains("resolv.conf")) {
-            self.bind_mounts.push(BindMount::readonly("/etc/resolv.conf", "/etc/resolv.conf"));
+        if !self
+            .bind_mounts
+            .iter()
+            .any(|m| m.target.to_string_lossy().contains("resolv.conf"))
+        {
+            self.bind_mounts
+                .push(BindMount::readonly("/etc/resolv.conf", "/etc/resolv.conf"));
         }
     }
 
@@ -335,7 +340,8 @@ impl ContainerConfig {
     pub fn deny_network(&mut self) {
         self.isolate_network = true;
         // Remove resolv.conf mount when network is denied (useless without network)
-        self.bind_mounts.retain(|m| !m.target.to_string_lossy().contains("resolv.conf"));
+        self.bind_mounts
+            .retain(|m| !m.target.to_string_lossy().contains("resolv.conf"));
     }
 }
 
@@ -494,7 +500,8 @@ impl Sandbox {
             cmd.env(*key, *value);
         }
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn: {}", e)))?;
 
         // Wait with timeout using wait-timeout
@@ -521,7 +528,9 @@ impl Sandbox {
     /// Set up the container filesystem with bind mounts
     fn setup_container_fs(&self, root: &Path) -> Result<()> {
         // Create essential directories
-        for dir in &["dev", "etc", "proc", "sys", "tmp", "usr", "lib", "lib64", "bin", "sbin", "var"] {
+        for dir in &[
+            "dev", "etc", "proc", "sys", "tmp", "usr", "lib", "lib64", "bin", "sbin", "var",
+        ] {
             let path = root.join(dir);
             if !path.exists() {
                 fs::create_dir_all(&path)?;
@@ -650,15 +659,14 @@ impl Sandbox {
 
         // Execute the script
         let mut cmd = Command::new(interpreter);
-        cmd.arg(script_path)
-            .args(args)
-            .stdin(Stdio::null());
+        cmd.arg(script_path).args(args).stdin(Stdio::null());
 
         for (key, value) in env {
             cmd.env(*key, *value);
         }
 
-        let status = cmd.status()
+        let status = cmd
+            .status()
             .map_err(|e| Error::ScriptletError(format!("Exec failed: {}", e)))?;
 
         Ok(status.code().unwrap_or(-1))
@@ -667,13 +675,8 @@ impl Sandbox {
     /// Set up mount namespace with bind mounts
     fn setup_mount_namespace(&self, root: &Path) -> Result<()> {
         // Make all mounts private so changes don't propagate to host
-        mount::<str, str, str, str>(
-            None,
-            "/",
-            None,
-            MsFlags::MS_PRIVATE | MsFlags::MS_REC,
-            None,
-        ).map_err(|e| Error::ScriptletError(format!("mount --make-rprivate failed: {}", e)))?;
+        mount::<str, str, str, str>(None, "/", None, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None)
+            .map_err(|e| Error::ScriptletError(format!("mount --make-rprivate failed: {}", e)))?;
 
         // Perform bind mounts
         for bm in &self.config.bind_mounts {
@@ -697,16 +700,11 @@ impl Sandbox {
             }
 
             // Bind mount
-            mount::<Path, Path, str, str>(
-                Some(&bm.source),
-                &target,
-                None,
-                MsFlags::MS_BIND,
-                None,
-            ).map_err(|e| {
-                debug!("Bind mount {:?} -> {:?} failed: {}", bm.source, target, e);
-                Error::ScriptletError(format!("Bind mount failed: {}", e))
-            })?;
+            mount::<Path, Path, str, str>(Some(&bm.source), &target, None, MsFlags::MS_BIND, None)
+                .map_err(|e| {
+                    debug!("Bind mount {:?} -> {:?} failed: {}", bm.source, target, e);
+                    Error::ScriptletError(format!("Bind mount failed: {}", e))
+                })?;
 
             // Remount read-only if needed
             if !bm.writable {
@@ -716,7 +714,8 @@ impl Sandbox {
                     None,
                     MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
                     None,
-                ).ok(); // Best effort
+                )
+                .ok(); // Best effort
             }
         }
 
@@ -728,7 +727,9 @@ impl Sandbox {
                 return Err(Error::ScriptletError("chroot failed".to_string()));
             }
             if libc::chdir(c"/".as_ptr()) != 0 {
-                return Err(Error::ScriptletError("chdir after chroot failed".to_string()));
+                return Err(Error::ScriptletError(
+                    "chdir after chroot failed".to_string(),
+                ));
             }
         }
 
@@ -739,7 +740,11 @@ impl Sandbox {
     fn apply_resource_limits(&self) -> Result<()> {
         set_rlimit(libc::RLIMIT_AS, self.config.memory_limit, "RLIMIT_AS");
         set_rlimit(libc::RLIMIT_CPU, self.config.cpu_time_limit, "RLIMIT_CPU");
-        set_rlimit(libc::RLIMIT_FSIZE, self.config.file_size_limit, "RLIMIT_FSIZE");
+        set_rlimit(
+            libc::RLIMIT_FSIZE,
+            self.config.file_size_limit,
+            "RLIMIT_FSIZE",
+        );
         set_rlimit(libc::RLIMIT_NPROC, self.config.nproc_limit, "RLIMIT_NPROC");
         Ok(())
     }
@@ -763,31 +768,72 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
 /// Dangerous patterns to look for in scripts
 const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
     // Critical - remote code execution
-    ("curl.*|.*sh", ScriptRisk::Critical, "Downloads and executes remote code"),
-    ("wget.*|.*sh", ScriptRisk::Critical, "Downloads and executes remote code"),
+    (
+        "curl.*|.*sh",
+        ScriptRisk::Critical,
+        "Downloads and executes remote code",
+    ),
+    (
+        "wget.*|.*sh",
+        ScriptRisk::Critical,
+        "Downloads and executes remote code",
+    ),
     ("eval.*$", ScriptRisk::Critical, "Dynamic code execution"),
-
     // High - system modification
     ("rm -rf /", ScriptRisk::High, "Recursive deletion of root"),
-    ("rm -rf /*", ScriptRisk::High, "Recursive deletion of root contents"),
+    (
+        "rm -rf /*",
+        ScriptRisk::High,
+        "Recursive deletion of root contents",
+    ),
     ("mkfs", ScriptRisk::High, "Filesystem formatting"),
     ("dd if=.* of=/dev/", ScriptRisk::High, "Direct device write"),
     (":(){ :|:& };:", ScriptRisk::High, "Fork bomb"),
-
     // Medium - privilege escalation or persistence
-    ("chmod.*4[0-7][0-7][0-7]", ScriptRisk::Medium, "Setuid bit manipulation"),
+    (
+        "chmod.*4[0-7][0-7][0-7]",
+        ScriptRisk::Medium,
+        "Setuid bit manipulation",
+    ),
     ("chmod.*u+s", ScriptRisk::Medium, "Setuid bit manipulation"),
     ("crontab", ScriptRisk::Medium, "Cron job modification"),
     ("/etc/shadow", ScriptRisk::Medium, "Password file access"),
-    ("/etc/sudoers", ScriptRisk::Medium, "Sudo configuration access"),
-    ("ssh.*authorized_keys", ScriptRisk::Medium, "SSH key manipulation"),
-
+    (
+        "/etc/sudoers",
+        ScriptRisk::Medium,
+        "Sudo configuration access",
+    ),
+    (
+        "ssh.*authorized_keys",
+        ScriptRisk::Medium,
+        "SSH key manipulation",
+    ),
     // Low - potentially suspicious
-    ("nc ", ScriptRisk::Low, "Netcat usage (network backdoor potential)"),
-    ("ncat ", ScriptRisk::Low, "Ncat usage (network backdoor potential)"),
-    ("/dev/tcp/", ScriptRisk::Low, "Bash TCP device (network comms)"),
-    ("/dev/udp/", ScriptRisk::Low, "Bash UDP device (network comms)"),
-    ("base64.*-d", ScriptRisk::Low, "Base64 decoding (obfuscation)"),
+    (
+        "nc ",
+        ScriptRisk::Low,
+        "Netcat usage (network backdoor potential)",
+    ),
+    (
+        "ncat ",
+        ScriptRisk::Low,
+        "Ncat usage (network backdoor potential)",
+    ),
+    (
+        "/dev/tcp/",
+        ScriptRisk::Low,
+        "Bash TCP device (network comms)",
+    ),
+    (
+        "/dev/udp/",
+        ScriptRisk::Low,
+        "Bash UDP device (network comms)",
+    ),
+    (
+        "base64.*-d",
+        ScriptRisk::Low,
+        "Base64 decoding (obfuscation)",
+    ),
 ];
 
 /// Analyze a script for dangerous patterns
@@ -801,8 +847,9 @@ pub fn analyze_script(content: &str) -> ScriptAnalysis {
     for (pattern, risk, description) in DANGEROUS_PATTERNS {
         // Simple pattern matching (could be improved with regex)
         let pattern_lower = pattern.to_lowercase();
-        if content_lower.contains(&pattern_lower) ||
-           (pattern.contains(".*") && fuzzy_match(&content_lower, &pattern_lower)) {
+        if content_lower.contains(&pattern_lower)
+            || (pattern.contains(".*") && fuzzy_match(&content_lower, &pattern_lower))
+        {
             patterns.push(format!("{} ({})", description, risk.as_str()));
             if *risk > max_risk {
                 max_risk = *risk;
@@ -1026,9 +1073,12 @@ mod tests {
         // Network isolation should be ON by default
         assert!(config.isolate_network);
         // resolv.conf should NOT be in default mounts
-        assert!(!config.bind_mounts.iter().any(|m| {
-            m.target.to_string_lossy().contains("resolv.conf")
-        }));
+        assert!(
+            !config
+                .bind_mounts
+                .iter()
+                .any(|m| { m.target.to_string_lossy().contains("resolv.conf") })
+        );
     }
 
     #[test]
@@ -1065,9 +1115,12 @@ mod tests {
         config.allow_network();
         assert!(!config.isolate_network);
         // resolv.conf should be added when network is allowed
-        assert!(config.bind_mounts.iter().any(|m| {
-            m.target.to_string_lossy().contains("resolv.conf")
-        }));
+        assert!(
+            config
+                .bind_mounts
+                .iter()
+                .any(|m| { m.target.to_string_lossy().contains("resolv.conf") })
+        );
     }
 
     #[test]
@@ -1079,9 +1132,12 @@ mod tests {
         config.deny_network();
         assert!(config.isolate_network);
         // resolv.conf should be removed when network is denied
-        assert!(!config.bind_mounts.iter().any(|m| {
-            m.target.to_string_lossy().contains("resolv.conf")
-        }));
+        assert!(
+            !config
+                .bind_mounts
+                .iter()
+                .any(|m| { m.target.to_string_lossy().contains("resolv.conf") })
+        );
     }
 
     #[test]
@@ -1090,7 +1146,9 @@ mod tests {
         config.allow_network();
         config.allow_network(); // Call twice
         // Should only have one resolv.conf mount
-        let resolv_count = config.bind_mounts.iter()
+        let resolv_count = config
+            .bind_mounts
+            .iter()
             .filter(|m| m.target.to_string_lossy().contains("resolv.conf"))
             .count();
         assert_eq!(resolv_count, 1);

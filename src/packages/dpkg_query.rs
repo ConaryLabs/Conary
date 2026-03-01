@@ -60,7 +60,12 @@ pub fn list_installed_packages() -> Result<Vec<String>> {
     let output = Command::new("dpkg-query")
         .args(["-W", "-f", "${Package}\n"])
         .output()
-        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}. Is dpkg installed?", e)))?;
+        .map_err(|e| {
+            Error::InitError(format!(
+                "Failed to run dpkg-query: {}. Is dpkg installed?",
+                e
+            ))
+        })?;
 
     if !output.status.success() {
         return Err(Error::InitError(format!(
@@ -117,11 +122,26 @@ pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
         name: parts[0].to_string(),
         version: parts[1].to_string(),
         arch: parts[2].to_string(),
-        description: parts.get(3).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-        maintainer: parts.get(4).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-        homepage: parts.get(5).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-        section: parts.get(6).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-        priority: parts.get(7).map(|s| s.to_string()).filter(|s| !s.is_empty()),
+        description: parts
+            .get(3)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
+        maintainer: parts
+            .get(4)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
+        homepage: parts
+            .get(5)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
+        section: parts
+            .get(6)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
+        priority: parts
+            .get(7)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
         installed_size,
     })
 }
@@ -159,7 +179,9 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
         // Check if this is a symlink and get target
         let link_target = if (mode & 0o170000) == 0o120000 {
-            std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+            std::fs::read_link(&path)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
         } else {
             None
         };
@@ -246,10 +268,7 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
         .flat_map(|dep| dep.split('|')) // Handle alternatives (a | b)
         .map(|s| {
             // Remove version constraints: "package (>= 1.0)" -> "package"
-            s.split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string()
+            s.split_whitespace().next().unwrap_or("").to_string()
         })
         .filter(|s| !s.is_empty())
         .collect();
@@ -260,7 +279,10 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
 
 /// Query dependencies of an installed package with full version constraints
 pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!("Querying dependencies with constraints for package: {}", name);
+    debug!(
+        "Querying dependencies with constraints for package: {}",
+        name
+    );
 
     let output = Command::new("dpkg-query")
         .args(["-W", "-f", "${Depends}\n", name])
@@ -589,11 +611,9 @@ pub fn remove_from_db_only(name: &str) -> Result<()> {
         if line.starts_with("Package: ") {
             let pkg = line.strip_prefix("Package: ").unwrap_or("").trim();
             in_target_stanza = pkg == name;
-        } else if line.is_empty() {
-            if in_target_stanza {
-                in_target_stanza = false;
-                continue; // Skip the blank line after the removed stanza
-            }
+        } else if line.is_empty() && in_target_stanza {
+            in_target_stanza = false;
+            continue; // Skip the blank line after the removed stanza
         }
 
         if !in_target_stanza {
@@ -607,14 +627,20 @@ pub fn remove_from_db_only(name: &str) -> Result<()> {
 
     let mut tmp_file = std::fs::File::create(&tmp_path)
         .map_err(|e| Error::InitError(format!("Failed to create temp file {}: {}", tmp_path, e)))?;
-    tmp_file.write_all(new_content.as_bytes())
+    tmp_file
+        .write_all(new_content.as_bytes())
         .map_err(|e| Error::InitError(format!("Failed to write temp file {}: {}", tmp_path, e)))?;
-    tmp_file.sync_all()
+    tmp_file
+        .sync_all()
         .map_err(|e| Error::InitError(format!("Failed to sync temp file: {}", e)))?;
     drop(tmp_file);
 
-    std::fs::rename(&tmp_path, status_path)
-        .map_err(|e| Error::InitError(format!("Failed to rename {} -> {}: {}", tmp_path, status_path, e)))?;
+    std::fs::rename(&tmp_path, status_path).map_err(|e| {
+        Error::InitError(format!(
+            "Failed to rename {} -> {}: {}",
+            tmp_path, status_path, e
+        ))
+    })?;
 
     // Lock is released when lock_file is dropped
 

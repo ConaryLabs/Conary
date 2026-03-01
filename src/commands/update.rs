@@ -1,13 +1,15 @@
 // src/commands/update.rs
 //! Update, pinning, and delta statistics commands
 
-use super::{cmd_install, SandboxMode};
 use super::progress::{UpdatePhase, UpdateProgress};
+use super::{SandboxMode, cmd_install};
 use anyhow::Result;
 use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
 use conary::db::paths::objects_dir;
 use conary::delta::DeltaApplier;
-use conary::repository::{self, resolve_package, DownloadOptions, PackageSource, ResolutionOptions};
+use conary::repository::{
+    self, DownloadOptions, PackageSource, ResolutionOptions, resolve_package,
+};
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -19,7 +21,10 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 
     let troves = Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' is not installed",
+            package_name
+        ));
     }
 
     let trove = &troves[0];
@@ -28,10 +33,14 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    let trove_id = trove.id
+    let trove_id = trove
+        .id
         .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
     Trove::pin(&conn, trove_id)?;
-    println!("Pinned package '{}' at version {}", package_name, trove.version);
+    println!(
+        "Pinned package '{}' at version {}",
+        package_name, trove.version
+    );
     println!("This package will be skipped during updates and cannot be removed until unpinned.");
 
     Ok(())
@@ -45,7 +54,10 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
 
     let troves = Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' is not installed",
+            package_name
+        ));
     }
 
     let trove = &troves[0];
@@ -54,10 +66,14 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    let trove_id = trove.id
+    let trove_id = trove
+        .id
         .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
     Trove::unpin(&conn, trove_id)?;
-    println!("Unpinned package '{}' (version {})", package_name, trove.version);
+    println!(
+        "Unpinned package '{}' (version {})",
+        package_name, trove.version
+    );
     println!("This package can now be updated or removed.");
 
     Ok(())
@@ -91,7 +107,13 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
 /// Check for and apply package updates
 ///
 /// If `security_only` is true, only applies security updates (critical/important severity).
-pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_only: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_update(
+    package: Option<String>,
+    db_path: &str,
+    root: &str,
+    security_only: bool,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
     } else {
@@ -203,14 +225,24 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
         return Ok(());
     }
 
-    let security_count = updates_available.iter().filter(|(_, pkg, _)| pkg.is_security_update).count();
+    let security_count = updates_available
+        .iter()
+        .filter(|(_, pkg, _)| pkg.is_security_update)
+        .count();
     if security_only {
-        println!("Found {} security update(s) available:", updates_available.len());
+        println!(
+            "Found {} security update(s) available:",
+            updates_available.len()
+        );
     } else {
         println!(
             "Found {} package(s) with updates available{}:",
             updates_available.len(),
-            if security_count > 0 { format!(" ({} security)", security_count) } else { String::new() }
+            if security_count > 0 {
+                format!(" ({} security)", security_count)
+            } else {
+                String::new()
+            }
         );
     }
     for (trove, repo_pkg, _) in &updates_available {
@@ -219,7 +251,10 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
         } else {
             String::new()
         };
-        println!("  {} {} -> {}{}", trove.name, trove.version, repo_pkg.version, security_marker);
+        println!(
+            "  {} {} -> {}{}",
+            trove.name, trove.version, repo_pkg.version, security_marker
+        );
     }
 
     // Phase 1: Check for deltas and categorize updates
@@ -227,12 +262,9 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
 
     for (trove, repo_pkg, repo) in updates_available {
-        if let Ok(Some(delta_info)) = PackageDelta::find_delta(
-            &conn,
-            &trove.name,
-            &trove.version,
-            &repo_pkg.version,
-        ) {
+        if let Ok(Some(delta_info)) =
+            PackageDelta::find_delta(&conn, &trove.name, &trove.version, &repo_pkg.version)
+        {
             println!(
                 "  {} has delta: {} bytes ({:.1}% of full)",
                 trove.name,
@@ -286,18 +318,22 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
         ) {
             Ok(_) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
-                match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash)
-                {
+                match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash) {
                     Ok(_) => {
                         println!("  [OK] Delta applied");
                         deltas_applied += 1;
                         total_bytes_saved += repo_pkg.size - delta_info.delta_size;
                     }
                     Err(e) => {
-                        warn!("  Delta application failed: {}, will download full package", e);
+                        warn!(
+                            "  Delta application failed: {}, will download full package",
+                            e
+                        );
                         delta_failures += 1;
                         // Get repository for fallback download
-                        if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
+                        if let Ok(Some(repo)) =
+                            Repository::find_by_id(&conn, repo_pkg.repository_id)
+                        {
                             full_updates.push((trove, repo_pkg, repo));
                         }
                     }
@@ -371,7 +407,10 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
                     }
                     // Future: handle actual CAS content hashes
                     progress.fail_package(&trove.name, "LocalCas not yet supported");
-                    warn!("LocalCas resolution not yet implemented for {}: {}", trove.name, hash);
+                    warn!(
+                        "LocalCas resolution not yet implemented for {}: {}",
+                        trove.name, hash
+                    );
                     continue;
                 }
             };
@@ -380,12 +419,15 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
 
             let path_str = pkg_path.to_string_lossy().to_string();
 
-            if let Err(e) = cmd_install(&path_str, super::InstallOptions {
-                db_path,
-                root,
-                sandbox_mode,
-                ..Default::default()
-            }) {
+            if let Err(e) = cmd_install(
+                &path_str,
+                super::InstallOptions {
+                    db_path,
+                    root,
+                    sandbox_mode,
+                    ..Default::default()
+                },
+            ) {
                 progress.fail_package(&trove.name, &e.to_string());
                 warn!("  Package installation failed: {}", e);
                 let _ = std::fs::remove_file(&pkg_path);
@@ -509,7 +551,13 @@ pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
 ///
 /// This updates all installed packages that are members of the specified collection.
 /// If `security_only` is true, only applies security updates.
-pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_update_group(
+    name: &str,
+    db_path: &str,
+    root: &str,
+    security_only: bool,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
     info!("Updating collection: {}", name);
     let conn = conary::db::open(db_path)?;
 
@@ -520,7 +568,9 @@ pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bo
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let collection_id = collection.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = collection
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
     let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
@@ -595,7 +645,13 @@ pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bo
 
     for pkg_name in &updates_to_apply {
         println!("\nUpdating {}...", pkg_name);
-        match cmd_update(Some(pkg_name.clone()), db_path, root, security_only, sandbox_mode) {
+        match cmd_update(
+            Some(pkg_name.clone()),
+            db_path,
+            root,
+            security_only,
+            sandbox_mode,
+        ) {
             Ok(()) => updated_count += 1,
             Err(e) => {
                 eprintln!("  Failed to update {}: {}", pkg_name, e);

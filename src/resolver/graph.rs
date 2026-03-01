@@ -58,7 +58,13 @@ impl DependencyEdge {
     }
 
     /// Create a new typed dependency edge
-    pub fn typed(from: String, to: String, constraint: VersionConstraint, dep_type: String, kind: String) -> Self {
+    pub fn typed(
+        from: String,
+        to: String,
+        constraint: VersionConstraint,
+        dep_type: String,
+        kind: String,
+    ) -> Self {
         Self {
             from,
             to,
@@ -99,13 +105,13 @@ impl DependencyGraph {
 
         for trove in troves {
             // Get trove ID - required for database operations
-            let trove_id = trove.id
+            let trove_id = trove
+                .id
                 .ok_or_else(|| Error::InitError("Trove from database has no ID".to_string()))?;
 
             // Parse the version
             let version = RpmVersion::parse(&trove.version)?;
-            let node = PackageNode::new(trove.name.clone(), version)
-                .with_trove_id(trove_id);
+            let node = PackageNode::new(trove.name.clone(), version).with_trove_id(trove_id);
 
             graph.add_node(node);
 
@@ -161,15 +167,15 @@ impl DependencyGraph {
 
     /// Get all dependencies of a package
     pub fn get_dependencies(&self, name: &str) -> Vec<&DependencyEdge> {
-        self.edges.get(name).map(|v| v.iter().collect()).unwrap_or_default()
+        self.edges
+            .get(name)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
     }
 
     /// Get all packages that depend on this package (reverse dependencies)
     pub fn get_dependents(&self, name: &str) -> Vec<String> {
-        self.reverse_edges
-            .get(name)
-            .cloned()
-            .unwrap_or_default()
+        self.reverse_edges.get(name).cloned().unwrap_or_default()
     }
 
     /// Perform topological sort using Kahn's algorithm
@@ -304,9 +310,7 @@ impl DependencyGraph {
             for dependent in dependents {
                 if let Some(edges) = self.edges.get(dependent) {
                     for edge in edges {
-                        if edge.to == package_name
-                            && !edge.constraint.satisfies(version)
-                        {
+                        if edge.to == package_name && !edge.constraint.satisfies(version) {
                             return Err(Error::InitError(format!(
                                 "Version {} of {} does not satisfy constraint {} required by {}",
                                 version, package_name, edge.constraint, dependent

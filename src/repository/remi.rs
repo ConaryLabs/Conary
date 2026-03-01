@@ -133,9 +133,11 @@ impl RemiClient {
 
         info!("Requesting package from Remi: {}", url);
 
-        let response = self.client.get(&url).send().map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
-        })?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .map_err(|e| Error::DownloadError(format!("Failed to connect to Remi: {e}")))?;
 
         match response.status().as_u16() {
             200 => {
@@ -143,7 +145,11 @@ impl RemiClient {
                 let manifest: PackageManifest = response.json().map_err(|e| {
                     Error::DownloadError(format!("Failed to parse package manifest: {e}"))
                 })?;
-                info!("Package ready: {} chunks, {} bytes", manifest.chunks.len(), manifest.total_size);
+                info!(
+                    "Package ready: {} chunks, {} bytes",
+                    manifest.chunks.len(),
+                    manifest.total_size
+                );
                 Ok(manifest)
             }
             202 => {
@@ -157,17 +163,13 @@ impl RemiClient {
                 );
                 self.poll_for_completion(&accepted.job_id)
             }
-            404 => {
-                Err(Error::NotFound(format!(
-                    "Package '{}' not found in {} repositories",
-                    name, distro
-                )))
-            }
-            503 => {
-                Err(Error::DownloadError(
-                    "Remi conversion queue is full, try again later".to_string(),
-                ))
-            }
+            404 => Err(Error::NotFound(format!(
+                "Package '{}' not found in {} repositories",
+                name, distro
+            ))),
+            503 => Err(Error::DownloadError(
+                "Remi conversion queue is full, try again later".to_string(),
+            )),
             status => {
                 let body = response.text().unwrap_or_default();
                 Err(Error::DownloadError(format!(
@@ -204,9 +206,11 @@ impl RemiClient {
             }
 
             // Poll job status
-            let response = self.client.get(&url).send().map_err(|e| {
-                Error::DownloadError(format!("Failed to poll job status: {e}"))
-            })?;
+            let response = self
+                .client
+                .get(&url)
+                .send()
+                .map_err(|e| Error::DownloadError(format!("Failed to poll job status: {e}")))?;
 
             if !response.status().is_success() {
                 spinner.finish_with_message("Poll failed");
@@ -216,9 +220,9 @@ impl RemiClient {
                 )));
             }
 
-            let status: JobStatus = response.json().map_err(|e| {
-                Error::DownloadError(format!("Failed to parse job status: {e}"))
-            })?;
+            let status: JobStatus = response
+                .json()
+                .map_err(|e| Error::DownloadError(format!("Failed to parse job status: {e}")))?;
 
             match status.status.as_str() {
                 "ready" => {
@@ -272,7 +276,11 @@ impl RemiClient {
     ) -> Result<HashMap<String, Vec<u8>>> {
         let mut chunks = HashMap::new();
 
-        info!("Downloading {} chunks for {}", manifest.chunks.len(), manifest.name);
+        info!(
+            "Downloading {} chunks for {}",
+            manifest.chunks.len(),
+            manifest.name
+        );
 
         // Create a client with longer timeout for chunk downloads
         let chunk_client = Client::builder()
@@ -299,7 +307,8 @@ impl RemiClient {
             if !response.status().is_success() {
                 return Err(Error::DownloadError(format!(
                     "Chunk {} returned HTTP {}",
-                    chunk.hash, response.status()
+                    chunk.hash,
+                    response.status()
                 )));
             }
 
@@ -308,9 +317,11 @@ impl RemiClient {
             })?;
 
             // Verify chunk hash using shared hash module
-            crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| Error::ChecksumMismatch {
-                expected: e.expected,
-                actual: e.actual,
+            crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| {
+                Error::ChecksumMismatch {
+                    expected: e.expected,
+                    actual: e.actual,
+                }
             })?;
 
             downloaded += data.len() as u64;
@@ -348,9 +359,8 @@ impl RemiClient {
         sorted_chunks.sort_by_key(|c| c.offset);
 
         // Create output file
-        let mut file = std::fs::File::create(output_path).map_err(|e| {
-            Error::IoError(format!("Failed to create output file: {e}"))
-        })?;
+        let mut file = std::fs::File::create(output_path)
+            .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
 
         // Write chunks in order
         for chunk_ref in sorted_chunks {
@@ -358,15 +368,13 @@ impl RemiClient {
                 Error::DownloadError(format!("Missing chunk: {}", chunk_ref.hash))
             })?;
 
-            file.write_all(data).map_err(|e| {
-                Error::IoError(format!("Failed to write chunk: {e}"))
-            })?;
+            file.write_all(data)
+                .map_err(|e| Error::IoError(format!("Failed to write chunk: {e}")))?;
         }
 
         // Verify total size
-        let metadata = std::fs::metadata(output_path).map_err(|e| {
-            Error::IoError(format!("Failed to read output file metadata: {e}"))
-        })?;
+        let metadata = std::fs::metadata(output_path)
+            .map_err(|e| Error::IoError(format!("Failed to read output file metadata: {e}")))?;
 
         if metadata.len() != manifest.total_size {
             return Err(Error::ChecksumMismatch {
@@ -385,7 +393,10 @@ impl RemiClient {
             });
         }
 
-        info!("CCS package assembled and verified: {}", output_path.display());
+        info!(
+            "CCS package assembled and verified: {}",
+            output_path.display()
+        );
         Ok(())
     }
 
@@ -408,9 +419,11 @@ impl RemiClient {
 
         info!("Downloading CCS package from Remi: {}", url);
 
-        let response = self.client.get(&url).send().map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
-        })?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .map_err(|e| Error::DownloadError(format!("Failed to connect to Remi: {e}")))?;
 
         match response.status().as_u16() {
             200 => {
@@ -455,7 +468,10 @@ impl RemiClient {
                         )));
                     }
 
-                    debug!("Download returned 202, retrying ({}/{})", attempt, max_retries);
+                    debug!(
+                        "Download returned 202, retrying ({}/{})",
+                        attempt, max_retries
+                    );
                 }
 
                 Err(Error::DownloadError(format!(
@@ -463,17 +479,13 @@ impl RemiClient {
                     last_status, max_retries
                 )))
             }
-            404 => {
-                Err(Error::NotFound(format!(
-                    "Package '{}' not found in {} repositories",
-                    name, distro
-                )))
-            }
-            503 => {
-                Err(Error::DownloadError(
-                    "Remi conversion queue is full, try again later".to_string(),
-                ))
-            }
+            404 => Err(Error::NotFound(format!(
+                "Package '{}' not found in {} repositories",
+                name, distro
+            ))),
+            503 => Err(Error::DownloadError(
+                "Remi conversion queue is full, try again later".to_string(),
+            )),
             status => {
                 let body = response.text().unwrap_or_default();
                 Err(Error::DownloadError(format!(
@@ -501,13 +513,14 @@ impl RemiClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| {
                 // Parse filename="something.ccs"
-                v.split("filename=").nth(1).map(|s| s.trim_matches('"').to_string())
+                v.split("filename=")
+                    .nth(1)
+                    .map(|s| s.trim_matches('"').to_string())
             })
             .unwrap_or_else(|| format!("{}.ccs", name));
 
         // Sanitize filename to prevent path traversal from malicious servers
-        let filename = sanitize_filename(&filename)
-            .unwrap_or_else(|_| format!("{}.ccs", name));
+        let filename = sanitize_filename(&filename).unwrap_or_else(|_| format!("{}.ccs", name));
 
         let output_path = output_dir.join(&filename);
 
@@ -522,26 +535,23 @@ impl RemiClient {
         pb.set_message(format!("Downloading {}", filename));
 
         // Download to file with progress
-        let mut file = std::fs::File::create(&output_path).map_err(|e| {
-            Error::IoError(format!("Failed to create output file: {e}"))
-        })?;
+        let mut file = std::fs::File::create(&output_path)
+            .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
 
         let mut downloaded: u64 = 0;
         let mut reader = response;
         let mut buffer = [0u8; 8192];
 
         loop {
-            let bytes_read = std::io::Read::read(&mut reader, &mut buffer).map_err(|e| {
-                Error::DownloadError(format!("Failed to read response: {e}"))
-            })?;
+            let bytes_read = std::io::Read::read(&mut reader, &mut buffer)
+                .map_err(|e| Error::DownloadError(format!("Failed to read response: {e}")))?;
 
             if bytes_read == 0 {
                 break;
             }
 
-            file.write_all(&buffer[..bytes_read]).map_err(|e| {
-                Error::IoError(format!("Failed to write to output file: {e}"))
-            })?;
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| Error::IoError(format!("Failed to write to output file: {e}")))?;
 
             downloaded += bytes_read as u64;
             pb.set_position(downloaded);
@@ -555,12 +565,10 @@ impl RemiClient {
         let mut magic = [0u8; 2];
         {
             use std::io::Read;
-            let mut file = std::fs::File::open(&output_path).map_err(|e| {
-                Error::IoError(format!("Failed to read downloaded file: {e}"))
-            })?;
-            file.read_exact(&mut magic).map_err(|e| {
-                Error::IoError(format!("Failed to read magic bytes: {e}"))
-            })?;
+            let mut file = std::fs::File::open(&output_path)
+                .map_err(|e| Error::IoError(format!("Failed to read downloaded file: {e}")))?;
+            file.read_exact(&mut magic)
+                .map_err(|e| Error::IoError(format!("Failed to read magic bytes: {e}")))?;
         }
 
         // Gzip magic: 0x1f 0x8b
@@ -568,7 +576,7 @@ impl RemiClient {
             // Clean up invalid file
             let _ = std::fs::remove_file(&output_path);
             return Err(Error::DownloadError(
-                "Downloaded file is not a valid CCS package (expected gzip)".to_string()
+                "Downloaded file is not a valid CCS package (expected gzip)".to_string(),
             ));
         }
 
@@ -669,9 +677,12 @@ impl AsyncRemiClient {
 
         info!("Requesting package from Remi: {}", url);
 
-        let response = self.http_client.get(&url).send().await.map_err(|e| {
-            Error::DownloadError(format!("Failed to connect to Remi: {e}"))
-        })?;
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::DownloadError(format!("Failed to connect to Remi: {e}")))?;
 
         match response.status().as_u16() {
             200 => {
@@ -725,9 +736,12 @@ impl AsyncRemiClient {
                 )));
             }
 
-            let response = self.http_client.get(&url).send().await.map_err(|e| {
-                Error::DownloadError(format!("Failed to poll job status: {e}"))
-            })?;
+            let response = self
+                .http_client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| Error::DownloadError(format!("Failed to poll job status: {e}")))?;
 
             if !response.status().is_success() {
                 return Err(Error::DownloadError(format!(
@@ -736,9 +750,10 @@ impl AsyncRemiClient {
                 )));
             }
 
-            let status: JobStatus = response.json().await.map_err(|e| {
-                Error::DownloadError(format!("Failed to parse job status: {e}"))
-            })?;
+            let status: JobStatus = response
+                .json()
+                .await
+                .map_err(|e| Error::DownloadError(format!("Failed to parse job status: {e}")))?;
 
             match status.status.as_str() {
                 "ready" => {
@@ -899,7 +914,8 @@ mod tests {
 
     #[test]
     fn test_conversion_accepted_parsing() {
-        let json = r#"{"status":"queued","job_id":"123","poll_url":"/v1/jobs/123","eta_seconds":30}"#;
+        let json =
+            r#"{"status":"queued","job_id":"123","poll_url":"/v1/jobs/123","eta_seconds":30}"#;
         let accepted: ConversionAccepted = serde_json::from_str(json).unwrap();
         assert_eq!(accepted.status, "queued");
         assert_eq!(accepted.job_id, "123");
@@ -923,15 +939,17 @@ mod tests {
     #[test]
     fn test_build_package_url_with_version() {
         let url = build_package_url("http://remi:8080", "arch", "nginx", Some("1.24.0"));
-        assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx?version=1.24.0");
+        assert_eq!(
+            url,
+            "http://remi:8080/v1/arch/packages/nginx?version=1.24.0"
+        );
     }
 
     #[test]
     fn test_filename_sanitization_fallback() {
         // Path traversal in filename should fall back to safe default
         let malicious = "../../etc/cron.d/evil";
-        let safe = sanitize_filename(malicious)
-            .unwrap_or_else(|_| format!("{}.ccs", "nginx"));
+        let safe = sanitize_filename(malicious).unwrap_or_else(|_| format!("{}.ccs", "nginx"));
         assert_eq!(safe, "nginx.ccs");
     }
 

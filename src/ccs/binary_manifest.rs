@@ -334,7 +334,6 @@ impl MerkleTree {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,32 +449,44 @@ mod tests {
     fn test_merkle_root_order_independent() {
         // BTreeMap ensures consistent ordering
         let mut comp1 = BTreeMap::new();
-        comp1.insert("a".to_string(), ComponentRef {
-            hash: Hash::sha256(b"a"),
-            file_count: 1,
-            total_size: 100,
-            default: true,
-        });
-        comp1.insert("b".to_string(), ComponentRef {
-            hash: Hash::sha256(b"b"),
-            file_count: 1,
-            total_size: 100,
-            default: true,
-        });
+        comp1.insert(
+            "a".to_string(),
+            ComponentRef {
+                hash: Hash::sha256(b"a"),
+                file_count: 1,
+                total_size: 100,
+                default: true,
+            },
+        );
+        comp1.insert(
+            "b".to_string(),
+            ComponentRef {
+                hash: Hash::sha256(b"b"),
+                file_count: 1,
+                total_size: 100,
+                default: true,
+            },
+        );
 
         let mut comp2 = BTreeMap::new();
-        comp2.insert("b".to_string(), ComponentRef {
-            hash: Hash::sha256(b"b"),
-            file_count: 1,
-            total_size: 100,
-            default: true,
-        });
-        comp2.insert("a".to_string(), ComponentRef {
-            hash: Hash::sha256(b"a"),
-            file_count: 1,
-            total_size: 100,
-            default: true,
-        });
+        comp2.insert(
+            "b".to_string(),
+            ComponentRef {
+                hash: Hash::sha256(b"b"),
+                file_count: 1,
+                total_size: 100,
+                default: true,
+            },
+        );
+        comp2.insert(
+            "a".to_string(),
+            ComponentRef {
+                hash: Hash::sha256(b"a"),
+                file_count: 1,
+                total_size: 100,
+                default: true,
+            },
+        );
 
         let root1 = MerkleTree::calculate_root(&comp1);
         let root2 = MerkleTree::calculate_root(&comp2);

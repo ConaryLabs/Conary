@@ -110,13 +110,16 @@ fn test_default_component_types() {
         !ComponentType::Devel.is_default(),
         ":devel should NOT be default"
     );
-    assert!(!ComponentType::Doc.is_default(), ":doc should NOT be default");
+    assert!(
+        !ComponentType::Doc.is_default(),
+        ":doc should NOT be default"
+    );
 }
 
 /// Test scriptlet gating: scriptlets only run when :runtime or :lib is installed
 #[test]
 fn test_scriptlet_gating() {
-    use conary::components::{should_run_scriptlets, ComponentType};
+    use conary::components::{ComponentType, should_run_scriptlets};
 
     // Scriptlets SHOULD run when :runtime or :lib is present
     assert!(
@@ -159,7 +162,7 @@ fn test_scriptlet_gating() {
 /// Smoke test: Simulate devel-only installation and verify correct behavior
 #[test]
 fn test_devel_only_install_smoke_test() {
-    use conary::components::{should_run_scriptlets, ComponentClassifier, ComponentType};
+    use conary::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
     use std::collections::HashSet;
 
     // Simulate a package with files in all component types
@@ -277,12 +280,12 @@ fn test_default_install_excludes_devel_and_doc() {
 
     // Simulate a package
     let package_files = vec![
-        "/usr/bin/nginx".to_string(),              // :runtime
-        "/usr/lib/libnginx.so".to_string(),        // :lib
-        "/etc/nginx/nginx.conf".to_string(),       // :config
-        "/usr/include/nginx.h".to_string(),        // :devel
-        "/usr/lib/pkgconfig/nginx.pc".to_string(), // :devel
-        "/usr/share/doc/nginx/README".to_string(), // :doc
+        "/usr/bin/nginx".to_string(),                 // :runtime
+        "/usr/lib/libnginx.so".to_string(),           // :lib
+        "/etc/nginx/nginx.conf".to_string(),          // :config
+        "/usr/include/nginx.h".to_string(),           // :devel
+        "/usr/lib/pkgconfig/nginx.pc".to_string(),    // :devel
+        "/usr/share/doc/nginx/README".to_string(),    // :doc
         "/usr/share/man/man8/nginx.8.gz".to_string(), // :doc
     ];
 

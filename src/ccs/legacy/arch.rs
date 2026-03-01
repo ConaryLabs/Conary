@@ -8,8 +8,8 @@
 //! - Actual files at their install paths
 
 use super::{
-    arch_for_format, map_capability_to_package, CommonHookGenerator, GenerationResult,
-    HookConverter, LossReport,
+    CommonHookGenerator, GenerationResult, HookConverter, LossReport, arch_for_format,
+    map_capability_to_package,
 };
 use crate::ccs::builder::{BuildResult, FileType};
 use crate::ccs::manifest::Hooks;

@@ -6,7 +6,7 @@
 //! This provides persistent metadata that complements filesystem-based LRU tracking.
 
 use crate::error::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// A chunk access record
 #[derive(Debug, Clone)]
@@ -251,13 +251,17 @@ mod tests {
         chunk.upsert(&conn).unwrap();
 
         // Find it
-        let found = ChunkAccess::find_by_hash(&conn, "abc123def456").unwrap().unwrap();
+        let found = ChunkAccess::find_by_hash(&conn, "abc123def456")
+            .unwrap()
+            .unwrap();
         assert_eq!(found.size_bytes, 1024);
         assert_eq!(found.access_count, 1);
 
         // Upsert again - should increment count
         chunk.upsert(&conn).unwrap();
-        let found2 = ChunkAccess::find_by_hash(&conn, "abc123def456").unwrap().unwrap();
+        let found2 = ChunkAccess::find_by_hash(&conn, "abc123def456")
+            .unwrap()
+            .unwrap();
         assert_eq!(found2.access_count, 2);
     }
 
@@ -283,7 +287,9 @@ mod tests {
 
         // Set protected
         ChunkAccess::set_protected(&conn, "protected_chunk", true).unwrap();
-        let found = ChunkAccess::find_by_hash(&conn, "protected_chunk").unwrap().unwrap();
+        let found = ChunkAccess::find_by_hash(&conn, "protected_chunk")
+            .unwrap()
+            .unwrap();
         assert!(found.protected);
 
         // LRU query should not return protected chunks
@@ -300,9 +306,15 @@ mod tests {
     fn test_chunk_stats() {
         let (_temp, conn) = create_test_db();
 
-        ChunkAccess::new("chunk1".to_string(), 1000).upsert(&conn).unwrap();
-        ChunkAccess::new("chunk2".to_string(), 2000).upsert(&conn).unwrap();
-        ChunkAccess::new("chunk3".to_string(), 3000).upsert(&conn).unwrap();
+        ChunkAccess::new("chunk1".to_string(), 1000)
+            .upsert(&conn)
+            .unwrap();
+        ChunkAccess::new("chunk2".to_string(), 2000)
+            .upsert(&conn)
+            .unwrap();
+        ChunkAccess::new("chunk3".to_string(), 3000)
+            .upsert(&conn)
+            .unwrap();
 
         let stats = ChunkAccess::get_stats(&conn).unwrap();
         assert_eq!(stats.total_chunks, 3);
@@ -332,10 +344,20 @@ mod tests {
     fn test_delete_chunk() {
         let (_temp, conn) = create_test_db();
 
-        ChunkAccess::new("to_delete".to_string(), 512).upsert(&conn).unwrap();
-        assert!(ChunkAccess::find_by_hash(&conn, "to_delete").unwrap().is_some());
+        ChunkAccess::new("to_delete".to_string(), 512)
+            .upsert(&conn)
+            .unwrap();
+        assert!(
+            ChunkAccess::find_by_hash(&conn, "to_delete")
+                .unwrap()
+                .is_some()
+        );
 
         ChunkAccess::delete(&conn, "to_delete").unwrap();
-        assert!(ChunkAccess::find_by_hash(&conn, "to_delete").unwrap().is_none());
+        assert!(
+            ChunkAccess::find_by_hash(&conn, "to_delete")
+                .unwrap()
+                .is_none()
+        );
     }
 }

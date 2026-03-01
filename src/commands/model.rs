@@ -6,16 +6,18 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use conary::db;
-use conary::db::models::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
+use conary::db::models::{CollectionMember, Repository, Trove, TroveType};
+use conary::db::models::{
+    DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy,
+};
 use conary::derived::build_from_definition;
 use conary::filesystem::CasStore;
 use conary::hash::sha256;
-use conary::db::models::{CollectionMember, Repository, Trove, TroveType};
 use conary::model::{
-    capture_current_state, compute_diff, compute_diff_with_includes, parse_model_file,
-    snapshot_to_model, DiffAction, ModelDerivedPackage,
+    DiffAction, ModelDerivedPackage, capture_current_state, compute_diff,
+    compute_diff_with_includes, parse_model_file, snapshot_to_model,
 };
 use rusqlite::Connection;
 use tracing::info;
@@ -47,10 +49,7 @@ fn create_derived_from_model(
     };
 
     // Create the derived package
-    let mut derived = DerivedPackage::new(
-        model_derived.name.clone(),
-        model_derived.from.clone(),
-    );
+    let mut derived = DerivedPackage::new(model_derived.name.clone(), model_derived.from.clone());
     derived.version_policy = version_policy;
     derived.model_source = Some(model_dir.display().to_string());
 
@@ -79,12 +78,7 @@ fn create_derived_from_model(
             .unwrap_or("patch")
             .to_string();
 
-        let mut patch = DerivedPatch::new(
-            derived_id,
-            (order + 1) as i32,
-            patch_name,
-            patch_hash,
-        );
+        let mut patch = DerivedPatch::new(derived_id, (order + 1) as i32, patch_name, patch_hash);
         patch.insert(conn)?;
 
         // Store in CAS
@@ -111,11 +105,7 @@ fn create_derived_from_model(
             let content = std::fs::read(&full_source)?;
             let source_hash = sha256(&content);
 
-            let mut ov = DerivedOverride::new_replace(
-                derived_id,
-                target_path.clone(),
-                source_hash,
-            );
+            let mut ov = DerivedOverride::new_replace(derived_id, target_path.clone(), source_hash);
             ov.source_path = Some(source_path.clone());
             ov.insert(conn)?;
 
@@ -128,11 +118,7 @@ fn create_derived_from_model(
 }
 
 /// Build a derived package and return success/failure
-fn build_derived_package(
-    conn: &Connection,
-    name: &str,
-    cas: &CasStore,
-) -> Result<()> {
+fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Result<()> {
     let mut derived = DerivedPackage::find_by_name(conn, name)?
         .ok_or_else(|| anyhow!("Derived package '{}' not found", name))?;
 
@@ -141,7 +127,8 @@ fn build_derived_package(
 
     match result {
         Ok(build_result) => {
-            println!("  Built '{}': {} files, {} patches applied",
+            println!(
+                "  Built '{}': {} files, {} patches applied",
                 name,
                 build_result.files.len(),
                 build_result.patches_applied.len()
@@ -182,7 +169,10 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
 
     // Compute diff, resolving includes if present
     let diff = if model.has_includes() {
-        println!("Resolving {} remote include(s)...", model.include.models.len());
+        println!(
+            "Resolving {} remote include(s)...",
+            model.include.models.len()
+        );
         compute_diff_with_includes(&model, &state, &conn)?
     } else {
         compute_diff(&model, &state)
@@ -282,7 +272,10 @@ pub fn cmd_model_apply(
 
     // Compute diff, resolving includes if present
     let diff = if model.has_includes() {
-        println!("Resolving {} remote include(s)...", model.include.models.len());
+        println!(
+            "Resolving {} remote include(s)...",
+            model.include.models.len()
+        );
         compute_diff_with_includes(&model, &state, &conn)?
     } else {
         compute_diff(&model, &state)
@@ -298,9 +291,7 @@ pub fn cmd_model_apply(
         .actions
         .iter()
         .filter(|a| {
-            if skip_optional
-                && let DiffAction::Install { optional, .. } = a
-            {
+            if skip_optional && let DiffAction::Install { optional, .. } = a {
                 return !optional;
             }
             if !strict {
@@ -341,7 +332,10 @@ pub fn cmd_model_apply(
 
     // Set up CAS for derived package operations
     let db_path_obj = Path::new(db_path);
-    let objects_dir = db_path_obj.parent().unwrap_or(Path::new(".")).join("objects");
+    let objects_dir = db_path_obj
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("objects");
     let cas = CasStore::new(&objects_dir)?;
 
     // Get model directory for resolving relative paths
@@ -386,11 +380,18 @@ pub fn cmd_model_apply(
     // Process derived package actions
     for action in &actions {
         match action {
-            DiffAction::BuildDerived { name, parent, needs_parent } => {
+            DiffAction::BuildDerived {
+                name,
+                parent,
+                needs_parent,
+            } => {
                 println!("Building derived package '{}'...", name);
 
                 if *needs_parent {
-                    println!("  [WARNING: Parent '{}' needs to be installed first]", parent);
+                    println!(
+                        "  [WARNING: Parent '{}' needs to be installed first]",
+                        parent
+                    );
                     errors.push(format!(
                         "Cannot build '{}': parent '{}' not installed",
                         name, parent
@@ -486,11 +487,7 @@ pub fn cmd_model_apply(
 }
 
 /// Check if system state matches the model
-pub fn cmd_model_check(
-    model_path: &str,
-    db_path: &str,
-    verbose: bool,
-) -> Result<()> {
+pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool) -> Result<()> {
     // Check if model file exists
     let model_path = Path::new(model_path);
     if !model_path.exists() {
@@ -525,15 +522,9 @@ pub fn cmd_model_check(
             println!("  {}", action.description());
         }
         println!();
-        println!(
-            "Total: {} difference(s)",
-            diff.actions.len()
-        );
+        println!("Total: {} difference(s)", diff.actions.len());
     } else {
-        println!(
-            "DRIFT: {} difference(s) from model",
-            diff.actions.len()
-        );
+        println!("DRIFT: {} difference(s) from model", diff.actions.len());
         println!("Run with --verbose for details, or 'model-diff' for full output");
     }
 
@@ -660,7 +651,10 @@ pub fn cmd_model_publish(
     let existing = Trove::find_by_name(&conn, &group_name)?;
     if !existing.is_empty() {
         // Check if it's a collection
-        if existing.iter().any(|t| t.trove_type == TroveType::Collection) {
+        if existing
+            .iter()
+            .any(|t| t.trove_type == TroveType::Collection)
+        {
             return Err(anyhow!(
                 "Collection '{}' already exists. Use a different name or remove the existing one.",
                 group_name
@@ -680,7 +674,10 @@ pub fn cmd_model_publish(
         trove.selection_reason = Some(format!("Published from {}", model_path.display()));
         let collection_id = trove.insert(tx)?;
 
-        info!("Created collection '{}' with id={}", group_name, collection_id);
+        info!(
+            "Created collection '{}' with id={}",
+            group_name, collection_id
+        );
 
         // Add members from the model's install list
         for pkg_name in &model.config.install {
@@ -700,8 +697,7 @@ pub fn cmd_model_publish(
         // Also add optional packages that aren't in the install list
         for pkg_name in &model.optional.packages {
             if !model.config.install.contains(pkg_name) {
-                let mut member = CollectionMember::new(collection_id, pkg_name.clone())
-                    .optional();
+                let mut member = CollectionMember::new(collection_id, pkg_name.clone()).optional();
                 if let Some(v) = model.pin.get(pkg_name) {
                     member = member.with_version(v.clone());
                 }
@@ -713,14 +709,21 @@ pub fn cmd_model_publish(
     })?;
 
     // Count members for summary
-    let member_count = model.config.install.len() + model.optional.packages.iter()
-        .filter(|p| !model.config.install.contains(*p))
-        .count();
+    let member_count = model.config.install.len()
+        + model
+            .optional
+            .packages
+            .iter()
+            .filter(|p| !model.config.install.contains(*p))
+            .count();
     let optional_count = model.optional.packages.len();
     let pinned_count = model.pin.len();
 
     println!();
-    println!("Published {} v{} to repository '{}'", group_name, version, repo_name);
+    println!(
+        "Published {} v{} to repository '{}'",
+        group_name, version, repo_name
+    );
     println!("  Members: {} package(s)", member_count);
     if optional_count > 0 {
         println!("  Optional: {} package(s)", optional_count);

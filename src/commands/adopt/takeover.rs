@@ -7,12 +7,10 @@
 //! about the package.
 
 use super::super::create_state_snapshot;
-use super::system::{compute_file_hash, FileInfoTuple};
+use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
-use conary::db::models::{
-    Changeset, ChangesetStatus, InstallSource, Trove,
-};
-use conary::packages::{dpkg_query, pacman_query, rpm_query, SystemPackageManager};
+use conary::db::models::{Changeset, ChangesetStatus, InstallSource, Trove};
+use conary::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::io::{self, Write};
 use tracing::{info, warn};
 
@@ -79,12 +77,7 @@ pub fn cmd_adopt_takeover(
         pkg_mgr.display_name()
     );
     for t in &targets {
-        println!(
-            "  {} {} ({})",
-            t.name,
-            t.version,
-            t.install_source.as_str()
-        );
+        println!("  {} {} ({})", t.name, t.version, t.install_source.as_str());
     }
 
     if dry_run {
@@ -94,7 +87,10 @@ pub fn cmd_adopt_takeover(
 
     // Interactive confirmation unless --yes
     if !yes {
-        print!("\nThis will remove these packages from the {} database.\nConary will fully own the files. Continue? [y/N] ", pkg_mgr.display_name());
+        print!(
+            "\nThis will remove these packages from the {} database.\nConary will fully own the files. Continue? [y/N] ",
+            pkg_mgr.display_name()
+        );
         io::stdout().flush()?;
         let mut answer = String::new();
         io::stdin().read_line(&mut answer)?;
@@ -140,13 +136,17 @@ pub fn cmd_adopt_takeover(
                 // and should not be blocked from takeover.
                 // DB errors are treated conservatively as "has files" to avoid
                 // accidentally deleting file tracking on a transient DB issue.
-                let has_db_files = match conary::db::models::FileEntry::find_by_trove(&conn, trove_id) {
-                    Ok(f) => !f.is_empty(),
-                    Err(e) => {
-                        warn!("DB error checking files for {}: {} -- assuming files exist", trove.name, e);
-                        true
-                    }
-                };
+                let has_db_files =
+                    match conary::db::models::FileEntry::find_by_trove(&conn, trove_id) {
+                        Ok(f) => !f.is_empty(),
+                        Err(e) => {
+                            warn!(
+                                "DB error checking files for {}: {} -- assuming files exist",
+                                trove.name, e
+                            );
+                            true
+                        }
+                    };
                 if has_db_files {
                     eprintln!(
                         "WARNING: Could not retrieve file list for '{}' from {} -- \
@@ -165,9 +165,10 @@ pub fn cmd_adopt_takeover(
     }
 
     // Check if any candidates remain after pre-capture filtering
-    let actionable_count = targets.iter().filter(|t| {
-        t.id.is_some_and(|id| !skip_ids.contains(&id))
-    }).count();
+    let actionable_count = targets
+        .iter()
+        .filter(|t| t.id.is_some_and(|id| !skip_ids.contains(&id)))
+        .count();
     if actionable_count == 0 {
         println!("\nAll packages were skipped due to errors. No changes made.");
         return Ok(());
@@ -201,7 +202,16 @@ pub fn cmd_adopt_takeover(
                 let files = captured_files.get(&trove_id).cloned().unwrap_or_default();
                 tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
 
-                for (file_path, file_size, file_mode, file_digest, file_user, file_group, link_target) in &files {
+                for (
+                    file_path,
+                    file_size,
+                    file_mode,
+                    file_digest,
+                    file_user,
+                    file_group,
+                    link_target,
+                ) in &files
+                {
                     let hash = compute_file_hash(
                         file_path,
                         *file_mode,
@@ -220,7 +230,10 @@ pub fn cmd_adopt_takeover(
                     fe.owner = file_user.clone();
                     fe.group_name = file_group.clone();
                     if let Err(e) = fe.insert_or_replace(tx) {
-                        warn!("Failed to insert file {} for {}: {}", file_path, trove.name, e);
+                        warn!(
+                            "Failed to insert file {} for {}: {}",
+                            file_path, trove.name, e
+                        );
                     }
                 }
             }
@@ -270,7 +283,11 @@ pub fn cmd_adopt_takeover(
             );
             pm_fail_count += 1;
         } else {
-            println!("  [OK] {} removed from {} database", trove.name, pkg_mgr.display_name());
+            println!(
+                "  [OK] {} removed from {} database",
+                trove.name,
+                pkg_mgr.display_name()
+            );
         }
     }
 
@@ -301,12 +318,15 @@ pub fn cmd_adopt_takeover(
 /// Remove a package from the system package manager's database only.
 fn remove_from_system_pm(pkg_mgr: SystemPackageManager, name: &str) -> Result<()> {
     match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::remove_from_db_only(name)
-            .map_err(|e| anyhow::anyhow!("{}", e)),
-        SystemPackageManager::Dpkg => dpkg_query::remove_from_db_only(name)
-            .map_err(|e| anyhow::anyhow!("{}", e)),
-        SystemPackageManager::Pacman => pacman_query::remove_from_db_only(name)
-            .map_err(|e| anyhow::anyhow!("{}", e)),
+        SystemPackageManager::Rpm => {
+            rpm_query::remove_from_db_only(name).map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        SystemPackageManager::Dpkg => {
+            dpkg_query::remove_from_db_only(name).map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        SystemPackageManager::Pacman => {
+            pacman_query::remove_from_db_only(name).map_err(|e| anyhow::anyhow!("{}", e))
+        }
         SystemPackageManager::Unknown => Err(anyhow::anyhow!("No supported package manager")),
     }
 }
@@ -317,17 +337,47 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Vec<FileInf
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         _ => Vec::new(),
     }

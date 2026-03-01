@@ -42,7 +42,10 @@ pub enum JournalRecord {
     },
 
     /// Content prepared in CAS
-    Prepared { files_in_cas: usize, total_bytes: u64 },
+    Prepared {
+        files_in_cas: usize,
+        total_bytes: u64,
+    },
 
     /// Pre-scriptlet executed
     PreScriptComplete { exit_code: i32, duration_ms: u64 },
@@ -172,7 +175,10 @@ impl TransactionJournal {
     /// Create a placeholder journal (used when replacing ownership)
     pub fn create_placeholder() -> Result<Self> {
         // Create a temp file that will be dropped
-        let path = std::env::temp_dir().join(format!("conary-placeholder-{}.journal", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "conary-placeholder-{}.journal",
+            uuid::Uuid::new_v4()
+        ));
         let file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -331,11 +337,7 @@ impl TransactionJournal {
 
     /// Archive the journal after successful completion
     pub fn archive(self) -> Result<()> {
-        let archive_dir = self
-            .path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("archive");
+        let archive_dir = self.path.parent().unwrap_or(Path::new(".")).join("archive");
         fs::create_dir_all(&archive_dir)?;
 
         let filename = self.path.file_name().ok_or_else(|| {
@@ -585,11 +587,13 @@ mod tests {
         journal.archive().unwrap();
 
         assert!(!original_path.exists());
-        assert!(temp_dir
-            .path()
-            .join("archive")
-            .join(format!("tx-{}.journal", tx_uuid))
-            .exists());
+        assert!(
+            temp_dir
+                .path()
+                .join("archive")
+                .join(format!("tx-{}.journal", tx_uuid))
+                .exists()
+        );
     }
 
     #[test]

@@ -78,9 +78,9 @@ impl Recipe {
 
     /// Check if this recipe requires cross-compilation
     pub fn is_cross_build(&self) -> bool {
-        self.cross.as_ref().is_some_and(|c| {
-            c.target.is_some() || c.sysroot.is_some() || c.cross_tools.is_some()
-        })
+        self.cross
+            .as_ref()
+            .is_some_and(|c| c.target.is_some() || c.sysroot.is_some() || c.cross_tools.is_some())
     }
 
     /// Get the build stage (defaults to Final)
@@ -152,7 +152,11 @@ impl Recipe {
             let sysroot_flag = format!("--sysroot={}", sysroot);
             env.insert(
                 "CFLAGS".to_string(),
-                format!("{} {}", env.get("CFLAGS").unwrap_or(&String::new()), sysroot_flag),
+                format!(
+                    "{} {}",
+                    env.get("CFLAGS").unwrap_or(&String::new()),
+                    sysroot_flag
+                ),
             );
             env.insert(
                 "CXXFLAGS".to_string(),
@@ -608,7 +612,10 @@ tool_prefix = "x86_64-conary-linux-gnu"
         assert_eq!(cross.sysroot.as_deref(), Some("/opt/sysroot/stage0"));
         assert_eq!(cross.cross_tools.as_deref(), Some("/opt/cross/bin"));
         assert_eq!(cross.stage, Some(BuildStage::Stage1));
-        assert_eq!(cross.tool_prefix.as_deref(), Some("x86_64-conary-linux-gnu"));
+        assert_eq!(
+            cross.tool_prefix.as_deref(),
+            Some("x86_64-conary-linux-gnu")
+        );
     }
 
     #[test]
@@ -732,7 +739,11 @@ stage = "{}"
         assert_eq!(env.get("SYSROOT").unwrap(), "/opt/sysroot/stage0");
 
         // Should have sysroot in CFLAGS
-        assert!(env.get("CFLAGS").unwrap().contains("--sysroot=/opt/sysroot/stage0"));
+        assert!(
+            env.get("CFLAGS")
+                .unwrap()
+                .contains("--sysroot=/opt/sysroot/stage0")
+        );
 
         // Should have stage marker
         assert_eq!(env.get("CONARY_STAGE").unwrap(), "stage1");

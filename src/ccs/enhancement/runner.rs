@@ -4,11 +4,11 @@
 use super::context::{ConvertedPackageInfo, EnhancementContext, EnhancementStats};
 use super::error::{EnhancementError, EnhancementResult};
 use super::registry::EnhancementRegistry;
-use super::{EnhancementResult_, EnhancementStatus, EnhancementType, ENHANCEMENT_VERSION};
+use super::{ENHANCEMENT_VERSION, EnhancementResult_, EnhancementStatus, EnhancementType};
 use rusqlite::Connection;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, info, warn};
 
 /// Options for running enhancements
@@ -37,7 +37,7 @@ impl Default for EnhancementOptions {
             force: false,
             install_root: PathBuf::from("/"),
             fail_fast: false,
-            parallel: true, // Enable by default for performance
+            parallel: true,      // Enable by default for performance
             parallel_workers: 0, // Auto-detect
             cancel_token: None,
         }
@@ -137,11 +137,8 @@ impl<'a> EnhancementRunner<'a> {
         info!("Enhancing trove_id={}", trove_id);
 
         // Create enhancement context
-        let mut ctx = EnhancementContext::new(
-            self.conn,
-            trove_id,
-            self.options.install_root.clone(),
-        )?;
+        let mut ctx =
+            EnhancementContext::new(self.conn, trove_id, self.options.install_root.clone())?;
 
         // Mark as in progress
         ctx.set_status(EnhancementStatus::InProgress)?;
@@ -226,10 +223,7 @@ impl<'a> EnhancementRunner<'a> {
             match self.enhance(package.trove_id) {
                 Ok(result) => results.push(result),
                 Err(e) => {
-                    warn!(
-                        "Failed to enhance {}: {}",
-                        package.name, e
-                    );
+                    warn!("Failed to enhance {}: {}", package.name, e);
                     if self.options.fail_fast {
                         return Err(e);
                     }
@@ -254,10 +248,7 @@ impl<'a> EnhancementRunner<'a> {
             match self.enhance(package.trove_id) {
                 Ok(result) => results.push(result),
                 Err(e) => {
-                    warn!(
-                        "Failed to enhance {}: {}",
-                        package.name, e
-                    );
+                    warn!("Failed to enhance {}: {}", package.name, e);
                     if self.options.fail_fast {
                         return Err(e);
                     }
@@ -279,20 +270,15 @@ impl<'a> EnhancementRunner<'a> {
 // ============================================================================
 
 /// Mode for handling enhancement during package installation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum EnhancementMode {
     /// Run enhancement synchronously during installation (blocking)
     Immediate,
     /// Schedule enhancement for background processing (non-blocking)
+    #[default]
     Lazy,
     /// Skip enhancement entirely
     Skip,
-}
-
-impl Default for EnhancementMode {
-    fn default() -> Self {
-        Self::Lazy
-    }
 }
 
 /// Schedule a converted package for lazy enhancement
@@ -326,7 +312,10 @@ pub fn schedule_for_enhancement(
 
     match status.as_deref() {
         Some("complete") | Some("in_progress") => {
-            debug!("Skipping schedule for trove_id={}: already enhanced/in progress", trove_id);
+            debug!(
+                "Skipping schedule for trove_id={}: already enhanced/in progress",
+                trove_id
+            );
             return Ok(false);
         }
         _ => {}
@@ -340,28 +329,37 @@ pub fn schedule_for_enhancement(
         rusqlite::params![trove_id, priority.as_i32()],
     )?;
 
-    info!("Scheduled trove_id={} for lazy enhancement (priority={})", trove_id, priority);
+    info!(
+        "Scheduled trove_id={} for lazy enhancement (priority={})",
+        trove_id, priority
+    );
     Ok(true)
 }
 
 /// Priority levels for enhancement scheduling
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum EnhancementPriority {
     /// Low priority - background enhancement
     Low = 0,
     /// Normal priority - standard packages
+    #[default]
     Normal = 1,
     /// High priority - security-sensitive packages
     High = 2,
     /// Critical priority - packages with network access
     Critical = 3,
-}
-
-impl Default for EnhancementPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl EnhancementPriority {
@@ -456,13 +454,9 @@ pub enum EnhancementWindowStatus {
     /// Enhancement is complete - full capability enforcement available
     Complete,
     /// Enhancement is pending or in progress - capabilities not yet known
-    InProgress {
-        package_name: String,
-    },
+    InProgress { package_name: String },
     /// Enhancement failed - capabilities may be incomplete
-    Failed {
-        package_name: String,
-    },
+    Failed { package_name: String },
     /// Enhancement was skipped (not needed)
     Skipped,
     /// Not a converted package
@@ -595,19 +589,33 @@ mod tests {
     fn test_enhancement_window_status() {
         // Test usability
         assert!(EnhancementWindowStatus::Complete.is_usable());
-        assert!(EnhancementWindowStatus::InProgress { package_name: "test".into() }.is_usable());
+        assert!(
+            EnhancementWindowStatus::InProgress {
+                package_name: "test".into()
+            }
+            .is_usable()
+        );
         assert!(!EnhancementWindowStatus::Unknown.is_usable());
 
         // Test completeness
         assert!(EnhancementWindowStatus::Complete.is_complete());
         assert!(EnhancementWindowStatus::Skipped.is_complete());
-        assert!(!EnhancementWindowStatus::InProgress { package_name: "test".into() }.is_complete());
+        assert!(
+            !EnhancementWindowStatus::InProgress {
+                package_name: "test".into()
+            }
+            .is_complete()
+        );
     }
 
     #[test]
     fn test_enhancement_window_warning() {
         // No warning for complete
-        assert!(EnhancementWindowStatus::Complete.warning_message().is_none());
+        assert!(
+            EnhancementWindowStatus::Complete
+                .warning_message()
+                .is_none()
+        );
 
         // Warning for in-progress
         let warning = EnhancementWindowStatus::InProgress {
@@ -639,9 +647,7 @@ mod tests {
 
     #[test]
     fn test_parallel_options() {
-        let opts = EnhancementOptions::default()
-            .parallel(true)
-            .workers(4);
+        let opts = EnhancementOptions::default().parallel(true).workers(4);
 
         assert!(opts.parallel);
         assert_eq!(opts.parallel_workers, 4);

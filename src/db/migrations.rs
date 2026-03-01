@@ -566,16 +566,10 @@ pub fn migrate_v14(conn: &Connection) -> Result<()> {
     debug!("Migrating to schema version 14");
 
     // Add flavor_spec column - NULL for packages without flavor requirements
-    conn.execute(
-        "ALTER TABLE troves ADD COLUMN flavor_spec TEXT",
-        [],
-    )?;
+    conn.execute("ALTER TABLE troves ADD COLUMN flavor_spec TEXT", [])?;
 
     // Index for efficient flavor-based queries and matching
-    conn.execute(
-        "CREATE INDEX idx_troves_flavor ON troves(flavor_spec)",
-        [],
-    )?;
+    conn.execute("CREATE INDEX idx_troves_flavor ON troves(flavor_spec)", [])?;
 
     info!("Schema version 14 applied successfully");
     Ok(())
@@ -624,10 +618,7 @@ pub fn migrate_v16(conn: &Connection) -> Result<()> {
     debug!("Migrating to schema version 16");
 
     // Add selection_reason column - NULL for existing packages (will show as "Unknown")
-    conn.execute(
-        "ALTER TABLE troves ADD COLUMN selection_reason TEXT",
-        [],
-    )?;
+    conn.execute("ALTER TABLE troves ADD COLUMN selection_reason TEXT", [])?;
 
     // Update existing packages with default reasons based on install_reason
     conn.execute(
@@ -759,7 +750,10 @@ pub fn migrate_v17(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    info!("Schema version 17 applied successfully (trigger system with {} built-in triggers)", 10);
+    info!(
+        "Schema version 17 applied successfully (trigger system with {} built-in triggers)",
+        10
+    );
     Ok(())
 }
 

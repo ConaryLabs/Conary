@@ -52,7 +52,9 @@ impl SignatureProvenance {
 
     /// Check if this package has security review
     pub fn has_security_review(&self) -> bool {
-        self.reviewer_sigs.iter().any(|s| s.scope == SignatureScope::Security)
+        self.reviewer_sigs
+            .iter()
+            .any(|s| s.scope == SignatureScope::Security)
     }
 
     /// Get all signers (builder + reviewers)
@@ -283,8 +285,8 @@ mod tests {
 
     #[test]
     fn test_signature_creation() {
-        let sig = Signature::builder("builder@example.com", "base64sig==")
-            .with_algorithm("ed25519");
+        let sig =
+            Signature::builder("builder@example.com", "base64sig==").with_algorithm("ed25519");
 
         assert_eq!(sig.scope, SignatureScope::Build);
         assert_eq!(sig.algorithm.as_deref(), Some("ed25519"));
@@ -292,9 +294,8 @@ mod tests {
 
     #[test]
     fn test_signature_provenance() {
-        let mut prov = SignatureProvenance::with_builder(
-            Signature::builder("builder@example.com", "sig1==")
-        );
+        let mut prov =
+            SignatureProvenance::with_builder(Signature::builder("builder@example.com", "sig1=="));
 
         assert!(prov.is_signed());
         assert!(!prov.has_security_review());
@@ -307,8 +308,7 @@ mod tests {
 
     #[test]
     fn test_rekor_log() {
-        let log = TransparencyLog::rekor(12345678)
-            .with_proof("inclusion_proof_base64");
+        let log = TransparencyLog::rekor(12345678).with_proof("inclusion_proof_base64");
 
         assert!(log.entry_url.as_ref().unwrap().contains("12345678"));
         assert!(log.inclusion_proof.is_some());
@@ -316,12 +316,10 @@ mod tests {
 
     #[test]
     fn test_canonical_bytes() {
-        let prov1 = SignatureProvenance::with_builder(
-            Signature::builder("builder@example.com", "sig==")
-        );
-        let prov2 = SignatureProvenance::with_builder(
-            Signature::builder("builder@example.com", "sig==")
-        );
+        let prov1 =
+            SignatureProvenance::with_builder(Signature::builder("builder@example.com", "sig=="));
+        let prov2 =
+            SignatureProvenance::with_builder(Signature::builder("builder@example.com", "sig=="));
 
         assert_eq!(prov1.canonical_bytes(), prov2.canonical_bytes());
     }

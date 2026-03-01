@@ -65,9 +65,16 @@ pub fn cmd_label_add(
 
     // Check if already exists
     if let Some(existing) = conary::db::models::LabelEntry::find_by_spec(
-        &conn, &spec.repository, &spec.namespace, &spec.tag
+        &conn,
+        &spec.repository,
+        &spec.namespace,
+        &spec.tag,
     )? {
-        println!("Label '{}' already exists (id={})", label_str, existing.id.unwrap_or(0));
+        println!(
+            "Label '{}' already exists (id={})",
+            label_str,
+            existing.id.unwrap_or(0)
+        );
         return Ok(());
     }
 
@@ -114,7 +121,8 @@ pub fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<(
     if pkg_count > 0 && !force {
         return Err(anyhow::anyhow!(
             "Cannot remove label '{}': {} package(s) use it. Use --force to override.",
-            label_str, pkg_count
+            label_str,
+            pkg_count
         ));
     }
 
@@ -124,7 +132,8 @@ pub fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<(
         let child_names: Vec<String> = children.iter().map(|c| c.to_string()).collect();
         return Err(anyhow::anyhow!(
             "Cannot remove label '{}': has child labels ({}). Use --force to override.",
-            label_str, child_names.join(", ")
+            label_str,
+            child_names.join(", ")
         ));
     }
 
@@ -153,8 +162,13 @@ pub fn cmd_label_path(
 
     // Handle modifications
     if let Some(label_str) = add {
-        let label = conary::db::models::LabelEntry::find_by_string(&conn, label_str)?
-            .ok_or_else(|| anyhow::anyhow!("Label '{}' not found. Add it first with 'conary label-add'.", label_str))?;
+        let label =
+            conary::db::models::LabelEntry::find_by_string(&conn, label_str)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Label '{}' not found. Add it first with 'conary label-add'.",
+                    label_str
+                )
+            })?;
 
         let label_id = label.id.ok_or_else(|| anyhow::anyhow!("Label has no ID"))?;
         let prio = priority.unwrap_or(50); // Default priority
@@ -201,7 +215,10 @@ pub fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
 
     let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' is not installed",
+            package_name
+        ));
     }
 
     for trove in &troves {
@@ -228,7 +245,10 @@ pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Resu
     // Find the package
     let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' is not installed",
+            package_name
+        ));
     }
 
     // Find or create the label
@@ -245,7 +265,10 @@ pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Resu
                 "UPDATE troves SET label_id = ?1 WHERE id = ?2",
                 rusqlite::params![label_id, trove_id],
             )?;
-            println!("Set label for {} {} to {}", trove.name, trove.version, label_str);
+            println!(
+                "Set label for {} {} to {}",
+                trove.name, trove.version, label_str
+            );
         }
     }
 
@@ -264,7 +287,7 @@ pub fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
 
     // Query packages with this label
     let mut stmt = conn.prepare(
-        "SELECT name, version, architecture FROM troves WHERE label_id = ?1 ORDER BY name, version"
+        "SELECT name, version, architecture FROM troves WHERE label_id = ?1 ORDER BY name, version",
     )?;
 
     let packages: Vec<(String, String, Option<String>)> = stmt
@@ -315,20 +338,25 @@ pub fn cmd_label_link(
         return Ok(());
     }
 
-    let repo_name = repository
-        .ok_or_else(|| anyhow::anyhow!("Repository name required (or use --unlink)"))?;
+    let repo_name =
+        repository.ok_or_else(|| anyhow::anyhow!("Repository name required (or use --unlink)"))?;
 
     // Find the repository
     let repo = conary::db::models::Repository::find_by_name(&conn, repo_name)?
         .ok_or_else(|| anyhow::anyhow!("Repository '{}' not found", repo_name))?;
 
-    let repo_id = repo.id.ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let repo_id = repo
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
 
     // Set the repository link
     label.set_repository(&conn, Some(repo_id))?;
 
     println!("Linked label '{}' to repository '{}'", label_str, repo_name);
-    println!("Packages resolved through this label will come from '{}'", repo_name);
+    println!(
+        "Packages resolved through this label will come from '{}'",
+        repo_name
+    );
 
     Ok(())
 }
@@ -358,14 +386,16 @@ pub fn cmd_label_delegate(
         return Ok(());
     }
 
-    let target_str = target
-        .ok_or_else(|| anyhow::anyhow!("Target label required (or use --undelegate)"))?;
+    let target_str =
+        target.ok_or_else(|| anyhow::anyhow!("Target label required (or use --undelegate)"))?;
 
     // Find the target label
     let target_label = conary::db::models::LabelEntry::find_by_string(&conn, target_str)?
         .ok_or_else(|| anyhow::anyhow!("Target label '{}' not found", target_str))?;
 
-    let target_id = target_label.id.ok_or_else(|| anyhow::anyhow!("Target label has no ID"))?;
+    let target_id = target_label
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Target label has no ID"))?;
 
     // Check for self-delegation
     if label.id == Some(target_id) {
@@ -376,7 +406,8 @@ pub fn cmd_label_delegate(
     if target_label.delegate_to_label_id == label.id {
         return Err(anyhow::anyhow!(
             "Circular delegation detected: '{}' already delegates to '{}'",
-            target_str, label_str
+            target_str,
+            label_str
         ));
     }
 
@@ -384,7 +415,10 @@ pub fn cmd_label_delegate(
     label.set_delegate(&conn, Some(target_id))?;
 
     println!("Label '{}' now delegates to '{}'", label_str, target_str);
-    println!("Packages resolved through '{}' will be fetched from '{}'", label_str, target_str);
+    println!(
+        "Packages resolved through '{}' will be fetched from '{}'",
+        label_str, target_str
+    );
 
     Ok(())
 }

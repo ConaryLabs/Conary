@@ -56,7 +56,10 @@ impl CasStore {
     /// // Secure CAS for package verification
     /// let secure_cas = CasStore::with_algorithm("/var/lib/conary/objects", HashAlgorithm::Sha256)?;
     /// ```
-    pub fn with_algorithm<P: AsRef<Path>>(objects_dir: P, algorithm: HashAlgorithm) -> Result<Self> {
+    pub fn with_algorithm<P: AsRef<Path>>(
+        objects_dir: P,
+        algorithm: HashAlgorithm,
+    ) -> Result<Self> {
         let objects_dir = objects_dir.as_ref().to_path_buf();
 
         // Create objects directory if it doesn't exist
@@ -143,14 +146,15 @@ impl CasStore {
         if computed_hash != hash {
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!(
-                    "Hash mismatch: expected {}, got {}",
-                    hash, computed_hash
-                ),
+                format!("Hash mismatch: expected {}, got {}", hash, computed_hash),
             )));
         }
 
-        debug!("Retrieved content from CAS: {} ({} bytes)", hash, content.len());
+        debug!(
+            "Retrieved content from CAS: {} ({} bytes)",
+            hash,
+            content.len()
+        );
         Ok(content)
     }
 
@@ -481,7 +485,11 @@ mod tests {
         );
 
         // Hash should be 64 chars (SHA-256), not 32 (XXH128)
-        assert_eq!(stored_hash.len(), 64, "Symlink hash must be SHA-256 (64 chars)");
+        assert_eq!(
+            stored_hash.len(),
+            64,
+            "Symlink hash must be SHA-256 (64 chars)"
+        );
 
         // Verify the symlink can be retrieved
         let retrieved = cas.retrieve_symlink(&stored_hash).unwrap();

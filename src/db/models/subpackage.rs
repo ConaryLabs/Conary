@@ -9,7 +9,7 @@
 //! - User guidance when installing related packages
 
 use crate::error::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// A subpackage relationship record
 #[derive(Debug, Clone)]
@@ -196,10 +196,11 @@ impl SubpackageRelationship {
     /// Check if a package name matches the virtual provide pattern
     /// e.g., "nginx:devel" matches base="nginx", component="devel"
     pub fn parse_virtual_provide(name: &str) -> Option<(String, String)> {
-        if let Some((base, component)) = name.split_once(':') {
-            if !base.is_empty() && !component.is_empty() {
-                return Some((base.to_string(), component.to_string()));
-            }
+        if let Some((base, component)) = name.split_once(':')
+            && !base.is_empty()
+            && !component.is_empty()
+        {
+            return Some((base.to_string(), component.to_string()));
         }
         None
     }
@@ -228,10 +229,7 @@ impl SubpackageRelationship {
     ///
     /// Returns (base_package, subpackages) if this is a base package with subpackages,
     /// or (base_package, siblings) if this is a subpackage.
-    pub fn get_related_packages(
-        conn: &Connection,
-        package_name: &str,
-    ) -> Result<RelatedPackages> {
+    pub fn get_related_packages(conn: &Connection, package_name: &str) -> Result<RelatedPackages> {
         // Check if this is a subpackage
         if let Some(rel) = Self::find_by_subpackage(conn, package_name)? {
             // This is a subpackage - find siblings and base
@@ -288,11 +286,11 @@ impl RelatedPackages {
                 if subpackages.is_empty() {
                     None
                 } else {
-                    let types: Vec<_> = subpackages.iter().map(|s| s.component_type.as_str()).collect();
-                    Some(format!(
-                        "Available subpackages: {}",
-                        types.join(", ")
-                    ))
+                    let types: Vec<_> = subpackages
+                        .iter()
+                        .map(|s| s.component_type.as_str())
+                        .collect();
+                    Some(format!("Available subpackages: {}", types.join(", ")))
                 }
             }
             Self::Subpackage {
@@ -305,7 +303,8 @@ impl RelatedPackages {
                     component_type, base_package
                 );
                 if !siblings.is_empty() {
-                    let sibling_types: Vec<_> = siblings.iter().map(|s| s.component_type.as_str()).collect();
+                    let sibling_types: Vec<_> =
+                        siblings.iter().map(|s| s.component_type.as_str()).collect();
                     msg.push_str(&format!(". Other components: {}", sibling_types.join(", ")));
                 }
                 Some(msg)
@@ -429,7 +428,8 @@ mod tests {
 
     #[test]
     fn test_parse_virtual_provide() {
-        let (base, component) = SubpackageRelationship::parse_virtual_provide("nginx:devel").unwrap();
+        let (base, component) =
+            SubpackageRelationship::parse_virtual_provide("nginx:devel").unwrap();
         assert_eq!(base, "nginx");
         assert_eq!(component, "devel");
 

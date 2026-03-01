@@ -49,7 +49,8 @@ impl InspectedPackage {
                 manifest = Some(CcsManifest::parse(&content)?);
             }
             // Read component files (files are stored in components/*.json per spec)
-            else if (entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/"))
+            else if (entry_path_str.starts_with("components/")
+                || entry_path_str.starts_with("./components/"))
                 && entry_path_str.ends_with(".json")
             {
                 let mut content = String::new();
@@ -62,10 +63,7 @@ impl InspectedPackage {
         let manifest = manifest.ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST.toml"))?;
 
         // Collect files from components (spec says files live in components/*.json)
-        let files: Vec<FileEntry> = components
-            .values()
-            .flat_map(|c| c.files.clone())
-            .collect();
+        let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
 
         Ok(InspectedPackage {
             manifest,
@@ -121,7 +119,13 @@ pub fn print_summary(pkg: &InspectedPackage) {
         let comp = &pkg.components[name];
         let is_default = pkg.manifest.components.default.contains(name);
         let marker = if is_default { " (default)" } else { "" };
-        println!("  :{} - {} files ({} bytes){}", name, comp.files.len(), comp.size, marker);
+        println!(
+            "  :{} - {} files ({} bytes){}",
+            name,
+            comp.files.len(),
+            comp.size,
+            marker
+        );
     }
 }
 
@@ -144,12 +148,9 @@ pub fn print_files(pkg: &InspectedPackage) {
             format!("{:>10}", file.size)
         };
 
-        println!("{}{} :{:<8} {} {}",
-            type_char,
-            mode_str,
-            file.component,
-            size_or_target,
-            file.path
+        println!(
+            "{}{} :{:<8} {} {}",
+            type_char, mode_str, file.component, size_or_target, file.path
         );
     }
 }
@@ -194,8 +195,10 @@ pub fn print_hooks(pkg: &InspectedPackage) {
     if !hooks.directories.is_empty() {
         println!("Directories:");
         for dir in &hooks.directories {
-            println!("  - {} (mode={}, owner={}:{})",
-                dir.path, dir.mode, dir.owner, dir.group);
+            println!(
+                "  - {} (mode={}, owner={}:{})",
+                dir.path, dir.mode, dir.owner, dir.group
+            );
         }
         println!();
     }
@@ -212,7 +215,10 @@ pub fn print_hooks(pkg: &InspectedPackage) {
     if !hooks.alternatives.is_empty() {
         println!("Alternatives:");
         for alt in &hooks.alternatives {
-            println!("  - {} -> {} (priority={})", alt.name, alt.path, alt.priority);
+            println!(
+                "  - {} -> {} (priority={})",
+                alt.name, alt.path, alt.priority
+            );
         }
         println!();
     }
@@ -253,7 +259,12 @@ pub fn print_dependencies(pkg: &InspectedPackage) {
 }
 
 /// Print as JSON
-pub fn print_json(pkg: &InspectedPackage, show_files: bool, show_hooks: bool, show_deps: bool) -> Result<()> {
+pub fn print_json(
+    pkg: &InspectedPackage,
+    show_files: bool,
+    show_hooks: bool,
+    show_deps: bool,
+) -> Result<()> {
     #[derive(Serialize)]
     struct JsonOutput<'a> {
         name: &'a str,
@@ -283,9 +294,21 @@ pub fn print_json(pkg: &InspectedPackage, show_files: bool, show_hooks: bool, sh
         total_size: pkg.total_size(),
         components: &pkg.components,
         files: if show_files { Some(&pkg.files) } else { None },
-        hooks: if show_hooks { Some(&pkg.manifest.hooks) } else { None },
-        provides: if show_deps { Some(&pkg.manifest.provides) } else { None },
-        requires: if show_deps { Some(&pkg.manifest.requires) } else { None },
+        hooks: if show_hooks {
+            Some(&pkg.manifest.hooks)
+        } else {
+            None
+        },
+        provides: if show_deps {
+            Some(&pkg.manifest.provides)
+        } else {
+            None
+        },
+        requires: if show_deps {
+            Some(&pkg.manifest.requires)
+        } else {
+            None
+        },
     };
 
     println!("{}", serde_json::to_string_pretty(&output)?);

@@ -164,7 +164,10 @@ impl RepositoryParser for DebianParser {
                     serde_json::Value::String(installed_size),
                 );
             }
-            extra.insert("format".to_string(), serde_json::Value::String("deb".to_string()));
+            extra.insert(
+                "format".to_string(),
+                serde_json::Value::String("deb".to_string()),
+            );
             extra.insert(
                 "distribution".to_string(),
                 serde_json::Value::String(self.distribution.clone()),
@@ -201,7 +204,8 @@ mod tests {
 
     #[test]
     fn test_parse_dependency() {
-        let parser = DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
+        let parser =
+            DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
 
         let (name, constraint) = parser.parse_dependency("libc6 (>= 2.34)").unwrap();
         assert_eq!(name, "libc6");
@@ -214,7 +218,8 @@ mod tests {
 
     #[test]
     fn test_parse_dependencies() {
-        let parser = DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
+        let parser =
+            DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
 
         let deps = parser.parse_dependencies("libc6 (>= 2.34), bash (= 5.2-1), coreutils");
         assert_eq!(deps.len(), 3);
@@ -225,7 +230,8 @@ mod tests {
 
     #[test]
     fn test_parse_alternatives() {
-        let parser = DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
+        let parser =
+            DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
 
         // Should take first alternative
         let deps = parser.parse_dependencies("package-a | package-b, other-package");

@@ -27,17 +27,21 @@ pub mod verify;
 
 pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
 pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry, FileType};
-pub use chunking::{Chunk, ChunkedFile, Chunker, ChunkStore, DeltaStats, StoreStats};
-pub use convert::{ConversionOptions, ConversionResult, FidelityLevel, FidelityReport, LegacyConverter};
+pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
+pub use convert::{
+    ConversionOptions, ConversionResult, FidelityLevel, FidelityReport, LegacyConverter,
+};
 pub use enhancement::{
-    EnhancementContext, EnhancementEngine, EnhancementError, EnhancementRegistry,
-    EnhancementRunner, EnhancementStatus, EnhancementType, ENHANCEMENT_VERSION,
+    ENHANCEMENT_VERSION, EnhancementContext, EnhancementEngine, EnhancementError,
+    EnhancementRegistry, EnhancementRunner, EnhancementStatus, EnhancementType,
 };
 pub use hooks::{AppliedHook, HookExecutionResults, HookExecutor, HookResult, HookType};
-pub use lockfile::{DependencyKind, LockedDependency, Lockfile, LockfileError, LOCKFILE_NAME, LOCKFILE_VERSION};
 pub use inspector::InspectedPackage;
+pub use lockfile::{
+    DependencyKind, LOCKFILE_NAME, LOCKFILE_VERSION, LockedDependency, Lockfile, LockfileError,
+};
 pub use manifest::CcsManifest;
 pub use package::CcsPackage;
-pub use signing::SigningKeyPair;
 pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
+pub use signing::SigningKeyPair;
 pub use verify::{TrustPolicy, VerificationResult};

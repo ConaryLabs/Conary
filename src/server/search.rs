@@ -11,10 +11,10 @@ use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery, TermQuery};
 use tantivy::schema::{
-    self, Facet, FacetOptions, Field, NumericOptions, Schema, TextFieldIndexing, TextOptions,
-    Value, STORED, STRING,
+    self, Facet, FacetOptions, Field, NumericOptions, STORED, STRING, Schema, TextFieldIndexing,
+    TextOptions, Value,
 };
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term, doc};
 
 /// Document to be indexed in the search engine
 #[derive(Debug, Clone)]
@@ -72,8 +72,9 @@ impl SearchEngine {
         let converted_field = schema.get_field("converted").unwrap();
 
         // Create or open index
-        std::fs::create_dir_all(index_dir)
-            .with_context(|| format!("Failed to create index directory: {}", index_dir.display()))?;
+        std::fs::create_dir_all(index_dir).with_context(|| {
+            format!("Failed to create index directory: {}", index_dir.display())
+        })?;
 
         let index = if index_dir.join("meta.json").exists() {
             match Index::open_in_dir(index_dir) {
@@ -85,8 +86,9 @@ impl SearchEngine {
                         let entry = entry?;
                         std::fs::remove_file(entry.path()).ok();
                     }
-                    Index::create_in_dir(index_dir, schema)
-                        .with_context(|| format!("Failed to create index at {}", index_dir.display()))?
+                    Index::create_in_dir(index_dir, schema).with_context(|| {
+                        format!("Failed to create index at {}", index_dir.display())
+                    })?
                 }
             }
         } else {
@@ -156,10 +158,7 @@ impl SearchEngine {
         schema_builder.add_text_field("dependencies", deps_options);
 
         // Size: numeric, stored and fast for sorting
-        schema_builder.add_u64_field(
-            "size",
-            NumericOptions::default().set_stored().set_fast(),
-        );
+        schema_builder.add_u64_field("size", NumericOptions::default().set_stored().set_fast());
 
         // Converted: boolean as u64 (0/1), stored and fast
         schema_builder.add_u64_field(
@@ -187,10 +186,7 @@ impl SearchEngine {
     fn write_package(&self, writer: &mut IndexWriter, pkg: &PackageSearchDoc) -> Result<()> {
         // Delete existing document with same name+distro (composite key)
         let composite_key = format!("{}\0{}", pkg.name, pkg.distro);
-        let delete_term = Term::from_field_text(
-            self.name_distro_field,
-            &composite_key,
-        );
+        let delete_term = Term::from_field_text(self.name_distro_field, &composite_key);
         writer.delete_term(delete_term);
 
         let distro_facet = Facet::from(&format!("/{}", pkg.distro));
@@ -413,8 +409,7 @@ fn regex_escape(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len() * 2);
     for c in s.chars() {
         match c {
-            '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '\\' | '|' | '^'
-            | '$' => {
+            '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '\\' | '|' | '^' | '$' => {
                 escaped.push('\\');
                 escaped.push(c);
             }

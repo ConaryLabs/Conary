@@ -39,9 +39,11 @@
 //! - Split packages (pkgname=(...)) are not supported
 //! - VCS packages (-git, -svn) need manual adjustment
 
-use crate::recipe::format::{BuildSection, PatchInfo, PatchSection, Recipe, PackageSection, SourceSection};
-use std::collections::HashMap;
+use crate::recipe::format::{
+    BuildSection, PackageSection, PatchInfo, PatchSection, Recipe, SourceSection,
+};
 use regex::Regex;
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -80,21 +82,26 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let functions = extract_functions(content);
 
     // Required variables
-    let pkgname = vars.get("pkgname")
+    let pkgname = vars
+        .get("pkgname")
         .ok_or_else(|| PkgbuildError::MissingVariable("pkgname".to_string()))?
         .clone();
 
-    let pkgver = vars.get("pkgver")
+    let pkgver = vars
+        .get("pkgver")
         .ok_or_else(|| PkgbuildError::MissingVariable("pkgver".to_string()))?
         .clone();
 
-    let pkgrel = vars.get("pkgrel")
+    let pkgrel = vars
+        .get("pkgrel")
         .cloned()
         .unwrap_or_else(|| "1".to_string());
 
     // Check for split packages
     if pkgname.starts_with('(') {
-        return Err(PkgbuildError::Unsupported("Split packages (pkgname=(...)) are not supported".to_string()));
+        return Err(PkgbuildError::Unsupported(
+            "Split packages (pkgname=(...)) are not supported".to_string(),
+        ));
     }
 
     // Optional variables
@@ -115,7 +122,8 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     }
 
     let source_url = convert_pkgbuild_url(&sources[0], &pkgname, &pkgver);
-    let checksum = checksums.as_ref()
+    let checksum = checksums
+        .as_ref()
         .and_then(|c| c.first())
         .map(|s| format!("sha256:{}", s))
         .unwrap_or_else(|| {
@@ -124,10 +132,13 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
         });
 
     // Handle additional sources
-    let additional_sources: Vec<_> = sources.iter().skip(1)
+    let additional_sources: Vec<_> = sources
+        .iter()
+        .skip(1)
         .enumerate()
         .map(|(i, url)| {
-            let cs = checksums.as_ref()
+            let cs = checksums
+                .as_ref()
                 .and_then(|c| c.get(i + 1))
                 .map(|s| format!("sha256:{}", s))
                 .unwrap_or_else(|| "SKIP".to_string());
@@ -143,7 +154,8 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let depends = extract_array(content, "depends").unwrap_or_default();
     let makedepends = extract_array(content, "makedepends").unwrap_or_default();
 
-    let mut build_requires: Vec<String> = makedepends.iter()
+    let mut build_requires: Vec<String> = makedepends
+        .iter()
         .map(|d| d.split(['>', '<', '=']).next().unwrap_or(d).to_string())
         .collect();
 
@@ -156,10 +168,18 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     }
 
     // Convert build functions to commands
-    let build_cmd = functions.get("build").map(|f| convert_function_body(f, &pkgname, &pkgver));
-    let package_cmd = functions.get("package").map(|f| convert_function_body(f, &pkgname, &pkgver));
-    let prepare_cmd = functions.get("prepare").map(|f| convert_function_body(f, &pkgname, &pkgver));
-    let check_cmd = functions.get("check").map(|f| convert_function_body(f, &pkgname, &pkgver));
+    let build_cmd = functions
+        .get("build")
+        .map(|f| convert_function_body(f, &pkgname, &pkgver));
+    let package_cmd = functions
+        .get("package")
+        .map(|f| convert_function_body(f, &pkgname, &pkgver));
+    let prepare_cmd = functions
+        .get("prepare")
+        .map(|f| convert_function_body(f, &pkgname, &pkgver));
+    let check_cmd = functions
+        .get("check")
+        .map(|f| convert_function_body(f, &pkgname, &pkgver));
 
     // Try to split build into configure and make
     let (configure, make) = if let Some(ref build) = build_cmd {
@@ -172,16 +192,18 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let install = package_cmd.map(|cmd| {
         // Replace $pkgdir with %(destdir)s
         cmd.replace("$pkgdir", "%(destdir)s")
-           .replace("${pkgdir}", "%(destdir)s")
+            .replace("${pkgdir}", "%(destdir)s")
     });
 
     // Detect patches from source array
-    let patches: Vec<PatchInfo> = sources.iter()
+    let patches: Vec<PatchInfo> = sources
+        .iter()
         .enumerate()
         .filter(|(_, s)| s.ends_with(".patch") || s.ends_with(".diff"))
         .map(|(i, s)| PatchInfo {
             file: convert_pkgbuild_url(s, &pkgname, &pkgver),
-            checksum: checksums.as_ref()
+            checksum: checksums
+                .as_ref()
                 .and_then(|c| c.get(i))
                 .map(|cs| format!("sha256:{}", cs)),
             strip: 1,
@@ -241,7 +263,9 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
         warnings.push("VCS package detected - source URL may need manual adjustment".to_string());
     }
     if functions.contains_key("pkgver") {
-        warnings.push("Dynamic pkgver() function detected - version may need manual update".to_string());
+        warnings.push(
+            "Dynamic pkgver() function detected - version may need manual update".to_string(),
+        );
     }
 
     Ok(ConversionResult { recipe, warnings })
@@ -258,8 +282,16 @@ fn extract_variables(content: &str) -> Result<HashMap<String, String>, PkgbuildE
     for line in content.lines() {
         let line = line.trim();
         if let Some(caps) = re.captures(line) {
-            let name = caps.get(1).expect("regex capture group must exist").as_str().to_string();
-            let value = caps.get(2).expect("regex capture group must exist").as_str().to_string();
+            let name = caps
+                .get(1)
+                .expect("regex capture group must exist")
+                .as_str()
+                .to_string();
+            let value = caps
+                .get(2)
+                .expect("regex capture group must exist")
+                .as_str()
+                .to_string();
             vars.insert(name, value);
         }
     }
@@ -277,14 +309,16 @@ fn extract_array(content: &str, name: &str) -> Option<Vec<String>> {
         let array_content = caps.get(1)?.as_str();
         // Extract quoted values
         let value_re = Regex::new(r#"["']([^"']+)["']"#).ok()?;
-        let values: Vec<String> = value_re.captures_iter(array_content)
+        let values: Vec<String> = value_re
+            .captures_iter(array_content)
             .filter_map(|c| c.get(1))
             .map(|m| m.as_str().to_string())
             .collect();
 
         if values.is_empty() {
             // Try unquoted values
-            let values: Vec<String> = array_content.split_whitespace()
+            let values: Vec<String> = array_content
+                .split_whitespace()
                 .map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -306,7 +340,10 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
     let fn_re = Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex");
 
     for caps in fn_re.captures_iter(content) {
-        let fn_name = caps.get(1).expect("regex capture group must exist").as_str();
+        let fn_name = caps
+            .get(1)
+            .expect("regex capture group must exist")
+            .as_str();
         let start = caps.get(0).expect("regex capture group must exist").end();
 
         // Find matching closing brace (simple nesting)
@@ -339,14 +376,25 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
 /// Convert PKGBUILD URL format to Recipe format
 fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
     // Replace $pkgname, ${pkgname}, $pkgver, ${pkgver}
-    let url = url.replace("$pkgname", "%(name)s")
+    let url = url
+        .replace("$pkgname", "%(name)s")
         .replace("${pkgname}", "%(name)s")
         .replace("$pkgver", "%(version)s")
         .replace("${pkgver}", "%(version)s");
 
     // Handle ${pkgver%.*} (version without last component)
     // This is common but hard to replicate exactly, so we just use full version
-    let url = url.replace("${pkgver%.*}", &pkgver.rsplit('.').skip(1).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("."));
+    let url = url.replace(
+        "${pkgver%.*}",
+        &pkgver
+            .rsplit('.')
+            .skip(1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("."),
+    );
 
     // Replace actual values with placeholders where they appear literally
     let url = url.replace(pkgname, "%(name)s");
@@ -365,35 +413,26 @@ fn convert_function_body(body: &str, pkgname: &str, pkgver: &str) -> String {
 
 /// Try to split build commands into configure and make steps
 fn split_build_commands(build: &str) -> (Option<String>, Option<String>) {
-    let lines: Vec<&str> = build.lines()
+    let lines: Vec<&str> = build
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("cd "))
         .collect();
 
     // Look for configure command
-    let configure_idx = lines.iter().position(|l|
-        l.contains("./configure") ||
-        l.contains("cmake") ||
-        l.contains("meson")
-    );
+    let configure_idx = lines
+        .iter()
+        .position(|l| l.contains("./configure") || l.contains("cmake") || l.contains("meson"));
 
     // Look for make command
-    let make_idx = lines.iter().position(|l|
-        l.starts_with("make") ||
-        l.starts_with("ninja") ||
-        l.contains("cmake --build")
-    );
+    let make_idx = lines.iter().position(|l| {
+        l.starts_with("make") || l.starts_with("ninja") || l.contains("cmake --build")
+    });
 
     match (configure_idx, make_idx) {
-        (Some(c), Some(m)) if c < m => {
-            (Some(lines[c].to_string()), Some(lines[m..].join("\n")))
-        }
-        (Some(c), None) => {
-            (Some(lines[c].to_string()), None)
-        }
-        (None, Some(m)) => {
-            (None, Some(lines[m..].join("\n")))
-        }
+        (Some(c), Some(m)) if c < m => (Some(lines[c].to_string()), Some(lines[m..].join("\n"))),
+        (Some(c), None) => (Some(lines[c].to_string()), None),
+        (None, Some(m)) => (None, Some(lines[m..].join("\n"))),
         _ => {
             // Can't split, return everything as make
             (None, Some(build.to_string()))

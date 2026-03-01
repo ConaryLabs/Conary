@@ -11,8 +11,8 @@ use crate::packages::deb::DebPackage;
 use crate::packages::rpm::RpmPackage;
 use crate::packages::traits::PackageFormat;
 use crate::provenance::{
-    BuildProvenance, ContentProvenance, HostAttestation, Provenance, Signature, SignatureProvenance,
-    SignatureScope, SourceProvenance,
+    BuildProvenance, ContentProvenance, HostAttestation, Provenance, Signature,
+    SignatureProvenance, SignatureScope, SourceProvenance,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,11 @@ impl LegacyProvenance {
     }
 
     /// Extract provenance from an RPM package with path for signature extraction
-    pub fn from_rpm_with_path(pkg: &RpmPackage, checksum: &str, package_path: Option<&str>) -> Self {
+    pub fn from_rpm_with_path(
+        pkg: &RpmPackage,
+        checksum: &str,
+        package_path: Option<&str>,
+    ) -> Self {
         let mut prov = Self::new("rpm", checksum);
 
         // Source layer
@@ -106,16 +110,16 @@ impl LegacyProvenance {
         }
 
         // Extract signature if we have the package path
-        if let Some(path) = package_path {
-            if let Some(sig) = extract_rpm_signature(path) {
-                prov.was_signed = true;
-                prov.signature_key_id = Some(sig.key_id);
-                prov.original_signature = if sig.signature_data.is_empty() {
-                    None
-                } else {
-                    Some(sig.signature_data)
-                };
-            }
+        if let Some(path) = package_path
+            && let Some(sig) = extract_rpm_signature(path)
+        {
+            prov.was_signed = true;
+            prov.signature_key_id = Some(sig.key_id);
+            prov.original_signature = if sig.signature_data.is_empty() {
+                None
+            } else {
+                Some(sig.signature_data)
+            };
         }
 
         prov
@@ -127,7 +131,11 @@ impl LegacyProvenance {
     }
 
     /// Extract provenance from a DEB package with path for signature extraction
-    pub fn from_deb_with_path(pkg: &DebPackage, checksum: &str, package_path: Option<&str>) -> Self {
+    pub fn from_deb_with_path(
+        pkg: &DebPackage,
+        checksum: &str,
+        package_path: Option<&str>,
+    ) -> Self {
         let mut prov = Self::new("deb", checksum);
 
         // Source layer
@@ -141,16 +149,16 @@ impl LegacyProvenance {
         prov.priority = pkg.priority().map(String::from);
 
         // Extract signature if we have the package path
-        if let Some(path) = package_path {
-            if let Some(sig) = extract_deb_signature(path) {
-                prov.was_signed = true;
-                prov.signature_key_id = Some(sig.key_id);
-                prov.original_signature = if sig.signature_data.is_empty() {
-                    None
-                } else {
-                    Some(sig.signature_data)
-                };
-            }
+        if let Some(path) = package_path
+            && let Some(sig) = extract_deb_signature(path)
+        {
+            prov.was_signed = true;
+            prov.signature_key_id = Some(sig.key_id);
+            prov.original_signature = if sig.signature_data.is_empty() {
+                None
+            } else {
+                Some(sig.signature_data)
+            };
         }
 
         prov
@@ -183,15 +191,17 @@ impl LegacyProvenance {
     /// Convert to a full Provenance structure for storage
     pub fn to_provenance(&self) -> Provenance {
         // Build source layer
-        let mut source = SourceProvenance::default();
-        source.upstream_url = self.upstream_url.clone();
+        let mut source = SourceProvenance {
+            upstream_url: self.upstream_url.clone(),
+            ..Default::default()
+        };
 
         // If we have a source RPM, record it as a reference
         if let Some(ref srpm) = self.source_rpm {
             // Source RPM is like a reference to the source package
-            source.upstream_url = source.upstream_url.or_else(|| {
-                Some(format!("srpm://{}", srpm))
-            });
+            source.upstream_url = source
+                .upstream_url
+                .or_else(|| Some(format!("srpm://{}", srpm)));
         }
 
         // Build build layer
@@ -210,11 +220,11 @@ impl LegacyProvenance {
         }
 
         // Parse and set build date
-        if let Some(ref date_str) = self.build_date {
-            if let Some(dt) = parse_build_date(date_str) {
-                build.build_start = Some(dt);
-                build.build_end = Some(dt);
-            }
+        if let Some(ref date_str) = self.build_date
+            && let Some(dt) = parse_build_date(date_str)
+        {
+            build.build_start = Some(dt);
+            build.build_end = Some(dt);
         }
 
         // Build signature layer
@@ -296,41 +306,31 @@ impl LegacyProvenance {
     ///
     /// # Returns
     /// Extracted provenance, or a basic provenance if parsing fails
-    pub fn extract_from_path(
-        format: &str,
-        checksum: &str,
-        path: &std::path::Path,
-    ) -> Self {
+    pub fn extract_from_path(format: &str, checksum: &str, path: &std::path::Path) -> Self {
         let path_str = path.to_string_lossy();
 
         match format {
-            "rpm" => {
-                match RpmPackage::parse(&path_str) {
-                    Ok(pkg) => Self::from_rpm_with_path(&pkg, checksum, Some(&path_str)),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse RPM for provenance: {}", e);
-                        Self::new("rpm", checksum)
-                    }
+            "rpm" => match RpmPackage::parse(&path_str) {
+                Ok(pkg) => Self::from_rpm_with_path(&pkg, checksum, Some(&path_str)),
+                Err(e) => {
+                    tracing::warn!("Failed to parse RPM for provenance: {}", e);
+                    Self::new("rpm", checksum)
                 }
-            }
-            "deb" => {
-                match DebPackage::parse(&path_str) {
-                    Ok(pkg) => Self::from_deb_with_path(&pkg, checksum, Some(&path_str)),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse DEB for provenance: {}", e);
-                        Self::new("deb", checksum)
-                    }
+            },
+            "deb" => match DebPackage::parse(&path_str) {
+                Ok(pkg) => Self::from_deb_with_path(&pkg, checksum, Some(&path_str)),
+                Err(e) => {
+                    tracing::warn!("Failed to parse DEB for provenance: {}", e);
+                    Self::new("deb", checksum)
                 }
-            }
-            "arch" => {
-                match ArchPackage::parse(&path_str) {
-                    Ok(pkg) => Self::from_arch(&pkg, checksum),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse Arch package for provenance: {}", e);
-                        Self::new("arch", checksum)
-                    }
+            },
+            "arch" => match ArchPackage::parse(&path_str) {
+                Ok(pkg) => Self::from_arch(&pkg, checksum),
+                Err(e) => {
+                    tracing::warn!("Failed to parse Arch package for provenance: {}", e);
+                    Self::new("arch", checksum)
                 }
-            }
+            },
             _ => {
                 tracing::warn!("Unknown package format for provenance: {}", format);
                 Self::new(format, checksum)
@@ -429,7 +429,7 @@ pub struct ExtractedSignature {
 ///
 /// Returns signature info if a signature is found.
 pub fn extract_rpm_signature(path: &str) -> Option<ExtractedSignature> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use rpm::IndexSignatureTag;
     use std::fs::File;
     use std::io::BufReader;
@@ -571,7 +571,7 @@ fn extract_pgp_key_id(sig_data: &[u8]) -> Option<String> {
 /// but this is not commonly used. Most Debian package verification
 /// is done via Release file signatures in the repository.
 pub fn extract_deb_signature(path: &str) -> Option<ExtractedSignature> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use std::fs::File;
     use std::io::Read;
 
@@ -819,7 +819,8 @@ mod tests {
             0x03, // version 3
             0x05, // sig type
             0x00, 0x00, 0x00, 0x00, // timestamp
-            0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, // key ID (last 8 bytes in fallback)
+            0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67,
+            0x89, // key ID (last 8 bytes in fallback)
         ];
         let result = extract_pgp_key_id(&data);
         assert!(result.is_some());
@@ -903,10 +904,7 @@ No key ID here
         prov.vendor = Some("Fedora Project".to_string());
         prov.build_host = Some("buildhost.fedoraproject.org".to_string());
 
-        assert_eq!(
-            prov.source_rpm,
-            Some("nginx-1.24.0-1.src.rpm".to_string())
-        );
+        assert_eq!(prov.source_rpm, Some("nginx-1.24.0-1.src.rpm".to_string()));
         assert_eq!(prov.vendor, Some("Fedora Project".to_string()));
     }
 

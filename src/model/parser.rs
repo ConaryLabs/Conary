@@ -840,7 +840,10 @@ exclude = ["nginx"]
 "#;
         let result = parse_model_string(toml);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ModelError::ConflictingSpecs(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ModelError::ConflictingSpecs(_)
+        ));
     }
 
     #[test]
@@ -917,7 +920,10 @@ on_conflict = "error"
         let mut model = SystemModel::new();
         assert!(!model.has_includes());
 
-        model.include.models.push("group-base@repo:stable".to_string());
+        model
+            .include
+            .models
+            .push("group-base@repo:stable".to_string());
         assert!(model.has_includes());
     }
 
@@ -1005,9 +1011,15 @@ require_human_approval = ["security", "removal"]
         assert_eq!(model.automation.orphans.keep, vec!["libfoo"]);
 
         // Updates
-        assert_eq!(model.automation.updates.mode, Some(AutomationMode::Disabled));
+        assert_eq!(
+            model.automation.updates.mode,
+            Some(AutomationMode::Disabled)
+        );
         assert_eq!(model.automation.updates.frequency, "daily");
-        assert_eq!(model.automation.updates.window, Some("02:00-04:00".to_string()));
+        assert_eq!(
+            model.automation.updates.window,
+            Some("02:00-04:00".to_string())
+        );
         assert_eq!(model.automation.updates.exclude, vec!["kernel"]);
 
         // Major upgrades
@@ -1091,6 +1103,9 @@ mode = "auto"
         let parsed = parse_model_string(&toml).unwrap();
 
         assert_eq!(parsed.automation.mode, AutomationMode::Auto);
-        assert_eq!(parsed.automation.security.mode, Some(AutomationMode::Suggest));
+        assert_eq!(
+            parsed.automation.security.mode,
+            Some(AutomationMode::Suggest)
+        );
     }
 }

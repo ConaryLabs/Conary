@@ -7,7 +7,7 @@
 
 use crate::error::{Error, Result};
 use crate::packages::traits::PackageFormat;
-use crate::packages::{rpm, deb, arch};
+use crate::packages::{arch, deb, rpm};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -36,7 +36,7 @@ impl PackageFormatType {
 /// Uses magic bytes for reliable detection, falling back to file extensions.
 pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
     let path = path.as_ref();
-    
+
     // Try magic bytes first
     if let Ok(mut file) = File::open(path) {
         let mut magic = [0u8; 8];
@@ -54,7 +54,10 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
                 return Ok(PackageFormatType::Arch);
             }
             // XZ: fd 37 7a 58 5a 00
-            if n >= 6 && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] && is_arch_extension(path) {
+            if n >= 6
+                && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
+                && is_arch_extension(path)
+            {
                 return Ok(PackageFormatType::Arch);
             }
             // Gzip: 1f 8b
@@ -89,9 +92,10 @@ fn is_arch_extension(path: &Path) -> bool {
 /// Parse a package file into a boxed PackageFormat implementation
 pub fn parse_package(path: impl AsRef<Path>) -> Result<Box<dyn PackageFormat + Send>> {
     let path = path.as_ref();
-    let path_str = path.to_str() 
+    let path_str = path
+        .to_str()
         .ok_or_else(|| Error::InitError("Package path contains invalid UTF-8".to_string()))?;
-        
+
     match detect_format(path)? {
         PackageFormatType::Rpm => Ok(Box::new(rpm::RpmPackage::parse(path_str)?)),
         PackageFormatType::Deb => Ok(Box::new(deb::DebPackage::parse(path_str)?)),
@@ -108,7 +112,8 @@ mod tests {
     #[test]
     fn test_detect_rpm_magic() {
         let mut file = NamedTempFile::new().unwrap();
-        file.write_all(&[0xED, 0xAB, 0xEE, 0xDB, 0x00, 0x00]).unwrap();
+        file.write_all(&[0xED, 0xAB, 0xEE, 0xDB, 0x00, 0x00])
+            .unwrap();
         assert_eq!(detect_format(file.path()).unwrap(), PackageFormatType::Rpm);
     }
 

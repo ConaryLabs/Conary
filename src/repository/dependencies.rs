@@ -12,9 +12,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::download::{
-    download_package_verified_with_progress, DownloadOptions, DownloadProgress,
-};
+use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
 /// Resolve dependencies and return list of packages to download

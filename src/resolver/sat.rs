@@ -259,13 +259,11 @@ mod tests {
     ) -> i64 {
         let mut changeset = Changeset::new(format!("Install {name}"));
         let _cs_id = changeset.insert(conn).unwrap();
-        changeset.update_status(conn, ChangesetStatus::Applied).unwrap();
+        changeset
+            .update_status(conn, ChangesetStatus::Applied)
+            .unwrap();
 
-        let mut trove = Trove::new(
-            name.to_string(),
-            version.to_string(),
-            TroveType::Package,
-        );
+        let mut trove = Trove::new(name.to_string(), version.to_string(), TroveType::Package);
         let trove_id = trove.insert(conn).unwrap();
 
         for (dep_name, constraint) in deps {
@@ -289,15 +287,17 @@ mod tests {
         insert_trove(&conn, "B", "1.0.0", &[]);
         insert_trove(&conn, "A", "1.0.0", &[("B", None)]);
 
-        let result = solve_install(&conn, &[
-            ("A".to_string(), VersionConstraint::Any),
-        ]).unwrap();
+        let result = solve_install(&conn, &[("A".to_string(), VersionConstraint::Any)]).unwrap();
 
         assert!(result.conflict_message.is_none());
         assert!(!result.install_order.is_empty());
 
         // Both A and B should be in the result
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"A"));
         assert!(names.contains(&"B"));
     }
@@ -308,9 +308,7 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         insert_trove(&conn, "A", "1.0.0", &[("B", Some(">= 2.0.0"))]);
 
-        let result = solve_install(&conn, &[
-            ("A".to_string(), VersionConstraint::Any),
-        ]).unwrap();
+        let result = solve_install(&conn, &[("A".to_string(), VersionConstraint::Any)]).unwrap();
 
         // Should have a conflict message since B can't be found
         assert!(result.conflict_message.is_some());
@@ -323,9 +321,7 @@ mod tests {
         insert_trove(&conn, "B", "1.0.0", &[]);
         insert_trove(&conn, "A", "1.0.0", &[("B", Some(">= 2.0.0"))]);
 
-        let result = solve_install(&conn, &[
-            ("A".to_string(), VersionConstraint::Any),
-        ]).unwrap();
+        let result = solve_install(&conn, &[("A".to_string(), VersionConstraint::Any)]).unwrap();
 
         // B 1.0 doesn't satisfy >= 2.0, so this should report a conflict
         // (unless a repo has B >= 2.0, which it doesn't here)
@@ -341,13 +337,15 @@ mod tests {
         insert_trove(&conn, "C", "1.0.0", &[("D", None)]);
         insert_trove(&conn, "A", "1.0.0", &[("B", None), ("C", None)]);
 
-        let result = solve_install(&conn, &[
-            ("A".to_string(), VersionConstraint::Any),
-        ]).unwrap();
+        let result = solve_install(&conn, &[("A".to_string(), VersionConstraint::Any)]).unwrap();
 
         assert!(result.conflict_message.is_none());
 
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"A"));
         assert!(names.contains(&"B"));
         assert!(names.contains(&"C"));
@@ -397,13 +395,15 @@ mod tests {
         insert_trove(&conn, "B", "1.0.0", &[("C", None)]);
         insert_trove(&conn, "A", "1.0.0", &[("B", None)]);
 
-        let result = solve_install(&conn, &[
-            ("A".to_string(), VersionConstraint::Any),
-        ]).unwrap();
+        let result = solve_install(&conn, &[("A".to_string(), VersionConstraint::Any)]).unwrap();
 
         assert!(result.conflict_message.is_none());
 
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"A"));
         assert!(names.contains(&"B"));
         assert!(names.contains(&"C"));
@@ -416,8 +416,8 @@ mod tests {
         // Pre-existing broken dep: X depends on Y, but Y is not installed.
         // Installing new package Z (which depends on installed W) should
         // succeed without reporting X's missing dependency Y.
-        use crate::resolver::graph::DependencyEdge;
         use crate::resolver::Resolver;
+        use crate::resolver::graph::DependencyEdge;
 
         let (_dir, conn) = setup_test_db();
 
@@ -429,54 +429,64 @@ mod tests {
         let mut resolver = Resolver::new(&conn).unwrap();
 
         // Install Z which only depends on W (already installed)
-        let plan = resolver.resolve_install(
-            "Z".to_string(),
-            RpmVersion::parse("1.0.0").unwrap(),
-            vec![DependencyEdge {
-                from: "Z".to_string(),
-                to: "W".to_string(),
-                constraint: VersionConstraint::Any,
-                dep_type: "runtime".to_string(),
-                kind: "package".to_string(),
-            }],
-        ).unwrap();
+        let plan = resolver
+            .resolve_install(
+                "Z".to_string(),
+                RpmVersion::parse("1.0.0").unwrap(),
+                vec![DependencyEdge {
+                    from: "Z".to_string(),
+                    to: "W".to_string(),
+                    constraint: VersionConstraint::Any,
+                    dep_type: "runtime".to_string(),
+                    kind: "package".to_string(),
+                }],
+            )
+            .unwrap();
 
         // Z's deps are all satisfied — no missing, no conflicts
-        assert!(plan.missing.is_empty(), "should not report unrelated missing deps");
-        assert!(plan.conflicts.is_empty(), "should not report unrelated conflicts");
+        assert!(
+            plan.missing.is_empty(),
+            "should not report unrelated missing deps"
+        );
+        assert!(
+            plan.conflicts.is_empty(),
+            "should not report unrelated conflicts"
+        );
     }
 
     #[test]
     fn test_resolve_install_reports_own_missing() {
         // Installing Z which depends on NOTINSTALLED should report it as missing
-        use crate::resolver::graph::DependencyEdge;
         use crate::resolver::Resolver;
+        use crate::resolver::graph::DependencyEdge;
 
         let (_dir, conn) = setup_test_db();
         insert_trove(&conn, "W", "1.0.0", &[]);
 
         let mut resolver = Resolver::new(&conn).unwrap();
 
-        let plan = resolver.resolve_install(
-            "Z".to_string(),
-            RpmVersion::parse("1.0.0").unwrap(),
-            vec![
-                DependencyEdge {
-                    from: "Z".to_string(),
-                    to: "W".to_string(),
-                    constraint: VersionConstraint::Any,
-                    dep_type: "runtime".to_string(),
-                    kind: "package".to_string(),
-                },
-                DependencyEdge {
-                    from: "Z".to_string(),
-                    to: "NOTINSTALLED".to_string(),
-                    constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
-                    dep_type: "runtime".to_string(),
-                    kind: "package".to_string(),
-                },
-            ],
-        ).unwrap();
+        let plan = resolver
+            .resolve_install(
+                "Z".to_string(),
+                RpmVersion::parse("1.0.0").unwrap(),
+                vec![
+                    DependencyEdge {
+                        from: "Z".to_string(),
+                        to: "W".to_string(),
+                        constraint: VersionConstraint::Any,
+                        dep_type: "runtime".to_string(),
+                        kind: "package".to_string(),
+                    },
+                    DependencyEdge {
+                        from: "Z".to_string(),
+                        to: "NOTINSTALLED".to_string(),
+                        constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+                        dep_type: "runtime".to_string(),
+                        kind: "package".to_string(),
+                    },
+                ],
+            )
+            .unwrap();
 
         assert_eq!(plan.missing.len(), 1);
         assert_eq!(plan.missing[0].name, "NOTINSTALLED");

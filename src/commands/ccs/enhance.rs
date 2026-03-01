@@ -2,11 +2,11 @@
 //! Enhancement command for retroactive CCS feature addition
 
 use anyhow::{Context, Result};
-use conary::ccs::enhancement::{
-    EnhancementResult_, EnhancementRunner, EnhancementType, ENHANCEMENT_VERSION,
-};
 use conary::ccs::enhancement::context::ConvertedPackageInfo;
 use conary::ccs::enhancement::runner::EnhancementOptions;
+use conary::ccs::enhancement::{
+    ENHANCEMENT_VERSION, EnhancementResult_, EnhancementRunner, EnhancementType,
+};
 use conary::db::schema;
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ pub fn cmd_ccs_enhance(
     let enhancement_types: Vec<EnhancementType> = if let Some(ref type_strs) = types {
         type_strs
             .iter()
-            .filter_map(|s| EnhancementType::from_str(s))
+            .filter_map(|s| EnhancementType::parse_name(s))
             .collect()
     } else {
         EnhancementType::all().to_vec()
@@ -151,14 +151,19 @@ fn show_dry_run(
 
     if let Some(tid) = trove_id {
         let name: String = conn
-            .query_row("SELECT name FROM troves WHERE id = ?1", [tid], |row| row.get(0))
+            .query_row("SELECT name FROM troves WHERE id = ?1", [tid], |row| {
+                row.get(0)
+            })
             .unwrap_or_else(|_| format!("(unknown trove {})", tid));
         println!("Would enhance: {} (trove_id={})", name, tid);
     } else if all_pending {
         let pending = ConvertedPackageInfo::find_pending(conn)?;
         println!("Would enhance {} pending packages:", pending.len());
         for pkg in pending.iter().take(20) {
-            println!("  - {} v{} (trove_id={})", pkg.name, pkg.version, pkg.trove_id);
+            println!(
+                "  - {} v{} (trove_id={})",
+                pkg.name, pkg.version, pkg.trove_id
+            );
         }
         if pending.len() > 20 {
             println!("  ... and {} more", pending.len() - 20);

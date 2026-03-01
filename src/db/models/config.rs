@@ -260,7 +260,12 @@ impl ConfigFile {
     }
 
     /// Update the status and current hash
-    pub fn update_status(&self, conn: &Connection, status: ConfigStatus, current_hash: Option<&str>) -> Result<()> {
+    pub fn update_status(
+        &self,
+        conn: &Connection,
+        status: ConfigStatus,
+        current_hash: Option<&str>,
+    ) -> Result<()> {
         let modified_at = if status == ConfigStatus::Modified {
             Some(chrono::Utc::now().to_rfc3339())
         } else {
@@ -406,7 +411,9 @@ impl ConfigBackup {
              FROM config_backups WHERE config_file_id = ?1 ORDER BY created_at DESC LIMIT 1",
         )?;
 
-        let backup = stmt.query_row([config_file_id], Self::from_row).optional()?;
+        let backup = stmt
+            .query_row([config_file_id], Self::from_row)
+            .optional()?;
         Ok(backup)
     }
 
@@ -497,11 +504,8 @@ mod tests {
     fn test_config_file_crud() {
         let (_temp, conn) = create_test_db();
 
-        let mut config = ConfigFile::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            1,
-            "abc123".to_string(),
-        );
+        let mut config =
+            ConfigFile::new("/etc/nginx/nginx.conf".to_string(), 1, "abc123".to_string());
         config.insert(&conn).unwrap();
 
         assert!(config.id.is_some());
@@ -518,11 +522,8 @@ mod tests {
     fn test_config_file_status_update() {
         let (_temp, conn) = create_test_db();
 
-        let mut config = ConfigFile::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            1,
-            "abc123".to_string(),
-        );
+        let mut config =
+            ConfigFile::new("/etc/nginx/nginx.conf".to_string(), 1, "abc123".to_string());
         config.insert(&conn).unwrap();
 
         // Mark as modified
@@ -565,11 +566,8 @@ mod tests {
     fn test_config_backup_crud() {
         let (_temp, conn) = create_test_db();
 
-        let mut config = ConfigFile::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            1,
-            "abc123".to_string(),
-        );
+        let mut config =
+            ConfigFile::new("/etc/nginx/nginx.conf".to_string(), 1, "abc123".to_string());
         config.insert(&conn).unwrap();
 
         let mut backup = ConfigBackup::new(
@@ -589,19 +587,13 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create pristine config
-        let mut config1 = ConfigFile::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            1,
-            "abc123".to_string(),
-        );
+        let mut config1 =
+            ConfigFile::new("/etc/nginx/nginx.conf".to_string(), 1, "abc123".to_string());
         config1.insert(&conn).unwrap();
 
         // Create modified config
-        let mut config2 = ConfigFile::new(
-            "/etc/nginx/proxy.conf".to_string(),
-            1,
-            "def456".to_string(),
-        );
+        let mut config2 =
+            ConfigFile::new("/etc/nginx/proxy.conf".to_string(), 1, "def456".to_string());
         config2.status = ConfigStatus::Modified;
         config2.insert(&conn).unwrap();
 

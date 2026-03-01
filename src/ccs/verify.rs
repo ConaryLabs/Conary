@@ -9,7 +9,7 @@ use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::hash;
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
@@ -178,8 +178,8 @@ pub enum ContentStatus {
 
 /// Verify a CCS package
 pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationResult> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open package: {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("Failed to open package: {}", path.display()))?;
 
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
@@ -204,10 +204,14 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
             manifest_raw = Some(content.clone());
             // Convert CBOR to CcsManifest for compatibility
             if let Ok(bin_manifest) = BinaryManifest::from_cbor(&content) {
-                manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(&bin_manifest));
+                manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(
+                    &bin_manifest,
+                ));
                 binary_manifest = Some(bin_manifest);
             }
-        } else if manifest.is_none() && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml") {
+        } else if manifest.is_none()
+            && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
+        {
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
             manifest_raw = Some(content.as_bytes().to_vec());
@@ -216,7 +220,8 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
             signature = Some(serde_json::from_str(&content)?);
-        } else if (entry_path_str.starts_with("components/") || entry_path_str.starts_with("./components/"))
+        } else if (entry_path_str.starts_with("components/")
+            || entry_path_str.starts_with("./components/"))
             && entry_path_str.ends_with(".json")
         {
             let mut content = String::new();
@@ -229,11 +234,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
             // Extract blob hash from path: objects/{prefix}/{suffix} -> {prefix}{suffix}
             let parts: Vec<&str> = entry_path_str.split('/').collect();
             if parts.len() >= 3 {
-                let hash_str = format!(
-                    "{}{}",
-                    parts[parts.len() - 2],
-                    parts[parts.len() - 1]
-                );
+                let hash_str = format!("{}{}", parts[parts.len() - 2], parts[parts.len() - 1]);
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
                 blobs.insert(hash_str, content);
@@ -246,15 +247,13 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
         manifest_raw.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST".into()))?;
 
     // Collect files from components
-    let files: Vec<FileEntry> = components
-        .values()
-        .flat_map(|c| c.files.clone())
-        .collect();
+    let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
 
     let mut warnings = Vec::new();
 
     // Verify signature (over raw manifest bytes - CBOR or TOML)
-    let signature_status = verify_signature(&manifest_raw, signature.as_ref(), policy, &mut warnings)?;
+    let signature_status =
+        verify_signature(&manifest_raw, signature.as_ref(), policy, &mut warnings)?;
 
     // Verify content hashes
     let content_status = verify_content_hashes(&files, &blobs)?;
@@ -272,8 +271,12 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
 
     let valid = matches!(
         (&signature_status, &content_status),
-        (SignatureStatus::Valid { .. } | SignatureStatus::Unsigned, ContentStatus::Valid { .. })
-    ) && (policy.allow_unsigned || matches!(signature_status, SignatureStatus::Valid { .. }));
+        (
+            SignatureStatus::Valid { .. } | SignatureStatus::Unsigned,
+            ContentStatus::Valid { .. }
+        )
+    ) && (policy.allow_unsigned
+        || matches!(signature_status, SignatureStatus::Valid { .. }));
 
     Ok(VerificationResult {
         valid,
@@ -309,27 +312,30 @@ fn verify_signature(
     }
 
     // Decode signature
-    let sig_bytes = BASE64
-        .decode(&sig.signature)
-        .map_err(|e| VerifyError::InvalidSignatureFormat(format!("Invalid signature base64: {}", e)))?;
+    let sig_bytes = BASE64.decode(&sig.signature).map_err(|e| {
+        VerifyError::InvalidSignatureFormat(format!("Invalid signature base64: {}", e))
+    })?;
 
     let signature = Signature::from_slice(&sig_bytes)
         .map_err(|e| VerifyError::InvalidSignatureFormat(format!("Invalid signature: {}", e)))?;
 
     // Decode public key
-    let key_bytes = BASE64
-        .decode(&sig.public_key)
-        .map_err(|e| VerifyError::InvalidSignatureFormat(format!("Invalid public key base64: {}", e)))?;
+    let key_bytes = BASE64.decode(&sig.public_key).map_err(|e| {
+        VerifyError::InvalidSignatureFormat(format!("Invalid public key base64: {}", e))
+    })?;
 
-    let verifying_key = VerifyingKey::from_bytes(&key_bytes.try_into().map_err(|_| {
-        VerifyError::InvalidSignatureFormat("Public key must be 32 bytes".into())
-    })?)
-    .map_err(|e| VerifyError::InvalidSignatureFormat(format!("Invalid public key: {}", e)))?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&key_bytes.try_into().map_err(|_| {
+            VerifyError::InvalidSignatureFormat("Public key must be 32 bytes".into())
+        })?)
+        .map_err(|e| VerifyError::InvalidSignatureFormat(format!("Invalid public key: {}", e)))?;
 
     // Verify signature
     verifying_key
         .verify(manifest_raw, &signature)
-        .map_err(|e| VerifyError::SignatureInvalid(format!("Signature verification failed: {}", e)))?;
+        .map_err(|e| {
+            VerifyError::SignatureInvalid(format!("Signature verification failed: {}", e))
+        })?;
 
     // Check if key is trusted
     if !policy.trusted_keys.is_empty() && !policy.trusted_keys.contains(&sig.public_key) {
@@ -342,11 +348,9 @@ fn verify_signature(
                 key_id: sig.key_id.clone(),
             });
         }
-        return Err(VerifyError::TrustViolation(format!(
-            "Key not trusted: {:?}",
-            sig.key_id
-        ))
-        .into());
+        return Err(
+            VerifyError::TrustViolation(format!("Key not trusted: {:?}", sig.key_id)).into(),
+        );
     }
 
     // Check timestamp if required
@@ -410,10 +414,7 @@ fn verify_content_hashes(
                         }
                     }
                     None => {
-                        errors.push(format!(
-                            "{}: missing chunk blob {}",
-                            file.path, chunk_hash
-                        ));
+                        errors.push(format!("{}: missing chunk blob {}", file.path, chunk_hash));
                         chunk_errors = true;
                     }
                 }

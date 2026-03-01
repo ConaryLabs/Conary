@@ -9,8 +9,8 @@ use super::PackageFormatType;
 use anyhow::{Context, Result};
 use conary::capability::inference::InferenceOptions;
 use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary::packages::common::PackageMetadata;
 use conary::packages::PackageFormat;
+use conary::packages::common::PackageMetadata;
 use conary::scriptlet::SandboxMode;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -20,10 +20,7 @@ use tracing::{info, warn};
 /// Result of attempting CCS conversion
 pub enum ConversionResult {
     /// Package was converted, install via CCS path
-    Converted {
-        ccs_path: String,
-        temp_dir: TempDir,
-    },
+    Converted { ccs_path: String, temp_dir: TempDir },
     /// Conversion skipped (already converted or not needed)
     Skipped,
 }
@@ -43,8 +40,12 @@ pub fn try_convert_to_ccs(
     info!("Converting {} to CCS format...", pkg.name());
 
     // Compute checksum of original package for deduplication
-    let package_bytes = std::fs::read(package_path)
-        .with_context(|| format!("Failed to read package file for checksum: {}", package_path.display()))?;
+    let package_bytes = std::fs::read(package_path).with_context(|| {
+        format!(
+            "Failed to read package file for checksum: {}",
+            package_path.display()
+        )
+    })?;
     let mut hasher = Sha256::new();
     hasher.update(&package_bytes);
     let hash_result = hasher.finalize();
@@ -58,30 +59,32 @@ pub fn try_convert_to_ccs(
     };
 
     // Open database early to check for existing conversion
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     // Check if already converted (skip re-conversion)
-    if let Some(existing) = conary::db::models::ConvertedPackage::find_by_checksum(
-        &conn,
-        &original_checksum,
-    )? {
+    if let Some(existing) =
+        conary::db::models::ConvertedPackage::find_by_checksum(&conn, &original_checksum)?
+    {
         if existing.needs_reconversion() {
             info!("Re-converting {} (algorithm upgraded)", pkg.name());
-            conary::db::models::ConvertedPackage::delete_by_checksum(
-                &conn,
-                &original_checksum,
-            )?;
+            conary::db::models::ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
         } else {
             // Already converted and up to date
-            info!("Package {} already converted, using regular install path", pkg.name());
-            println!("Note: {} was previously converted - using standard install", pkg.name());
+            info!(
+                "Package {} already converted, using regular install path",
+                pkg.name()
+            );
+            println!(
+                "Note: {} was previously converted - using standard install",
+                pkg.name()
+            );
             return Ok(ConversionResult::Skipped);
         }
     }
 
     // Extract files for conversion
-    let extracted = pkg.extract_file_contents()
+    let extracted = pkg
+        .extract_file_contents()
         .with_context(|| format!("Failed to extract files for conversion: {}", pkg.name()))?;
 
     // Build PackageMetadata from the package
@@ -98,8 +101,7 @@ pub fn try_convert_to_ccs(
     };
 
     // Create temp directory for CCS output
-    let ccs_temp = TempDir::new()
-        .context("Failed to create temp directory for CCS conversion")?;
+    let ccs_temp = TempDir::new().context("Failed to create temp directory for CCS conversion")?;
 
     let options = ConversionOptions {
         enable_chunking: true,
@@ -112,7 +114,8 @@ pub fn try_convert_to_ccs(
     };
 
     let converter = LegacyConverter::new(options);
-    let conversion_result = converter.convert(&metadata, &extracted, format_str, &original_checksum)
+    let conversion_result = converter
+        .convert(&metadata, &extracted, format_str, &original_checksum)
         .with_context(|| format!("Failed to convert {} to CCS format", pkg.name()))?;
 
     // Warn if fidelity is below High
@@ -128,7 +131,8 @@ pub fn try_convert_to_ccs(
     }
 
     // Get the package path
-    let ccs_package_path = conversion_result.package_path
+    let ccs_package_path = conversion_result
+        .package_path
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Conversion succeeded but no package path returned"))?;
 
@@ -144,20 +148,21 @@ pub fn try_convert_to_ccs(
         .unwrap_or_else(|_| "{}".to_string());
 
     // Serialize inferred capabilities to JSON for audit trail
-    let inferred_caps_json = conversion_result.inferred_capabilities.as_ref()
+    let inferred_caps_json = conversion_result
+        .inferred_capabilities
+        .as_ref()
         .and_then(|caps| serde_json::to_string(caps).ok());
 
     // Serialize extracted provenance to JSON for audit trail
-    let provenance_json = conversion_result.legacy_provenance.as_ref()
+    let provenance_json = conversion_result
+        .legacy_provenance
+        .as_ref()
         .and_then(|prov| prov.to_json().ok());
 
-    if let Some(ref prov) = conversion_result.legacy_provenance {
-        if prov.has_content() {
-            info!(
-                "Provenance extracted: {}",
-                prov.summary()
-            );
-        }
+    if let Some(ref prov) = conversion_result.legacy_provenance
+        && prov.has_content()
+    {
+        info!("Provenance extracted: {}", prov.summary());
     }
 
     // Create conversion record
@@ -195,9 +200,9 @@ pub fn install_converted_ccs(
         db_path,
         root,
         dry_run,
-        true,  // allow_unsigned - converted packages aren't signed yet
-        None,  // policy
-        None,  // components - install all
+        true, // allow_unsigned - converted packages aren't signed yet
+        None, // policy
+        None, // components - install all
         sandbox_mode,
         no_deps,
     )

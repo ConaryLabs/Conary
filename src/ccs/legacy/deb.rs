@@ -8,14 +8,14 @@
 //! - data.tar.gz: actual file contents
 
 use super::{
-    arch_for_format, map_capability_to_package, CommonHookGenerator, GenerationResult,
-    HookConverter, LossReport,
+    CommonHookGenerator, GenerationResult, HookConverter, LossReport, arch_for_format,
+    map_capability_to_package,
 };
 use crate::ccs::builder::{BuildResult, FileType};
 use crate::ccs::manifest::Hooks;
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

@@ -211,7 +211,9 @@ impl CcsBuilder {
             // Phase 3: Store content (chunked or whole)
             if self.use_chunking && self.should_chunk(&entry, &final_content) {
                 // Chunk the file
-                let chunker = self.chunker.as_ref()
+                let chunker = self
+                    .chunker
+                    .as_ref()
                     .context("Chunker not initialized even though chunking is enabled")?;
                 let chunks = chunker.chunk_bytes(&final_content);
 
@@ -363,10 +365,10 @@ impl CcsBuilder {
             }
 
             // Skip manifest files - these are metadata, not package content
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name == "ccs.toml" || file_name == "MANIFEST.toml" {
-                    continue;
-                }
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                && (file_name == "ccs.toml" || file_name == "MANIFEST.toml")
+            {
+                continue;
             }
 
             // We only collect files and symlinks (directories are handled by their children)
@@ -459,8 +461,8 @@ fn write_ccs_package_internal(
     signing_key: Option<&super::signing::SigningKeyPair>,
 ) -> Result<()> {
     use crate::ccs::binary_manifest::{ComponentRef, Hash, MerkleTree};
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::collections::BTreeMap;
     use tar::Builder;
 
@@ -622,10 +624,9 @@ fn build_binary_manifest(
     content_root: super::binary_manifest::Hash,
 ) -> Result<super::binary_manifest::BinaryManifest> {
     use crate::ccs::binary_manifest::{
-        BinaryBuildInfo, BinaryManifest, BinaryCapability, BinaryHooks, BinaryPlatform,
-        BinaryRequirement, FORMAT_VERSION,
-        BinaryUserHook, BinaryGroupHook, BinaryDirectoryHook, BinarySystemdHook,
-        BinaryTmpfilesHook, BinarySysctlHook, BinaryAlternativeHook,
+        BinaryAlternativeHook, BinaryBuildInfo, BinaryCapability, BinaryDirectoryHook,
+        BinaryGroupHook, BinaryHooks, BinaryManifest, BinaryPlatform, BinaryRequirement,
+        BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook, FORMAT_VERSION,
     };
 
     let manifest = &result.manifest;
@@ -677,44 +678,72 @@ fn build_binary_manifest(
         None
     } else {
         Some(BinaryHooks {
-            users: hooks.users.iter().map(|u| BinaryUserHook {
-                name: u.name.clone(),
-                system: u.system,
-                home: u.home.clone(),
-                shell: u.shell.clone(),
-                group: u.group.clone(),
-            }).collect(),
-            groups: hooks.groups.iter().map(|g| BinaryGroupHook {
-                name: g.name.clone(),
-                system: g.system,
-            }).collect(),
-            directories: hooks.directories.iter().map(|d| BinaryDirectoryHook {
-                path: d.path.clone(),
-                mode: u32::from_str_radix(d.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
-                owner: d.owner.clone(),
-                group: d.group.clone(),
-            }).collect(),
-            systemd: hooks.systemd.iter().map(|s| BinarySystemdHook {
-                unit: s.unit.clone(),
-                enable: s.enable,
-            }).collect(),
-            tmpfiles: hooks.tmpfiles.iter().map(|t| BinaryTmpfilesHook {
-                entry_type: t.entry_type.clone(),
-                path: t.path.clone(),
-                mode: u32::from_str_radix(t.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
-                owner: t.owner.clone(),
-                group: t.group.clone(),
-            }).collect(),
-            sysctl: hooks.sysctl.iter().map(|s| BinarySysctlHook {
-                key: s.key.clone(),
-                value: s.value.clone(),
-                only_if_lower: s.only_if_lower,
-            }).collect(),
-            alternatives: hooks.alternatives.iter().map(|a| BinaryAlternativeHook {
-                name: a.name.clone(),
-                path: a.path.clone(),
-                priority: a.priority,
-            }).collect(),
+            users: hooks
+                .users
+                .iter()
+                .map(|u| BinaryUserHook {
+                    name: u.name.clone(),
+                    system: u.system,
+                    home: u.home.clone(),
+                    shell: u.shell.clone(),
+                    group: u.group.clone(),
+                })
+                .collect(),
+            groups: hooks
+                .groups
+                .iter()
+                .map(|g| BinaryGroupHook {
+                    name: g.name.clone(),
+                    system: g.system,
+                })
+                .collect(),
+            directories: hooks
+                .directories
+                .iter()
+                .map(|d| BinaryDirectoryHook {
+                    path: d.path.clone(),
+                    mode: u32::from_str_radix(d.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
+                    owner: d.owner.clone(),
+                    group: d.group.clone(),
+                })
+                .collect(),
+            systemd: hooks
+                .systemd
+                .iter()
+                .map(|s| BinarySystemdHook {
+                    unit: s.unit.clone(),
+                    enable: s.enable,
+                })
+                .collect(),
+            tmpfiles: hooks
+                .tmpfiles
+                .iter()
+                .map(|t| BinaryTmpfilesHook {
+                    entry_type: t.entry_type.clone(),
+                    path: t.path.clone(),
+                    mode: u32::from_str_radix(t.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
+                    owner: t.owner.clone(),
+                    group: t.group.clone(),
+                })
+                .collect(),
+            sysctl: hooks
+                .sysctl
+                .iter()
+                .map(|s| BinarySysctlHook {
+                    key: s.key.clone(),
+                    value: s.value.clone(),
+                    only_if_lower: s.only_if_lower,
+                })
+                .collect(),
+            alternatives: hooks
+                .alternatives
+                .iter()
+                .map(|a| BinaryAlternativeHook {
+                    name: a.name.clone(),
+                    path: a.path.clone(),
+                    priority: a.priority,
+                })
+                .collect(),
         })
     };
 
@@ -748,7 +777,10 @@ pub fn print_build_summary(result: &BuildResult) {
     println!("Build Summary");
     println!("=============");
     println!();
-    println!("Package: {} v{}", result.manifest.package.name, result.manifest.package.version);
+    println!(
+        "Package: {} v{}",
+        result.manifest.package.name, result.manifest.package.version
+    );
     println!("Total files: {}", result.files.len());
     println!("Total size: {} bytes", result.total_size);
     println!("Blobs: {} objects", result.blobs.len());
@@ -762,10 +794,7 @@ pub fn print_build_summary(result: &BuildResult) {
         println!("  Total chunks: {}", stats.total_chunks);
         println!("  Unique chunks: {}", stats.unique_chunks);
         if stats.dedup_savings > 0 {
-            println!(
-                "  Intra-package dedup: {} bytes saved",
-                stats.dedup_savings
-            );
+            println!("  Intra-package dedup: {} bytes saved", stats.dedup_savings);
         }
     }
 
@@ -777,7 +806,12 @@ pub fn print_build_summary(result: &BuildResult) {
 
     for name in comp_names {
         let comp = &result.components[name];
-        println!("  :{} - {} files ({} bytes)", name, comp.files.len(), comp.size);
+        println!(
+            "  :{} - {} files ({} bytes)",
+            name,
+            comp.files.len(),
+            comp.size
+        );
     }
 }
 
@@ -864,7 +898,10 @@ mod tests {
 
         // Create manifest with override
         let mut manifest = create_test_manifest();
-        manifest.components.files.insert("/usr/bin/helper".to_string(), "lib".to_string());
+        manifest
+            .components
+            .files
+            .insert("/usr/bin/helper".to_string(), "lib".to_string());
 
         let builder = CcsBuilder::new(manifest, temp_dir.path());
         let result = builder.build().unwrap();
@@ -893,7 +930,11 @@ mod tests {
         {
             assert_eq!(result.files.len(), 2);
 
-            let symlink = result.files.iter().find(|f| f.path == "/usr/lib/libfoo.so.1").unwrap();
+            let symlink = result
+                .files
+                .iter()
+                .find(|f| f.path == "/usr/lib/libfoo.so.1")
+                .unwrap();
             assert_eq!(symlink.file_type, FileType::Symlink);
             assert_eq!(symlink.target, Some("libfoo.so.1.0.0".to_string()));
         }

@@ -12,8 +12,7 @@
 //! declare matching capabilities, enabling flexible and semantic dependency resolution.
 
 use crate::capability::{
-    CapabilityDeclaration, CapabilityResult, FilesystemCapabilities,
-    NetworkCapabilities,
+    CapabilityDeclaration, CapabilityResult, FilesystemCapabilities, NetworkCapabilities,
 };
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -157,7 +156,10 @@ impl<'a> CapabilityResolver<'a> {
     }
 
     /// Resolve a single capability requirement
-    pub fn resolve(&mut self, requirement: &CapabilityRequirement) -> CapabilityResult<ResolvedCapability> {
+    pub fn resolve(
+        &mut self,
+        requirement: &CapabilityRequirement,
+    ) -> CapabilityResult<ResolvedCapability> {
         let providers = match &requirement.capability {
             CapabilitySpec::Named(name) => self.resolve_named(name)?,
             CapabilitySpec::Typed { kind, name } => self.resolve_typed(kind, name)?,
@@ -191,17 +193,17 @@ impl<'a> CapabilityResolver<'a> {
             "SELECT p.trove_id, p.capability, p.version, p.kind, t.name, t.version as pkg_version
              FROM provides p
              JOIN troves t ON p.trove_id = t.id
-             WHERE p.capability = ?1"
+             WHERE p.capability = ?1",
         )?;
 
         let rows = stmt.query_map([name], |row| {
             Ok((
-                row.get::<_, i64>(0)?,      // trove_id
-                row.get::<_, String>(1)?,   // capability
+                row.get::<_, i64>(0)?,            // trove_id
+                row.get::<_, String>(1)?,         // capability
                 row.get::<_, Option<String>>(2)?, // version
                 row.get::<_, Option<String>>(3)?, // kind
-                row.get::<_, String>(4)?,   // package name
-                row.get::<_, String>(5)?,   // package version
+                row.get::<_, String>(4)?,         // package name
+                row.get::<_, String>(5)?,         // package version
             ))
         })?;
 
@@ -239,7 +241,7 @@ impl<'a> CapabilityResolver<'a> {
             "SELECT p.trove_id, t.name, t.version
              FROM provides p
              JOIN troves t ON p.trove_id = t.id
-             WHERE p.kind = ?1 AND p.capability = ?2"
+             WHERE p.kind = ?1 AND p.capability = ?2",
         )?;
 
         let rows = stmt.query_map([kind, name], |row| {
@@ -267,14 +269,17 @@ impl<'a> CapabilityResolver<'a> {
     }
 
     /// Resolve a network capability requirement
-    fn resolve_network(&mut self, spec: &NetworkCapabilitySpec) -> CapabilityResult<Vec<CapabilityProvider>> {
+    fn resolve_network(
+        &mut self,
+        spec: &NetworkCapabilitySpec,
+    ) -> CapabilityResult<Vec<CapabilityProvider>> {
         let mut providers = Vec::new();
 
         // Query all packages with capability declarations
         let mut stmt = self.conn.prepare(
             "SELECT c.trove_id, c.declaration_json, t.name, t.version
              FROM capabilities c
-             JOIN troves t ON c.trove_id = t.id"
+             JOIN troves t ON c.trove_id = t.id",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -289,21 +294,21 @@ impl<'a> CapabilityResolver<'a> {
         for row in rows {
             let (trove_id, decl_json, pkg_name, pkg_version) = row?;
 
-            if let Ok(decl) = serde_json::from_str::<CapabilityDeclaration>(&decl_json) {
-                if self.network_matches(&decl.network, spec) {
-                    let match_reason = match spec.cap_type {
-                        NetworkCapType::Listen => format!("Can listen on port {}", spec.port),
-                        NetworkCapType::Outbound => format!("Can connect to port {}", spec.port),
-                    };
+            if let Ok(decl) = serde_json::from_str::<CapabilityDeclaration>(&decl_json)
+                && self.network_matches(&decl.network, spec)
+            {
+                let match_reason = match spec.cap_type {
+                    NetworkCapType::Listen => format!("Can listen on port {}", spec.port),
+                    NetworkCapType::Outbound => format!("Can connect to port {}", spec.port),
+                };
 
-                    providers.push(CapabilityProvider {
-                        package_name: pkg_name,
-                        version: Some(pkg_version),
-                        trove_id: Some(trove_id),
-                        match_score: 85,
-                        match_reason,
-                    });
-                }
+                providers.push(CapabilityProvider {
+                    package_name: pkg_name,
+                    version: Some(pkg_version),
+                    trove_id: Some(trove_id),
+                    match_score: 85,
+                    match_reason,
+                });
             }
         }
 
@@ -319,34 +324,37 @@ impl<'a> CapabilityResolver<'a> {
         };
 
         // Check for exact match or "any"
-        ports.iter().any(|p| {
-            p == &spec.port || p == "any" || self.port_in_range(p, &spec.port)
-        })
+        ports
+            .iter()
+            .any(|p| p == &spec.port || p == "any" || self.port_in_range(p, &spec.port))
     }
 
     /// Check if a port is within a range specification
     fn port_in_range(&self, range_spec: &str, port: &str) -> bool {
-        if let Some((start, end)) = range_spec.split_once('-') {
-            if let (Ok(s), Ok(e), Ok(p)) = (
+        if let Some((start, end)) = range_spec.split_once('-')
+            && let (Ok(s), Ok(e), Ok(p)) = (
                 start.parse::<u16>(),
                 end.parse::<u16>(),
                 port.parse::<u16>(),
-            ) {
-                return p >= s && p <= e;
-            }
+            )
+        {
+            return (s..=e).contains(&p);
         }
         false
     }
 
     /// Resolve a filesystem capability requirement
-    fn resolve_filesystem(&mut self, spec: &FilesystemCapabilitySpec) -> CapabilityResult<Vec<CapabilityProvider>> {
+    fn resolve_filesystem(
+        &mut self,
+        spec: &FilesystemCapabilitySpec,
+    ) -> CapabilityResult<Vec<CapabilityProvider>> {
         let mut providers = Vec::new();
 
         // Query all packages with capability declarations
         let mut stmt = self.conn.prepare(
             "SELECT c.trove_id, c.declaration_json, t.name, t.version
              FROM capabilities c
-             JOIN troves t ON c.trove_id = t.id"
+             JOIN troves t ON c.trove_id = t.id",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -361,22 +369,22 @@ impl<'a> CapabilityResolver<'a> {
         for row in rows {
             let (trove_id, decl_json, pkg_name, pkg_version) = row?;
 
-            if let Ok(decl) = serde_json::from_str::<CapabilityDeclaration>(&decl_json) {
-                if self.filesystem_matches(&decl.filesystem, spec) {
-                    let match_reason = match spec.cap_type {
-                        FilesystemCapType::Read => format!("Can read {}", spec.path),
-                        FilesystemCapType::Write => format!("Can write {}", spec.path),
-                        FilesystemCapType::Execute => format!("Can execute in {}", spec.path),
-                    };
+            if let Ok(decl) = serde_json::from_str::<CapabilityDeclaration>(&decl_json)
+                && self.filesystem_matches(&decl.filesystem, spec)
+            {
+                let match_reason = match spec.cap_type {
+                    FilesystemCapType::Read => format!("Can read {}", spec.path),
+                    FilesystemCapType::Write => format!("Can write {}", spec.path),
+                    FilesystemCapType::Execute => format!("Can execute in {}", spec.path),
+                };
 
-                    providers.push(CapabilityProvider {
-                        package_name: pkg_name,
-                        version: Some(pkg_version),
-                        trove_id: Some(trove_id),
-                        match_score: 80,
-                        match_reason,
-                    });
-                }
+                providers.push(CapabilityProvider {
+                    package_name: pkg_name,
+                    version: Some(pkg_version),
+                    trove_id: Some(trove_id),
+                    match_score: 80,
+                    match_reason,
+                });
             }
         }
 
@@ -385,7 +393,11 @@ impl<'a> CapabilityResolver<'a> {
     }
 
     /// Check if filesystem capabilities match the requirement
-    fn filesystem_matches(&self, caps: &FilesystemCapabilities, spec: &FilesystemCapabilitySpec) -> bool {
+    fn filesystem_matches(
+        &self,
+        caps: &FilesystemCapabilities,
+        spec: &FilesystemCapabilitySpec,
+    ) -> bool {
         let paths = match spec.cap_type {
             FilesystemCapType::Read => &caps.read,
             FilesystemCapType::Write => &caps.write,
@@ -408,11 +420,10 @@ impl<'a> CapabilityResolver<'a> {
         }
 
         // Glob-style matching (e.g., /var/cache/* matches /var/cache/nginx)
-        if pattern.ends_with("/*") {
-            let prefix = &pattern[..pattern.len() - 2];
-            if required.starts_with(prefix) {
-                return true;
-            }
+        if let Some(prefix) = pattern.strip_suffix("/*")
+            && required.starts_with(prefix)
+        {
+            return true;
         }
 
         false
@@ -447,46 +458,46 @@ impl<'a> CapabilityResolver<'a> {
 /// - `filesystem.read:/etc/ssl` → Filesystem(...)
 pub fn parse_capability_spec(spec: &str) -> Result<CapabilitySpec, String> {
     // Check for typed capability: kind(name)
-    if let Some(paren_pos) = spec.find('(') {
-        if spec.ends_with(')') {
-            let kind = &spec[..paren_pos];
-            let name = &spec[paren_pos + 1..spec.len() - 1];
-            return Ok(CapabilitySpec::Typed {
-                kind: kind.to_string(),
-                name: name.to_string(),
-            });
-        }
+    if let Some(paren_pos) = spec.find('(')
+        && spec.ends_with(')')
+    {
+        let kind = &spec[..paren_pos];
+        let name = &spec[paren_pos + 1..spec.len() - 1];
+        return Ok(CapabilitySpec::Typed {
+            kind: kind.to_string(),
+            name: name.to_string(),
+        });
     }
 
     // Check for network capability: network.listen:port or network.outbound:port
-    if let Some(rest) = spec.strip_prefix("network.") {
-        if let Some((cap_type, port)) = rest.split_once(':') {
-            let cap_type = match cap_type {
-                "listen" => NetworkCapType::Listen,
-                "outbound" => NetworkCapType::Outbound,
-                _ => return Err(format!("Unknown network capability type: {}", cap_type)),
-            };
-            return Ok(CapabilitySpec::Network(NetworkCapabilitySpec {
-                cap_type,
-                port: port.to_string(),
-            }));
-        }
+    if let Some(rest) = spec.strip_prefix("network.")
+        && let Some((cap_type, port)) = rest.split_once(':')
+    {
+        let cap_type = match cap_type {
+            "listen" => NetworkCapType::Listen,
+            "outbound" => NetworkCapType::Outbound,
+            _ => return Err(format!("Unknown network capability type: {}", cap_type)),
+        };
+        return Ok(CapabilitySpec::Network(NetworkCapabilitySpec {
+            cap_type,
+            port: port.to_string(),
+        }));
     }
 
     // Check for filesystem capability: filesystem.read:/path
-    if let Some(rest) = spec.strip_prefix("filesystem.") {
-        if let Some((cap_type, path)) = rest.split_once(':') {
-            let cap_type = match cap_type {
-                "read" => FilesystemCapType::Read,
-                "write" => FilesystemCapType::Write,
-                "execute" => FilesystemCapType::Execute,
-                _ => return Err(format!("Unknown filesystem capability type: {}", cap_type)),
-            };
-            return Ok(CapabilitySpec::Filesystem(FilesystemCapabilitySpec {
-                cap_type,
-                path: path.to_string(),
-            }));
-        }
+    if let Some(rest) = spec.strip_prefix("filesystem.")
+        && let Some((cap_type, path)) = rest.split_once(':')
+    {
+        let cap_type = match cap_type {
+            "read" => FilesystemCapType::Read,
+            "write" => FilesystemCapType::Write,
+            "execute" => FilesystemCapType::Execute,
+            _ => return Err(format!("Unknown filesystem capability type: {}", cap_type)),
+        };
+        return Ok(CapabilitySpec::Filesystem(FilesystemCapabilitySpec {
+            cap_type,
+            path: path.to_string(),
+        }));
     }
 
     // Default: named capability

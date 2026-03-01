@@ -86,10 +86,14 @@ impl LabelEntry {
     /// Insert or get existing label
     pub fn insert_or_get(&mut self, conn: &Connection) -> Result<i64> {
         // Try to find existing
-        if let Some(existing) = Self::find_by_spec(conn, &self.repository, &self.namespace, &self.tag)? {
+        if let Some(existing) =
+            Self::find_by_spec(conn, &self.repository, &self.namespace, &self.tag)?
+        {
             self.id = existing.id;
             self.created_at = existing.created_at;
-            return Ok(existing.id.expect("Label entry from database should have an id"));
+            return Ok(existing
+                .id
+                .expect("Label entry from database should have an id"));
         }
 
         // Insert new
@@ -119,7 +123,9 @@ impl LabelEntry {
              FROM labels WHERE repository = ?1 AND namespace = ?2 AND tag = ?3",
         )?;
 
-        let label = stmt.query_row([repository, namespace, tag], Self::from_row).optional()?;
+        let label = stmt
+            .query_row([repository, namespace, tag], Self::from_row)
+            .optional()?;
         Ok(label)
     }
 
@@ -159,7 +165,11 @@ impl LabelEntry {
     }
 
     /// Find labels by repository and namespace (all tags on a branch)
-    pub fn find_by_branch(conn: &Connection, repository: &str, namespace: &str) -> Result<Vec<Self>> {
+    pub fn find_by_branch(
+        conn: &Connection,
+        repository: &str,
+        namespace: &str,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
              FROM labels WHERE repository = ?1 AND namespace = ?2 ORDER BY tag",
@@ -263,7 +273,11 @@ impl LabelEntry {
     }
 
     /// Set the delegation target (another label to delegate resolution to)
-    pub fn set_delegate(&mut self, conn: &Connection, delegate_label_id: Option<i64>) -> Result<()> {
+    pub fn set_delegate(
+        &mut self,
+        conn: &Connection,
+        delegate_label_id: Option<i64>,
+    ) -> Result<()> {
         let id = self.id.ok_or_else(|| {
             crate::error::Error::InitError("Cannot update label without ID".to_string())
         })?;
@@ -615,10 +629,15 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create two labels
-        let mut source = LabelEntry::new("local".to_string(), "devel".to_string(), "main".to_string());
+        let mut source =
+            LabelEntry::new("local".to_string(), "devel".to_string(), "main".to_string());
         let source_id = source.insert(&conn).unwrap();
 
-        let mut target = LabelEntry::new("fedora".to_string(), "f41".to_string(), "stable".to_string());
+        let mut target = LabelEntry::new(
+            "fedora".to_string(),
+            "f41".to_string(),
+            "stable".to_string(),
+        );
         let target_id = target.insert(&conn).unwrap();
 
         // Set up delegation
@@ -654,11 +673,16 @@ mod tests {
             "INSERT INTO repositories (name, url, enabled, priority)
              VALUES ('test-repo', 'https://example.com', 1, 10)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         let repo_id: i64 = conn.last_insert_rowid();
 
         // Create a label
-        let mut label = LabelEntry::new("fedora".to_string(), "f41".to_string(), "stable".to_string());
+        let mut label = LabelEntry::new(
+            "fedora".to_string(),
+            "f41".to_string(),
+            "stable".to_string(),
+        );
         let label_id = label.insert(&conn).unwrap();
 
         // Link label to repository

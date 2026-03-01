@@ -79,7 +79,10 @@ pub fn cmd_sync_hook_install(remove: bool) -> Result<()> {
     }
 
     let paths = hook_paths(pkg_mgr).ok_or_else(|| {
-        anyhow::anyhow!("No hook configuration for package manager: {}", pkg_mgr.display_name())
+        anyhow::anyhow!(
+            "No hook configuration for package manager: {}",
+            pkg_mgr.display_name()
+        )
     })?;
 
     if remove {
@@ -88,10 +91,7 @@ pub fn cmd_sync_hook_install(remove: bool) -> Result<()> {
         if let Some(filter) = paths.filter {
             remove_file_if_exists(filter)?;
         }
-        println!(
-            "Removed Conary sync hook for {}.",
-            pkg_mgr.display_name()
-        );
+        println!("Removed Conary sync hook for {}.", pkg_mgr.display_name());
     } else {
         // Install hooks
         match pkg_mgr {
@@ -107,7 +107,10 @@ pub fn cmd_sync_hook_install(remove: bool) -> Result<()> {
                     use std::os::unix::fs::PermissionsExt;
                     fs::set_permissions(paths.script, fs::Permissions::from_mode(0o755))?;
                 }
-                info!("Installed RPM file trigger at {} and {}", filter_path, paths.script);
+                info!(
+                    "Installed RPM file trigger at {} and {}",
+                    filter_path, paths.script
+                );
             }
             SystemPackageManager::Dpkg => {
                 ensure_parent_dir(paths.script)?;
@@ -122,13 +125,8 @@ pub fn cmd_sync_hook_install(remove: bool) -> Result<()> {
             _ => unreachable!(),
         }
 
-        println!(
-            "Installed Conary sync hook for {}.",
-            pkg_mgr.display_name()
-        );
-        println!(
-            "The system PM will now auto-refresh Conary tracking after package operations."
-        );
+        println!("Installed Conary sync hook for {}.", pkg_mgr.display_name());
+        println!("The system PM will now auto-refresh Conary tracking after package operations.");
     }
 
     Ok(())
@@ -145,10 +143,10 @@ fn remove_file_if_exists(path: &str) -> Result<()> {
 
 /// Ensure the parent directory of a path exists.
 fn ensure_parent_dir(path: &str) -> Result<()> {
-    if let Some(parent) = Path::new(path).parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = Path::new(path).parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
     }
     Ok(())
 }

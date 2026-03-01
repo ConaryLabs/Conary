@@ -64,12 +64,10 @@ impl DeltaGenerator {
         let delta = self.compress_with_dictionary(&new_content, &old_content)?;
 
         // Write delta to output file
-        let mut file = File::create(output_path).map_err(|e| {
-            Error::IoError(format!("Failed to create delta file: {}", e))
-        })?;
-        file.write_all(&delta).map_err(|e| {
-            Error::IoError(format!("Failed to write delta file: {}", e))
-        })?;
+        let mut file = File::create(output_path)
+            .map_err(|e| Error::IoError(format!("Failed to create delta file: {}", e)))?;
+        file.write_all(&delta)
+            .map_err(|e| Error::IoError(format!("Failed to write delta file: {}", e)))?;
 
         // Calculate metrics
         let metrics = DeltaMetrics::new(

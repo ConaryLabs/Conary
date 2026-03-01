@@ -158,7 +158,10 @@ impl Federation {
 
         // Read certificate and key
         let cert_pem = fs::read(cert_path).map_err(|e| {
-            Error::InitError(format!("Failed to read mTLS certificate '{}': {}", cert_path, e))
+            Error::InitError(format!(
+                "Failed to read mTLS certificate '{}': {}",
+                cert_path, e
+            ))
         })?;
         let key_pem = fs::read(key_path).map_err(|e| {
             Error::InitError(format!("Failed to read mTLS key '{}': {}", key_path, e))
@@ -176,7 +179,10 @@ impl Federation {
         // Add custom CA if configured
         if let Some(ca_path) = &config.mtls_ca_path {
             let ca_pem = fs::read(ca_path).map_err(|e| {
-                Error::InitError(format!("Failed to read CA certificate '{}': {}", ca_path, e))
+                Error::InitError(format!(
+                    "Failed to read CA certificate '{}': {}",
+                    ca_path, e
+                ))
             })?;
             let ca_cert = reqwest::Certificate::from_pem(&ca_pem)
                 .map_err(|e| Error::InitError(format!("Failed to parse CA certificate: {e}")))?;
@@ -270,7 +276,9 @@ impl Federation {
     #[cfg(feature = "server")]
     pub fn start_mdns_discovery(&mut self) -> Result<()> {
         if !self.config.enable_mdns {
-            return Err(Error::Federation("mDNS discovery is disabled in config".into()));
+            return Err(Error::Federation(
+                "mDNS discovery is disabled in config".into(),
+            ));
         }
 
         // Create mDNS manager if not exists
@@ -280,9 +288,9 @@ impl Federation {
         }
 
         let mdns_guard = self.mdns.as_ref().unwrap();
-        let mut mdns = mdns_guard.lock().map_err(|e| {
-            Error::Federation(format!("Failed to lock mDNS manager: {e}"))
-        })?;
+        let mut mdns = mdns_guard
+            .lock()
+            .map_err(|e| Error::Federation(format!("Failed to lock mDNS manager: {e}")))?;
 
         // Register this node if it's a hub
         if matches!(self.config.tier, PeerTier::CellHub | PeerTier::RegionHub) {
@@ -311,7 +319,11 @@ impl Federation {
                     info!(
                         "[mdns] Discovered peer: {} at {}:{} (tier: {})",
                         discovered.instance_name,
-                        discovered.addresses.first().map(|a| a.to_string()).unwrap_or_default(),
+                        discovered
+                            .addresses
+                            .first()
+                            .map(|a| a.to_string())
+                            .unwrap_or_default(),
                         discovered.port,
                         discovered.tier
                     );
@@ -323,7 +335,9 @@ impl Federation {
                             if let Ok(mut registry) = peers.try_write() {
                                 registry.add(peer);
                             } else {
-                                debug!("[mdns] Could not acquire write lock, peer will be added later");
+                                debug!(
+                                    "[mdns] Could not acquire write lock, peer will be added later"
+                                );
                             }
                         }
                         Err(e) => {
@@ -347,7 +361,9 @@ impl Federation {
     /// Stop mDNS discovery
     #[cfg(feature = "server")]
     pub fn stop_mdns_discovery(&mut self) {
-        if let Some(ref mdns_mutex) = self.mdns && let Ok(mut mdns) = mdns_mutex.lock() {
+        if let Some(ref mdns_mutex) = self.mdns
+            && let Ok(mut mdns) = mdns_mutex.lock()
+        {
             mdns.stop_discovery();
             info!("[mdns] Discovery stopped");
         }
@@ -356,9 +372,9 @@ impl Federation {
     /// Check if mDNS discovery is running
     #[cfg(feature = "server")]
     pub fn is_mdns_running(&self) -> bool {
-        self.mdns.as_ref().is_some_and(|m| {
-            m.lock().is_ok_and(|mdns| mdns.is_running())
-        })
+        self.mdns
+            .as_ref()
+            .is_some_and(|m| m.lock().is_ok_and(|mdns| mdns.is_running()))
     }
 
     /// Perform a one-shot mDNS scan and return discovered peers

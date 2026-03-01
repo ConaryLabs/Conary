@@ -124,12 +124,7 @@ pub struct ScriptletExecutor {
 
 impl ScriptletExecutor {
     /// Create a new executor
-    pub fn new(
-        root: &Path,
-        name: &str,
-        version: &str,
-        format: PackageFormat,
-    ) -> Self {
+    pub fn new(root: &Path, name: &str, version: &str, format: PackageFormat) -> Self {
         Self {
             root: root.to_path_buf(),
             package_name: name.to_string(),
@@ -369,9 +364,7 @@ impl ScriptletExecutor {
             self.execute_with_chroot(phase, interpreter, &target_script_path, args, env)
         } else {
             // Non-root: try unshare with user namespace, fall back to error
-            warn!(
-                "Target root scriptlet execution requires root privileges or user namespaces"
-            );
+            warn!("Target root scriptlet execution requires root privileges or user namespaces");
             Err(Error::ScriptletError(format!(
                 "Cannot execute {} scriptlet in target root without root privileges",
                 phase
@@ -395,9 +388,7 @@ impl ScriptletExecutor {
         env: &[(&str, &str)],
     ) -> Result<()> {
         // Script path relative to chroot
-        let script_in_chroot = script_path
-            .strip_prefix(&self.root)
-            .unwrap_or(script_path);
+        let script_in_chroot = script_path.strip_prefix(&self.root).unwrap_or(script_path);
         let script_in_chroot = format!("/{}", script_in_chroot.display());
 
         debug!(
@@ -513,7 +504,8 @@ impl ScriptletExecutor {
             cmd.env(*key, *value);
         }
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
 
         // Wait with timeout
@@ -586,13 +578,11 @@ impl ScriptletExecutor {
                 // prerm: remove | upgrade <new-version>
                 // postrm: remove | upgrade <new-version>
                 match mode {
-                    ExecutionMode::Install => {
-                        match phase {
-                            "pre-install" => vec!["install".to_string()],
-                            "post-install" => vec!["configure".to_string()],
-                            _ => vec!["install".to_string()],
-                        }
-                    }
+                    ExecutionMode::Install => match phase {
+                        "pre-install" => vec!["install".to_string()],
+                        "post-install" => vec!["configure".to_string()],
+                        _ => vec!["install".to_string()],
+                    },
                     ExecutionMode::Remove => {
                         vec!["remove".to_string()]
                     }
@@ -692,102 +682,131 @@ mod tests {
 
     #[test]
     fn test_rpm_args() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        );
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
 
-        assert_eq!(executor.get_args(&ExecutionMode::Install, "pre-install"), vec!["1"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["0"]);
         assert_eq!(
-            executor.get_args(&ExecutionMode::Upgrade {
-                old_version: "0.9.0".to_string()
-            }, "pre-install"),
+            executor.get_args(&ExecutionMode::Install, "pre-install"),
+            vec!["1"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
+            vec!["0"]
+        );
+        assert_eq!(
+            executor.get_args(
+                &ExecutionMode::Upgrade {
+                    old_version: "0.9.0".to_string()
+                },
+                "pre-install"
+            ),
             vec!["2"]
         );
         // UpgradeRemoval: old package scripts get $1=1 (NOT 0!)
         assert_eq!(
-            executor.get_args(&ExecutionMode::UpgradeRemoval {
-                new_version: "1.0.0".to_string()
-            }, "pre-remove"),
+            executor.get_args(
+                &ExecutionMode::UpgradeRemoval {
+                    new_version: "1.0.0".to_string()
+                },
+                "pre-remove"
+            ),
             vec!["1"]
         );
     }
 
     #[test]
     fn test_deb_args() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Deb,
-        );
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb);
 
         // Fresh install
-        assert_eq!(executor.get_args(&ExecutionMode::Install, "pre-install"), vec!["install"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Install, "post-install"), vec!["configure"]);
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Install, "pre-install"),
+            vec!["install"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Install, "post-install"),
+            vec!["configure"]
+        );
 
         // Remove
-        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["remove"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Remove, "post-remove"), vec!["remove"]);
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
+            vec!["remove"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Remove, "post-remove"),
+            vec!["remove"]
+        );
 
         // Upgrade
         assert_eq!(
-            executor.get_args(&ExecutionMode::Upgrade {
-                old_version: "0.9.0".to_string()
-            }, "pre-install"),
+            executor.get_args(
+                &ExecutionMode::Upgrade {
+                    old_version: "0.9.0".to_string()
+                },
+                "pre-install"
+            ),
             vec!["upgrade", "0.9.0"]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::Upgrade {
-                old_version: "0.9.0".to_string()
-            }, "post-install"),
+            executor.get_args(
+                &ExecutionMode::Upgrade {
+                    old_version: "0.9.0".to_string()
+                },
+                "post-install"
+            ),
             vec!["configure", "0.9.0"]
         );
         // UpgradeRemoval: OLD package scripts get "upgrade <new_version>"
         assert_eq!(
-            executor.get_args(&ExecutionMode::UpgradeRemoval {
-                new_version: "1.0.0".to_string()
-            }, "pre-remove"),
+            executor.get_args(
+                &ExecutionMode::UpgradeRemoval {
+                    new_version: "1.0.0".to_string()
+                },
+                "pre-remove"
+            ),
             vec!["upgrade", "1.0.0"]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::UpgradeRemoval {
-                new_version: "1.0.0".to_string()
-            }, "post-remove"),
+            executor.get_args(
+                &ExecutionMode::UpgradeRemoval {
+                    new_version: "1.0.0".to_string()
+                },
+                "post-remove"
+            ),
             vec!["upgrade", "1.0.0"]
         );
     }
 
     #[test]
     fn test_arch_args() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Arch,
-        );
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
 
-        assert_eq!(executor.get_args(&ExecutionMode::Install, "post-install"), vec!["1.0.0"]);
-        assert_eq!(executor.get_args(&ExecutionMode::Remove, "pre-remove"), vec!["1.0.0"]);
         assert_eq!(
-            executor.get_args(&ExecutionMode::Upgrade {
-                old_version: "0.9.0".to_string()
-            }, "post-upgrade"),
+            executor.get_args(&ExecutionMode::Install, "post-install"),
+            vec!["1.0.0"]
+        );
+        assert_eq!(
+            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
+            vec!["1.0.0"]
+        );
+        assert_eq!(
+            executor.get_args(
+                &ExecutionMode::Upgrade {
+                    old_version: "0.9.0".to_string()
+                },
+                "post-upgrade"
+            ),
             vec!["1.0.0", "0.9.0"]
         );
     }
 
     #[test]
     fn test_arch_wrapper_generation() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Arch,
-        );
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
 
         let content = "post_install() {\n    echo \"Hello\"\n}";
         let wrapper = executor.prepare_arch_wrapper(content, "post-install");
@@ -801,7 +820,10 @@ mod tests {
     #[test]
     fn test_phase_conversion() {
         assert_eq!(phase_to_string(ScriptletPhase::PreInstall), "pre-install");
-        assert_eq!(phase_from_string("pre-install"), Some(ScriptletPhase::PreInstall));
+        assert_eq!(
+            phase_from_string("pre-install"),
+            Some(ScriptletPhase::PreInstall)
+        );
         assert_eq!(phase_from_string("invalid"), None);
     }
 
@@ -838,24 +860,16 @@ mod tests {
 
     #[test]
     fn test_executor_default_sandbox_is_auto() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        );
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
         assert_eq!(executor.sandbox_mode, SandboxMode::Auto);
     }
 
     #[test]
     fn test_execute_basic_success() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
 
         let result = executor.execute_direct(
             "post-install",
@@ -869,13 +883,9 @@ mod tests {
 
     #[test]
     fn test_execute_script_failure() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
 
         let result = executor.execute_direct(
             "post-install",
@@ -886,18 +896,18 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("failed with exit code 42"), "unexpected error: {}", err);
+        assert!(
+            err.contains("failed with exit code 42"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
     fn test_execute_none_sandbox_runs_directly() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Deb,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb)
+                .with_sandbox_mode(SandboxMode::None);
 
         // Verify it runs and can produce output without error
         let result = executor.execute_direct(
@@ -915,14 +925,10 @@ mod tests {
 
     #[test]
     fn test_execute_timeout() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        )
-        .with_timeout(Duration::from_secs(1))
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_timeout(Duration::from_secs(1))
+                .with_sandbox_mode(SandboxMode::None);
 
         let result = executor.execute_direct(
             "post-install",
@@ -938,13 +944,9 @@ mod tests {
 
     #[test]
     fn test_execute_with_env_vars() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "my-package",
-            "2.5.0",
-            PackageFormat::Rpm,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "my-package", "2.5.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
 
         // Script that checks environment variables are set
         let script = r#"
@@ -967,13 +969,9 @@ mod tests {
 
     #[test]
     fn test_execute_impl_missing_interpreter() {
-        let executor = ScriptletExecutor::new(
-            Path::new("/"),
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
 
         let result = executor.execute_impl(
             "post-install",
@@ -984,6 +982,10 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Interpreter not found"), "unexpected error: {}", err);
+        assert!(
+            err.contains("Interpreter not found"),
+            "unexpected error: {}",
+            err
+        );
     }
 }

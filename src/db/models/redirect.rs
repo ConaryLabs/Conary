@@ -79,11 +79,7 @@ pub struct Redirect {
 
 impl Redirect {
     /// Create a new redirect
-    pub fn new(
-        source_name: String,
-        target_name: String,
-        redirect_type: RedirectType,
-    ) -> Self {
+    pub fn new(source_name: String, target_name: String, redirect_type: RedirectType) -> Self {
         Self {
             id: None,
             source_name,
@@ -103,7 +99,11 @@ impl Redirect {
 
     /// Create an obsolete redirect
     pub fn obsolete(deprecated: impl Into<String>, replacement: impl Into<String>) -> Self {
-        Self::new(deprecated.into(), replacement.into(), RedirectType::Obsolete)
+        Self::new(
+            deprecated.into(),
+            replacement.into(),
+            RedirectType::Obsolete,
+        )
     }
 
     /// Set the source version constraint
@@ -159,7 +159,11 @@ impl Redirect {
     ///
     /// If version is provided, looks for version-specific redirect first,
     /// then falls back to unversioned redirect.
-    pub fn find_by_source(conn: &Connection, source_name: &str, version: Option<&str>) -> Result<Option<Self>> {
+    pub fn find_by_source(
+        conn: &Connection,
+        source_name: &str,
+        version: Option<&str>,
+    ) -> Result<Option<Self>> {
         // First try to find a version-specific redirect
         if let Some(ver) = version {
             let mut stmt = conn.prepare(
@@ -167,7 +171,10 @@ impl Redirect {
                  FROM redirects WHERE source_name = ?1 AND source_version = ?2",
             )?;
 
-            if let Some(redirect) = stmt.query_row([source_name, ver], Self::from_row).optional()? {
+            if let Some(redirect) = stmt
+                .query_row([source_name, ver], Self::from_row)
+                .optional()?
+            {
                 return Ok(Some(redirect));
             }
         }
@@ -243,7 +250,11 @@ impl Redirect {
     ///
     /// Resolves transitive redirects (A -> B -> C returns C).
     /// Detects and returns error on circular redirects.
-    pub fn resolve(conn: &Connection, package_name: &str, version: Option<&str>) -> Result<ResolveResult> {
+    pub fn resolve(
+        conn: &Connection,
+        package_name: &str,
+        version: Option<&str>,
+    ) -> Result<ResolveResult> {
         let mut current = package_name.to_string();
         let mut current_version = version.map(String::from);
         let mut chain = vec![current.clone()];
@@ -253,7 +264,9 @@ impl Redirect {
         const MAX_DEPTH: usize = 10;
 
         for _ in 0..MAX_DEPTH {
-            if let Some(redirect) = Self::find_by_source(conn, &current, current_version.as_deref())? {
+            if let Some(redirect) =
+                Self::find_by_source(conn, &current, current_version.as_deref())?
+            {
                 // Detect circular redirect
                 if chain.contains(&redirect.target_name) {
                     return Err(crate::error::Error::ConflictError(format!(
@@ -373,8 +386,8 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create a rename redirect
-        let mut redirect = Redirect::rename("old-pkg", "new-pkg")
-            .with_message("Package was renamed in v2.0");
+        let mut redirect =
+            Redirect::rename("old-pkg", "new-pkg").with_message("Package was renamed in v2.0");
 
         let id = redirect.insert(&conn).unwrap();
         assert!(id > 0);
@@ -384,10 +397,15 @@ mod tests {
         assert_eq!(found.source_name, "old-pkg");
         assert_eq!(found.target_name, "new-pkg");
         assert_eq!(found.redirect_type, RedirectType::Rename);
-        assert_eq!(found.message, Some("Package was renamed in v2.0".to_string()));
+        assert_eq!(
+            found.message,
+            Some("Package was renamed in v2.0".to_string())
+        );
 
         // Find by source
-        let found = Redirect::find_by_source(&conn, "old-pkg", None).unwrap().unwrap();
+        let found = Redirect::find_by_source(&conn, "old-pkg", None)
+            .unwrap()
+            .unwrap();
         assert_eq!(found.target_name, "new-pkg");
     }
 
@@ -438,8 +456,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create version-specific redirect
-        let mut r1 = Redirect::rename("pkg", "new-pkg")
-            .with_source_version("1.0");
+        let mut r1 = Redirect::rename("pkg", "new-pkg").with_source_version("1.0");
         r1.insert(&conn).unwrap();
 
         // Create unversioned redirect
@@ -447,11 +464,15 @@ mod tests {
         r2.insert(&conn).unwrap();
 
         // Version 1.0 should go to new-pkg
-        let found = Redirect::find_by_source(&conn, "pkg", Some("1.0")).unwrap().unwrap();
+        let found = Redirect::find_by_source(&conn, "pkg", Some("1.0"))
+            .unwrap()
+            .unwrap();
         assert_eq!(found.target_name, "new-pkg");
 
         // Version 2.0 should fall back to unversioned (other-pkg)
-        let found = Redirect::find_by_source(&conn, "pkg", Some("2.0")).unwrap().unwrap();
+        let found = Redirect::find_by_source(&conn, "pkg", Some("2.0"))
+            .unwrap()
+            .unwrap();
         assert_eq!(found.target_name, "other-pkg");
     }
 

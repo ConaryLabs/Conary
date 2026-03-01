@@ -29,7 +29,11 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut changeset1 = Changeset::new("Install nginx-1.24.0".to_string());
         let changeset1_id = changeset1.insert(tx)?;
 
-        let mut nginx = Trove::new("nginx".to_string(), "1.24.0".to_string(), TroveType::Package);
+        let mut nginx = Trove::new(
+            "nginx".to_string(),
+            "1.24.0".to_string(),
+            TroveType::Package,
+        );
         nginx.architecture = Some("x86_64".to_string());
         nginx.description = Some("High performance web server".to_string());
         nginx.installed_by_changeset_id = Some(changeset1_id);
@@ -85,8 +89,11 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut changeset2 = Changeset::new("Install openssl-3.0.0".to_string());
         let changeset2_id = changeset2.insert(tx)?;
 
-        let mut openssl =
-            Trove::new("openssl".to_string(), "3.0.0".to_string(), TroveType::Package);
+        let mut openssl = Trove::new(
+            "openssl".to_string(),
+            "3.0.0".to_string(),
+            TroveType::Package,
+        );
         openssl.architecture = Some("x86_64".to_string());
         openssl.description = Some("Cryptography and SSL/TLS toolkit".to_string());
         openssl.installed_by_changeset_id = Some(changeset2_id);

@@ -10,7 +10,7 @@
 //! This allows skipping expensive builds when nothing has changed.
 
 use crate::error::Result;
-use crate::hash::{hash_bytes, HashAlgorithm};
+use crate::hash::{HashAlgorithm, hash_bytes};
 use crate::recipe::format::{BuildStage, Recipe};
 use std::collections::BTreeMap;
 use std::fs;
@@ -111,13 +111,15 @@ impl ToolchainInfo {
             linker_version: std::env::var("LD_VERSION").ok(),
             target: std::env::var("TARGET").ok(),
             sysroot: std::env::var("SYSROOT").ok().map(PathBuf::from),
-            stage: std::env::var("CONARY_STAGE").ok().and_then(|s| match s.as_str() {
-                "stage0" => Some(BuildStage::Stage0),
-                "stage1" => Some(BuildStage::Stage1),
-                "stage2" => Some(BuildStage::Stage2),
-                "final" => Some(BuildStage::Final),
-                _ => None,
-            }),
+            stage: std::env::var("CONARY_STAGE")
+                .ok()
+                .and_then(|s| match s.as_str() {
+                    "stage0" => Some(BuildStage::Stage0),
+                    "stage1" => Some(BuildStage::Stage1),
+                    "stage2" => Some(BuildStage::Stage2),
+                    "final" => Some(BuildStage::Final),
+                    _ => None,
+                }),
         }
     }
 
@@ -151,7 +153,9 @@ impl ToolchainInfo {
             data.push('\n');
         }
 
-        hash_bytes(HashAlgorithm::Sha256, data.as_bytes()).as_str().to_string()
+        hash_bytes(HashAlgorithm::Sha256, data.as_bytes())
+            .as_str()
+            .to_string()
     }
 }
 
@@ -238,12 +242,21 @@ impl BuildCache {
         if deps_hash.is_empty() {
             debug!(
                 "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8})",
-                recipe.package.name, recipe.package.version, &key[..16], recipe_hash, toolchain_hash
+                recipe.package.name,
+                recipe.package.version,
+                &key[..16],
+                recipe_hash,
+                toolchain_hash
             );
         } else {
             debug!(
                 "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8}, deps: {:.8})",
-                recipe.package.name, recipe.package.version, &key[..16], recipe_hash, toolchain_hash, deps_hash
+                recipe.package.name,
+                recipe.package.version,
+                &key[..16],
+                recipe_hash,
+                toolchain_hash,
+                deps_hash
             );
         }
 
@@ -353,21 +366,23 @@ impl BuildCache {
     fn cache_path(&self, key: &str) -> PathBuf {
         // Use first 2 chars as subdirectory for sharding
         let shard = &key[..2];
-        self.config.cache_dir.join(shard).join(format!("{}.ccs", key))
+        self.config
+            .cache_dir
+            .join(shard)
+            .join(format!("{}.ccs", key))
     }
 
     /// Get the metadata path for a cache entry
     fn metadata_path(&self, key: &str) -> PathBuf {
         let shard = &key[..2];
-        self.config.cache_dir.join(shard).join(format!("{}.meta", key))
+        self.config
+            .cache_dir
+            .join(shard)
+            .join(format!("{}.meta", key))
     }
 
     /// Check if a cached build exists for the given recipe and toolchain
-    pub fn get(
-        &self,
-        recipe: &Recipe,
-        toolchain: &ToolchainInfo,
-    ) -> Result<Option<CacheEntry>> {
+    pub fn get(&self, recipe: &Recipe, toolchain: &ToolchainInfo) -> Result<Option<CacheEntry>> {
         let key = self.cache_key(recipe, toolchain);
         self.get_by_key(&key)
     }
@@ -447,12 +462,7 @@ impl BuildCache {
     }
 
     /// Store a package with a specific key
-    fn put_with_key(
-        &self,
-        key: &str,
-        package_path: &Path,
-        recipe: &Recipe,
-    ) -> Result<CacheEntry> {
+    fn put_with_key(&self, key: &str, package_path: &Path, recipe: &Recipe) -> Result<CacheEntry> {
         let cache_path = self.cache_path(key);
 
         // Create shard directory
@@ -920,7 +930,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = CacheConfig {
             cache_dir: temp.path().to_path_buf(),
-            max_size: 2000, // Very small limit
+            max_size: 2000,          // Very small limit
             max_age: Duration::ZERO, // No expiry
             verify_integrity: false,
         };

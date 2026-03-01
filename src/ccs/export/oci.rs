@@ -6,8 +6,8 @@
 //! OCI-compatible runtimes.
 
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -189,7 +189,11 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
         for file in files {
             if let Some(target) = &file.target {
                 // Symlink - store as special content
-                all_files.push((file.path.clone(), format!("symlink:{}", target).into_bytes(), file.mode));
+                all_files.push((
+                    file.path.clone(),
+                    format!("symlink:{}", target).into_bytes(),
+                    file.mode,
+                ));
             } else if let Some(content) = blobs.get(&file.hash) {
                 all_files.push((file.path.clone(), content.clone(), file.mode));
             }
@@ -261,7 +265,10 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
                 let mut ann = HashMap::new();
                 ann.insert(
                     "org.opencontainers.image.ref.name".to_string(),
-                    format!("{}:latest", package_names.first().unwrap_or(&"image".to_string())),
+                    format!(
+                        "{}:latest",
+                        package_names.first().unwrap_or(&"image".to_string())
+                    ),
                 );
                 ann
             }),
@@ -295,8 +302,11 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     println!("To load the image:");
     println!("  podman load < {}", output.display());
     println!("  # or");
-    println!("  skopeo copy oci-archive:{} containers-storage:localhost/{}:latest",
-             output.display(), package_names.first().unwrap_or(&"image".to_string()));
+    println!(
+        "  skopeo copy oci-archive:{} containers-storage:localhost/{}:latest",
+        output.display(),
+        package_names.first().unwrap_or(&"image".to_string())
+    );
 
     Ok(())
 }
@@ -445,7 +455,9 @@ fn create_config(container: &ContainerConfig, diff_id: &str, packages: &[String]
         .env
         .iter()
         .map(|(k, v)| format!("{}={}", k, v))
-        .chain(std::iter::once("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string()))
+        .chain(std::iter::once(
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+        ))
         .collect();
 
     // Convert exposed ports to OCI format

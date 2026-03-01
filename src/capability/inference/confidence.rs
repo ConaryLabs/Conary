@@ -10,7 +10,19 @@
 use std::fmt;
 
 /// Confidence level in an inference result
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Confidence {
     /// Very uncertain - needs human review
     #[default]
@@ -49,11 +61,7 @@ impl Confidence {
 
     /// Combine two confidence levels (takes minimum)
     pub fn combine(self, other: Self) -> Self {
-        if self < other {
-            self
-        } else {
-            other
-        }
+        if self < other { self } else { other }
     }
 
     /// Check if confidence is sufficient for enforcement
@@ -229,7 +237,10 @@ fn aggregate_confidence(evidence: &[(String, Confidence)]) -> Confidence {
     }
 
     // If we have 3+ high confidence items, overall is high
-    let high_count = evidence.iter().filter(|(_, c)| *c >= Confidence::High).count();
+    let high_count = evidence
+        .iter()
+        .filter(|(_, c)| *c >= Confidence::High)
+        .count();
     if high_count >= 3 {
         return Confidence::High;
     }
@@ -240,7 +251,10 @@ fn aggregate_confidence(evidence: &[(String, Confidence)]) -> Confidence {
     }
 
     // If we have 2+ medium confidence items, overall is medium
-    let medium_count = evidence.iter().filter(|(_, c)| *c >= Confidence::Medium).count();
+    let medium_count = evidence
+        .iter()
+        .filter(|(_, c)| *c >= Confidence::Medium)
+        .count();
     if medium_count >= 2 {
         return Confidence::Medium;
     }

@@ -6,7 +6,7 @@
 //! used to build software. This module provides a type-safe way to work with
 //! toolchains from different bootstrap stages.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,7 +94,7 @@ impl Toolchain {
             path: prefix,
             target,
             gcc_version,
-            glibc_version: None, // TODO: detect
+            glibc_version: None,    // TODO: detect
             binutils_version: None, // TODO: detect
             is_static,
         })

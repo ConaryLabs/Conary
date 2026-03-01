@@ -25,10 +25,14 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
 
     // Check for empty name/version
     if recipe.package.name.is_empty() {
-        return Err(Error::ParseError("Recipe package name cannot be empty".to_string()));
+        return Err(Error::ParseError(
+            "Recipe package name cannot be empty".to_string(),
+        ));
     }
     if recipe.package.version.is_empty() {
-        return Err(Error::ParseError("Recipe package version cannot be empty".to_string()));
+        return Err(Error::ParseError(
+            "Recipe package version cannot be empty".to_string(),
+        ));
     }
 
     // Validate checksum format

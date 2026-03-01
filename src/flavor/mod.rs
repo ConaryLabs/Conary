@@ -205,10 +205,8 @@ impl FlavorSpec {
                 let arch_end = remaining.find(',').unwrap_or(remaining.len());
                 let arch_str = &remaining[3..arch_end].trim();
 
-                let architectures: Vec<String> = arch_str
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect();
+                let architectures: Vec<String> =
+                    arch_str.split_whitespace().map(|s| s.to_string()).collect();
 
                 if architectures.is_empty() {
                     return Err(Error::ParseError(
@@ -307,11 +305,7 @@ impl FlavorSpec {
             .iter()
             .filter_map(|(spec, item)| {
                 let (matches, score) = spec.matches(system);
-                if matches {
-                    Some((score, item))
-                } else {
-                    None
-                }
+                if matches { Some((score, item)) } else { None }
             })
             .max_by_key(|(score, _)| *score)
             .map(|(_, item)| item)

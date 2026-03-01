@@ -52,10 +52,9 @@ impl InstalledPacmanInfo {
 pub fn list_installed_packages() -> Result<Vec<String>> {
     debug!("Querying installed pacman packages");
 
-    let output = Command::new("pacman")
-        .args(["-Qq"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}. Is pacman installed?", e)))?;
+    let output = Command::new("pacman").args(["-Qq"]).output().map_err(|e| {
+        Error::InitError(format!("Failed to run pacman: {}. Is pacman installed?", e))
+    })?;
 
     if !output.status.success() {
         return Err(Error::InitError(format!(
@@ -189,7 +188,9 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
         // Check if this is a symlink and get target
         let link_target = if (mode & 0o170000) == 0o120000 {
-            std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+            std::fs::read_link(&path)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
         } else {
             None
         };
@@ -257,10 +258,7 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
                 .filter(|s| *s != "None")
                 .map(|s| {
                     // Remove version constraints like ">=1.0"
-                    s.split(['>', '<', '='])
-                        .next()
-                        .unwrap_or(s)
-                        .to_string()
+                    s.split(['>', '<', '=']).next().unwrap_or(s).to_string()
                 })
                 .collect();
             break;
@@ -273,7 +271,10 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
 
 /// Query dependencies of an installed package with full version constraints
 pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!("Querying dependencies with constraints for package: {}", name);
+    debug!(
+        "Querying dependencies with constraints for package: {}",
+        name
+    );
 
     let output = Command::new("pacman")
         .args(["-Qi", name])
@@ -485,7 +486,11 @@ pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
         .lines()
         .filter_map(|line| {
             let name = line.split_whitespace().next()?;
-            if name.is_empty() { None } else { Some(name.to_string()) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
         })
         .collect();
 

@@ -16,17 +16,19 @@
 //! - Cloudflare IP header extraction
 //! - Recipe build moved to admin API
 
-use crate::server::handlers::{chunks, detail, federation, index, jobs, packages, recipes, search, sparse};
+use crate::server::handlers::{
+    chunks, detail, federation, index, jobs, packages, recipes, search, sparse,
+};
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
 use axum::{
+    Json, Router,
     body::Body,
     extract::ConnectInfo,
-    http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, head, post},
-    Json, Router,
 };
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
@@ -120,19 +122,20 @@ fn extract_client_ip(
     }
 
     // Check trusted proxy header if configured
-    if let Some(header_name) = trusted_proxy_header {
-        if let Some(ip) = headers
+    if let Some(header_name) = trusted_proxy_header
+        && let Some(ip) = headers
             .get(header_name)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| {
                 // X-Forwarded-For can have multiple IPs, take the first (client)
-                s.split(',').next().map(|ip| ip.trim().parse::<IpAddr>().ok())
+                s.split(',')
+                    .next()
+                    .map(|ip| ip.trim().parse::<IpAddr>().ok())
             })
             .flatten()
-        {
-            debug!(header = header_name, ip = %ip, "Using trusted proxy header");
-            return ip;
-        }
+    {
+        debug!(header = header_name, ip = %ip, "Using trusted proxy header");
+        return ip;
     }
 
     // Fall back to direct connection IP
@@ -305,7 +308,10 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     };
 
     // Create rate limiter if enabled
-    let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit_rps, config.rate_limit_burst));
+    let rate_limiter = Arc::new(RateLimiter::new(
+        config.rate_limit_rps,
+        config.rate_limit_burst,
+    ));
 
     // CORS layers
     let public_cors = create_cors_layer(&config, false);
@@ -358,10 +364,22 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         // === Package Detail API ===
-        .route("/v1/packages/:distro/:name", get(detail::get_package_detail))
-        .route("/v1/packages/:distro/:name/versions", get(detail::get_versions))
-        .route("/v1/packages/:distro/:name/dependencies", get(detail::get_dependencies))
-        .route("/v1/packages/:distro/:name/rdepends", get(detail::get_reverse_dependencies))
+        .route(
+            "/v1/packages/:distro/:name",
+            get(detail::get_package_detail),
+        )
+        .route(
+            "/v1/packages/:distro/:name/versions",
+            get(detail::get_versions),
+        )
+        .route(
+            "/v1/packages/:distro/:name/dependencies",
+            get(detail::get_dependencies),
+        )
+        .route(
+            "/v1/packages/:distro/:name/rdepends",
+            get(detail::get_reverse_dependencies),
+        )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))
         .route("/v1/stats/recent", get(detail::get_recent))
@@ -377,10 +395,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     let web_routes = {
         let state_guard = state.read().await;
         state_guard.config.web_root.as_ref().map(|web_root| {
-            Router::new().fallback_service(
-                tower_http::services::ServeDir::new(web_root)
-                    .fallback(tower_http::services::ServeFile::new(web_root.join("index.html"))),
-            )
+            Router::new().fallback_service(tower_http::services::ServeDir::new(web_root).fallback(
+                tower_http::services::ServeFile::new(web_root.join("index.html")),
+            ))
         })
     };
 
@@ -400,11 +417,17 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     }
 
     // Add ban list enforcement (always enabled)
-    app = app.route_layer(middleware::from_fn_with_state(state.clone(), ban_middleware));
+    app = app.route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        ban_middleware,
+    ));
 
     // Add audit logging if enabled
     if config.enable_audit_log {
-        app = app.route_layer(middleware::from_fn_with_state(state.clone(), audit_log_middleware));
+        app = app.route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            audit_log_middleware,
+        ));
     }
 
     app
@@ -437,10 +460,7 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/metrics/prometheus", get(prometheus_metrics))
         // Negative cache stats
         .route("/v1/admin/negative-cache/stats", get(negative_cache_stats))
-        .route(
-            "/v1/admin/negative-cache/clear",
-            post(negative_cache_clear),
-        )
+        .route("/v1/admin/negative-cache/clear", post(negative_cache_clear))
         // Recipe build (moved from public - SSRF vector)
         .route("/v1/admin/recipes/build", post(recipes::build_recipe))
         // Server info
@@ -683,7 +703,9 @@ mod tests {
         assert!(is_cloudflare_ip(&IpAddr::V4(Ipv4Addr::new(162, 158, 0, 1))));
 
         // Non-Cloudflare IPs
-        assert!(!is_cloudflare_ip(&IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(!is_cloudflare_ip(&IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
         assert!(!is_cloudflare_ip(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         assert!(!is_cloudflare_ip(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }

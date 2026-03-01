@@ -28,12 +28,12 @@ pub use planner::{
 };
 pub use recovery::RecoveryOutcome;
 
+use crate::Result;
 use crate::db::paths::objects_dir;
 use crate::filesystem::path::safe_join;
 use crate::filesystem::{CasStore, FileDeployer};
 use crate::hash::HashAlgorithm;
 use crate::progress::ProgressTracker;
-use crate::Result;
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use rusqlite::Connection;
@@ -41,8 +41,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 /// Move a file atomically, falling back to copy+sync+delete for cross-filesystem moves.
@@ -76,7 +76,9 @@ pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
             drop(file);
 
             // fsync the parent directory to ensure directory entry is persisted
-            if let Some(parent) = dst.parent() && let Ok(dir) = File::open(parent) {
+            if let Some(parent) = dst.parent()
+                && let Ok(dir) = File::open(parent)
+            {
                 // Ignore errors from fsync on directory - not all filesystems support it
                 let _ = dir.sync_all();
             }
@@ -564,9 +566,10 @@ impl<'a> Transaction<'a> {
 
     /// Execute filesystem backup phase
     pub fn backup_files(&mut self) -> Result<()> {
-        let plan = self.plan.as_ref().ok_or_else(|| {
-            crate::Error::IoError("Transaction not planned".to_string())
-        })?;
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
 
         let backup_dir = self.engine.txn_work_dir(&self.uuid).join("backup");
         let total = plan.files_to_backup.len() as u64;
@@ -583,7 +586,12 @@ impl<'a> Transaction<'a> {
             );
 
             let source = safe_join(&self.engine.config.root, &backup_info.path)?;
-            let backup_path = backup_dir.join(backup_info.path.strip_prefix("/").unwrap_or(&backup_info.path));
+            let backup_path = backup_dir.join(
+                backup_info
+                    .path
+                    .strip_prefix("/")
+                    .unwrap_or(&backup_info.path),
+            );
 
             // Create parent directories in backup area
             if let Some(parent) = backup_path.parent() {
@@ -626,9 +634,10 @@ impl<'a> Transaction<'a> {
 
     /// Stage files from CAS to staging directory
     pub fn stage_files(&mut self) -> Result<()> {
-        let plan = self.plan.as_ref().ok_or_else(|| {
-            crate::Error::IoError("Transaction not planned".to_string())
-        })?;
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
 
         let stage_dir = self.engine.txn_work_dir(&self.uuid).join("stage");
         let total = plan.files_to_stage.len() as u64;
@@ -644,7 +653,10 @@ impl<'a> Transaction<'a> {
                 &format!("Staging {}", stage_info.path.display()),
             );
 
-            let relative_path = stage_info.path.strip_prefix("/").unwrap_or(&stage_info.path);
+            let relative_path = stage_info
+                .path
+                .strip_prefix("/")
+                .unwrap_or(&stage_info.path);
             let stage_path = stage_dir.join(relative_path);
 
             // Create parent directories
@@ -694,9 +706,10 @@ impl<'a> Transaction<'a> {
 
     /// Apply filesystem changes (atomic renames from stage to final)
     pub fn apply_filesystem(&mut self) -> Result<FsApplyResult> {
-        let plan = self.plan.as_ref().ok_or_else(|| {
-            crate::Error::IoError("Transaction not planned".to_string())
-        })?;
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
 
         let stage_dir = self.engine.txn_work_dir(&self.uuid).join("stage");
         let mut result = FsApplyResult {
@@ -710,16 +723,27 @@ impl<'a> Transaction<'a> {
         // Calculate total operations for progress tracking
         let total_ops = (plan.dirs_to_create.len()
             + plan.files_to_stage.len()
-            + plan.operations.iter().filter(|op| {
-                matches!(op.op_type, OperationType::RemoveFile | OperationType::RemoveSymlink)
-            }).count()
+            + plan
+                .operations
+                .iter()
+                .filter(|op| {
+                    matches!(
+                        op.op_type,
+                        OperationType::RemoveFile | OperationType::RemoveSymlink
+                    )
+                })
+                .count()
             + plan.dirs_to_remove.len()) as u64;
         let mut current_op = 0u64;
 
         // Create directories first (parent to child order)
         for dir in &plan.dirs_to_create {
             self.options.check_cancelled("apply")?;
-            self.options.report_progress(current_op, total_ops, &format!("Creating {}", dir.display()));
+            self.options.report_progress(
+                current_op,
+                total_ops,
+                &format!("Creating {}", dir.display()),
+            );
             current_op += 1;
 
             let target = safe_join(&self.engine.config.root, dir)?;
@@ -736,7 +760,10 @@ impl<'a> Transaction<'a> {
                 &format!("Installing {}", stage_info.path.display()),
             );
             current_op += 1;
-            let relative_path = stage_info.path.strip_prefix("/").unwrap_or(&stage_info.path);
+            let relative_path = stage_info
+                .path
+                .strip_prefix("/")
+                .unwrap_or(&stage_info.path);
             let stage_path = stage_dir.join(relative_path);
             let target = safe_join(&self.engine.config.root, &stage_info.path)?;
 
@@ -785,7 +812,11 @@ impl<'a> Transaction<'a> {
         // Remove empty directories (child to parent order)
         for dir in plan.dirs_to_remove.iter().rev() {
             self.options.check_cancelled("apply")?;
-            self.options.report_progress(current_op, total_ops, &format!("Cleanup {}", dir.display()));
+            self.options.report_progress(
+                current_op,
+                total_ops,
+                &format!("Cleanup {}", dir.display()),
+            );
             current_op += 1;
 
             let target = safe_join(&self.engine.config.root, dir)?;
@@ -851,10 +882,8 @@ impl<'a> Transaction<'a> {
         })?;
 
         // Take ownership of journal for archiving
-        let journal = std::mem::replace(
-            &mut self.journal,
-            TransactionJournal::create_placeholder()?,
-        );
+        let journal =
+            std::mem::replace(&mut self.journal, TransactionJournal::create_placeholder()?);
         journal.archive()?;
 
         self.state = TransactionState::Done;
@@ -893,10 +922,8 @@ impl<'a> Transaction<'a> {
         }
 
         // Take ownership of journal for deletion
-        let journal = std::mem::replace(
-            &mut self.journal,
-            TransactionJournal::create_placeholder()?,
-        );
+        let journal =
+            std::mem::replace(&mut self.journal, TransactionJournal::create_placeholder()?);
         journal.delete()?;
 
         self.state = TransactionState::Aborted;
@@ -932,14 +959,8 @@ mod tests {
         );
 
         assert_eq!(config.root, PathBuf::from("/"));
-        assert_eq!(
-            config.txn_dir,
-            PathBuf::from("/var/lib/conary/txn")
-        );
-        assert_eq!(
-            config.journal_dir,
-            PathBuf::from("/var/lib/conary/journal")
-        );
+        assert_eq!(config.txn_dir, PathBuf::from("/var/lib/conary/txn"));
+        assert_eq!(config.journal_dir, PathBuf::from("/var/lib/conary/journal"));
     }
 
     #[test]

@@ -3,8 +3,8 @@
 
 use clap::Subcommand;
 
-use super::label::LabelCommands;
 use super::DbArgs;
+use super::label::LabelCommands;
 
 #[derive(Subcommand)]
 pub enum QueryCommands {

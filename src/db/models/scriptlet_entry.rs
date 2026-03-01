@@ -3,7 +3,7 @@
 //! ScriptletEntry model - package install/remove hooks
 
 use crate::error::Result;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 
 /// A ScriptletEntry represents a package scriptlet (install/remove hook)
 #[derive(Debug, Clone)]

@@ -72,7 +72,9 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
 
     if collections.is_empty() {
         println!("No collections found.");
-        println!("\nCreate a collection with: conary collection-create <name> --members pkg1,pkg2,...");
+        println!(
+            "\nCreate a collection with: conary collection-create <name> --members pkg1,pkg2,..."
+        );
         return Ok(());
     }
 
@@ -100,7 +102,9 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let collection_id = trove.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
     let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     println!("Collection: {} v{}", trove.name, trove.version);
@@ -142,7 +146,9 @@ pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Resu
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let collection_id = trove.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
     conary::db::transaction(&mut conn, |tx| {
         for member_name in members {
@@ -174,7 +180,9 @@ pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &st
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let collection_id = trove.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
     conary::db::transaction(&mut conn, |tx| {
         for member_name in members {
@@ -207,7 +215,9 @@ pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let trove_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
     conary::db::transaction(&mut conn, |tx| {
         // Members will be cascade deleted due to FK constraint
@@ -237,7 +247,9 @@ pub fn cmd_collection_install(
         .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
-    let collection_id = trove.id.ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
     let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
@@ -295,14 +307,17 @@ pub fn cmd_collection_install(
 
         println!("\nInstalling {}...", member.member_name);
         let reason = format!("Installed via @{}", name);
-        match super::cmd_install(&member.member_name, super::InstallOptions {
-            db_path,
-            root,
-            version: member.member_version.clone(),
-            selection_reason: Some(&reason),
-            sandbox_mode,
-            ..Default::default()
-        }) {
+        match super::cmd_install(
+            &member.member_name,
+            super::InstallOptions {
+                db_path,
+                root,
+                version: member.member_version.clone(),
+                selection_reason: Some(&reason),
+                sandbox_mode,
+                ..Default::default()
+            },
+        ) {
             Ok(_) => {
                 installed_count += 1;
             }

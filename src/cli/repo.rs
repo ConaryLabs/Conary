@@ -1,8 +1,8 @@
 // src/cli/repo.rs
 //! Repository management commands
 
-use clap::Subcommand;
 use super::DbArgs;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum RepoCommands {

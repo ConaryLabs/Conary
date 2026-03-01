@@ -8,10 +8,10 @@
 use crate::db::models::{DownloadCount, Repository};
 use crate::server::ServerState;
 use axum::{
-    extract::{Path, Query, State},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    extract::{Path, Query, State},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -92,10 +92,8 @@ pub async fn get_package_detail(
         get_db_path(&guard)
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_package_detail(&db_path, &distro, &name)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_package_detail(&db_path, &distro, &name)).await;
 
     match result {
         Ok(Ok(Some(detail))) => (
@@ -128,10 +126,8 @@ pub async fn get_versions(
         get_db_path(&guard)
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_versions(&db_path, &distro, &name)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_versions(&db_path, &distro, &name)).await;
 
     match result {
         Ok(Ok(versions)) => (
@@ -163,10 +159,8 @@ pub async fn get_dependencies(
         get_db_path(&guard)
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_dependencies(&db_path, &distro, &name)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_dependencies(&db_path, &distro, &name)).await;
 
     match result {
         Ok(Ok(deps)) => (
@@ -198,10 +192,9 @@ pub async fn get_reverse_dependencies(
         get_db_path(&guard)
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_reverse_dependencies(&db_path, &distro, &name)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_reverse_dependencies(&db_path, &distro, &name))
+            .await;
 
     match result {
         Ok(Ok(rdeps)) => (
@@ -236,10 +229,9 @@ pub async fn get_popular(
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_popular(&db_path, distro.as_deref(), limit)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_popular(&db_path, distro.as_deref(), limit))
+            .await;
 
     match result {
         Ok(Ok(packages)) => (
@@ -274,10 +266,8 @@ pub async fn get_recent(
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_recent(&db_path, distro.as_deref(), limit)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || query_recent(&db_path, distro.as_deref(), limit)).await;
 
     match result {
         Ok(Ok(packages)) => (
@@ -300,18 +290,13 @@ pub async fn get_recent(
 /// GET /v1/stats/overview
 ///
 /// Global statistics: total packages, downloads, distros, conversions.
-pub async fn get_overview(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Response {
+pub async fn get_overview(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let db_path = {
         let guard = state.read().await;
         get_db_path(&guard)
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        query_overview(&db_path)
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || query_overview(&db_path)).await;
 
     match result {
         Ok(Ok(stats)) => (
@@ -525,7 +510,12 @@ fn query_popular(
         let counts = DownloadCount::popular(&conn, distro, limit)?;
         let mut results = Vec::with_capacity(counts.len());
         for count in counts {
-            let summary = enrich_package_summary(&conn, &count.distro, &count.package_name, count.total_count)?;
+            let summary = enrich_package_summary(
+                &conn,
+                &count.distro,
+                &count.package_name,
+                count.total_count,
+            )?;
             if let Some(s) = summary {
                 results.push(s);
             }
@@ -717,7 +707,10 @@ fn extract_metadata(
     if let Some(json_str) = metadata_json
         && let Ok(meta) = serde_json::from_str::<serde_json::Value>(&json_str)
     {
-        let license = meta.get("license").and_then(|v| v.as_str()).map(String::from);
+        let license = meta
+            .get("license")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let homepage = meta
             .get("homepage")
             .or_else(|| meta.get("url"))

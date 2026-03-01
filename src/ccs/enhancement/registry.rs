@@ -1,7 +1,9 @@
 // src/ccs/enhancement/registry.rs
 //! Enhancement registry for managing enhancement plugins
 
-use super::{EnhancementContext, EnhancementEngine, EnhancementError, EnhancementResult, EnhancementType};
+use super::{
+    EnhancementContext, EnhancementEngine, EnhancementError, EnhancementResult, EnhancementType,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -85,7 +87,7 @@ impl EnhancementEngine for CapabilityEnhancer {
     }
 
     fn enhance(&self, ctx: &mut EnhancementContext) -> EnhancementResult<()> {
-        use crate::capability::inference::{infer_capabilities, InferenceOptions};
+        use crate::capability::inference::{InferenceOptions, infer_capabilities};
 
         // Clone metadata before mutable borrow of files
         let metadata = ctx.metadata.clone();
@@ -244,9 +246,7 @@ impl EnhancementEngine for SubpackageEnhancer {
                 ("-common", "common"),
                 ("-data", "data"),
             ],
-            "arch" => &[
-                ("-docs", "doc"),
-            ],
+            "arch" => &[("-docs", "doc")],
             _ => &[],
         };
 

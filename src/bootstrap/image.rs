@@ -474,12 +474,7 @@ impl ImageBuilder {
 
         let status = Command::new(qemu_img)
             .args([
-                "convert",
-                "-f",
-                "raw",
-                "-O",
-                "qcow2",
-                "-c", // Compress
+                "convert", "-f", "raw", "-O", "qcow2", "-c", // Compress
             ])
             .arg(&raw_path)
             .arg(&self.output)
@@ -541,7 +536,10 @@ impl ImageBuilder {
 
     /// Create a sparse image file
     fn create_sparse_image(&mut self) -> Result<(), ImageError> {
-        self.log_line(&format!("Creating sparse image: {} bytes", self.size.bytes()));
+        self.log_line(&format!(
+            "Creating sparse image: {} bytes",
+            self.size.bytes()
+        ));
 
         // Use truncate for sparse file creation
         let file = File::create(&self.output)?;
@@ -747,7 +745,9 @@ impl ImageBuilder {
             .status()?;
 
         if !status.success() {
-            return Err(ImageError::CommandFailed("Failed to mount root".to_string()));
+            return Err(ImageError::CommandFailed(
+                "Failed to mount root".to_string(),
+            ));
         }
 
         // Create and mount ESP
@@ -966,9 +966,7 @@ menuentry "Conary Linux (Recovery Mode)" {
             .status()?;
 
         if !status.success() {
-            return Err(ImageError::CreationFailed(
-                "mksquashfs failed".to_string(),
-            ));
+            return Err(ImageError::CreationFailed("mksquashfs failed".to_string()));
         }
 
         Ok(())
@@ -1038,11 +1036,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
         self.create_efi_image(&efi_img)?;
 
         let status = Command::new(xorriso)
-            .args([
-                "-as",
-                "mkisofs",
-                "-o",
-            ])
+            .args(["-as", "mkisofs", "-o"])
             .arg(&self.output)
             .args([
                 "-R",

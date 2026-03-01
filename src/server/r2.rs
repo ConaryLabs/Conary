@@ -6,9 +6,9 @@
 //! a configurable prefix (e.g., "chunks/") using their content hash as key.
 
 use anyhow::{Context, Result};
-use s3::creds::Credentials;
 use s3::Bucket;
 use s3::Region;
+use s3::creds::Credentials;
 
 /// Configuration for the R2 storage backend
 #[derive(Debug, Clone)]
@@ -58,16 +58,9 @@ impl R2Store {
             endpoint: config.endpoint.clone(),
         };
 
-        let credentials = Credentials::new(
-            Some(&access_key),
-            Some(&secret_key),
-            None,
-            None,
-            None,
-        )?;
+        let credentials = Credentials::new(Some(&access_key), Some(&secret_key), None, None, None)?;
 
-        let bucket = Bucket::new(&config.bucket, region, credentials)?
-            .with_path_style();
+        let bucket = Bucket::new(&config.bucket, region, credentials)?.with_path_style();
 
         Ok(Self {
             bucket,
@@ -81,11 +74,7 @@ impl R2Store {
         let response = self.bucket.put_object(&key, data).await?;
 
         if response.status_code() >= 300 {
-            anyhow::bail!(
-                "R2 PUT failed for {}: HTTP {}",
-                key,
-                response.status_code()
-            );
+            anyhow::bail!("R2 PUT failed for {}: HTTP {}", key, response.status_code());
         }
 
         Ok(())
@@ -101,11 +90,7 @@ impl R2Store {
                 if resp.status_code() == 404 {
                     Ok(None)
                 } else if resp.status_code() >= 300 {
-                    anyhow::bail!(
-                        "R2 GET failed for {}: HTTP {}",
-                        key,
-                        resp.status_code()
-                    );
+                    anyhow::bail!("R2 GET failed for {}: HTTP {}", key, resp.status_code());
                 } else {
                     Ok(Some(resp.to_vec()))
                 }

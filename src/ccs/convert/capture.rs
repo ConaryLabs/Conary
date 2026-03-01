@@ -5,10 +5,10 @@
 //! Executes legacy scriptlets in a sandboxed, mocked environment and captures
 //! their side effects (file creations) and declarative intents (service enablement).
 
-use crate::container::{ContainerConfig, Sandbox, BindMount};
+use super::mock::{self, CapturedIntent};
+use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::Result;
 use crate::packages::traits::ExtractedFile;
-use super::mock::{self, CapturedIntent};
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -42,10 +42,10 @@ impl ScriptletCapturer {
 
     /// Run a scriptlet and capture its effects
     pub fn capture(
-        &mut self, 
-        script: &str, 
+        &mut self,
+        script: &str,
         interpreter: &str,
-        initial_files: &[ExtractedFile]
+        initial_files: &[ExtractedFile],
     ) -> Result<CaptureResult> {
         let root_path = self.root.path();
         debug!("Setting up capture environment in {}", root_path.display());
@@ -64,10 +64,10 @@ impl ScriptletCapturer {
         // 4. Configure Sandbox
         // We use a "permissive" sandbox in terms of mounts (we want to write to root)
         // but strict on network.
-        
+
         let mut config = ContainerConfig::pristine();
         config.isolate_network = true;
-        
+
         // Mount the temp dir as root (RW)
         config.add_bind_mount(BindMount::writable(root_path, "/"));
 
@@ -77,30 +77,29 @@ impl ScriptletCapturer {
         if Path::new("/lib64").exists() {
             config.add_bind_mount(BindMount::readonly("/lib64", "/lib64"));
         }
-        
+
         config.add_bind_mount(BindMount::readonly("/bin", "/host-bin"));
-        
+
         // Fixup shell symlinks in root_path
         let bin_dir = root_path.join("bin");
         fs::create_dir_all(&bin_dir)?;
-        
+
         // Force sh/bash to point to host binaries
-        if bin_dir.join("sh").exists() { fs::remove_file(bin_dir.join("sh"))?; }
-        if bin_dir.join("bash").exists() { fs::remove_file(bin_dir.join("bash"))?; }
-        
+        if bin_dir.join("sh").exists() {
+            fs::remove_file(bin_dir.join("sh"))?;
+        }
+        if bin_dir.join("bash").exists() {
+            fs::remove_file(bin_dir.join("bash"))?;
+        }
+
         std::os::unix::fs::symlink("/host-bin/sh", bin_dir.join("sh"))?;
         std::os::unix::fs::symlink("/host-bin/bash", bin_dir.join("bash"))?;
 
         // 5. Execute
         let mut sandbox = Sandbox::new(config);
-        
+
         info!("Running scriptlet in capture mode...");
-        let (code, _stdout, stderr) = sandbox.execute(
-            interpreter,
-            script,
-            &[],
-            &[]
-        )?;
+        let (code, _stdout, stderr) = sandbox.execute(interpreter, script, &[], &[])?;
 
         if code != 0 {
             warn!("Scriptlet failed with code {}: {}", code, stderr);
@@ -108,14 +107,11 @@ impl ScriptletCapturer {
 
         // 6. Diff filesystem
         let new_files = self.scan_for_changes(initial_files)?;
-        
+
         // 7. Parse intents
         let intents = mock::parse_capture_log(root_path)?;
 
-        Ok(CaptureResult {
-            new_files,
-            intents,
-        })
+        Ok(CaptureResult { new_files, intents })
     }
 
     fn write_files(&self, files: &[ExtractedFile]) -> Result<()> {
@@ -123,13 +119,13 @@ impl ScriptletCapturer {
         for file in files {
             let rel_path = file.path.strip_prefix('/').unwrap_or(&file.path);
             let full_path = root.join(rel_path);
-            
+
             if let Some(parent) = full_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            
+
             fs::write(&full_path, &file.content)?;
-            
+
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -143,15 +139,16 @@ impl ScriptletCapturer {
 
     fn scan_for_changes(&self, initial_files: &[ExtractedFile]) -> Result<Vec<ExtractedFile>> {
         let root = self.root.path();
-        let initial_paths: HashMap<String, _> = initial_files.iter()
-            .map(|f| (f.path.clone(), f))
-            .collect();
-            
+        let initial_paths: HashMap<String, _> =
+            initial_files.iter().map(|f| (f.path.clone(), f)).collect();
+
         let mut new_files = Vec::new();
 
         for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-            if !entry.file_type().is_file() { continue; }
-            
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
             let path = entry.path();
             let rel_path = path.strip_prefix(root).unwrap();
             let abs_path = format!("/{}", rel_path.to_string_lossy());
@@ -160,7 +157,7 @@ impl ScriptletCapturer {
             if abs_path.starts_with("/var/log/conary") || abs_path.starts_with("/tmp") {
                 continue;
             }
-            
+
             // Skip initial files (unless modified? For now assume immutability of package payload)
             if initial_paths.contains_key(&abs_path) {
                 // TODO: Check hash to see if modified
@@ -170,7 +167,7 @@ impl ScriptletCapturer {
             // It's a new file
             let content = fs::read(path)?;
             let metadata = fs::metadata(path)?;
-            
+
             new_files.push(ExtractedFile {
                 path: abs_path,
                 content,
@@ -179,7 +176,7 @@ impl ScriptletCapturer {
                 sha256: None, // Recalculate later
             });
         }
-        
+
         Ok(new_files)
     }
 }

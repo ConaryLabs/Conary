@@ -1,8 +1,8 @@
 // src/cli/ccs.rs
 //! CCS (Conary Container System) package format commands
 
+use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
-use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum CcsCommands {

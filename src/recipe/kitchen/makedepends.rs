@@ -74,14 +74,11 @@ mod tests {
     impl MockResolver {
         pub fn new(initially_installed: &[&str]) -> Self {
             Self {
-                installed: Mutex::new(
-                    initially_installed.iter().map(|s| s.to_string()).collect(),
-                ),
+                installed: Mutex::new(initially_installed.iter().map(|s| s.to_string()).collect()),
                 install_calls: Mutex::new(Vec::new()),
                 cleanup_calls: Mutex::new(Vec::new()),
             }
         }
-
     }
 
     impl MakedependsResolver for MockResolver {
@@ -131,7 +128,9 @@ mod tests {
     #[test]
     fn test_mock_resolver_install() {
         let resolver = MockResolver::new(&[]);
-        let installed = resolver.install(&["pkg1".to_string(), "pkg2".to_string()]).unwrap();
+        let installed = resolver
+            .install(&["pkg1".to_string(), "pkg2".to_string()])
+            .unwrap();
         assert_eq!(installed.len(), 2);
 
         // Now they should not be missing

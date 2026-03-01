@@ -56,7 +56,10 @@ impl HookExecutor {
             .context("Failed to run update-alternatives")?;
 
         if status.success() {
-            info!("Updated alternative '{}' -> '{}' (priority {})", name, path, priority);
+            info!(
+                "Updated alternative '{}' -> '{}' (priority {})",
+                name, path, priority
+            );
             Ok(())
         } else {
             Err(anyhow::anyhow!("update-alternatives --install failed"))

@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use super::parser::SystemModel;
 use super::state::SystemState;
-use super::{resolve_includes, ResolvedModel};
+use super::{ResolvedModel, resolve_includes};
 
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,25 +41,16 @@ pub enum DiffAction {
     },
 
     /// Pin a package (mark as pinned, possibly update)
-    Pin {
-        package: String,
-        pattern: String,
-    },
+    Pin { package: String, pattern: String },
 
     /// Unpin a package
-    Unpin {
-        package: String,
-    },
+    Unpin { package: String },
 
     /// Mark a package as explicitly installed (was a dependency)
-    MarkExplicit {
-        package: String,
-    },
+    MarkExplicit { package: String },
 
     /// Mark a package as dependency (was explicit)
-    MarkDependency {
-        package: String,
-    },
+    MarkDependency { package: String },
 
     /// Build and install a derived package
     BuildDerived {
@@ -104,7 +95,11 @@ impl DiffAction {
     /// Get a human-readable description
     pub fn description(&self) -> String {
         match self {
-            DiffAction::Install { package, pin, optional } => {
+            DiffAction::Install {
+                package,
+                pin,
+                optional,
+            } => {
                 let mut desc = format!("Install {}", package);
                 if let Some(v) = pin {
                     desc.push_str(&format!(" (pinned to {})", v));
@@ -114,11 +109,21 @@ impl DiffAction {
                 }
                 desc
             }
-            DiffAction::Remove { package, current_version } => {
+            DiffAction::Remove {
+                package,
+                current_version,
+            } => {
                 format!("Remove {} ({})", package, current_version)
             }
-            DiffAction::Update { package, current_version, target_version } => {
-                format!("Update {} ({} -> {})", package, current_version, target_version)
+            DiffAction::Update {
+                package,
+                current_version,
+                target_version,
+            } => {
+                format!(
+                    "Update {} ({} -> {})",
+                    package, current_version, target_version
+                )
             }
             DiffAction::Pin { package, pattern } => {
                 format!("Pin {} to {}", package, pattern)
@@ -132,15 +137,25 @@ impl DiffAction {
             DiffAction::MarkDependency { package } => {
                 format!("Mark {} as dependency", package)
             }
-            DiffAction::BuildDerived { name, parent, needs_parent } => {
+            DiffAction::BuildDerived {
+                name,
+                parent,
+                needs_parent,
+            } => {
                 if *needs_parent {
-                    format!("Build derived '{}' from '{}' (will install parent first)", name, parent)
+                    format!(
+                        "Build derived '{}' from '{}' (will install parent first)",
+                        name, parent
+                    )
                 } else {
                     format!("Build derived '{}' from '{}'", name, parent)
                 }
             }
             DiffAction::RebuildDerived { name, parent } => {
-                format!("Rebuild derived '{}' (parent '{}' was updated)", name, parent)
+                format!(
+                    "Rebuild derived '{}' (parent '{}' was updated)",
+                    name, parent
+                )
             }
         }
     }
@@ -218,7 +233,6 @@ impl ModelDiff {
         }
         self.actions.push(action);
     }
-
 }
 
 impl Default for ModelDiff {
@@ -289,20 +303,11 @@ fn compute_diff_inner(
 ) -> ModelDiff {
     let mut diff = ModelDiff::new();
 
-    let model_packages: HashSet<&str> = install
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let model_packages: HashSet<&str> = install.iter().map(|s| s.as_str()).collect();
 
-    let model_optional: HashSet<&str> = optionals
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let model_optional: HashSet<&str> = optionals.iter().map(|s| s.as_str()).collect();
 
-    let model_excluded: HashSet<&str> = exclude
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let model_excluded: HashSet<&str> = exclude.iter().map(|s| s.as_str()).collect();
 
     // Check what needs to be installed
     for package in &model_packages {
@@ -446,8 +451,8 @@ impl Default for ApplyOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::state::InstalledPackage;
+    use super::*;
 
     fn make_state_with_packages(packages: &[(&str, &str, bool)]) -> SystemState {
         let mut state = SystemState::new();
@@ -626,11 +631,20 @@ mod tests {
         let state = make_state_with_packages(&[("sendmail", "1.0.0", true)]);
         let diff = compute_diff(&model, &state);
 
-        let remove_count = diff.actions.iter().filter(|a| matches!(
-            a,
-            DiffAction::Remove { package, .. } if package == "sendmail"
-        )).count();
-        assert_eq!(remove_count, 1, "Expected exactly one Remove action for excluded package");
+        let remove_count = diff
+            .actions
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a,
+                    DiffAction::Remove { package, .. } if package == "sendmail"
+                )
+            })
+            .count();
+        assert_eq!(
+            remove_count, 1,
+            "Expected exactly one Remove action for excluded package"
+        );
     }
 
     #[test]
@@ -645,10 +659,19 @@ mod tests {
         let diff = compute_diff(&model, &state);
 
         assert!(diff.packages_to_remove().contains(&"sendmail"));
-        let remove_count = diff.actions.iter().filter(|a| matches!(
-            a,
-            DiffAction::Remove { package, .. } if package == "sendmail"
-        )).count();
-        assert_eq!(remove_count, 1, "Expected exactly one Remove action for excluded dependency");
+        let remove_count = diff
+            .actions
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a,
+                    DiffAction::Remove { package, .. } if package == "sendmail"
+                )
+            })
+            .count();
+        assert_eq!(
+            remove_count, 1,
+            "Expected exactly one Remove action for excluded dependency"
+        );
     }
 }

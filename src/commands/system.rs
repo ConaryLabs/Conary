@@ -248,7 +248,10 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
-    println!("  Removed {} files from filesystem", files_to_rollback.len());
+    println!(
+        "  Removed {} files from filesystem",
+        files_to_rollback.len()
+    );
 
     Ok(())
 }
@@ -280,12 +283,13 @@ fn rollback_removal(
         let rollback_changeset_id = rollback_changeset.insert(tx)?;
 
         // Restore the trove
-        let install_source: conary::db::models::InstallSource = snapshot
-            .install_source
-            .parse()
-            .map_err(|e| conary::Error::InitError(format!(
-                "Invalid install_source in snapshot '{}': {}", snapshot.install_source, e
-            )))?;
+        let install_source: conary::db::models::InstallSource =
+            snapshot.install_source.parse().map_err(|e| {
+                conary::Error::InitError(format!(
+                    "Invalid install_source in snapshot '{}': {}",
+                    snapshot.install_source, e
+                ))
+            })?;
 
         let mut trove = conary::db::models::Trove::new_with_source(
             snapshot.name.clone(),
@@ -311,7 +315,9 @@ fn rollback_removal(
             file_entry.insert(tx)?;
 
             // Record in file history only for valid SHA256 hashes
-            if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            if file.sha256_hash.len() == 64
+                && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 tx.execute(
                     "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
                     [&rollback_changeset_id.to_string(), &file.path, &file.sha256_hash, "add"],
@@ -351,10 +357,7 @@ fn rollback_removal(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
-    println!(
-        "  Restored {} version {}",
-        snapshot.name, snapshot.version
-    );
+    println!("  Restored {} version {}", snapshot.name, snapshot.version);
     println!("  Files restored: {}/{}", restored_count, file_count);
 
     Ok(())
@@ -492,7 +495,10 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
         return Ok(());
     }
 
-    println!("Verifying {} adopted packages against RPM database...\n", packages.len());
+    println!(
+        "Verifying {} adopted packages against RPM database...\n",
+        packages.len()
+    );
 
     let mut verified_count = 0;
     let mut failed_count = 0;
@@ -500,9 +506,7 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
 
     for pkg_name in &packages {
         // Run rpm -V <package>
-        let output = Command::new("rpm")
-            .args(["-V", pkg_name])
-            .output();
+        let output = Command::new("rpm").args(["-V", pkg_name]).output();
 
         match output {
             Ok(result) => {
@@ -578,16 +582,22 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -
     for hash in file_hashes {
         referenced_hashes.insert(hash);
     }
-    println!("  Found {} hashes from installed files", referenced_hashes.len());
+    println!(
+        "  Found {} hashes from installed files",
+        referenced_hashes.len()
+    );
 
     // Step 2: Collect hashes from file_history within retention period
-    println!("Collecting hashes from recent file history ({}+ days)...", keep_days);
+    println!(
+        "Collecting hashes from recent file history ({}+ days)...",
+        keep_days
+    );
     let history_hashes: Vec<String> = {
         let mut stmt = conn.prepare(
             "SELECT DISTINCT fh.sha256_hash FROM file_history fh
              JOIN changesets c ON fh.changeset_id = c.id
              WHERE fh.sha256_hash IS NOT NULL AND fh.sha256_hash != ''
-             AND c.applied_at >= datetime('now', ?1)"
+             AND c.applied_at >= datetime('now', ?1)",
         )?;
         let days_param = format!("-{} days", keep_days);
         let rows = stmt.query_map([days_param], |row| row.get::<_, String>(0))?;
@@ -643,7 +653,11 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -
             }
         }
     }
-    println!("  Found {} objects in CAS ({} total)", cas_objects.len(), format_bytes(total_cas_size));
+    println!(
+        "  Found {} objects in CAS ({} total)",
+        cas_objects.len(),
+        format_bytes(total_cas_size)
+    );
 
     // Step 4: Find unreferenced objects
     let unreferenced: Vec<(PathBuf, String)> = cas_objects

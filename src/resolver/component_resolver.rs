@@ -181,7 +181,11 @@ impl<'a> ComponentResolver<'a> {
     }
 
     /// Get dependencies for a component from cache
-    fn get_deps_for_component(&self, package: &str, component: &str) -> Option<Vec<ComponentDependency>> {
+    fn get_deps_for_component(
+        &self,
+        package: &str,
+        component: &str,
+    ) -> Option<Vec<ComponentDependency>> {
         let comp = self.get_installed(package, component)?;
         let comp_id = comp.id?;
         self.deps.get(&comp_id).cloned()
@@ -208,8 +212,7 @@ impl<'a> ComponentResolver<'a> {
         let mut breaking = Vec::new();
 
         // Find all components that depend on this one
-        let reverse_deps =
-            ComponentDependency::find_reverse_deps(self.conn, package, component)?;
+        let reverse_deps = ComponentDependency::find_reverse_deps(self.conn, package, component)?;
 
         for dep in reverse_deps {
             // Find the component that has this dependency
@@ -236,8 +239,7 @@ impl<'a> ComponentResolver<'a> {
                 {
                     for dep in deps {
                         // Same-package dependency (depends_on_package is None)
-                        if dep.depends_on_package.is_none()
-                            && dep.depends_on_component == component
+                        if dep.depends_on_package.is_none() && dep.depends_on_component == component
                         {
                             breaking.push((package.to_string(), sibling.name.clone()));
                             break;
@@ -453,10 +455,7 @@ mod tests {
         let breaking = resolver.check_removal("nginx", "lib").unwrap();
 
         assert_eq!(breaking.len(), 1);
-        assert_eq!(
-            breaking[0],
-            ("myapp".to_string(), "runtime".to_string())
-        );
+        assert_eq!(breaking[0], ("myapp".to_string(), "runtime".to_string()));
     }
 
     #[test]
@@ -478,10 +477,7 @@ mod tests {
         let breaking = resolver.check_removal("openssl", "lib").unwrap();
 
         assert_eq!(breaking.len(), 1);
-        assert_eq!(
-            breaking[0],
-            ("openssl".to_string(), "devel".to_string())
-        );
+        assert_eq!(breaking[0], ("openssl".to_string(), "devel".to_string()));
     }
 
     #[test]
@@ -524,11 +520,17 @@ mod tests {
         let plan = resolver.resolve_default_install("nginx");
 
         // runtime is installed, lib and config should be in install_order
-        assert!(plan.already_installed.contains(&("nginx".to_string(), "runtime".to_string())));
+        assert!(
+            plan.already_installed
+                .contains(&("nginx".to_string(), "runtime".to_string()))
+        );
 
         // lib and config should be requested for install (they're default but not installed)
         let install_names: Vec<_> = plan.install_order.iter().map(|(_, c)| c.as_str()).collect();
-        assert!(install_names.contains(&"lib") || install_names.contains(&"config")
-            || plan.install_order.is_empty()); // Empty if we can't find them
+        assert!(
+            install_names.contains(&"lib")
+                || install_names.contains(&"config")
+                || plan.install_order.is_empty()
+        ); // Empty if we can't find them
     }
 }

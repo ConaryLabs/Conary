@@ -11,12 +11,12 @@
 #![allow(dead_code)]
 
 use super::resolve::check_provides_dependencies;
-use crate::commands::{cmd_install, SandboxMode};
 use crate::commands::progress::{InstallPhase, InstallProgress};
+use crate::commands::{SandboxMode, cmd_install};
 use anyhow::{Context, Result};
 use conary::db::paths::keyring_dir;
-use conary::packages::traits::DependencyType;
 use conary::packages::PackageFormat;
+use conary::packages::traits::DependencyType;
 use conary::repository;
 use conary::resolver::{DependencyEdge, ResolutionPlan, Resolver};
 use conary::version::{RpmVersion, VersionConstraint};
@@ -46,7 +46,6 @@ pub fn build_dependency_edges(pkg: &dyn PackageFormat) -> Vec<DependencyEdge> {
         .collect()
 }
 
-
 /// Resolve dependencies for a package
 ///
 /// Returns the resolution plan if successful, or an error if there are conflicts.
@@ -55,17 +54,19 @@ pub fn resolve_dependencies(
     pkg: &dyn PackageFormat,
     dependency_edges: Vec<DependencyEdge>,
 ) -> Result<ResolutionPlan> {
-    let package_version = RpmVersion::parse(pkg.version())
-        .with_context(|| format!("Failed to parse version '{}' for package '{}'", pkg.version(), pkg.name()))?;
+    let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
+        format!(
+            "Failed to parse version '{}' for package '{}'",
+            pkg.version(),
+            pkg.name()
+        )
+    })?;
 
-    let mut resolver = Resolver::new(conn)
-        .context("Failed to initialize dependency resolver")?;
+    let mut resolver = Resolver::new(conn).context("Failed to initialize dependency resolver")?;
 
-    resolver.resolve_install(
-        pkg.name().to_string(),
-        package_version,
-        dependency_edges,
-    ).with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))
+    resolver
+        .resolve_install(pkg.name().to_string(), package_version, dependency_edges)
+        .with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))
 }
 
 /// Check for dependency conflicts and handle missing dependencies
@@ -108,7 +109,13 @@ pub fn handle_missing_dependencies(
         Ok(to_download) => {
             if !to_download.is_empty() {
                 handle_downloadable_deps(
-                    conn, pkg, &to_download, dry_run, root, db_path, progress
+                    conn,
+                    pkg,
+                    &to_download,
+                    dry_run,
+                    root,
+                    db_path,
+                    progress,
                 )?;
             } else {
                 // Dependencies not found in Conary repos - check provides table
@@ -161,14 +168,17 @@ fn handle_downloadable_deps(
                 println!("Installing dependency: {}", dep_name);
                 let reason = format!("Required by {}", parent_name);
                 let path_str = dep_path.to_string_lossy().to_string();
-                if let Err(e) = cmd_install(&path_str, super::InstallOptions {
-                    db_path,
-                    root,
-                    dry_run,
-                    selection_reason: Some(&reason),
-                    sandbox_mode: SandboxMode::None,
-                    ..Default::default()
-                }) {
+                if let Err(e) = cmd_install(
+                    &path_str,
+                    super::InstallOptions {
+                        db_path,
+                        root,
+                        dry_run,
+                        selection_reason: Some(&reason),
+                        sandbox_mode: SandboxMode::None,
+                        ..Default::default()
+                    },
+                ) {
                     return Err(anyhow::anyhow!(
                         "Failed to install dependency {}: {}",
                         dep_name,

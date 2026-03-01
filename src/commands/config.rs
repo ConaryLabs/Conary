@@ -32,7 +32,12 @@ pub fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Resul
                 if configs.is_empty() {
                     println!("{} {}: no config files", trove.name, trove.version);
                 } else {
-                    println!("{} {} ({} config files):", trove.name, trove.version, configs.len());
+                    println!(
+                        "{} {} ({} config files):",
+                        trove.name,
+                        trove.version,
+                        configs.len()
+                    );
                     for config in &configs {
                         let status_marker = match config.status {
                             ConfigStatus::Pristine => " ",
@@ -96,7 +101,8 @@ pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
     let cas = CasStore::new(&objects_dir)?;
 
     // Get the original (package) content from CAS
-    let original_content = cas.retrieve(&config.original_hash)
+    let original_content = cas
+        .retrieve(&config.original_hash)
         .map_err(|_| anyhow::anyhow!("Original config content not found in CAS"))?;
     let original_str = String::from_utf8_lossy(&original_content);
 
@@ -157,7 +163,8 @@ pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
 
-    let config_id = config.id
+    let config_id = config
+        .id
         .ok_or_else(|| anyhow::anyhow!("Config file has no ID"))?;
 
     // Read the current file
@@ -166,8 +173,8 @@ pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
         return Err(anyhow::anyhow!("Config file '{}' does not exist", path));
     }
 
-    let content = std::fs::read(&fs_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
+    let content =
+        std::fs::read(&fs_path).map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
 
     // Store in CAS
     let objects_dir = objects_dir(db_path);
@@ -186,13 +193,19 @@ pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
 }
 
 /// Restore a config file from backup
-pub fn cmd_config_restore(db_path: &str, path: &str, root: &str, backup_id: Option<i64>) -> Result<()> {
+pub fn cmd_config_restore(
+    db_path: &str,
+    path: &str,
+    root: &str,
+    backup_id: Option<i64>,
+) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
 
-    let config_id = config.id
+    let config_id = config
+        .id
         .ok_or_else(|| anyhow::anyhow!("Config file has no ID"))?;
 
     // Find the backup to restore
@@ -211,7 +224,8 @@ pub fn cmd_config_restore(db_path: &str, path: &str, root: &str, backup_id: Opti
     let objects_dir = objects_dir(db_path);
     let cas = CasStore::new(&objects_dir)?;
 
-    let content = cas.retrieve(&backup.backup_hash)
+    let content = cas
+        .retrieve(&backup.backup_hash)
         .map_err(|_| anyhow::anyhow!("Backup content not found in CAS"))?;
 
     // Write to filesystem
@@ -313,7 +327,8 @@ pub fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
 
-    let config_id = config.id
+    let config_id = config
+        .id
         .ok_or_else(|| anyhow::anyhow!("Config file has no ID"))?;
 
     let backups = ConfigBackup::find_by_config_file(&conn, config_id)?;
@@ -327,7 +342,13 @@ pub fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
     for backup in &backups {
         let id = backup.id.unwrap_or(0);
         let created = backup.created_at.as_deref().unwrap_or("unknown");
-        println!("  [{}] {} - {} ({})", id, &backup.backup_hash[..12], backup.reason, created);
+        println!(
+            "  [{}] {} - {} ({})",
+            id,
+            &backup.backup_hash[..12],
+            backup.reason,
+            created
+        );
     }
 
     Ok(())

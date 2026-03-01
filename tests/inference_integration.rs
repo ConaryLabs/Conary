@@ -5,8 +5,8 @@
 //! from the system to ensure accuracy in real-world scenarios.
 
 use conary::capability::inference::{
-    infer_capabilities, BinaryAnalyzer, HeuristicInferrer, InferenceOptions, PackageFile,
-    PackageMetadataRef, WellKnownProfiles,
+    BinaryAnalyzer, HeuristicInferrer, InferenceOptions, PackageFile, PackageMetadataRef,
+    WellKnownProfiles, infer_capabilities,
 };
 use std::fs;
 
@@ -114,13 +114,19 @@ fn test_heuristic_inference_network_server() {
 
     // Should detect config directory
     assert!(
-        result.filesystem.read_paths.contains(&"/etc/myserver".to_string()),
+        result
+            .filesystem
+            .read_paths
+            .contains(&"/etc/myserver".to_string()),
         "Should detect config dir"
     );
 
     // Should detect log directory
     assert!(
-        result.filesystem.write_paths.contains(&"/var/log/myserver".to_string()),
+        result
+            .filesystem
+            .write_paths
+            .contains(&"/var/log/myserver".to_string()),
         "Should detect log dir"
     );
 }
@@ -222,7 +228,10 @@ fn test_full_inference_pipeline() {
     let result = infer_capabilities(&files, &metadata, &options).unwrap();
 
     // Should get well-known profile for nginx
-    assert_eq!(result.tier_used, 1, "Should use tier 1 (well-known) for nginx");
+    assert_eq!(
+        result.tier_used, 1,
+        "Should use tier 1 (well-known) for nginx"
+    );
     assert!(
         result.network.listen_ports.contains(&"80".to_string()),
         "nginx should listen on port 80"
@@ -234,8 +243,14 @@ fn test_full_inference_pipeline() {
 
     // Convert to declaration and verify
     let decl = result.to_declaration();
-    assert!(!decl.network.listen.is_empty(), "Declaration should have listen ports");
-    assert!(decl.rationale.is_some(), "Declaration should have rationale");
+    assert!(
+        !decl.network.listen.is_empty(),
+        "Declaration should have listen ports"
+    );
+    assert!(
+        decl.rationale.is_some(),
+        "Declaration should have rationale"
+    );
 }
 
 #[test]
@@ -257,11 +272,17 @@ fn test_unknown_package_inference() {
     let result = infer_capabilities(&files, &metadata, &options).unwrap();
 
     // Should use heuristics (tier 2) for unknown package
-    assert!(result.tier_used >= 2, "Should use heuristics for unknown package");
+    assert!(
+        result.tier_used >= 2,
+        "Should use heuristics for unknown package"
+    );
 
     // Should detect config directory
     assert!(
-        result.filesystem.read_paths.contains(&"/etc/obscure-tool".to_string()),
+        result
+            .filesystem
+            .read_paths
+            .contains(&"/etc/obscure-tool".to_string()),
         "Should detect config directory from file paths"
     );
 }

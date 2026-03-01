@@ -153,15 +153,15 @@ impl<'db> ConaryProvider<'db> {
         let options = SelectionOptions::default();
         for name in names {
             // Skip if we already have a repo package for this name
-            let already_has_repo = self.solvables.iter().any(|s| {
-                s.name == *name && s.repo_package_id.is_some()
-            });
+            let already_has_repo = self
+                .solvables
+                .iter()
+                .any(|s| s.name == *name && s.repo_package_id.is_some());
             if already_has_repo {
                 continue;
             }
 
-            if let Ok(pkg_with_repo) =
-                PackageSelector::find_best_package(self.conn, name, &options)
+            if let Ok(pkg_with_repo) = PackageSelector::find_best_package(self.conn, name, &options)
             {
                 let version = match RpmVersion::parse(&pkg_with_repo.package.version) {
                     Ok(v) => v,
@@ -252,9 +252,10 @@ impl<'db> ConaryProvider<'db> {
             for (dep_name, constraint) in deps {
                 let name_id = self.intern_name(dep_name);
                 // Check if this version set already exists
-                let already_exists = self.version_sets.iter().any(|(nid, c)| {
-                    *nid == name_id && c == constraint
-                });
+                let already_exists = self
+                    .version_sets
+                    .iter()
+                    .any(|(nid, c)| *nid == name_id && c == constraint);
                 if !already_exists {
                     self.intern_version_set(name_id, constraint.clone());
                 }
@@ -615,10 +616,8 @@ mod tests {
         let mut provider = ConaryProvider::new(&conn);
 
         let name_id = provider.intern_name("nginx");
-        let vs_id = provider.intern_version_set(
-            name_id,
-            VersionConstraint::parse(">= 1.0.0").unwrap(),
-        );
+        let vs_id =
+            provider.intern_version_set(name_id, VersionConstraint::parse(">= 1.0.0").unwrap());
         let sid = provider.add_solvable(ConaryPackage {
             name: "nginx".to_string(),
             version: RpmVersion::parse("1.24.0").unwrap(),
@@ -628,18 +627,9 @@ mod tests {
         let str_id = provider.intern_string("test string");
 
         assert_eq!(provider.display_name(name_id).to_string(), "nginx");
-        assert_eq!(
-            provider.display_solvable(sid).to_string(),
-            "nginx=1.24.0"
-        );
-        assert_eq!(
-            provider.display_version_set(vs_id).to_string(),
-            ">= 1.0.0"
-        );
-        assert_eq!(
-            provider.display_string(str_id).to_string(),
-            "test string"
-        );
+        assert_eq!(provider.display_solvable(sid).to_string(), "nginx=1.24.0");
+        assert_eq!(provider.display_version_set(vs_id).to_string(), ">= 1.0.0");
+        assert_eq!(provider.display_string(str_id).to_string(), "test string");
         assert_eq!(provider.version_set_name(vs_id), name_id);
         assert_eq!(provider.solvable_name(sid), name_id);
     }

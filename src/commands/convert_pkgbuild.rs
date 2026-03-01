@@ -21,8 +21,7 @@ pub fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> Result
         .with_context(|| format!("Failed to read PKGBUILD: {}", path.display()))?;
 
     // Convert to recipe
-    let result = convert_pkgbuild(&content)
-        .with_context(|| "Failed to convert PKGBUILD")?;
+    let result = convert_pkgbuild(&content).with_context(|| "Failed to convert PKGBUILD")?;
 
     // Print warnings
     for warning in &result.warnings {
@@ -30,8 +29,7 @@ pub fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> Result
     }
 
     // Convert to TOML
-    let toml = pkgbuild_to_toml(&content)
-        .with_context(|| "Failed to serialize recipe to TOML")?;
+    let toml = pkgbuild_to_toml(&content).with_context(|| "Failed to serialize recipe to TOML")?;
 
     // Output
     match output {
@@ -47,9 +45,15 @@ pub fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> Result
         }
     }
 
-    println!("\nConverted: {} version {}", result.recipe.package.name, result.recipe.package.version);
+    println!(
+        "\nConverted: {} version {}",
+        result.recipe.package.name, result.recipe.package.version
+    );
     if !result.warnings.is_empty() {
-        println!("{} warning(s) - review recipe before use", result.warnings.len());
+        println!(
+            "{} warning(s) - review recipe before use",
+            result.warnings.len()
+        );
     }
 
     Ok(())

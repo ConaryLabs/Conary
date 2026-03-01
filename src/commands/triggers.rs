@@ -24,7 +24,10 @@ pub fn cmd_trigger_list(db_path: &str, show_disabled: bool, show_builtin_only: b
     }
 
     println!("Triggers:");
-    println!("{:<25} {:<8} {:<8} {:<40}", "NAME", "ENABLED", "BUILTIN", "PATTERN");
+    println!(
+        "{:<25} {:<8} {:<8} {:<40}",
+        "NAME", "ENABLED", "BUILTIN", "PATTERN"
+    );
     println!("{}", "-".repeat(85));
 
     for trigger in &triggers {
@@ -94,7 +97,9 @@ pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    let id = trigger.id.ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
+    let id = trigger
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
     Trigger::enable(&conn, id)?;
 
     info!("Enabled trigger: {}", name);
@@ -114,7 +119,9 @@ pub fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    let id = trigger.id.ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
+    let id = trigger
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
     Trigger::disable(&conn, id)?;
 
     info!("Disabled trigger: {}", name);
@@ -138,11 +145,7 @@ pub fn cmd_trigger_add(
         return Err(anyhow::anyhow!("Trigger '{}' already exists", name));
     }
 
-    let mut trigger = Trigger::new(
-        name.to_string(),
-        pattern.to_string(),
-        handler.to_string(),
-    );
+    let mut trigger = Trigger::new(name.to_string(), pattern.to_string(), handler.to_string());
 
     if let Some(desc) = description {
         trigger.description = Some(desc.to_string());
@@ -174,11 +177,14 @@ pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
     if trigger.builtin {
         return Err(anyhow::anyhow!(
             "Cannot remove built-in trigger '{}'. Use 'conary trigger-disable {}' instead.",
-            name, name
+            name,
+            name
         ));
     }
 
-    let id = trigger.id.ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
+    let id = trigger
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
     if Trigger::delete(&conn, id)? {
         info!("Removed trigger: {}", name);
         println!("Removed trigger: {}", name);
@@ -197,9 +203,7 @@ pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> 
     let cs_id = if let Some(id) = changeset_id {
         id
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM changesets ORDER BY id DESC LIMIT 1"
-        )?;
+        let mut stmt = conn.prepare("SELECT id FROM changesets ORDER BY id DESC LIMIT 1")?;
         stmt.query_row([], |row| row.get(0))?
     };
 

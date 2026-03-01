@@ -53,12 +53,18 @@ impl InstallSource {
     }
 
     pub fn is_adopted(&self) -> bool {
-        matches!(self, InstallSource::AdoptedTrack | InstallSource::AdoptedFull)
+        matches!(
+            self,
+            InstallSource::AdoptedTrack | InstallSource::AdoptedFull
+        )
     }
 
     /// Returns true if Conary fully owns the package files (not just tracking)
     pub fn is_conary_owned(&self) -> bool {
-        matches!(self, InstallSource::File | InstallSource::Repository | InstallSource::Taken)
+        matches!(
+            self,
+            InstallSource::File | InstallSource::Repository | InstallSource::Taken
+        )
     }
 }
 
@@ -454,10 +460,7 @@ impl Trove {
              WHERE name = ?2
                AND install_reason = 'dependency'
                AND type = 'package'",
-            rusqlite::params![
-                reason.unwrap_or("Explicitly installed"),
-                name,
-            ],
+            rusqlite::params![reason.unwrap_or("Explicitly installed"), name,],
         )?;
         Ok(rows > 0)
     }

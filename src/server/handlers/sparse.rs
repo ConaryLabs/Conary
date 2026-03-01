@@ -9,7 +9,7 @@ use crate::db::models::{Repository, RepositoryPackage};
 use crate::server::ServerState;
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use rusqlite::Connection;
@@ -66,10 +66,8 @@ pub async fn get_sparse_entry(
     let db_path = state_guard.config.db_path.clone();
     drop(state_guard);
 
-    let result = tokio::task::spawn_blocking(move || {
-        build_sparse_entry(&db_path, &distro, &name)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || build_sparse_entry(&db_path, &distro, &name)).await;
 
     match result {
         Ok(Ok(Some(entry))) => Response::builder()
@@ -80,9 +78,7 @@ pub async fn get_sparse_entry(
                 serde_json::to_string(&entry).unwrap(),
             ))
             .unwrap(),
-        Ok(Ok(None)) => {
-            (StatusCode::NOT_FOUND, "Package not found").into_response()
-        }
+        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
         Ok(Err(e)) => {
             tracing::error!("Failed to build sparse entry: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -109,10 +105,9 @@ pub async fn list_packages(
     let db_path = state_guard.config.db_path.clone();
     drop(state_guard);
 
-    let result = tokio::task::spawn_blocking(move || {
-        build_package_list(&db_path, &distro, page, per_page)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || build_package_list(&db_path, &distro, page, per_page))
+            .await;
 
     match result {
         Ok(Ok(list)) => Response::builder()
@@ -425,11 +420,19 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let v1240 = entry.versions.iter().find(|v| v.version == "1.24.0-1.fc43").unwrap();
+        let v1240 = entry
+            .versions
+            .iter()
+            .find(|v| v.version == "1.24.0-1.fc43")
+            .unwrap();
         assert!(v1240.converted);
         assert_eq!(v1240.content_hash.as_deref(), Some("sha256:content_abc"));
 
-        let v1250 = entry.versions.iter().find(|v| v.version == "1.25.0-1.fc43").unwrap();
+        let v1250 = entry
+            .versions
+            .iter()
+            .find(|v| v.version == "1.25.0-1.fc43")
+            .unwrap();
         assert!(!v1250.converted);
         assert!(v1250.content_hash.is_none());
     }

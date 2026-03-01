@@ -4,10 +4,10 @@
 use super::PackageFormatType;
 use anyhow::{Context, Result};
 use conary::components::ComponentType;
+use conary::packages::PackageFormat;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
-use conary::packages::PackageFormat;
 use conary::version::RpmVersion;
 use rusqlite::Connection;
 use std::path::Path;
@@ -142,7 +142,11 @@ impl ComponentSelection {
         match self {
             Self::All => "all".to_string(),
             Self::Defaults => "defaults (runtime, lib, config)".to_string(),
-            Self::Specific(types) => types.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", "),
+            Self::Specific(types) => types
+                .iter()
+                .map(|t| t.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
         }
     }
 }

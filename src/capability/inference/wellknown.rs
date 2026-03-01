@@ -8,7 +8,7 @@
 //! This is Tier 1 of inference - the fastest and most reliable.
 
 use super::confidence::{Confidence, ConfidenceScore};
-use super::{InferredCapabilities, InferredFilesystem, InferredNetwork, InferenceSource};
+use super::{InferenceSource, InferredCapabilities, InferredFilesystem, InferredNetwork};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -59,10 +59,15 @@ impl WellKnownProfiles {
 /// Strip version suffix from package name
 fn strip_version_suffix(name: &str) -> &str {
     // Handle patterns like "nginx-1.24" or "python3.11"
-    if let Some(pos) = name.rfind(|c: char| c == '-' || (c.is_ascii_digit() && name.contains('.'))) {
+    if let Some(pos) = name.rfind(|c: char| c == '-' || (c.is_ascii_digit() && name.contains('.')))
+    {
         // Check if everything after is version-like
         let suffix = &name[pos..];
-        if suffix.chars().skip(1).all(|c| c.is_ascii_digit() || c == '.') {
+        if suffix
+            .chars()
+            .skip(1)
+            .all(|c| c.is_ascii_digit() || c == '.')
+        {
             return &name[..pos];
         }
     }
@@ -228,7 +233,11 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
             "postgresql",
             &["5432"],
             &["/etc/postgresql"],
-            &["/var/lib/postgresql", "/var/log/postgresql", "/run/postgresql"],
+            &[
+                "/var/lib/postgresql",
+                "/var/log/postgresql",
+                "/run/postgresql",
+            ],
         ),
     );
 
@@ -238,7 +247,11 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
             "postgres",
             &["5432"],
             &["/etc/postgresql"],
-            &["/var/lib/postgresql", "/var/log/postgresql", "/run/postgresql"],
+            &[
+                "/var/lib/postgresql",
+                "/var/log/postgresql",
+                "/run/postgresql",
+            ],
         ),
     );
 
@@ -386,55 +399,30 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     );
 
     // CLI tools
-    m.insert(
-        "coreutils",
-        cli_profile("coreutils", &["/"], &[]),
-    );
+    m.insert("coreutils", cli_profile("coreutils", &["/"], &[]));
 
-    m.insert(
-        "grep",
-        cli_profile("grep", &["/"], &[]),
-    );
+    m.insert("grep", cli_profile("grep", &["/"], &[]));
 
-    m.insert(
-        "sed",
-        cli_profile("sed", &["/"], &[]),
-    );
+    m.insert("sed", cli_profile("sed", &["/"], &[]));
 
-    m.insert(
-        "gawk",
-        cli_profile("gawk", &["/"], &[]),
-    );
+    m.insert("gawk", cli_profile("gawk", &["/"], &[]));
 
     m.insert(
         "vim",
         cli_profile("vim", &["/", "$HOME/.vimrc"], &["$HOME/.viminfo"]),
     );
 
-    m.insert(
-        "nano",
-        cli_profile("nano", &["/", "$HOME/.nanorc"], &[]),
-    );
+    m.insert("nano", cli_profile("nano", &["/", "$HOME/.nanorc"], &[]));
 
     // Build tools
     m.insert(
         "gcc",
-        cli_profile(
-            "gcc",
-            &["/usr/include", "/usr/lib"],
-            &["/tmp"],
-        ),
+        cli_profile("gcc", &["/usr/include", "/usr/lib"], &["/tmp"]),
     );
 
-    m.insert(
-        "make",
-        cli_profile("make", &["/"], &["."]),
-    );
+    m.insert("make", cli_profile("make", &["/"], &["."]));
 
-    m.insert(
-        "cmake",
-        cli_profile("cmake", &["/usr/share/cmake"], &["."]),
-    );
+    m.insert("cmake", cli_profile("cmake", &["/usr/share/cmake"], &["."]));
 
     // Container/virtualization
     m.insert(
@@ -490,12 +478,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "node_exporter",
-        network_server_profile(
-            "node_exporter",
-            &["9100"],
-            &["/proc", "/sys"],
-            &[],
-        ),
+        network_server_profile("node_exporter", &["9100"], &["/proc", "/sys"], &[]),
     );
 
     // Proxies/Load balancers
@@ -733,12 +716,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "coredns",
-        network_server_profile(
-            "coredns",
-            &["53"],
-            &["/etc/coredns"],
-            &["/var/log/coredns"],
-        ),
+        network_server_profile("coredns", &["53"], &["/etc/coredns"], &["/var/log/coredns"]),
     );
 
     // =========================================================================
@@ -756,12 +734,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "proftpd",
-        network_server_profile(
-            "proftpd",
-            &["21"],
-            &["/etc/proftpd"],
-            &["/var/log/proftpd"],
-        ),
+        network_server_profile("proftpd", &["21"], &["/etc/proftpd"], &["/var/log/proftpd"]),
     );
 
     // =========================================================================
@@ -779,12 +752,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "wireguard",
-        daemon_profile(
-            "wireguard",
-            &["51820"],
-            &["/etc/wireguard"],
-            &[],
-        ),
+        daemon_profile("wireguard", &["51820"], &["/etc/wireguard"], &[]),
     );
 
     m.insert(
@@ -878,12 +846,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "syslog-ng",
-        daemon_profile(
-            "syslog-ng",
-            &["514"],
-            &["/etc/syslog-ng"],
-            &["/var/log"],
-        ),
+        daemon_profile("syslog-ng", &["514"], &["/etc/syslog-ng"], &["/var/log"]),
     );
 
     m.insert(
@@ -918,12 +881,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "vector",
-        network_server_profile(
-            "vector",
-            &["8686"],
-            &["/etc/vector"],
-            &["/var/lib/vector"],
-        ),
+        network_server_profile("vector", &["8686"], &["/etc/vector"], &["/var/lib/vector"]),
     );
 
     // =========================================================================
@@ -969,12 +927,20 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "python",
-        cli_profile("python", &["/usr/lib/python*", "$HOME/.local"], &["$HOME/.cache/pip"]),
+        cli_profile(
+            "python",
+            &["/usr/lib/python*", "$HOME/.local"],
+            &["$HOME/.cache/pip"],
+        ),
     );
 
     m.insert(
         "python3",
-        cli_profile("python3", &["/usr/lib/python3*", "$HOME/.local"], &["$HOME/.cache/pip"]),
+        cli_profile(
+            "python3",
+            &["/usr/lib/python3*", "$HOME/.local"],
+            &["$HOME/.cache/pip"],
+        ),
     );
 
     m.insert(
@@ -984,12 +950,20 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "node",
-        cli_profile("node", &["/usr/lib/node_modules", "$HOME/.npm"], &["$HOME/.npm"]),
+        cli_profile(
+            "node",
+            &["/usr/lib/node_modules", "$HOME/.npm"],
+            &["$HOME/.npm"],
+        ),
     );
 
     m.insert(
         "nodejs",
-        cli_profile("nodejs", &["/usr/lib/node_modules", "$HOME/.npm"], &["$HOME/.npm"]),
+        cli_profile(
+            "nodejs",
+            &["/usr/lib/node_modules", "$HOME/.npm"],
+            &["$HOME/.npm"],
+        ),
     );
 
     m.insert(
@@ -1014,7 +988,11 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "rust",
-        cli_profile("rust", &["$HOME/.rustup", "$HOME/.cargo"], &["$HOME/.cargo"]),
+        cli_profile(
+            "rust",
+            &["$HOME/.rustup", "$HOME/.cargo"],
+            &["$HOME/.cargo"],
+        ),
     );
 
     // =========================================================================
@@ -1022,7 +1000,11 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "apt",
-        cli_profile("apt", &["/etc/apt", "/var/lib/apt"], &["/var/cache/apt", "/var/lib/apt"]),
+        cli_profile(
+            "apt",
+            &["/etc/apt", "/var/lib/apt"],
+            &["/var/cache/apt", "/var/lib/apt"],
+        ),
     );
 
     m.insert(
@@ -1032,17 +1014,29 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "yum",
-        cli_profile("yum", &["/etc/yum.conf", "/etc/yum.repos.d"], &["/var/cache/yum"]),
+        cli_profile(
+            "yum",
+            &["/etc/yum.conf", "/etc/yum.repos.d"],
+            &["/var/cache/yum"],
+        ),
     );
 
     m.insert(
         "dnf",
-        cli_profile("dnf", &["/etc/dnf", "/etc/yum.repos.d"], &["/var/cache/dnf"]),
+        cli_profile(
+            "dnf",
+            &["/etc/dnf", "/etc/yum.repos.d"],
+            &["/var/cache/dnf"],
+        ),
     );
 
     m.insert(
         "pacman",
-        cli_profile("pacman", &["/etc/pacman.conf", "/etc/pacman.d"], &["/var/cache/pacman", "/var/lib/pacman"]),
+        cli_profile(
+            "pacman",
+            &["/etc/pacman.conf", "/etc/pacman.d"],
+            &["/var/cache/pacman", "/var/lib/pacman"],
+        ),
     );
 
     m.insert(
@@ -1052,12 +1046,22 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "pip",
-        network_client_profile("pip", &["443"], &["$HOME/.cache/pip"], &["$HOME/.cache/pip"]),
+        network_client_profile(
+            "pip",
+            &["443"],
+            &["$HOME/.cache/pip"],
+            &["$HOME/.cache/pip"],
+        ),
     );
 
     m.insert(
         "npm",
-        network_client_profile("npm", &["443"], &["$HOME/.npm", "/usr/lib/node_modules"], &["$HOME/.npm"]),
+        network_client_profile(
+            "npm",
+            &["443"],
+            &["$HOME/.npm", "/usr/lib/node_modules"],
+            &["$HOME/.npm"],
+        ),
     );
 
     m.insert(
@@ -1075,46 +1079,43 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "bash",
-        cli_profile("bash", &["/etc/bash.bashrc", "$HOME/.bashrc"], &["$HOME/.bash_history"]),
+        cli_profile(
+            "bash",
+            &["/etc/bash.bashrc", "$HOME/.bashrc"],
+            &["$HOME/.bash_history"],
+        ),
     );
 
     m.insert(
         "zsh",
-        cli_profile("zsh", &["/etc/zsh", "$HOME/.zshrc"], &["$HOME/.zsh_history"]),
+        cli_profile(
+            "zsh",
+            &["/etc/zsh", "$HOME/.zshrc"],
+            &["$HOME/.zsh_history"],
+        ),
     );
 
     m.insert(
         "fish",
-        cli_profile("fish", &["/etc/fish", "$HOME/.config/fish"], &["$HOME/.local/share/fish"]),
+        cli_profile(
+            "fish",
+            &["/etc/fish", "$HOME/.config/fish"],
+            &["$HOME/.local/share/fish"],
+        ),
     );
 
     // =========================================================================
     // More CLI tools
     // =========================================================================
-    m.insert(
-        "tar",
-        cli_profile("tar", &["/"], &[]),
-    );
+    m.insert("tar", cli_profile("tar", &["/"], &[]));
 
-    m.insert(
-        "gzip",
-        cli_profile("gzip", &["/"], &[]),
-    );
+    m.insert("gzip", cli_profile("gzip", &["/"], &[]));
 
-    m.insert(
-        "xz",
-        cli_profile("xz", &["/"], &[]),
-    );
+    m.insert("xz", cli_profile("xz", &["/"], &[]));
 
-    m.insert(
-        "bzip2",
-        cli_profile("bzip2", &["/"], &[]),
-    );
+    m.insert("bzip2", cli_profile("bzip2", &["/"], &[]));
 
-    m.insert(
-        "unzip",
-        cli_profile("unzip", &["/"], &[]),
-    );
+    m.insert("unzip", cli_profile("unzip", &["/"], &[]));
 
     m.insert(
         "rsync",
@@ -1123,12 +1124,22 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "openssh-client",
-        network_client_profile("openssh-client", &["22"], &["/etc/ssh", "$HOME/.ssh"], &["$HOME/.ssh/known_hosts"]),
+        network_client_profile(
+            "openssh-client",
+            &["22"],
+            &["/etc/ssh", "$HOME/.ssh"],
+            &["$HOME/.ssh/known_hosts"],
+        ),
     );
 
     m.insert(
         "ssh",
-        network_client_profile("ssh", &["22"], &["/etc/ssh", "$HOME/.ssh"], &["$HOME/.ssh/known_hosts"]),
+        network_client_profile(
+            "ssh",
+            &["22"],
+            &["/etc/ssh", "$HOME/.ssh"],
+            &["$HOME/.ssh/known_hosts"],
+        ),
     );
 
     m.insert(
@@ -1136,14 +1147,15 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         network_client_profile("scp", &["22"], &["/etc/ssh", "$HOME/.ssh"], &["/"]),
     );
 
-    m.insert(
-        "less",
-        cli_profile("less", &["/"], &[]),
-    );
+    m.insert("less", cli_profile("less", &["/"], &[]));
 
     m.insert(
         "htop",
-        cli_profile("htop", &["/proc", "$HOME/.config/htop"], &["$HOME/.config/htop"]),
+        cli_profile(
+            "htop",
+            &["/proc", "$HOME/.config/htop"],
+            &["$HOME/.config/htop"],
+        ),
     );
 
     m.insert(
@@ -1166,26 +1178,28 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "neovim",
-        cli_profile("neovim", &["/", "$HOME/.config/nvim"], &["$HOME/.local/share/nvim"]),
+        cli_profile(
+            "neovim",
+            &["/", "$HOME/.config/nvim"],
+            &["$HOME/.local/share/nvim"],
+        ),
     );
 
     m.insert(
         "nvim",
-        cli_profile("nvim", &["/", "$HOME/.config/nvim"], &["$HOME/.local/share/nvim"]),
+        cli_profile(
+            "nvim",
+            &["/", "$HOME/.config/nvim"],
+            &["$HOME/.local/share/nvim"],
+        ),
     );
 
     // =========================================================================
     // Build tools
     // =========================================================================
-    m.insert(
-        "ninja",
-        cli_profile("ninja", &["/"], &["."]),
-    );
+    m.insert("ninja", cli_profile("ninja", &["/"], &["."]));
 
-    m.insert(
-        "meson",
-        cli_profile("meson", &["/usr/share/meson"], &["."]),
-    );
+    m.insert("meson", cli_profile("meson", &["/usr/share/meson"], &["."]));
 
     m.insert(
         "autoconf",
@@ -1197,10 +1211,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         cli_profile("automake", &["/usr/share/automake"], &["."]),
     );
 
-    m.insert(
-        "llvm",
-        cli_profile("llvm", &["/usr/lib/llvm*"], &["/tmp"]),
-    );
+    m.insert("llvm", cli_profile("llvm", &["/usr/lib/llvm*"], &["/tmp"]));
 
     m.insert(
         "clang",
@@ -1212,12 +1223,22 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "psql",
-        network_client_profile("psql", &["5432"], &["$HOME/.psqlrc", "$HOME/.pgpass"], &["$HOME/.psql_history"]),
+        network_client_profile(
+            "psql",
+            &["5432"],
+            &["$HOME/.psqlrc", "$HOME/.pgpass"],
+            &["$HOME/.psql_history"],
+        ),
     );
 
     m.insert(
         "mysql-client",
-        network_client_profile("mysql-client", &["3306"], &["$HOME/.my.cnf"], &["$HOME/.mysql_history"]),
+        network_client_profile(
+            "mysql-client",
+            &["3306"],
+            &["$HOME/.my.cnf"],
+            &["$HOME/.mysql_history"],
+        ),
     );
 
     m.insert(
@@ -1227,7 +1248,12 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "mongosh",
-        network_client_profile("mongosh", &["27017"], &["$HOME/.mongoshrc.js"], &["$HOME/.mongosh"]),
+        network_client_profile(
+            "mongosh",
+            &["27017"],
+            &["$HOME/.mongoshrc.js"],
+            &["$HOME/.mongosh"],
+        ),
     );
 
     // =========================================================================
@@ -1288,7 +1314,12 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "kubectl",
-        network_client_profile("kubectl", &["6443"], &["$HOME/.kube"], &["$HOME/.kube/cache"]),
+        network_client_profile(
+            "kubectl",
+            &["6443"],
+            &["$HOME/.kube"],
+            &["$HOME/.kube/cache"],
+        ),
     );
 
     m.insert(
@@ -1313,7 +1344,12 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
 
     m.insert(
         "helm",
-        network_client_profile("helm", &["443"], &["$HOME/.helm", "$HOME/.config/helm"], &["$HOME/.cache/helm"]),
+        network_client_profile(
+            "helm",
+            &["443"],
+            &["$HOME/.helm", "$HOME/.config/helm"],
+            &["$HOME/.cache/helm"],
+        ),
     );
 
     // =========================================================================
@@ -1329,19 +1365,15 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         ),
     );
 
-    m.insert(
-        "runc",
-        daemon_profile(
-            "runc",
-            &[],
-            &[],
-            &["/run/runc"],
-        ),
-    );
+    m.insert("runc", daemon_profile("runc", &[], &[], &["/run/runc"]));
 
     m.insert(
         "buildah",
-        cli_profile("buildah", &["$HOME/.config/containers"], &["$HOME/.local/share/containers"]),
+        cli_profile(
+            "buildah",
+            &["$HOME/.config/containers"],
+            &["$HOME/.local/share/containers"],
+        ),
     );
 
     m.insert(
@@ -1377,40 +1409,24 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "iperf3",
-        network_server_profile(
-            "iperf3",
-            &["5201"],
-            &[],
-            &[],
-        ),
+        network_server_profile("iperf3", &["5201"], &[], &[]),
     );
 
-    m.insert(
-        "netcat",
-        network_client_profile("netcat", &["*"], &[], &[]),
-    );
+    m.insert("netcat", network_client_profile("netcat", &["*"], &[], &[]));
 
     m.insert(
         "nmap",
         network_client_profile("nmap", &["*"], &["/usr/share/nmap"], &[]),
     );
 
-    m.insert(
-        "tcpdump",
-        cli_profile("tcpdump", &["/"], &[]),
-    );
+    m.insert("tcpdump", cli_profile("tcpdump", &["/"], &[]));
 
     // =========================================================================
     // Vault and secrets
     // =========================================================================
     m.insert(
         "vault",
-        network_server_profile(
-            "vault",
-            &["8200"],
-            &["/etc/vault.d"],
-            &["/var/lib/vault"],
-        ),
+        network_server_profile("vault", &["8200"], &["/etc/vault.d"], &["/var/lib/vault"]),
     );
 
     // =========================================================================
@@ -1418,12 +1434,7 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     // =========================================================================
     m.insert(
         "linkerd-proxy",
-        network_server_profile(
-            "linkerd-proxy",
-            &["4143", "4191"],
-            &[],
-            &[],
-        ),
+        network_server_profile("linkerd-proxy", &["4143", "4191"], &[], &[]),
     );
 
     m
@@ -1477,7 +1488,11 @@ mod tests {
         let packages = WellKnownProfiles::list_known_packages();
         assert!(packages.contains(&"nginx"));
         assert!(packages.contains(&"postgresql"));
-        assert!(packages.len() >= 100, "Expected 100+ profiles, got {}", packages.len());
+        assert!(
+            packages.len() >= 100,
+            "Expected 100+ profiles, got {}",
+            packages.len()
+        );
     }
 
     #[test]

@@ -125,13 +125,19 @@ mod tests {
     #[test]
     fn test_should_run_scriptlets_with_runtime() {
         assert!(should_run_scriptlets(&[ComponentType::Runtime]));
-        assert!(should_run_scriptlets(&[ComponentType::Runtime, ComponentType::Doc]));
+        assert!(should_run_scriptlets(&[
+            ComponentType::Runtime,
+            ComponentType::Doc
+        ]));
     }
 
     #[test]
     fn test_should_run_scriptlets_with_lib() {
         assert!(should_run_scriptlets(&[ComponentType::Lib]));
-        assert!(should_run_scriptlets(&[ComponentType::Lib, ComponentType::Devel]));
+        assert!(should_run_scriptlets(&[
+            ComponentType::Lib,
+            ComponentType::Devel
+        ]));
     }
 
     #[test]
@@ -139,7 +145,10 @@ mod tests {
         assert!(!should_run_scriptlets(&[ComponentType::Devel]));
         assert!(!should_run_scriptlets(&[ComponentType::Doc]));
         assert!(!should_run_scriptlets(&[ComponentType::Config]));
-        assert!(!should_run_scriptlets(&[ComponentType::Devel, ComponentType::Doc]));
+        assert!(!should_run_scriptlets(&[
+            ComponentType::Devel,
+            ComponentType::Doc
+        ]));
         assert!(!should_run_scriptlets(&[]));
     }
 }

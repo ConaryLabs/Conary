@@ -286,8 +286,14 @@ mod tests {
 
     #[test]
     fn test_fidelity_level_parse() {
-        assert_eq!("full".parse::<FidelityLevel>().unwrap(), FidelityLevel::Full);
-        assert_eq!("HIGH".parse::<FidelityLevel>().unwrap(), FidelityLevel::High);
+        assert_eq!(
+            "full".parse::<FidelityLevel>().unwrap(),
+            FidelityLevel::Full
+        );
+        assert_eq!(
+            "HIGH".parse::<FidelityLevel>().unwrap(),
+            FidelityLevel::High
+        );
         assert_eq!(
             "partial".parse::<FidelityLevel>().unwrap(),
             FidelityLevel::Partial

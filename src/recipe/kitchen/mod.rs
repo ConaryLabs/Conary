@@ -72,17 +72,19 @@ impl Kitchen {
     ///
     /// Returns the resolution result with lists of installed and missing packages.
     pub fn resolve_makedepends(&self, recipe: &Recipe) -> Result<MakedependsResult> {
-        let makedepends: Vec<&str> = recipe.build.makedepends.iter().map(|s| s.as_str()).collect();
+        let makedepends: Vec<&str> = recipe
+            .build
+            .makedepends
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
 
         if makedepends.is_empty() {
             debug!("No makedepends specified in recipe");
             return Ok(MakedependsResult::default());
         }
 
-        info!(
-            "Checking makedepends: {}",
-            makedepends.join(", ")
-        );
+        info!("Checking makedepends: {}", makedepends.join(", "));
 
         let resolver = match &self.resolver {
             Some(r) => r,
@@ -119,10 +121,7 @@ impl Kitchen {
             .map(|s| s.to_string())
             .collect();
 
-        info!(
-            "Installing missing makedepends: {}",
-            missing.join(", ")
-        );
+        info!("Installing missing makedepends: {}", missing.join(", "));
 
         // Install missing deps
         let installed = resolver.install(&missing)?;
@@ -137,10 +136,7 @@ impl Kitchen {
             .collect();
 
         if !unresolved.is_empty() {
-            warn!(
-                "Could not resolve makedepends: {}",
-                unresolved.join(", ")
-            );
+            warn!("Could not resolve makedepends: {}", unresolved.join(", "));
         }
 
         Ok(MakedependsResult {

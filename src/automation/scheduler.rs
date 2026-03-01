@@ -142,7 +142,10 @@ impl AutomationScheduler {
         if !self.state.enabled {
             return format!(
                 "Scheduler paused: {}",
-                self.state.pause_reason.as_deref().unwrap_or("unknown reason")
+                self.state
+                    .pause_reason
+                    .as_deref()
+                    .unwrap_or("unknown reason")
             );
         }
 
@@ -284,7 +287,10 @@ mod tests {
 
         scheduler.pause("Manual pause");
         assert!(!scheduler.state.enabled);
-        assert_eq!(scheduler.state.pause_reason, Some("Manual pause".to_string()));
+        assert_eq!(
+            scheduler.state.pause_reason,
+            Some("Manual pause".to_string())
+        );
 
         scheduler.resume();
         assert!(scheduler.state.enabled);

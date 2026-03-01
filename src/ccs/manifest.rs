@@ -876,7 +876,10 @@ message = "Legacy branch no longer supported"
 
         assert_eq!(manifest.redirects.obsoletes.len(), 1);
         assert_eq!(manifest.redirects.obsoletes[0].package, "nginx-legacy");
-        assert_eq!(manifest.redirects.obsoletes[0].version, Some("<1.20".to_string()));
+        assert_eq!(
+            manifest.redirects.obsoletes[0].version,
+            Some("<1.20".to_string())
+        );
     }
 
     #[test]
@@ -903,7 +906,10 @@ component = "core"
         assert_eq!(manifest.redirects.merges.len(), 2);
         assert_eq!(manifest.redirects.splits.len(), 1);
         assert_eq!(manifest.redirects.splits[0].from_package, "monolithic-foo");
-        assert_eq!(manifest.redirects.splits[0].component, Some("core".to_string()));
+        assert_eq!(
+            manifest.redirects.splits[0].component,
+            Some("core".to_string())
+        );
     }
 
     #[test]

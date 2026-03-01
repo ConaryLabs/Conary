@@ -15,8 +15,8 @@ mod dependencies;
 mod download;
 mod management;
 mod metadata;
-pub mod remi;
 pub mod registry;
+pub mod remi;
 pub mod resolution;
 mod sync;
 
@@ -29,27 +29,28 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::RepositoryClient;
-pub use dependencies::{download_dependencies, resolve_dependencies, resolve_dependencies_transitive};
+pub use dependencies::{
+    download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
+};
 pub use download::{
-    download_delta, download_package, download_package_verified,
+    DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,
     download_package_verified_with_progress, download_package_with_progress, verify_checksum,
-    DownloadOptions, DownloadProgress,
 };
 pub use gpg::GpgVerifier;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
-pub use registry::{create_parser, detect_repository_format, RepositoryFormat};
+pub use registry::{RepositoryFormat, create_parser, detect_repository_format};
+#[cfg(feature = "server")]
+pub use remi::AsyncRemiClient;
+pub use remi::{PackageManifest, RemiClient};
+pub use resolution::{
+    PackageResolver, PackageSource, ResolutionOptions, build_gpg_options, resolve_package,
+};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
 };
-pub use remi::{RemiClient, PackageManifest};
-pub use resolution::{
-    build_gpg_options, resolve_package, PackageResolver, PackageSource, ResolutionOptions,
-};
-#[cfg(feature = "server")]
-pub use remi::AsyncRemiClient;
 
 #[cfg(feature = "server")]
 pub use chunk_fetcher::{
@@ -152,12 +153,16 @@ mod tests {
 
         // Disable
         set_repository_enabled(&conn, "test-repo", false).unwrap();
-        let repo = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+        let repo = Repository::find_by_name(&conn, "test-repo")
+            .unwrap()
+            .unwrap();
         assert!(!repo.enabled);
 
         // Enable
         set_repository_enabled(&conn, "test-repo", true).unwrap();
-        let repo = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+        let repo = Repository::find_by_name(&conn, "test-repo")
+            .unwrap()
+            .unwrap();
         assert!(repo.enabled);
     }
 
@@ -190,12 +195,17 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create repository with default settings (gpg_strict = false)
-        let mut repo = Repository::new("test-repo".to_string(), "https://example.com/repo".to_string());
+        let mut repo = Repository::new(
+            "test-repo".to_string(),
+            "https://example.com/repo".to_string(),
+        );
         assert!(!repo.gpg_strict); // Default should be false
         repo.insert(&conn).unwrap();
 
         // Verify it was stored correctly
-        let fetched = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+        let fetched = Repository::find_by_name(&conn, "test-repo")
+            .unwrap()
+            .unwrap();
         assert!(!fetched.gpg_strict);
 
         // Update to enable strict mode
@@ -204,7 +214,9 @@ mod tests {
         repo.update(&conn).unwrap();
 
         // Verify the update
-        let fetched = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+        let fetched = Repository::find_by_name(&conn, "test-repo")
+            .unwrap()
+            .unwrap();
         assert!(fetched.gpg_strict);
     }
 }

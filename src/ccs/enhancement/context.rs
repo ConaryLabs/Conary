@@ -1,8 +1,8 @@
 // src/ccs/enhancement/context.rs
 //! Enhancement context providing package data and database access
 
-use super::error::{EnhancementError, EnhancementResult};
 use super::EnhancementStatus;
+use super::error::{EnhancementError, EnhancementResult};
 use crate::capability::inference::{InferredCapabilities, PackageFile, PackageMetadataRef};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -61,9 +61,8 @@ impl<'a> EnhancementContext<'a> {
             .map_err(|_| EnhancementError::PackageNotFound(trove_id))?;
 
         // Load dependencies
-        let mut dep_stmt = conn.prepare(
-            "SELECT depends_on_name FROM dependencies WHERE trove_id = ?1",
-        )?;
+        let mut dep_stmt =
+            conn.prepare("SELECT depends_on_name FROM dependencies WHERE trove_id = ?1")?;
         let dependencies: Vec<String> = dep_stmt
             .query_map([trove_id], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -141,10 +140,10 @@ impl<'a> EnhancementContext<'a> {
 
         for mut file in files {
             let full_path = self.install_root.join(file.path.trim_start_matches('/'));
-            if full_path.exists() {
-                if let Ok(content) = std::fs::read(&full_path) {
-                    file.content = Some(content);
-                }
+            if full_path.exists()
+                && let Ok(content) = std::fs::read(&full_path)
+            {
+                file.content = Some(content);
             }
             files_with_content.push(file);
         }
@@ -191,7 +190,10 @@ impl<'a> EnhancementContext<'a> {
     }
 
     /// Store extracted provenance JSON
-    pub fn store_extracted_provenance<T: Serialize>(&self, provenance: &T) -> EnhancementResult<()> {
+    pub fn store_extracted_provenance<T: Serialize>(
+        &self,
+        provenance: &T,
+    ) -> EnhancementResult<()> {
         let json = serde_json::to_string(provenance)?;
         self.conn.execute(
             "UPDATE converted_packages SET extracted_provenance_json = ?1 WHERE id = ?2",
@@ -333,9 +335,7 @@ impl ConvertedPackageInfo {
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(
-                        &row.get::<_, String>(5)?,
-                    ),
+                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
                     enhancement_version: row.get(6)?,
                 })
             })?
@@ -364,9 +364,7 @@ impl ConvertedPackageInfo {
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(
-                        &row.get::<_, String>(5)?,
-                    ),
+                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
                     enhancement_version: row.get(6)?,
                 })
             })?
@@ -399,7 +397,8 @@ impl ConvertedPackageInfo {
             }
         }
 
-        stats.total = stats.pending + stats.in_progress + stats.complete + stats.failed + stats.skipped;
+        stats.total =
+            stats.pending + stats.in_progress + stats.complete + stats.failed + stats.skipped;
         Ok(stats)
     }
 }

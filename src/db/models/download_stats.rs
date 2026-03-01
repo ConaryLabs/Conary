@@ -238,12 +238,16 @@ mod tests {
         DownloadCount::refresh_aggregates(&conn).unwrap();
 
         // Check fedora nginx
-        let count = DownloadCount::find_by_package(&conn, "fedora", "nginx").unwrap().unwrap();
+        let count = DownloadCount::find_by_package(&conn, "fedora", "nginx")
+            .unwrap()
+            .unwrap();
         assert_eq!(count.total_count, 2);
         assert_eq!(count.count_30d, 2);
 
         // Check arch nginx
-        let count = DownloadCount::find_by_package(&conn, "arch", "nginx").unwrap().unwrap();
+        let count = DownloadCount::find_by_package(&conn, "arch", "nginx")
+            .unwrap()
+            .unwrap();
         assert_eq!(count.total_count, 1);
     }
 

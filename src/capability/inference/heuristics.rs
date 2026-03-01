@@ -94,10 +94,8 @@ impl HeuristicInferrer {
 
                 if service_analysis.has_network {
                     network.no_network = false;
-                    confidence_builder.add_network_evidence(
-                        "Systemd service uses network",
-                        Confidence::High,
-                    );
+                    confidence_builder
+                        .add_network_evidence("Systemd service uses network", Confidence::High);
                 }
 
                 if !service_analysis.ports.is_empty() {
@@ -135,7 +133,11 @@ impl HeuristicInferrer {
 
         if dep_hints.has_database_libs {
             // Common database ports
-            if metadata.dependencies.iter().any(|d| d.contains("pq") || d.contains("postgres")) {
+            if metadata
+                .dependencies
+                .iter()
+                .any(|d| d.contains("pq") || d.contains("postgres"))
+            {
                 network.outbound_ports.push("5432".to_string());
             }
             if metadata.dependencies.iter().any(|d| d.contains("mysql")) {
@@ -165,12 +167,12 @@ impl HeuristicInferrer {
             network.confidence = Confidence::Medium;
         }
 
-        filesystem.confidence = if filesystem.read_paths.is_empty() && filesystem.write_paths.is_empty()
-        {
-            Confidence::Low
-        } else {
-            Confidence::Medium
-        };
+        filesystem.confidence =
+            if filesystem.read_paths.is_empty() && filesystem.write_paths.is_empty() {
+                Confidence::Low
+            } else {
+                Confidence::Medium
+            };
 
         let confidence = confidence_builder.build();
 
@@ -232,10 +234,8 @@ fn analyze_file_paths(files: &[PackageFile]) -> PathAnalysis {
     };
 
     // Regex patterns
-    static CONFIG_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^/etc/([^/]+)").unwrap());
-    static LOG_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^/var/log/([^/]+)").unwrap());
+    static CONFIG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/etc/([^/]+)").unwrap());
+    static LOG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/var/log/([^/]+)").unwrap());
     static VAR_LIB_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^/var/lib/([^/]+)").unwrap());
 
@@ -289,14 +289,15 @@ fn analyze_systemd_service(content: &str) -> ServiceAnalysis {
     };
 
     // Check for network-related directives
-    static NETWORK_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)(After|Wants|Requires)=.*network").unwrap()
-    });
+    static NETWORK_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(After|Wants|Requires)=.*network").unwrap());
 
     // Match systemd socket directives: ListenStream, ListenDatagram, ListenSequentialPacket
     // as well as general Listen= and Port= patterns
-    static PORT_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(?:Listen(?:Stream|Datagram|SequentialPacket)?|Port)[=:]?\s*(\d{1,5})").unwrap());
+    static PORT_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(?:Listen(?:Stream|Datagram|SequentialPacket)?|Port)[=:]?\s*(\d{1,5})")
+            .unwrap()
+    });
 
     static PRIVATE_NETWORK_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"PrivateNetwork\s*=\s*true").unwrap());
@@ -414,7 +415,11 @@ mod tests {
         assert!(analysis.has_sbin_executables);
         assert!(analysis.config_dirs.contains(&"/etc/nginx".to_string()));
         assert!(analysis.log_paths.contains(&"/var/log/nginx".to_string()));
-        assert!(analysis.var_lib_paths.contains(&"/var/lib/nginx".to_string()));
+        assert!(
+            analysis
+                .var_lib_paths
+                .contains(&"/var/lib/nginx".to_string())
+        );
     }
 
     #[test]
@@ -473,6 +478,11 @@ WantedBy=multi-user.target
         assert_eq!(result.source, InferenceSource::Heuristic);
         assert_eq!(result.tier_used, 2);
         assert!(!result.network.no_network);
-        assert!(result.filesystem.read_paths.contains(&"/etc/myservice".to_string()));
+        assert!(
+            result
+                .filesystem
+                .read_paths
+                .contains(&"/etc/myservice".to_string())
+        );
     }
 }

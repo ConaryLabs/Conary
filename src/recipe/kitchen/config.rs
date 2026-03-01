@@ -60,12 +60,17 @@ impl StageConfig {
         let mut env = Vec::new();
 
         // Set sysroot
-        env.push(("SYSROOT".to_string(), self.sysroot.to_string_lossy().to_string()));
+        env.push((
+            "SYSROOT".to_string(),
+            self.sysroot.to_string_lossy().to_string(),
+        ));
         let sysroot_flag = format!("--sysroot={}", self.sysroot.display());
 
         // Set tool prefix for cross-compilation
         if let Some(prefix) = &self.tool_prefix {
-            let tools_path = self.tools_dir.as_ref()
+            let tools_path = self
+                .tools_dir
+                .as_ref()
                 .map(|d| format!("{}/", d.display()))
                 .unwrap_or_default();
 
@@ -73,9 +78,15 @@ impl StageConfig {
             env.push(("CXX".to_string(), format!("{}{}-g++", tools_path, prefix)));
             env.push(("AR".to_string(), format!("{}{}-ar", tools_path, prefix)));
             env.push(("LD".to_string(), format!("{}{}-ld", tools_path, prefix)));
-            env.push(("RANLIB".to_string(), format!("{}{}-ranlib", tools_path, prefix)));
+            env.push((
+                "RANLIB".to_string(),
+                format!("{}{}-ranlib", tools_path, prefix),
+            ));
             env.push(("NM".to_string(), format!("{}{}-nm", tools_path, prefix)));
-            env.push(("STRIP".to_string(), format!("{}{}-strip", tools_path, prefix)));
+            env.push((
+                "STRIP".to_string(),
+                format!("{}{}-strip", tools_path, prefix),
+            ));
             env.push(("CROSS_COMPILE".to_string(), format!("{}-", prefix)));
         }
 
@@ -211,10 +222,10 @@ impl Default for KitchenConfig {
             keep_builddir: false,
             use_isolation: true, // On by default for security and reproducibility
             memory_limit: 4 * 1024 * 1024 * 1024, // 4 GB for builds
-            cpu_time_limit: 0, // No CPU time limit (builds can be long)
+            cpu_time_limit: 0,   // No CPU time limit (builds can be long)
             pristine_mode: false,
             sysroot: None,
-            auto_makedepends: false, // Off by default, requires resolver
+            auto_makedepends: false,   // Off by default, requires resolver
             cleanup_makedepends: true, // Clean up by default when auto is enabled
         }
     }

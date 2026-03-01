@@ -18,7 +18,7 @@ pub fn cmd_ccs_export(
     format: &str,
     db_path: &str,
 ) -> Result<()> {
-    use conary::ccs::export::{export, ExportFormat};
+    use conary::ccs::export::{ExportFormat, export};
 
     let export_format = ExportFormat::parse(format)
         .ok_or_else(|| anyhow::anyhow!("Unknown export format: {}. Supported: oci", format))?;
@@ -41,7 +41,10 @@ pub fn cmd_ccs_shell(
     env_vars: &[String],
     keep: bool,
 ) -> Result<()> {
-    println!("Creating ephemeral environment with packages: {}", packages.join(", "));
+    println!(
+        "Creating ephemeral environment with packages: {}",
+        packages.join(", ")
+    );
 
     let conn = conary::db::open(db_path)?;
     let objects_dir = Path::new(db_path)
@@ -120,7 +123,12 @@ pub fn cmd_ccs_shell(
     let current_ld_path = env_map.get("LD_LIBRARY_PATH").cloned().unwrap_or_default();
     env_map.insert(
         "LD_LIBRARY_PATH".to_string(),
-        format!("{}:{}:{}", lib_dir.display(), lib64_dir.display(), current_ld_path),
+        format!(
+            "{}:{}:{}",
+            lib_dir.display(),
+            lib64_dir.display(),
+            current_ld_path
+        ),
     );
 
     // Add custom environment variables
@@ -132,7 +140,10 @@ pub fn cmd_ccs_shell(
 
     // Mark as ephemeral environment
     env_map.insert("CONARY_EPHEMERAL".to_string(), "1".to_string());
-    env_map.insert("CONARY_ENV_ROOT".to_string(), temp_path.display().to_string());
+    env_map.insert(
+        "CONARY_ENV_ROOT".to_string(),
+        temp_path.display().to_string(),
+    );
 
     // Determine which shell to use
     let shell_cmd = shell
@@ -174,7 +185,9 @@ pub fn cmd_ccs_run(
     env_vars: &[String],
 ) -> Result<()> {
     if command.is_empty() {
-        anyhow::bail!("No command specified. Usage: conary ccs run <package> -- <command> [args...]");
+        anyhow::bail!(
+            "No command specified. Usage: conary ccs run <package> -- <command> [args...]"
+        );
     }
 
     let conn = conary::db::open(db_path)?;
@@ -243,7 +256,12 @@ pub fn cmd_ccs_run(
     let current_ld_path = env_map.get("LD_LIBRARY_PATH").cloned().unwrap_or_default();
     env_map.insert(
         "LD_LIBRARY_PATH".to_string(),
-        format!("{}:{}:{}", lib_dir.display(), lib64_dir.display(), current_ld_path),
+        format!(
+            "{}:{}:{}",
+            lib_dir.display(),
+            lib64_dir.display(),
+            current_ld_path
+        ),
     );
 
     for var in env_vars {

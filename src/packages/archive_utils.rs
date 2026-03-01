@@ -1,5 +1,5 @@
-use crate::filesystem::path::sanitize_path;
 use crate::error::Result;
+use crate::filesystem::path::sanitize_path;
 pub use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
 use tracing::warn;
 

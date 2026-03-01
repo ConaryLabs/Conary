@@ -29,12 +29,11 @@ fn init_schema_version(conn: &Connection) -> Result<()> {
 pub fn get_schema_version(conn: &Connection) -> Result<i32> {
     init_schema_version(conn)?;
 
-    let version = conn
-        .query_row(
-            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        );
+    let version = conn.query_row(
+        "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    );
 
     match version {
         Ok(v) => Ok(v),
@@ -295,7 +294,14 @@ mod tests {
         conn.execute(
             "INSERT INTO files (path, sha256_hash, size, permissions, trove_id, component_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params!["/usr/sbin/nginx", "abc123", 1024, 755, trove_id, component_id],
+            rusqlite::params![
+                "/usr/sbin/nginx",
+                "abc123",
+                1024,
+                755,
+                trove_id,
+                component_id
+            ],
         )
         .unwrap();
 

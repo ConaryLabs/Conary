@@ -10,7 +10,9 @@ use anyhow::Result;
 use conary::components::ComponentType;
 use conary::db::models::ScriptletEntry;
 use conary::packages::traits::{Scriptlet, ScriptletPhase};
-use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
+use conary::scriptlet::{
+    ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
+};
 use rusqlite::Connection;
 use std::path::Path;
 use tracing::{info, warn};
@@ -47,8 +49,8 @@ pub fn run_pre_install(
     execution_mode: &ExecutionMode,
     sandbox_mode: SandboxMode,
 ) -> Result<()> {
-    let executor = ScriptletExecutor::new(root, pkg_name, pkg_version, format)
-        .with_sandbox_mode(sandbox_mode);
+    let executor =
+        ScriptletExecutor::new(root, pkg_name, pkg_version, format).with_sandbox_mode(sandbox_mode);
 
     // For Arch packages during upgrade, use PreUpgrade; for RPM/DEB always use PreInstall
     let pre_phase = if format == ScriptletPackageFormat::Arch
@@ -85,8 +87,8 @@ pub fn run_post_install(
     execution_mode: &ExecutionMode,
     sandbox_mode: SandboxMode,
 ) {
-    let executor = ScriptletExecutor::new(root, pkg_name, pkg_version, format)
-        .with_sandbox_mode(sandbox_mode);
+    let executor =
+        ScriptletExecutor::new(root, pkg_name, pkg_version, format).with_sandbox_mode(sandbox_mode);
 
     // For Arch packages during upgrade, use PostUpgrade; for RPM/DEB always use PostInstall
     let post_phase = if format == ScriptletPackageFormat::Arch
@@ -103,7 +105,10 @@ pub fn run_post_install(
         info!("Running {} scriptlet...", post.phase);
         if let Err(e) = executor.execute(post, execution_mode) {
             // Post-install failure is serious but files are already deployed
-            warn!("{} scriptlet failed: {}. Package files are installed.", post.phase, e);
+            warn!(
+                "{} scriptlet failed: {}. Package files are installed.",
+                post.phase, e
+            );
             eprintln!("WARNING: {} scriptlet failed: {}", post.phase, e);
         }
     }
@@ -138,8 +143,8 @@ pub fn run_old_pre_remove(
         return Ok(());
     }
 
-    let executor = ScriptletExecutor::new(root, old_name, old_version, format)
-        .with_sandbox_mode(sandbox_mode);
+    let executor =
+        ScriptletExecutor::new(root, old_name, old_version, format).with_sandbox_mode(sandbox_mode);
 
     let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
         new_version: new_version.to_string(),
@@ -171,8 +176,8 @@ pub fn run_old_post_remove(
         return;
     }
 
-    let executor = ScriptletExecutor::new(root, old_name, old_version, format)
-        .with_sandbox_mode(sandbox_mode);
+    let executor =
+        ScriptletExecutor::new(root, old_name, old_version, format).with_sandbox_mode(sandbox_mode);
 
     let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
         new_version: new_version.to_string(),
@@ -182,7 +187,10 @@ pub fn run_old_post_remove(
         info!("Running old package post-remove scriptlet (upgrade)...");
         // Post-remove failure during upgrade is not fatal - files are already replaced
         if let Err(e) = executor.execute_entry(post_remove, &upgrade_removal_mode) {
-            warn!("Old package post-remove scriptlet failed: {}. Continuing anyway.", e);
+            warn!(
+                "Old package post-remove scriptlet failed: {}. Continuing anyway.",
+                e
+            );
             eprintln!("WARNING: Old package post-remove scriptlet failed: {}", e);
         }
     }
@@ -202,9 +210,18 @@ mod tests {
 
     #[test]
     fn test_to_scriptlet_format() {
-        assert_eq!(to_scriptlet_format(PackageFormatType::Rpm), ScriptletPackageFormat::Rpm);
-        assert_eq!(to_scriptlet_format(PackageFormatType::Deb), ScriptletPackageFormat::Deb);
-        assert_eq!(to_scriptlet_format(PackageFormatType::Arch), ScriptletPackageFormat::Arch);
+        assert_eq!(
+            to_scriptlet_format(PackageFormatType::Rpm),
+            ScriptletPackageFormat::Rpm
+        );
+        assert_eq!(
+            to_scriptlet_format(PackageFormatType::Deb),
+            ScriptletPackageFormat::Deb
+        );
+        assert_eq!(
+            to_scriptlet_format(PackageFormatType::Arch),
+            ScriptletPackageFormat::Arch
+        );
     }
 
     #[test]

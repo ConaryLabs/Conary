@@ -98,10 +98,7 @@ impl FileDeployer {
         // Final safety check: ensure the path starts with install_root
         // This catches edge cases and provides defense in depth
         if !target_path.starts_with(&self.install_root) {
-            warn!(
-                "Path escaped install root: {} -> {:?}",
-                path, target_path
-            );
+            warn!("Path escaped install root: {} -> {:?}", path, target_path);
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Path escapes install root: {}", path),
@@ -118,12 +115,7 @@ impl FileDeployer {
     ///
     /// - Creates hardlink from CAS to install_root + path
     /// - Sets permissions (ownership requires root)
-    pub fn deploy_file(
-        &self,
-        path: &str,
-        hash: &str,
-        permissions: u32,
-    ) -> Result<()> {
+    pub fn deploy_file(&self, path: &str, hash: &str, permissions: u32) -> Result<()> {
         // Get CAS path for this content
         let cas_path = self.cas.hash_to_path(hash);
 
@@ -152,10 +144,7 @@ impl FileDeployer {
             "hardlink"
         } else {
             // Hardlink failed, fall back to copy
-            debug!(
-                "Hardlink failed for {}, falling back to copy",
-                path
-            );
+            debug!("Hardlink failed for {}, falling back to copy", path);
             self.copy_from_cas(hash, &target_path)?;
             "copy"
         };
@@ -299,9 +288,7 @@ impl FileDeployer {
 
             if has_parent_traversal {
                 // Resolve the target relative to the link's parent directory
-                let link_parent = link_path
-                    .parent()
-                    .unwrap_or(&self.install_root);
+                let link_parent = link_path.parent().unwrap_or(&self.install_root);
 
                 let mut resolved = link_parent.to_path_buf();
                 for component in target_path.components() {
@@ -438,7 +425,9 @@ mod tests {
         let hash = deployer.cas().store(content).unwrap();
 
         // Deploy file
-        deployer.deploy_file("/usr/bin/test.sh", &hash, 0o755).unwrap();
+        deployer
+            .deploy_file("/usr/bin/test.sh", &hash, 0o755)
+            .unwrap();
 
         // Verify file exists
         assert!(deployer.file_exists("/usr/bin/test.sh"));
@@ -492,7 +481,9 @@ mod tests {
         // Store and deploy
         let content = b"to be removed";
         let hash = deployer.cas().store(content).unwrap();
-        deployer.deploy_file("/remove_me.txt", &hash, 0o644).unwrap();
+        deployer
+            .deploy_file("/remove_me.txt", &hash, 0o644)
+            .unwrap();
 
         assert!(deployer.file_exists("/remove_me.txt"));
 
@@ -555,9 +546,15 @@ mod tests {
         let hash = deployer.cas().store(content).unwrap();
 
         // Deploy same content to multiple locations (simulating multiple packages)
-        deployer.deploy_file("/pkg1/shared.txt", &hash, 0o644).unwrap();
-        deployer.deploy_file("/pkg2/shared.txt", &hash, 0o644).unwrap();
-        deployer.deploy_file("/pkg3/shared.txt", &hash, 0o644).unwrap();
+        deployer
+            .deploy_file("/pkg1/shared.txt", &hash, 0o644)
+            .unwrap();
+        deployer
+            .deploy_file("/pkg2/shared.txt", &hash, 0o644)
+            .unwrap();
+        deployer
+            .deploy_file("/pkg3/shared.txt", &hash, 0o644)
+            .unwrap();
 
         // All should share the same inode
         let cas_path = deployer.cas().hash_to_path(&hash);
@@ -678,8 +675,12 @@ mod tests {
 
         // These should all work
         deployer.deploy_file("/usr/bin/test", &hash, 0o755).unwrap();
-        deployer.deploy_file("usr/local/bin/test2", &hash, 0o755).unwrap();
-        deployer.deploy_file("/var/lib/app/data.txt", &hash, 0o644).unwrap();
+        deployer
+            .deploy_file("usr/local/bin/test2", &hash, 0o755)
+            .unwrap();
+        deployer
+            .deploy_file("/var/lib/app/data.txt", &hash, 0o644)
+            .unwrap();
 
         // Verify they exist
         assert!(deployer.file_exists("/usr/bin/test"));
@@ -722,7 +723,10 @@ mod tests {
 
         let link_path = install_root.join("usr/lib/libfoo.so");
         assert!(link_path.symlink_metadata().is_ok());
-        assert_eq!(fs::read_link(&link_path).unwrap().to_str().unwrap(), "libfoo.so.1");
+        assert_eq!(
+            fs::read_link(&link_path).unwrap().to_str().unwrap(),
+            "libfoo.so.1"
+        );
     }
 
     #[test]
@@ -771,10 +775,7 @@ mod tests {
         let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
 
         // Malicious: symlink at valid path but target escapes via ".."
-        let result = deployer.deploy_symlink(
-            "/usr/lib/libevil.so",
-            "../../../../etc/shadow",
-        );
+        let result = deployer.deploy_symlink("/usr/lib/libevil.so", "../../../../etc/shadow");
         assert!(
             result.is_err(),
             "Symlink target escaping install root should be rejected"
@@ -822,10 +823,7 @@ mod tests {
         let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
 
         // Absolute target with ".." traversal
-        let result = deployer.deploy_symlink(
-            "/usr/lib/libevil.so",
-            "/usr/lib/../../../etc/shadow",
-        );
+        let result = deployer.deploy_symlink("/usr/lib/libevil.so", "/usr/lib/../../../etc/shadow");
         assert!(
             result.is_err(),
             "Absolute symlink target with traversal should be rejected"

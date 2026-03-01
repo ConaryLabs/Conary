@@ -39,7 +39,11 @@ pub struct Label {
 
 impl Label {
     /// Create a new label
-    pub fn new(repository: impl Into<String>, namespace: impl Into<String>, tag: impl Into<String>) -> Self {
+    pub fn new(
+        repository: impl Into<String>,
+        namespace: impl Into<String>,
+        tag: impl Into<String>,
+    ) -> Self {
         Self {
             repository: repository.into(),
             namespace: namespace.into(),
@@ -50,10 +54,13 @@ impl Label {
     /// Parse a label from string format `repository@namespace:tag`
     pub fn parse(s: &str) -> Result<Self, LabelParseError> {
         // Find the @ separator
-        let at_pos = s.find('@').ok_or_else(|| LabelParseError::MissingAt(s.to_string()))?;
+        let at_pos = s
+            .find('@')
+            .ok_or_else(|| LabelParseError::MissingAt(s.to_string()))?;
 
         // Find the : separator after @
-        let colon_pos = s[at_pos..].find(':')
+        let colon_pos = s[at_pos..]
+            .find(':')
             .map(|p| at_pos + p)
             .ok_or_else(|| LabelParseError::MissingColon(s.to_string()))?;
 
@@ -97,7 +104,9 @@ impl Label {
     /// A `*` in any component matches any value.
     pub fn matches(&self, other: &Label) -> bool {
         (self.repository == "*" || other.repository == "*" || self.repository == other.repository)
-            && (self.namespace == "*" || other.namespace == "*" || self.namespace == other.namespace)
+            && (self.namespace == "*"
+                || other.namespace == "*"
+                || self.namespace == other.namespace)
             && (self.tag == "*" || other.tag == "*" || self.tag == other.tag)
     }
 

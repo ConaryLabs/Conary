@@ -123,8 +123,7 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
                 &config.distro,
                 &pkg.name,
                 Some(&pkg.version),
-            ))
-        {
+            )) {
             Ok(conv_result) => {
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",
@@ -135,12 +134,16 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
                 );
                 result.packages_converted += 1;
                 result.total_bytes += conv_result.total_size;
-                result.converted.push(format!("{}-{}", pkg.name, pkg.version));
+                result
+                    .converted
+                    .push(format!("{}-{}", pkg.name, pkg.version));
             }
             Err(e) => {
                 warn!("Failed to convert {} {}: {}", pkg.name, pkg.version, e);
                 result.packages_failed += 1;
-                result.failed.push((format!("{}-{}", pkg.name, pkg.version), e.to_string()));
+                result
+                    .failed
+                    .push((format!("{}-{}", pkg.name, pkg.version), e.to_string()));
             }
         }
     }
@@ -232,19 +235,17 @@ fn load_popularity_data(path: &str) -> Result<Vec<PackagePopularity>> {
 }
 
 /// Check if a package is already converted
-fn is_already_converted(
-    conn: &rusqlite::Connection,
-    name: &str,
-    version: &str,
-) -> Result<bool> {
+fn is_already_converted(conn: &rusqlite::Connection, name: &str, version: &str) -> Result<bool> {
     // Check converted_packages table
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM converted_packages cp
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM converted_packages cp
          JOIN troves t ON cp.trove_id = t.id
          WHERE t.name = ?1 AND t.version = ?2",
-        [name, version],
-        |row| row.get(0),
-    ).unwrap_or(0);
+            [name, version],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     Ok(count > 0)
 }

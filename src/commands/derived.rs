@@ -79,11 +79,14 @@ pub fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
         println!("Parent Version Constraint: {}", v);
     }
 
-    println!("Version Policy: {}", match &derived.version_policy {
-        VersionPolicy::Inherit => "inherit".to_string(),
-        VersionPolicy::Suffix(s) => format!("suffix({})", s),
-        VersionPolicy::Specific(v) => format!("specific({})", v),
-    });
+    println!(
+        "Version Policy: {}",
+        match &derived.version_policy {
+            VersionPolicy::Inherit => "inherit".to_string(),
+            VersionPolicy::Suffix(s) => format!("suffix({})", s),
+            VersionPolicy::Specific(v) => format!("specific({})", v),
+        }
+    );
 
     println!("Status: {}", derived.status.as_str());
     if let Some(msg) = &derived.error_message {
@@ -99,7 +102,10 @@ pub fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
     if !patches.is_empty() {
         println!("\nPatches ({}):", patches.len());
         for patch in &patches {
-            println!("  {}. {} (strip -p{})", patch.patch_order, patch.patch_name, patch.strip_level);
+            println!(
+                "  {}. {} (strip -p{})",
+                patch.patch_order, patch.patch_name, patch.strip_level
+            );
         }
     }
 
@@ -164,9 +170,18 @@ pub fn cmd_derive_create(
     if let Some(desc) = description {
         println!("  Description: {}", desc);
     }
-    println!("\nUse 'conary derive-patch {} <patch-file>' to add patches.", name);
-    println!("Use 'conary derive-override {} <target> <source>' to override files.", name);
-    println!("Use 'conary derive-build {}' to build the derived package.", name);
+    println!(
+        "\nUse 'conary derive-patch {} <patch-file>' to add patches.",
+        name
+    );
+    println!(
+        "Use 'conary derive-override {} <target> <source>' to override files.",
+        name
+    );
+    println!(
+        "Use 'conary derive-build {}' to build the derived package.",
+        name
+    );
 
     Ok(())
 }
@@ -209,8 +224,10 @@ pub fn cmd_derive_patch(
     cas.store(&patch_content)?;
 
     info!("Added patch '{}' to derived package '{}'", patch_name, name);
-    println!("Added patch to {}: {} (order {}, strip -p{})",
-        name, patch_name, patch_order, patch.strip_level);
+    println!(
+        "Added patch to {}: {} (order {}, strip -p{})",
+        name, patch_name, patch_order, patch.strip_level
+    );
 
     Ok(())
 }
@@ -253,7 +270,10 @@ pub fn cmd_derive_override(
         ov.permissions = permissions.map(|p| p as i32);
         ov.insert(&conn)?;
 
-        println!("Added file override to {}: {} <- {}", name, target_path, source);
+        println!(
+            "Added file override to {}: {} <- {}",
+            name, target_path, source
+        );
     } else {
         // Remove file
         let mut ov = DerivedOverride::new_remove(derived_id, target_path.to_string());
@@ -285,7 +305,10 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
     let objects_dir = objects_dir(db_path);
     let cas = conary::filesystem::CasStore::new(&objects_dir)?;
 
-    println!("Building derived package '{}' from '{}'...", name, derived.parent_name);
+    println!(
+        "Building derived package '{}' from '{}'...",
+        name, derived.parent_name
+    );
 
     // Build the derived package
     let result = conary::derived::build_from_definition(&conn, &derived, &cas);
@@ -296,7 +319,10 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
             println!("  Version: {}", build_result.version);
             println!("  Files: {}", build_result.files.len());
             println!("  Patches applied: {}", build_result.patches_applied.len());
-            println!("  Files overridden: {}", build_result.files_overridden.len());
+            println!(
+                "  Files overridden: {}",
+                build_result.files_overridden.len()
+            );
             println!("  Files removed: {}", build_result.files_removed.len());
 
             // Mark as built (for now, without actually creating the trove)
@@ -361,7 +387,10 @@ pub fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
     let count = DerivedPackage::mark_stale(&conn, parent_name)?;
 
     if count > 0 {
-        println!("Marked {} derived packages as stale (parent '{}' was updated).", count, parent_name);
+        println!(
+            "Marked {} derived packages as stale (parent '{}' was updated).",
+            count, parent_name
+        );
     } else {
         println!("No derived packages found for parent '{}'.", parent_name);
     }

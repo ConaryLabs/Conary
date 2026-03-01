@@ -302,8 +302,8 @@ impl ProvenanceCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_provenance_capture_new() {
@@ -316,10 +316,7 @@ mod tests {
     #[test]
     fn test_record_source_fetch() {
         let mut capture = ProvenanceCapture::new();
-        capture.record_source_fetch(
-            "https://example.com/foo-1.0.tar.gz",
-            "sha256:abc123",
-        );
+        capture.record_source_fetch("https://example.com/foo-1.0.tar.gz", "sha256:abc123");
 
         assert_eq!(
             capture.upstream_url,
@@ -343,7 +340,10 @@ mod tests {
         assert_eq!(capture.patches.len(), 1);
         assert_eq!(capture.patches[0].source, "fix-build.patch");
         assert!(capture.patches[0].hash.starts_with("sha256:"));
-        assert_eq!(capture.patches[0].author, Some("maintainer@example.com".to_string()));
+        assert_eq!(
+            capture.patches[0].author,
+            Some("maintainer@example.com".to_string())
+        );
     }
 
     #[test]

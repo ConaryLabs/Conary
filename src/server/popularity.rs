@@ -17,24 +17,19 @@ pub struct PackagePopularity {
 }
 
 /// Default URL for Fedora popularity data (JSON format)
-const FEDORA_POPULARITY_URL: &str =
-    "https://data.fedoraproject.org/stats/packages/popularity.json";
+const FEDORA_POPULARITY_URL: &str = "https://data.fedoraproject.org/stats/packages/popularity.json";
 
 /// Default URL for Arch Linux pkgstats data
-const ARCH_POPULARITY_URL: &str =
-    "https://pkgstats.archlinux.de/api/packages";
+const ARCH_POPULARITY_URL: &str = "https://pkgstats.archlinux.de/api/packages";
 
 /// Default URL for Ubuntu popularity-contest data
-const UBUNTU_POPULARITY_URL: &str =
-    "https://popcon.ubuntu.com/by_inst.gz";
+const UBUNTU_POPULARITY_URL: &str = "https://popcon.ubuntu.com/by_inst.gz";
 
 /// Fetch popularity data from Fedora.
 ///
 /// Expects JSON format: `[{"name": "...", "download_count": N}, ...]`
 /// Falls back to a simpler format if the full mdapi response differs.
-pub async fn fetch_fedora_popularity(
-    client: &reqwest::Client,
-) -> Result<Vec<PackagePopularity>> {
+pub async fn fetch_fedora_popularity(client: &reqwest::Client) -> Result<Vec<PackagePopularity>> {
     fetch_fedora_popularity_from(client, FEDORA_POPULARITY_URL).await
 }
 
@@ -77,9 +72,7 @@ fn parse_fedora_popularity(body: &str) -> Result<Vec<PackagePopularity>> {
 /// ```text
 /// package_name count
 /// ```
-pub async fn fetch_arch_popularity(
-    client: &reqwest::Client,
-) -> Result<Vec<PackagePopularity>> {
+pub async fn fetch_arch_popularity(client: &reqwest::Client) -> Result<Vec<PackagePopularity>> {
     fetch_arch_popularity_from(client, ARCH_POPULARITY_URL).await
 }
 
@@ -145,9 +138,7 @@ fn parse_arch_popularity(body: &str) -> Result<Vec<PackagePopularity>> {
 /// ```text
 /// rank name inst vote old recent no-files
 /// ```
-pub async fn fetch_ubuntu_popularity(
-    client: &reqwest::Client,
-) -> Result<Vec<PackagePopularity>> {
+pub async fn fetch_ubuntu_popularity(client: &reqwest::Client) -> Result<Vec<PackagePopularity>> {
     fetch_ubuntu_popularity_from(client, UBUNTU_POPULARITY_URL).await
 }
 

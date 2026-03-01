@@ -57,9 +57,9 @@ pub use context::EnhancementContext;
 pub use error::{EnhancementError, EnhancementResult};
 pub use registry::EnhancementRegistry;
 pub use runner::{
-    check_enhancement_window, get_pending_by_priority, schedule_for_enhancement,
     EnhancementMode, EnhancementOptions, EnhancementPriority, EnhancementRunner,
-    EnhancementSummary, EnhancementWindowStatus,
+    EnhancementSummary, EnhancementWindowStatus, check_enhancement_window, get_pending_by_priority,
+    schedule_for_enhancement,
 };
 
 use serde::{Deserialize, Serialize};
@@ -92,8 +92,8 @@ impl EnhancementType {
         }
     }
 
-    /// Parse from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse from string name
+    pub fn parse_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "capabilities" | "caps" => Some(Self::Capabilities),
             "provenance" | "prov" => Some(Self::Provenance),
@@ -242,22 +242,22 @@ mod tests {
     #[test]
     fn test_enhancement_type_parsing() {
         assert_eq!(
-            EnhancementType::from_str("capabilities"),
+            EnhancementType::parse_name("capabilities"),
             Some(EnhancementType::Capabilities)
         );
         assert_eq!(
-            EnhancementType::from_str("caps"),
+            EnhancementType::parse_name("caps"),
             Some(EnhancementType::Capabilities)
         );
         assert_eq!(
-            EnhancementType::from_str("provenance"),
+            EnhancementType::parse_name("provenance"),
             Some(EnhancementType::Provenance)
         );
         assert_eq!(
-            EnhancementType::from_str("subpackages"),
+            EnhancementType::parse_name("subpackages"),
             Some(EnhancementType::Subpackages)
         );
-        assert_eq!(EnhancementType::from_str("unknown"), None);
+        assert_eq!(EnhancementType::parse_name("unknown"), None);
     }
 
     #[test]

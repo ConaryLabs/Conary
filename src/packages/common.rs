@@ -99,11 +99,7 @@ impl PackageMetadata {
     ///
     /// This is the standard conversion used by all package formats.
     pub fn to_trove(&self) -> Trove {
-        let mut trove = Trove::new(
-            self.name.clone(),
-            self.version.clone(),
-            TroveType::Package,
-        );
+        let mut trove = Trove::new(self.name.clone(), self.version.clone(), TroveType::Package);
 
         trove.architecture = self.architecture.clone();
         trove.description = self.description.clone();
@@ -280,9 +276,7 @@ mod tests {
 
     #[test]
     fn test_try_build_missing_fields() {
-        let result = PackageMetadataBuilder::new()
-            .name("incomplete")
-            .try_build();
+        let result = PackageMetadataBuilder::new().name("incomplete").try_build();
 
         assert!(result.is_none());
     }

@@ -7,25 +7,25 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD_ENGINE
 use chrono::Utc;
 use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
 use rusqlite::{Connection, params};
-use x509_cert::der::Decode;
-use sigstore::crypto::{CosignVerificationKey, Signature, SigningScheme};
+use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use sigstore::crypto::signing_key::SigStoreKeyPair;
-use sigstore::fulcio::{FulcioClient, FULCIO_ROOT, TokenProvider};
+use sigstore::crypto::{CosignVerificationKey, Signature, SigningScheme};
 use sigstore::fulcio::oauth::OauthTokenProvider;
+use sigstore::fulcio::{FULCIO_ROOT, FulcioClient, TokenProvider};
 use sigstore::rekor::apis::entries_api;
 use sigstore::rekor::models::{
-    hashedrekord, log_entry::Body as RekorBody, LogEntry as RekorLogEntry, ProposedEntry,
+    LogEntry as RekorLogEntry, ProposedEntry, hashedrekord, log_entry::Body as RekorBody,
 };
-use sigstore::trust::sigstore::SigstoreTrustRoot;
 use sigstore::trust::TrustRoot;
-use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
+use sigstore::trust::sigstore::SigstoreTrustRoot;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 use webpki::{EndEntityCert, KeyUsage};
+use x509_cert::der::Decode;
 
-use conary::provenance::{build_slsa_statement, SlsaContext};
+use conary::provenance::{SlsaContext, build_slsa_statement};
 
 #[derive(Debug, Error)]
 enum SigstoreCommandError {
@@ -108,11 +108,7 @@ pub fn cmd_provenance_show(
 }
 
 /// Verify provenance against transparency log
-pub fn cmd_provenance_verify(
-    db_path: &str,
-    package: &str,
-    all_signatures: bool,
-) -> Result<()> {
+pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool) -> Result<()> {
     let conn = Connection::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
@@ -120,14 +116,20 @@ pub fn cmd_provenance_verify(
 
     match trove_info {
         Some((trove_id, trove_name, trove_version)) => {
-            println!("Verifying provenance for {} v{}...", trove_name, trove_version);
+            println!(
+                "Verifying provenance for {} v{}...",
+                trove_name, trove_version
+            );
             println!();
 
             let prov = query_provenance(&conn, trove_id)?;
 
             // Check Rekor log entry
             if let Some(rekor_index) = prov.rekor_log_index {
-                println!("[CHECKING] Rekor transparency log entry #{}...", rekor_index);
+                println!(
+                    "[CHECKING] Rekor transparency log entry #{}...",
+                    rekor_index
+                );
                 let dna_hash = prov
                     .dna_hash
                     .as_deref()
@@ -162,7 +164,10 @@ pub fn cmd_provenance_verify(
                 println!();
             } else {
                 println!("[WARN] No Rekor transparency log entry found");
-                println!("       Run 'conary provenance register {}' to register", package);
+                println!(
+                    "       Run 'conary provenance register {}' to register",
+                    package
+                );
                 println!();
             }
 
@@ -548,7 +553,10 @@ fn generate_cyclonedx_sbom(
 }
 
 /// Collect dependencies for a package
-fn collect_dependencies(conn: &Connection, trove_id: i64) -> Result<Vec<(String, String, Option<String>)>> {
+fn collect_dependencies(
+    conn: &Connection,
+    trove_id: i64,
+) -> Result<Vec<(String, String, Option<String>)>> {
     let mut deps = Vec::new();
 
     let mut stmt = conn.prepare(
@@ -556,7 +564,7 @@ fn collect_dependencies(conn: &Connection, trove_id: i64) -> Result<Vec<(String,
          FROM dependencies d
          JOIN troves t ON d.dependency_name = t.name
          LEFT JOIN provenance p ON t.id = p.trove_id
-         WHERE d.trove_id = ?1"
+         WHERE d.trove_id = ?1",
     )?;
 
     let rows = stmt.query_map([trove_id], |row| {
@@ -701,10 +709,18 @@ pub fn cmd_provenance_audit(
 
         if show {
             let mut missing_parts = Vec::new();
-            if !has_source { missing_parts.push("source"); }
-            if !has_build { missing_parts.push("build"); }
-            if !has_sigs { missing_parts.push("signatures"); }
-            if !has_dna { missing_parts.push("DNA"); }
+            if !has_source {
+                missing_parts.push("source");
+            }
+            if !has_build {
+                missing_parts.push("build");
+            }
+            if !has_sigs {
+                missing_parts.push("signatures");
+            }
+            if !has_dna {
+                missing_parts.push("DNA");
+            }
 
             if !missing_parts.is_empty() {
                 println!("  {} v{}", name, version);
@@ -752,7 +768,9 @@ fn rekor_create_entry(entry: ProposedEntry) -> Result<RekorLogEntry, SigstoreCom
     Ok(RekorLogEntry::from_str(&parsed)?)
 }
 
-fn extract_hashedrekord_spec(entry: &RekorLogEntry) -> Result<hashedrekord::Spec, SigstoreCommandError> {
+fn extract_hashedrekord_spec(
+    entry: &RekorLogEntry,
+) -> Result<hashedrekord::Spec, SigstoreCommandError> {
     match &entry.body {
         RekorBody::hashedrekord(payload) => Ok(serde_json::from_value(payload.spec.clone())?),
         _ => Err(SigstoreCommandError::MissingHashedRekord),
@@ -818,15 +836,24 @@ fn sign_dna_keyless(dna_hash: &str) -> Result<SignedDna, SigstoreCommandError> {
     })
 }
 
-fn build_rekor_entry(dna_hash: &str, signed: &SignedDna) -> Result<ProposedEntry, SigstoreCommandError> {
+fn build_rekor_entry(
+    dna_hash: &str,
+    signed: &SignedDna,
+) -> Result<ProposedEntry, SigstoreCommandError> {
     let signature_b64 = BASE64_STD_ENGINE.encode(&signed.signature);
     let public_key_b64 = BASE64_STD_ENGINE.encode(signed.public_key_pem.as_bytes());
-    let hash_value = dna_hash.strip_prefix("sha256:").unwrap_or(dna_hash).to_string();
+    let hash_value = dna_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(dna_hash)
+        .to_string();
 
     Ok(ProposedEntry::Hashedrekord {
         api_version: "0.0.1".to_string(),
         spec: hashedrekord::Spec::new(
-            hashedrekord::Signature::new(signature_b64, hashedrekord::PublicKey::new(public_key_b64)),
+            hashedrekord::Signature::new(
+                signature_b64,
+                hashedrekord::PublicKey::new(public_key_b64),
+            ),
             hashedrekord::Data::new(hashedrekord::Hash::new(
                 hashedrekord::AlgorithmKind::sha256,
                 hash_value,
@@ -1158,17 +1185,43 @@ fn print_provenance_json(prov: &ProvenanceData, section: &str, _recursive: bool)
 fn print_provenance_tree(prov: &ProvenanceData, _section: &str, _recursive: bool) -> Result<()> {
     println!("DNA: {}", prov.dna_hash.as_deref().unwrap_or("(none)"));
     println!("├── Source");
-    println!("│   ├── URL: {}", prov.upstream_url.as_deref().unwrap_or("(none)"));
-    println!("│   ├── Hash: {}", prov.upstream_hash.as_deref().unwrap_or("(none)"));
-    println!("│   └── Git: {}", prov.git_commit.as_deref().unwrap_or("(none)"));
+    println!(
+        "│   ├── URL: {}",
+        prov.upstream_url.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "│   ├── Hash: {}",
+        prov.upstream_hash.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "│   └── Git: {}",
+        prov.git_commit.as_deref().unwrap_or("(none)")
+    );
     println!("├── Build");
-    println!("│   ├── Recipe: {}", prov.recipe_hash.as_deref().unwrap_or("(none)"));
-    println!("│   ├── Arch: {}", prov.host_arch.as_deref().unwrap_or("(none)"));
-    println!("│   └── Kernel: {}", prov.host_kernel.as_deref().unwrap_or("(none)"));
+    println!(
+        "│   ├── Recipe: {}",
+        prov.recipe_hash.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "│   ├── Arch: {}",
+        prov.host_arch.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "│   └── Kernel: {}",
+        prov.host_kernel.as_deref().unwrap_or("(none)")
+    );
     println!("├── Signatures");
-    println!("│   └── Rekor: {}", prov.rekor_log_index.map(|i| i.to_string()).unwrap_or_else(|| "(none)".to_string()));
+    println!(
+        "│   └── Rekor: {}",
+        prov.rekor_log_index
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
     println!("└── Content");
-    println!("    └── Merkle: {}", prov.merkle_root.as_deref().unwrap_or("(none)"));
+    println!(
+        "    └── Merkle: {}",
+        prov.merkle_root.as_deref().unwrap_or("(none)")
+    );
 
     Ok(())
 }
@@ -1181,7 +1234,8 @@ mod tests {
     fn build_rekor_entry_uses_dna_hash() {
         let signed = SignedDna {
             signature: vec![1, 2, 3],
-            public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----".to_string(),
+            public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----"
+                .to_string(),
         };
 
         let entry = build_rekor_entry("sha256:deadbeef", &signed).unwrap();
@@ -1197,19 +1251,13 @@ mod tests {
     #[ignore]
     fn rekor_sign_verify_roundtrip() {
         let db_path = std::env::var("CONARY_TEST_DB").expect("CONARY_TEST_DB is required");
-        let package = std::env::var("CONARY_TEST_PACKAGE")
-            .expect("CONARY_TEST_PACKAGE is required");
+        let package =
+            std::env::var("CONARY_TEST_PACKAGE").expect("CONARY_TEST_PACKAGE is required");
         let key = std::env::var("CONARY_TEST_KEY").ok();
         let keyless = std::env::var("CONARY_TEST_KEYLESS").is_ok();
 
-        let _ = cmd_provenance_register(
-            &db_path,
-            &package,
-            key.as_deref(),
-            keyless,
-            false,
-        )
-        .unwrap();
+        let _ =
+            cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false).unwrap();
 
         let _ = cmd_provenance_verify(&db_path, &package, true).unwrap();
     }

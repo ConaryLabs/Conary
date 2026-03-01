@@ -321,7 +321,10 @@ impl VfsTree {
             .ok_or_else(|| Error::InvalidPath("cannot create root".into()))?;
 
         let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!("parent directory not found: {}", parent_path.display()))
+            Error::NotFound(format!(
+                "parent directory not found: {}",
+                parent_path.display()
+            ))
         })?;
 
         // Verify parent is a directory
@@ -429,7 +432,10 @@ impl VfsTree {
             .ok_or_else(|| Error::InvalidPath("cannot create file at root".into()))?;
 
         let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!("parent directory not found: {}", parent_path.display()))
+            Error::NotFound(format!(
+                "parent directory not found: {}",
+                parent_path.display()
+            ))
         })?;
 
         // Verify parent is a directory
@@ -490,7 +496,10 @@ impl VfsTree {
             .ok_or_else(|| Error::InvalidPath("cannot create symlink at root".into()))?;
 
         let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!("parent directory not found: {}", parent_path.display()))
+            Error::NotFound(format!(
+                "parent directory not found: {}",
+                parent_path.display()
+            ))
         })?;
 
         // Verify parent is a directory
@@ -539,9 +548,9 @@ impl VfsTree {
             return Err(Error::InvalidPath("cannot remove root".into()));
         }
 
-        let node_id = self.lookup(&path).ok_or_else(|| {
-            Error::NotFound(format!("path not found: {}", path.display()))
-        })?;
+        let node_id = self
+            .lookup(&path)
+            .ok_or_else(|| Error::NotFound(format!("path not found: {}", path.display())))?;
 
         // Collect all descendants to remove from path index
         let mut to_remove = Vec::new();

@@ -6,7 +6,7 @@
 //! including generation of legacy format packages.
 
 use anyhow::{Context, Result};
-use conary::ccs::{builder, legacy, CcsBuilder, CcsManifest};
+use conary::ccs::{CcsBuilder, CcsManifest, builder, legacy};
 use std::path::Path;
 
 /// Build a CCS package from a manifest
@@ -22,13 +22,14 @@ pub fn cmd_ccs_build(
     let path = Path::new(path);
 
     // Find the manifest
-    let manifest_path = if path.is_file() && path.file_name().map(|n| n == "ccs.toml").unwrap_or(false) {
-        path.to_path_buf()
-    } else if path.is_dir() {
-        path.join("ccs.toml")
-    } else {
-        anyhow::bail!("Cannot find ccs.toml at {}", path.display());
-    };
+    let manifest_path =
+        if path.is_file() && path.file_name().map(|n| n == "ccs.toml").unwrap_or(false) {
+            path.to_path_buf()
+        } else if path.is_dir() {
+            path.join("ccs.toml")
+        } else {
+            anyhow::bail!("Cannot find ccs.toml at {}", path.display());
+        };
 
     if !manifest_path.exists() {
         anyhow::bail!(
@@ -38,10 +39,12 @@ pub fn cmd_ccs_build(
     }
 
     // Parse the manifest
-    let manifest = CcsManifest::from_file(&manifest_path)
-        .context("Failed to parse ccs.toml")?;
+    let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
 
-    println!("Building {} v{}", manifest.package.name, manifest.package.version);
+    println!(
+        "Building {} v{}",
+        manifest.package.name, manifest.package.version
+    );
 
     // Determine source directory
     let source_dir = source
@@ -59,8 +62,7 @@ pub fn cmd_ccs_build(
     // Create output directory
     let output_dir = Path::new(output);
     if !dry_run {
-        std::fs::create_dir_all(output_dir)
-            .context("Failed to create output directory")?;
+        std::fs::create_dir_all(output_dir).context("Failed to create output directory")?;
     }
 
     // Build the package data (needed for all targets)
@@ -77,7 +79,8 @@ pub fn cmd_ccs_build(
             println!("CDC chunking disabled (use default for delta-efficient updates)");
         }
 
-        let result = builder_instance.build()
+        let result = builder_instance
+            .build()
             .context("Failed to build package")?;
 
         builder::print_build_summary(&result);
@@ -94,9 +97,18 @@ pub fn cmd_ccs_build(
     for t in &targets {
         let filename = match *t {
             "ccs" => format!("{}-{}.ccs", manifest.package.name, manifest.package.version),
-            "deb" => format!("{}_{}_amd64.deb", manifest.package.name, manifest.package.version),
-            "rpm" => format!("{}-{}.x86_64.rpm", manifest.package.name, manifest.package.version),
-            "arch" => format!("{}-{}-x86_64.pkg.tar.zst", manifest.package.name, manifest.package.version),
+            "deb" => format!(
+                "{}_{}_amd64.deb",
+                manifest.package.name, manifest.package.version
+            ),
+            "rpm" => format!(
+                "{}-{}.x86_64.rpm",
+                manifest.package.name, manifest.package.version
+            ),
+            "arch" => format!(
+                "{}-{}-x86_64.pkg.tar.zst",
+                manifest.package.name, manifest.package.version
+            ),
             _ => {
                 println!("Unknown target format: {}", t);
                 continue;
@@ -123,7 +135,11 @@ pub fn cmd_ccs_build(
                     println!("Generating DEB package...");
                     let gen_result = legacy::deb::generate(result, &output_path)
                         .context("Failed to generate DEB package")?;
-                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    println!(
+                        "  Created: {} ({} bytes)",
+                        output_path.display(),
+                        gen_result.size
+                    );
                     gen_result.loss_report.print_summary("DEB");
                 }
                 "rpm" => {
@@ -131,7 +147,11 @@ pub fn cmd_ccs_build(
                     println!("Generating RPM package...");
                     let gen_result = legacy::rpm::generate(result, &output_path)
                         .context("Failed to generate RPM package")?;
-                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    println!(
+                        "  Created: {} ({} bytes)",
+                        output_path.display(),
+                        gen_result.size
+                    );
                     gen_result.loss_report.print_summary("RPM");
                 }
                 "arch" => {
@@ -139,7 +159,11 @@ pub fn cmd_ccs_build(
                     println!("Generating Arch package...");
                     let gen_result = legacy::arch::generate(result, &output_path)
                         .context("Failed to generate Arch package")?;
-                    println!("  Created: {} ({} bytes)", output_path.display(), gen_result.size);
+                    println!(
+                        "  Created: {} ({} bytes)",
+                        output_path.display(),
+                        gen_result.size
+                    );
                     gen_result.loss_report.print_summary("Arch");
                 }
                 _ => {}

@@ -21,9 +21,9 @@ use std::path::{Path, PathBuf};
 /// Default chunk size parameters (in bytes)
 /// These should be chosen carefully and kept stable - changing them
 /// invalidates all existing chunks in the store.
-pub const MIN_CHUNK_SIZE: u32 = 16 * 1024;      // 16 KB minimum
-pub const AVG_CHUNK_SIZE: u32 = 64 * 1024;      // 64 KB average (sweet spot)
-pub const MAX_CHUNK_SIZE: u32 = 256 * 1024;     // 256 KB maximum
+pub const MIN_CHUNK_SIZE: u32 = 16 * 1024; // 16 KB minimum
+pub const AVG_CHUNK_SIZE: u32 = 64 * 1024; // 64 KB average (sweet spot)
+pub const MAX_CHUNK_SIZE: u32 = 256 * 1024; // 256 KB maximum
 
 /// A single chunk produced by CDC
 #[derive(Debug, Clone)]
@@ -145,8 +145,8 @@ impl Chunker {
 
     /// Chunk a file
     pub fn chunk_file(&self, path: &Path) -> Result<ChunkedFile> {
-        let mut file = File::open(path)
-            .with_context(|| format!("Failed to open file: {}", path.display()))?;
+        let mut file =
+            File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
 
         let metadata = file.metadata()?;
         let size = metadata.len();
@@ -226,8 +226,7 @@ impl ChunkStore {
     /// Retrieve a chunk by hash
     pub fn get_chunk(&self, hash: &[u8; 32]) -> Result<Vec<u8>> {
         let path = self.chunk_path(hash);
-        std::fs::read(&path)
-            .with_context(|| format!("Failed to read chunk: {}", path.display()))
+        std::fs::read(&path).with_context(|| format!("Failed to read chunk: {}", path.display()))
     }
 
     /// Store all chunks from a chunked file, returning count of new chunks
@@ -278,11 +277,7 @@ impl ChunkStore {
                     entry.path().parent().and_then(|p| p.file_name()),
                     entry.path().file_name(),
                 ) {
-                    let hex = format!(
-                        "{}{}",
-                        prefix.to_string_lossy(),
-                        suffix.to_string_lossy()
-                    );
+                    let hex = format!("{}{}", prefix.to_string_lossy(), suffix.to_string_lossy());
                     if hex.len() == 64
                         && let Ok(bytes) = hex::decode(&hex)
                         && bytes.len() == 32
@@ -405,7 +400,6 @@ impl From<&ChunkedFile> for ChunkManifestEntry {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -576,8 +570,14 @@ mod tests {
         let delta = calculate_delta(&chunked1, &chunked2);
 
         println!("Delta stats:");
-        println!("  Old: {} bytes, {} chunks", delta.old_size, delta.old_chunks);
-        println!("  New: {} bytes, {} chunks", delta.new_size, delta.new_chunks);
+        println!(
+            "  Old: {} bytes, {} chunks",
+            delta.old_size, delta.old_chunks
+        );
+        println!(
+            "  New: {} bytes, {} chunks",
+            delta.new_size, delta.new_chunks
+        );
         println!(
             "  Shared: {} chunks, {} bytes",
             delta.shared_chunks, delta.shared_bytes

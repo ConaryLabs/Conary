@@ -1,8 +1,8 @@
 // src/cli/derive.rs
 //! Derived package management commands
 
-use clap::Subcommand;
 use super::DbArgs;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum DeriveCommands {

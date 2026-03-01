@@ -8,8 +8,8 @@
 //! - What dependencies (with their DNA) were used to build it?
 //! - Verify transparency log entries
 
-use clap::Subcommand;
 use super::DbArgs;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum ProvenanceCommands {

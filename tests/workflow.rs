@@ -11,8 +11,8 @@ use tempfile::NamedTempFile;
 #[ignore] // Ignored by default since it requires a real RPM file
 fn test_rpm_install_workflow() {
     use conary::db::models::{Changeset, ChangesetStatus, FileEntry, Trove};
-    use conary::packages::rpm::RpmPackage;
     use conary::packages::PackageFormat;
+    use conary::packages::rpm::RpmPackage;
 
     // This test requires a real RPM file to be present
     // To run: place an RPM file at /tmp/test.rpm and run:
@@ -155,7 +155,11 @@ fn test_install_and_rollback() {
         let mut changeset = Changeset::new("Install nginx-1.21.0".to_string());
         let changeset_id = changeset.insert(tx)?;
 
-        let mut trove = Trove::new("nginx".to_string(), "1.21.0".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "nginx".to_string(),
+            "1.21.0".to_string(),
+            TroveType::Package,
+        );
         trove.installed_by_changeset_id = Some(changeset_id);
         trove.insert(tx)?;
 
@@ -233,7 +237,10 @@ fn test_rollback_tracking() {
 
     // Verify rollback
     let nginx_after = Trove::find_by_name(&conn, "nginx").unwrap();
-    assert!(nginx_after.is_empty(), "nginx should be removed after rollback");
+    assert!(
+        nginx_after.is_empty(),
+        "nginx should be removed after rollback"
+    );
 
     let cs_after = Changeset::find_by_id(&conn, nginx_cs_id).unwrap().unwrap();
     assert_eq!(cs_after.status, ChangesetStatus::RolledBack);

@@ -196,8 +196,10 @@ mod tests {
 
     #[test]
     fn test_dna_hash_short() {
-        let bytes = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
-                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let bytes = [
+            0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
         let hash = DnaHash::from_bytes(&bytes).unwrap();
         assert_eq!(hash.short(), "123456789abc");
     }
@@ -222,7 +224,8 @@ mod tests {
             "{}".to_string(),
             "{}".to_string(),
             "{}".to_string(),
-        ).with_rekor(12345678);
+        )
+        .with_rekor(12345678);
 
         assert_eq!(dna.name, "nginx");
         assert_eq!(dna.rekor_log_index, Some(12345678));

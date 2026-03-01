@@ -100,7 +100,9 @@ impl PolicyChain {
 
         // Add FixShebangs if configured
         if !config.fix_shebangs.is_empty() {
-            chain.add(Box::new(FixShebangsPolicy::new(config.fix_shebangs.clone())));
+            chain.add(Box::new(FixShebangsPolicy::new(
+                config.fix_shebangs.clone(),
+            )));
         }
 
         // Add CompressManpages if configured
@@ -211,8 +213,9 @@ impl DenyPathsPolicy {
     pub fn new(patterns: &[String]) -> Result<Self> {
         let mut compiled = Vec::new();
         for pat in patterns {
-            let pattern = Pattern::new(pat)
-                .map_err(|e| PolicyError::Config(format!("Invalid glob pattern '{}': {}", pat, e)))?;
+            let pattern = Pattern::new(pat).map_err(|e| {
+                PolicyError::Config(format!("Invalid glob pattern '{}': {}", pat, e))
+            })?;
             compiled.push(pattern);
         }
         Ok(Self {
@@ -358,7 +361,7 @@ impl BuildPolicy for StripBinariesPolicy {
 /// This is equivalent to a basic `strip --strip-unneeded` for executables
 /// and shared libraries. It preserves program headers needed for execution.
 fn strip_elf_binary(content: &[u8]) -> std::result::Result<Vec<u8>, String> {
-    use goblin::elf::{header::*, program_header::PT_LOAD, Elf};
+    use goblin::elf::{Elf, header::*, program_header::PT_LOAD};
 
     // Parse the ELF file
     let elf = Elf::parse(content).map_err(|e| format!("Failed to parse ELF: {}", e))?;
@@ -455,7 +458,10 @@ impl FixShebangsPolicy {
         if !Self::is_script(content) {
             return None;
         }
-        let end = content.iter().position(|&b| b == b'\n').unwrap_or(content.len());
+        let end = content
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(content.len());
         Some(&content[0..end])
     }
 }
@@ -500,9 +506,15 @@ impl CompressManpagesPolicy {
     /// Check if path looks like a man page
     fn is_manpage(path: &str) -> bool {
         // Man pages are typically in /usr/share/man/manN/ with extensions like .1, .2, etc.
-        if !path.contains("/man/") && !path.contains("/man1/") && !path.contains("/man2/")
-            && !path.contains("/man3/") && !path.contains("/man4/") && !path.contains("/man5/")
-            && !path.contains("/man6/") && !path.contains("/man7/") && !path.contains("/man8/")
+        if !path.contains("/man/")
+            && !path.contains("/man1/")
+            && !path.contains("/man2/")
+            && !path.contains("/man3/")
+            && !path.contains("/man4/")
+            && !path.contains("/man5/")
+            && !path.contains("/man6/")
+            && !path.contains("/man7/")
+            && !path.contains("/man8/")
         {
             return false;
         }
@@ -547,8 +559,8 @@ impl BuildPolicy for CompressManpagesPolicy {
         }
 
         // Compress with gzip
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
 
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -583,7 +595,8 @@ mod tests {
 
     #[test]
     fn test_deny_paths_policy() {
-        let policy = DenyPathsPolicy::new(&["/home/*".to_string(), "/tmp/build*".to_string()]).unwrap();
+        let policy =
+            DenyPathsPolicy::new(&["/home/*".to_string(), "/tmp/build*".to_string()]).unwrap();
 
         // Should reject /home/user/file
         let entry = make_entry("/home/user/file", 0o644);
@@ -622,7 +635,10 @@ mod tests {
     #[test]
     fn test_fix_shebangs_policy() {
         let mut replacements = HashMap::new();
-        replacements.insert("/usr/bin/env python".to_string(), "/usr/bin/python3".to_string());
+        replacements.insert(
+            "/usr/bin/env python".to_string(),
+            "/usr/bin/python3".to_string(),
+        );
         let policy = FixShebangsPolicy::new(replacements);
 
         // Should fix python shebang
@@ -756,7 +772,10 @@ mod tests {
         match result {
             Ok(stripped) => {
                 // If successful, verify the output is valid
-                assert!(stripped.len() >= 64, "stripped binary should have ELF header");
+                assert!(
+                    stripped.len() >= 64,
+                    "stripped binary should have ELF header"
+                );
                 assert_eq!(&stripped[0..4], b"\x7fELF", "should still be ELF");
 
                 // Section header offset should be zeroed

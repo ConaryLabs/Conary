@@ -55,13 +55,13 @@ use crate::db::models::{
     LabelEntry, PackageResolution, PrimaryStrategy, Repository, RepositoryPackage,
     ResolutionStrategy, Trove,
 };
-use crate::label::Label;
 use crate::error::{Error, Result};
-use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
+use crate::label::Label;
+use crate::recipe::{Kitchen, KitchenConfig, parse_recipe};
+use crate::repository::client::RepositoryClient;
 use crate::repository::remi::RemiClient;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
-use crate::repository::client::RepositoryClient;
-use crate::repository::{download_package_verified, DownloadOptions};
+use crate::repository::{DownloadOptions, download_package_verified};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -183,8 +183,8 @@ impl DelegateContext {
 /// Returns `(temp_dir, output_dir)` where `output_dir` is either the user-specified
 /// output directory or the temp directory path.
 fn create_output_dir(options: &ResolutionOptions) -> Result<(TempDir, PathBuf)> {
-    let temp_dir = TempDir::new()
-        .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
+    let temp_dir =
+        TempDir::new().map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
     let output_dir = options
         .output_dir
         .clone()
@@ -212,24 +212,17 @@ impl<'a> PackageResolver<'a> {
     /// 2. Repository selection (using existing priority logic)
     /// 3. Strategy lookup from routing table (with implicit legacy fallback)
     /// 4. Strategy execution in priority order
-    pub fn resolve(
-        &self,
-        name: &str,
-        options: &ResolutionOptions,
-    ) -> Result<PackageSource> {
+    pub fn resolve(&self, name: &str, options: &ResolutionOptions) -> Result<PackageSource> {
         // Step 0: Check if already installed locally
-        if !options.skip_cas {
-            if let Some(installed) = self.check_installed(name, options)? {
-                return Ok(installed);
-            }
+        if !options.skip_cas
+            && let Some(installed) = self.check_installed(name, options)?
+        {
+            return Ok(installed);
         }
 
         // Step 1: Repository selection
-        let pkg_with_repo = PackageSelector::find_best_package(
-            self.conn,
-            name,
-            &options.to_selection_options(),
-        )?;
+        let pkg_with_repo =
+            PackageSelector::find_best_package(self.conn, name, &options.to_selection_options())?;
 
         info!(
             "Selected package {} {} from repository {} (priority {})",
@@ -253,9 +246,10 @@ impl<'a> PackageResolver<'a> {
         pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
     ) -> Result<Vec<ResolutionStrategy>> {
-        let repo_id = pkg_with_repo.repository.id.ok_or_else(|| {
-            Error::InitError("Repository missing ID".to_string())
-        })?;
+        let repo_id = pkg_with_repo
+            .repository
+            .id
+            .ok_or_else(|| Error::InitError("Repository missing ID".to_string()))?;
 
         // Check routing table first (per-package routing)
         if let Some(resolution) = PackageResolution::find(
@@ -318,9 +312,10 @@ impl<'a> PackageResolver<'a> {
             pkg_with_repo.package.name
         );
 
-        let pkg_id = pkg_with_repo.package.id.ok_or_else(|| {
-            Error::InitError("Package missing ID".to_string())
-        })?;
+        let pkg_id = pkg_with_repo
+            .package
+            .id
+            .ok_or_else(|| Error::InitError("Package missing ID".to_string()))?;
 
         Ok(vec![ResolutionStrategy::Legacy {
             repository_package_id: pkg_id,
@@ -390,16 +385,16 @@ impl<'a> PackageResolver<'a> {
                 url,
                 checksum,
                 delta_base,
-            } => {
-                self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options)
-            }
+            } => self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options),
 
             ResolutionStrategy::Remi {
                 endpoint,
                 distro,
                 source_name,
             } => {
-                let pkg_name = source_name.as_deref().unwrap_or(&pkg_with_repo.package.name);
+                let pkg_name = source_name
+                    .as_deref()
+                    .unwrap_or(&pkg_with_repo.package.name);
                 self.try_remi(endpoint, distro, pkg_name, options)
             }
 
@@ -407,9 +402,7 @@ impl<'a> PackageResolver<'a> {
                 recipe_url,
                 source_urls,
                 patches,
-            } => {
-                self.try_recipe(recipe_url, source_urls, patches, options)
-            }
+            } => self.try_recipe(recipe_url, source_urls, patches, options),
 
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
@@ -418,9 +411,7 @@ impl<'a> PackageResolver<'a> {
 
             ResolutionStrategy::Legacy {
                 repository_package_id,
-            } => {
-                self.try_legacy(*repository_package_id, pkg_with_repo, options)
-            }
+            } => self.try_legacy(*repository_package_id, pkg_with_repo, options),
         }
     }
 
@@ -488,7 +479,10 @@ impl<'a> PackageResolver<'a> {
 
         // TODO: Try delta first if base available
         if let Some(base) = delta_base {
-            debug!("Delta base available: {}, but delta fetch not yet implemented", base);
+            debug!(
+                "Delta base available: {}, but delta fetch not yet implemented",
+                base
+            );
         }
 
         // Construct a temporary RepositoryPackage with overridden URL and checksum
@@ -565,7 +559,8 @@ impl<'a> PackageResolver<'a> {
         let config = KitchenConfig::default();
         let kitchen = Kitchen::new(config);
 
-        let result = kitchen.cook(&recipe, &output_dir)
+        let result = kitchen
+            .cook(&recipe, &output_dir)
             .map_err(|e| Error::IoError(format!("Recipe cooking failed: {}", e)))?;
 
         Ok(PackageSource::Ccs {
@@ -602,15 +597,13 @@ impl<'a> PackageResolver<'a> {
             &label_spec.namespace,
             &label_spec.tag,
         )?
-        .ok_or_else(|| {
-            Error::NotFound(format!("Label '{}' not found in database", label_str))
-        })?;
+        .ok_or_else(|| Error::NotFound(format!("Label '{}' not found in database", label_str)))?;
 
         // Check for delegation chain
         if let Some(delegate_to_id) = label_entry.delegate_to_label_id {
             // Get the target label
-            let target_label = LabelEntry::find_by_id(self.conn, delegate_to_id)?
-                .ok_or_else(|| {
+            let target_label =
+                LabelEntry::find_by_id(self.conn, delegate_to_id)?.ok_or_else(|| {
                     Error::NotFound(format!(
                         "Delegation target label (id={}) not found",
                         delegate_to_id
@@ -636,13 +629,12 @@ impl<'a> PackageResolver<'a> {
             );
 
             // Get the repository
-            let repo = Repository::find_by_id(self.conn, repo_id)?
-                .ok_or_else(|| {
-                    Error::NotFound(format!(
-                        "Repository (id={}) linked from label '{}' not found",
-                        repo_id, label_str
-                    ))
-                })?;
+            let repo = Repository::find_by_id(self.conn, repo_id)?.ok_or_else(|| {
+                Error::NotFound(format!(
+                    "Repository (id={}) linked from label '{}' not found",
+                    repo_id, label_str
+                ))
+            })?;
 
             info!(
                 "Resolving '{}' through repository '{}' via label '{}'",
@@ -763,7 +755,8 @@ mod tests {
             "INSERT INTO repositories (name, url, enabled, priority)
              VALUES ('test-repo', 'https://example.com', 1, 10)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.last_insert_rowid()
     }
 
@@ -773,7 +766,8 @@ mod tests {
              (repository_id, name, version, checksum, size, download_url)
              VALUES (?1, ?2, ?3, 'sha256:abc123', 1024, 'https://example.com/pkg.rpm')",
             rusqlite::params![repo_id, name, version],
-        ).unwrap();
+        )
+        .unwrap();
         conn.last_insert_rowid()
     }
 
@@ -828,16 +822,16 @@ mod tests {
         let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
 
         // Find package
-        let pkg_with_repo = PackageSelector::find_best_package(
-            &conn,
-            "nginx",
-            &SelectionOptions::default(),
-        ).unwrap();
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
+                .unwrap();
 
         // Get strategies - should fall back to legacy since no routing entry
         let resolver = PackageResolver::new(&conn);
         let options = ResolutionOptions::default();
-        let strategies = resolver.get_strategies_or_legacy(&pkg_with_repo, &options).unwrap();
+        let strategies = resolver
+            .get_strategies_or_legacy(&pkg_with_repo, &options)
+            .unwrap();
 
         assert_eq!(strategies.len(), 1);
         assert!(matches!(strategies[0], ResolutionStrategy::Legacy { .. }));
@@ -859,16 +853,16 @@ mod tests {
         resolution.insert(&conn).unwrap();
 
         // Find package
-        let pkg_with_repo = PackageSelector::find_best_package(
-            &conn,
-            "nginx",
-            &SelectionOptions::default(),
-        ).unwrap();
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
+                .unwrap();
 
         // Get strategies - should use routing entry
         let resolver = PackageResolver::new(&conn);
         let options = ResolutionOptions::default();
-        let strategies = resolver.get_strategies_or_legacy(&pkg_with_repo, &options).unwrap();
+        let strategies = resolver
+            .get_strategies_or_legacy(&pkg_with_repo, &options)
+            .unwrap();
 
         assert_eq!(strategies.len(), 1);
         assert!(matches!(strategies[0], ResolutionStrategy::Remi { .. }));
@@ -918,7 +912,8 @@ mod tests {
             "INSERT INTO troves (name, version, type, install_source, install_reason)
              VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let resolver = PackageResolver::new(&conn);
 
@@ -950,7 +945,8 @@ mod tests {
             "INSERT INTO troves (name, version, type, install_source, install_reason)
              VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let resolver = PackageResolver::new(&conn);
 
@@ -972,7 +968,8 @@ mod tests {
             "INSERT INTO troves (name, version, type, install_source, install_reason)
              VALUES ('nginx', '1.24.0', 'package', 'repository', 'explicit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let resolver = PackageResolver::new(&conn);
 

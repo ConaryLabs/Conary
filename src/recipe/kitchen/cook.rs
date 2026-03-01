@@ -2,7 +2,7 @@
 
 //! Cook: the actual build execution for a single recipe
 
-use crate::ccs::builder::{write_ccs_package, CcsBuilder};
+use crate::ccs::builder::{CcsBuilder, write_ccs_package};
 use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
@@ -13,9 +13,9 @@ use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
+use super::Kitchen;
 use super::archive::{apply_patch, extract_archive};
 use super::provenance_capture::ProvenanceCapture;
-use super::Kitchen;
 
 /// A single cook operation
 pub struct Cook<'a> {
@@ -71,10 +71,13 @@ impl<'a> Cook<'a> {
     pub(super) fn prep(&mut self) -> Result<()> {
         // Fetch main source archive
         let archive_url = self.recipe.archive_url();
-        let archive_path = self.kitchen.fetch_source(&archive_url, &self.recipe.source.checksum)?;
+        let archive_path = self
+            .kitchen
+            .fetch_source(&archive_url, &self.recipe.source.checksum)?;
 
         // Record source fetch for provenance
-        self.provenance.record_source_fetch(&archive_url, &self.recipe.source.checksum);
+        self.provenance
+            .record_source_fetch(&archive_url, &self.recipe.source.checksum);
 
         // Copy to build directory
         let local_archive = self.build_dir.path().join(self.recipe.archive_filename());
@@ -84,7 +87,9 @@ impl<'a> Cook<'a> {
 
         // Fetch additional sources
         for additional in &self.recipe.source.additional {
-            let path = self.kitchen.fetch_source(&additional.url, &additional.checksum)?;
+            let path = self
+                .kitchen
+                .fetch_source(&additional.url, &additional.checksum)?;
             let filename = additional
                 .url
                 .split('/')
@@ -154,7 +159,11 @@ impl<'a> Cook<'a> {
             let patch_path = if patch_info.file.starts_with("http://")
                 || patch_info.file.starts_with("https://")
             {
-                let filename = patch_info.file.split('/').next_back().unwrap_or("patch.diff");
+                let filename = patch_info
+                    .file
+                    .split('/')
+                    .next_back()
+                    .unwrap_or("patch.diff");
                 self.build_dir.path().join("patches").join(filename)
             } else {
                 PathBuf::from(&patch_info.file)
@@ -191,7 +200,8 @@ impl<'a> Cook<'a> {
     pub(super) fn simmer(&mut self) -> Result<()> {
         // Mark build start for provenance
         self.provenance.start_build();
-        self.provenance.record_isolation(self.kitchen.config.use_isolation);
+        self.provenance
+            .record_isolation(self.kitchen.config.use_isolation);
 
         let build = &self.recipe.build;
 
@@ -222,13 +232,17 @@ impl<'a> Cook<'a> {
 
         // Run configure
         if let Some(configure) = &build.configure {
-            let cmd = self.recipe.substitute(configure, &self.dest_dir.to_string_lossy());
+            let cmd = self
+                .recipe
+                .substitute(configure, &self.dest_dir.to_string_lossy());
             self.run_build_step("configure", &cmd, &workdir, &env)?;
         }
 
         // Run make
         if let Some(make) = &build.make {
-            let cmd = self.recipe.substitute(make, &self.dest_dir.to_string_lossy());
+            let cmd = self
+                .recipe
+                .substitute(make, &self.dest_dir.to_string_lossy());
             self.run_build_step("make", &cmd, &workdir, &env)?;
         }
 
@@ -244,7 +258,9 @@ impl<'a> Cook<'a> {
 
         // Run install
         if let Some(install) = &build.install {
-            let cmd = self.recipe.substitute(install, &self.dest_dir.to_string_lossy());
+            let cmd = self
+                .recipe
+                .substitute(install, &self.dest_dir.to_string_lossy());
             self.run_build_step("install", &cmd, &workdir, &env)?;
         }
 
@@ -359,17 +375,16 @@ impl<'a> Cook<'a> {
                 .push(BindMount::writable(&self.dest_dir, &self.dest_dir));
 
             // Build directory (writable - for build artifacts)
-            container_config
-                .bind_mounts
-                .push(BindMount::writable(self.build_dir.path(), self.build_dir.path()));
+            container_config.bind_mounts.push(BindMount::writable(
+                self.build_dir.path(),
+                self.build_dir.path(),
+            ));
         }
 
         let mut sandbox = Sandbox::new(container_config);
 
         // Convert env to the format expected by Sandbox
-        let env_refs: Vec<(&str, &str)> = env.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
+        let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
         let (exit_code, stdout, stderr) = sandbox.execute(
             "/bin/sh",
@@ -433,10 +448,8 @@ impl<'a> Cook<'a> {
         }
 
         // Create CCS manifest from recipe metadata
-        let mut manifest = CcsManifest::new_minimal(
-            &self.recipe.package.name,
-            &self.recipe.package.version,
-        );
+        let mut manifest =
+            CcsManifest::new_minimal(&self.recipe.package.name, &self.recipe.package.version);
 
         // Copy over additional metadata from recipe
         if let Some(desc) = &self.recipe.package.description {

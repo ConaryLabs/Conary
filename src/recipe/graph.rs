@@ -71,9 +71,15 @@ impl RecipeGraph {
             self.reverse_edges.entry(dep.clone()).or_default();
 
             // Add the edge: name -> dep (name depends on dep)
-            self.edges.get_mut(&name).expect("entry initialized above").insert(dep.clone());
+            self.edges
+                .get_mut(&name)
+                .expect("entry initialized above")
+                .insert(dep.clone());
             // Add reverse edge: dep <- name (dep is depended on by name)
-            self.reverse_edges.get_mut(&dep).expect("entry initialized above").insert(name.clone());
+            self.reverse_edges
+                .get_mut(&dep)
+                .expect("entry initialized above")
+                .insert(name.clone());
         }
     }
 
@@ -161,7 +167,11 @@ impl RecipeGraph {
         for (name, deps) in &self.edges {
             let effective_deps: usize = deps
                 .iter()
-                .filter(|dep| !self.bootstrap_edges.contains(&(name.clone(), (*dep).clone())))
+                .filter(|dep| {
+                    !self
+                        .bootstrap_edges
+                        .contains(&(name.clone(), (*dep).clone()))
+                })
                 .count();
             *in_degrees.get_mut(name).expect("node initialized in map") = effective_deps;
         }
@@ -266,7 +276,10 @@ impl RecipeGraph {
                     self.find_cycles_dfs(dep, visited, rec_stack, path, cycles);
                 } else if rec_stack.contains(dep) {
                     // Found a cycle - extract it from path
-                    let cycle_start = path.iter().position(|x| x == dep).expect("cycle node must be in current path");
+                    let cycle_start = path
+                        .iter()
+                        .position(|x| x == dep)
+                        .expect("cycle node must be in current path");
                     let cycle: Vec<String> = path[cycle_start..].to_vec();
                     cycles.push(cycle);
                 }
@@ -375,10 +388,7 @@ impl RecipeGraph {
                     let to = &cycle[(i + 1) % cycle.len()];
 
                     // Score by number of dependents (more dependents = more critical = less likely to break)
-                    let score = self
-                        .reverse_edges
-                        .get(from)
-                        .map_or(0, |deps| deps.len());
+                    let score = self.reverse_edges.get(from).map_or(0, |deps| deps.len());
 
                     if best_break.is_none() || score < best_score {
                         best_break = Some((from.clone(), to.clone()));
@@ -463,11 +473,7 @@ impl BootstrapPlan {
         let build_order = graph.topological_sort()?;
 
         // Identify packages that are part of cycles (need multiple passes)
-        let cycle_packages: HashSet<String> = graph
-            .find_cycles()
-            .into_iter()
-            .flatten()
-            .collect();
+        let cycle_packages: HashSet<String> = graph.find_cycles().into_iter().flatten().collect();
 
         // Group recipes into phases
         let mut phases = Vec::new();
@@ -478,7 +484,12 @@ impl BootstrapPlan {
             .iter()
             .filter(|r| {
                 let deps = graph.dependencies(r).map_or(0, |d| d.len());
-                deps == 0 || (deps == 1 && graph.dependencies(r).expect("recipe from build_order must exist in graph").contains("linux-headers"))
+                deps == 0
+                    || (deps == 1
+                        && graph
+                            .dependencies(r)
+                            .expect("recipe from build_order must exist in graph")
+                            .contains("linux-headers"))
             })
             .cloned()
             .collect();
@@ -546,7 +557,9 @@ impl BootstrapPlan {
 
     /// Find which phase a recipe belongs to
     pub fn phase_for_recipe(&self, recipe: &str) -> Option<&BootstrapPhase> {
-        self.phases.iter().find(|p| p.recipes.iter().any(|r| r == recipe))
+        self.phases
+            .iter()
+            .find(|p| p.recipes.iter().any(|r| r == recipe))
     }
 }
 

@@ -60,16 +60,12 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let pkg_mgr = SystemPackageManager::detect();
     let (system_count, mgr_name) = if pkg_mgr.is_available() {
         let count = match pkg_mgr {
-            SystemPackageManager::Rpm => {
-                conary::packages::rpm_query::list_installed_packages()
-                    .map(|p| p.len())
-                    .unwrap_or(0)
-            }
-            SystemPackageManager::Dpkg => {
-                conary::packages::dpkg_query::list_installed_packages()
-                    .map(|p| p.len())
-                    .unwrap_or(0)
-            }
+            SystemPackageManager::Rpm => conary::packages::rpm_query::list_installed_packages()
+                .map(|p| p.len())
+                .unwrap_or(0),
+            SystemPackageManager::Dpkg => conary::packages::dpkg_query::list_installed_packages()
+                .map(|p| p.len())
+                .unwrap_or(0),
             SystemPackageManager::Pacman => {
                 conary::packages::pacman_query::list_installed_packages()
                     .map(|p| p.len())
@@ -118,7 +114,10 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
         let coverage = (adopted_total as f64 / system_count as f64 * 100.0).min(100.0);
         let bar = coverage_bar(coverage, 30);
         println!("Adoption coverage:");
-        println!("  {} {:.1}% ({}/{})", bar, coverage, adopted_total, system_count);
+        println!(
+            "  {} {:.1}% ({}/{})",
+            bar, coverage, adopted_total, system_count
+        );
     }
 
     Ok(())

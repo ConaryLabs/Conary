@@ -13,23 +13,23 @@ use crate::daemon::auth::{Action, AuthChecker, PeerCredentials};
 use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus};
 use crate::db::models::{Changeset, DependencyEntry, Trove};
 use axum::{
+    Router,
     extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse, Json, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{delete, get, post},
-    Router,
 };
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 /// Shared daemon state type
 pub type SharedState = Arc<DaemonState>;
@@ -78,17 +78,12 @@ impl From<DaemonError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.status)
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.0.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
         let body = Json(&self.0);
 
-        (
-            status,
-            [("content-type", "application/problem+json")],
-            body,
-        )
-            .into_response()
+        (status, [("content-type", "application/problem+json")], body).into_response()
     }
 }
 
@@ -620,7 +615,11 @@ async fn create_transaction_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<CreateTransactionRequest>,
-) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
+) -> ApiResult<(
+    StatusCode,
+    [(axum::http::header::HeaderName, String); 1],
+    Json<CreateTransactionResponse>,
+)> {
     // Check authorization based on operation types
     let action = match determine_job_kind(&request.operations) {
         crate::daemon::JobKind::Install => Action::Install,
@@ -632,7 +631,9 @@ async fn create_transaction_handler(
 
     // Validate request
     if request.operations.is_empty() {
-        return Err(ApiError(DaemonError::bad_request("At least one operation is required")));
+        return Err(ApiError(DaemonError::bad_request(
+            "At least one operation is required",
+        )));
     }
 
     // Get idempotency key from headers
@@ -670,8 +671,12 @@ async fn create_transaction_handler(
     let job_kind = determine_job_kind(&request.operations);
 
     // Create the job
-    let spec = serde_json::to_value(&request.operations)
-        .map_err(|e| ApiError(DaemonError::internal(&format!("Serialization error: {}", e))))?;
+    let spec = serde_json::to_value(&request.operations).map_err(|e| {
+        ApiError(DaemonError::internal(&format!(
+            "Serialization error: {}",
+            e
+        )))
+    })?;
 
     let mut job = DaemonJob::new(job_kind, spec);
     if let Some(key) = idempotency_key {
@@ -685,7 +690,10 @@ async fn create_transaction_handler(
     run_db_query(&state, move |conn| insert_job.insert(conn)).await?;
 
     // Enqueue the job
-    let _cancel_token = state.queue.enqueue(job, crate::daemon::JobPriority::Normal).await;
+    let _cancel_token = state
+        .queue
+        .enqueue(job, crate::daemon::JobPriority::Normal)
+        .await;
 
     // Get queue position
     let queue_position = state.queue.position(&job_id).await.unwrap_or(0);
@@ -754,8 +762,7 @@ async fn get_transaction_handler(
     let queue_position = state.queue.position(&id).await;
 
     let job_id = id.clone();
-    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &job_id))
-        .await?;
+    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &job_id)).await?;
 
     match job {
         Some(job) => {
@@ -864,7 +871,10 @@ async fn transaction_stream_handler(
     }
 
     // Track SSE connection (guard decrements on drop when stream ends)
-    state.metrics.sse_connections.fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .sse_connections
+        .fetch_add(1, Ordering::Relaxed);
     let _guard = SseConnectionGuard {
         metrics: state.clone(),
     };
@@ -874,48 +884,45 @@ async fn transaction_stream_handler(
     let filter_job_id = job_id.clone();
 
     // Create a stream that filters to only this job's events
-    let event_stream = BroadcastStream::new(rx)
-        .filter_map(move |result| {
-            let job_id = filter_job_id.clone();
-            // Filter out lagged messages and non-matching job events
-            match result {
-                Ok(event) => {
-                    // Check if this event is for our job
-                    let event_job_id = match &event {
-                        DaemonEvent::JobQueued { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobStarted { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobPhase { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobProgress { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobCompleted { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobFailed { job_id, .. } => Some(job_id.as_str()),
-                        DaemonEvent::JobCancelled { job_id, .. } => Some(job_id.as_str()),
-                        // Package and system events are not job-specific
-                        _ => None,
-                    };
+    let event_stream = BroadcastStream::new(rx).filter_map(move |result| {
+        let job_id = filter_job_id.clone();
+        // Filter out lagged messages and non-matching job events
+        match result {
+            Ok(event) => {
+                // Check if this event is for our job
+                let event_job_id = match &event {
+                    DaemonEvent::JobQueued { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobStarted { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobPhase { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobProgress { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobCompleted { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobFailed { job_id, .. } => Some(job_id.as_str()),
+                    DaemonEvent::JobCancelled { job_id, .. } => Some(job_id.as_str()),
+                    // Package and system events are not job-specific
+                    _ => None,
+                };
 
-                    // Only include events for this job
-                    if event_job_id != Some(job_id.as_str()) {
-                        return None;
-                    }
-
-                    // Serialize the event to JSON
-                    match serde_json::to_string(&event) {
-                        Ok(json) => {
-                            Some(Ok(Event::default()
-                                .event(event.event_type_name())
-                                .data(json)))
-                        }
-                        Err(_) => None,
-                    }
+                // Only include events for this job
+                if event_job_id != Some(job_id.as_str()) {
+                    return None;
                 }
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    tracing::warn!("SSE client (job {}) lagged {} events", job_id, n);
-                    Some(Ok(Event::default()
-                        .event("warning")
-                        .data(format!(r#"{{"lagged": {}}}"#, n))))
+
+                // Serialize the event to JSON
+                match serde_json::to_string(&event) {
+                    Ok(json) => Some(Ok(Event::default()
+                        .event(event.event_type_name())
+                        .data(json))),
+                    Err(_) => None,
                 }
             }
-        });
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                tracing::warn!("SSE client (job {}) lagged {} events", job_id, n);
+                Some(Ok(Event::default()
+                    .event("warning")
+                    .data(format!(r#"{{"lagged": {}}}"#, n))))
+            }
+        }
+    });
 
     // Prepend a "connected" event with job info
     let connected_data = serde_json::json!({
@@ -936,9 +943,7 @@ async fn transaction_stream_handler(
     });
 
     // Create the final stream
-    let stream = connected_event
-        .chain(event_stream)
-        .chain(guard_stream);
+    let stream = connected_event.chain(event_stream).chain(guard_stream);
 
     // Return SSE response with keepalive
     Ok(Sse::new(stream).keep_alive(
@@ -966,7 +971,9 @@ async fn dry_run_handler(
     require_auth(&creds, action)?;
     // Validate request
     if request.operations.is_empty() {
-        return Err(ApiError(DaemonError::bad_request("At least one operation is required")));
+        return Err(ApiError(DaemonError::bad_request(
+            "At least one operation is required",
+        )));
     }
 
     // Extract package names from operations (placeholder implementation)
@@ -1059,7 +1066,10 @@ async fn get_package_handler(
             };
             Ok(Json(details))
         }
-        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
+        None => Err(ApiError(DaemonError::not_found(&format!(
+            "package '{}'",
+            name
+        )))),
     }
 }
 
@@ -1076,12 +1086,10 @@ async fn get_package_files_handler(
         let trove = Trove::find_one_by_name(conn, &pkg_name)?;
         match trove {
             Some(t) => {
-                let trove_id = t.id.ok_or_else(|| {
-                    crate::Error::NotFound("Package has no ID".to_string())
-                })?;
-                let mut stmt = conn.prepare(
-                    "SELECT path FROM files WHERE trove_id = ?1 ORDER BY path"
-                )?;
+                let trove_id =
+                    t.id.ok_or_else(|| crate::Error::NotFound("Package has no ID".to_string()))?;
+                let mut stmt =
+                    conn.prepare("SELECT path FROM files WHERE trove_id = ?1 ORDER BY path")?;
                 let files: Vec<String> = stmt
                     .query_map([trove_id], |row| row.get(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1094,7 +1102,10 @@ async fn get_package_files_handler(
 
     match result {
         Some(files) => Ok(Json(files)),
-        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
+        None => Err(ApiError(DaemonError::not_found(&format!(
+            "package '{}'",
+            name
+        )))),
     }
 }
 
@@ -1109,10 +1120,16 @@ async fn install_packages_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
+) -> ApiResult<(
+    StatusCode,
+    [(axum::http::header::HeaderName, String); 1],
+    Json<CreateTransactionResponse>,
+)> {
     // Validate request
     if request.packages.is_empty() {
-        return Err(ApiError(DaemonError::bad_request("At least one package name is required")));
+        return Err(ApiError(DaemonError::bad_request(
+            "At least one package name is required",
+        )));
     }
 
     // Convert to transaction request
@@ -1139,10 +1156,16 @@ async fn remove_packages_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
+) -> ApiResult<(
+    StatusCode,
+    [(axum::http::header::HeaderName, String); 1],
+    Json<CreateTransactionResponse>,
+)> {
     // Validate request
     if request.packages.is_empty() {
-        return Err(ApiError(DaemonError::bad_request("At least one package name is required")));
+        return Err(ApiError(DaemonError::bad_request(
+            "At least one package name is required",
+        )));
     }
 
     // Convert to transaction request
@@ -1169,7 +1192,11 @@ async fn update_packages_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
+) -> ApiResult<(
+    StatusCode,
+    [(axum::http::header::HeaderName, String); 1],
+    Json<CreateTransactionResponse>,
+)> {
     // Convert to transaction request
     // Note: empty packages list means "update all"
     let tx_request = CreateTransactionRequest {
@@ -1209,7 +1236,7 @@ async fn search_handler(
             "SELECT id, name, version, type, architecture, description, installed_at, \
              installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, \
              selection_reason, label_id \
-             FROM troves WHERE name LIKE ?1 ORDER BY name, version"
+             FROM troves WHERE name LIKE ?1 ORDER BY name, version",
         )?;
 
         let troves: Vec<Trove> = stmt
@@ -1252,7 +1279,10 @@ async fn depends_handler(
             let dep_info: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
             Ok(Json(dep_info))
         }
-        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
+        None => Err(ApiError(DaemonError::not_found(&format!(
+            "package '{}'",
+            name
+        )))),
     }
 }
 
@@ -1292,9 +1322,7 @@ async fn rdepends_handler(
 /// GET /v1/history
 ///
 /// Returns the history of all changesets (transactions).
-async fn history_handler(
-    State(state): State<SharedState>,
-) -> ApiResult<Json<Vec<HistoryEntry>>> {
+async fn history_handler(State(state): State<SharedState>) -> ApiResult<Json<Vec<HistoryEntry>>> {
     let changesets = run_db_query(&state, |conn| Changeset::list_all(conn)).await?;
     let history: Vec<HistoryEntry> = changesets.iter().map(HistoryEntry::from).collect();
     Ok(Json(history))
@@ -1307,9 +1335,7 @@ async fn history_handler(
 /// List system states
 ///
 /// GET /v1/system/states
-async fn list_states_handler(
-    State(_state): State<SharedState>,
-) -> ApiResult<Json<Vec<()>>> {
+async fn list_states_handler(State(_state): State<SharedState>) -> ApiResult<Json<Vec<()>>> {
     Ok(Json(vec![]))
 }
 
@@ -1379,7 +1405,10 @@ async fn events_handler(
     State(state): State<SharedState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // Track SSE connection (guard decrements on drop when stream ends)
-    state.metrics.sse_connections.fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .sse_connections
+        .fetch_add(1, Ordering::Relaxed);
     let _guard = SseConnectionGuard {
         metrics: state.clone(),
     };
@@ -1388,30 +1417,27 @@ async fn events_handler(
     let rx = state.subscribe();
 
     // Create a stream from the broadcast receiver
-    let event_stream = BroadcastStream::new(rx)
-        .filter_map(|result| {
-            // Filter out lagged messages and convert to SSE events
-            match result {
-                Ok(event) => {
-                    // Serialize the event to JSON
-                    match serde_json::to_string(&event) {
-                        Ok(json) => {
-                            Some(Ok(Event::default()
-                                .event(event.event_type_name())
-                                .data(json)))
-                        }
-                        Err(_) => None,
-                    }
-                }
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    // Client fell behind, send a warning event
-                    tracing::warn!("SSE client lagged {} events", n);
-                    Some(Ok(Event::default()
-                        .event("warning")
-                        .data(format!(r#"{{"lagged": {}}}"#, n))))
+    let event_stream = BroadcastStream::new(rx).filter_map(|result| {
+        // Filter out lagged messages and convert to SSE events
+        match result {
+            Ok(event) => {
+                // Serialize the event to JSON
+                match serde_json::to_string(&event) {
+                    Ok(json) => Some(Ok(Event::default()
+                        .event(event.event_type_name())
+                        .data(json))),
+                    Err(_) => None,
                 }
             }
-        });
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                // Client fell behind, send a warning event
+                tracing::warn!("SSE client lagged {} events", n);
+                Some(Ok(Event::default()
+                    .event("warning")
+                    .data(format!(r#"{{"lagged": {}}}"#, n))))
+            }
+        }
+    });
 
     // Prepend a "connected" event
     let connected_event = stream::once(async {
@@ -1427,9 +1453,7 @@ async fn events_handler(
     });
 
     // Create the final stream
-    let stream = connected_event
-        .chain(event_stream)
-        .chain(guard_stream);
+    let stream = connected_event.chain(event_stream).chain(guard_stream);
 
     // Return SSE response with keepalive
     Sse::new(stream).keep_alive(

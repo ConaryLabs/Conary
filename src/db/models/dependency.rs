@@ -122,7 +122,11 @@ impl DependencyEntry {
     }
 
     /// Find all dependencies of a specific kind for a trove
-    pub fn find_by_trove_and_kind(conn: &Connection, trove_id: i64, kind: &str) -> Result<Vec<Self>> {
+    pub fn find_by_trove_and_kind(
+        conn: &Connection,
+        trove_id: i64,
+        kind: &str,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind
              FROM dependencies WHERE trove_id = ?1 AND kind = ?2",
@@ -171,7 +175,9 @@ impl DependencyEntry {
             depends_on_version: row.get(3)?,
             dependency_type: row.get(4)?,
             version_constraint: row.get(5)?,
-            kind: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "package".to_string()),
+            kind: row
+                .get::<_, Option<String>>(6)?
+                .unwrap_or_else(|| "package".to_string()),
         })
     }
 

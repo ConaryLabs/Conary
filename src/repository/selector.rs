@@ -44,7 +44,7 @@ impl PackageSelector {
     /// Check if a package architecture is compatible with the system
     pub fn is_architecture_compatible(pkg_arch: Option<&str>, system_arch: &str) -> bool {
         match pkg_arch {
-            None => true, // Unknown architecture - assume compatible
+            None => true,           // Unknown architecture - assume compatible
             Some("noarch") => true, // noarch is compatible with everything
             Some(arch) => arch == system_arch,
         }
@@ -60,10 +60,7 @@ impl PackageSelector {
         options: &SelectionOptions,
     ) -> Result<Vec<PackageWithRepo>> {
         let detected_arch = Self::detect_architecture();
-        let system_arch = options
-            .architecture
-            .as_deref()
-            .unwrap_or(&detected_arch);
+        let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
 
         debug!(
             "Searching for package '{}' (arch: {})",
@@ -97,13 +94,12 @@ impl PackageSelector {
             }
 
             // Get repository information
-            let repo = Repository::find_by_id(conn, pkg.repository_id)?
-                .ok_or_else(|| {
-                    Error::NotFound(format!(
-                        "Repository {} not found for package {}",
-                        pkg.repository_id, pkg.name
-                    ))
-                })?;
+            let repo = Repository::find_by_id(conn, pkg.repository_id)?.ok_or_else(|| {
+                Error::NotFound(format!(
+                    "Repository {} not found for package {}",
+                    pkg.repository_id, pkg.name
+                ))
+            })?;
 
             // Filter by repository if specified
             if let Some(ref repo_name) = options.repository
@@ -138,14 +134,14 @@ impl PackageSelector {
     /// 3. First match (stable tie-breaker)
     pub fn select_best(candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
         if candidates.is_empty() {
-            return Err(Error::NotFound(
-                "No matching packages found".to_string(),
-            ));
+            return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
         if candidates.len() == 1 {
             // Safe: we just verified len() == 1
-            return candidates.into_iter().next()
+            return candidates
+                .into_iter()
+                .next()
                 .ok_or_else(|| Error::NotFound("Unexpected empty candidates".to_string()));
         }
 
@@ -170,7 +166,9 @@ impl PackageSelector {
         });
 
         // Safe: we verified candidates is non-empty above
-        let selected = sorted.into_iter().next()
+        let selected = sorted
+            .into_iter()
+            .next()
             .ok_or_else(|| Error::NotFound("Unexpected empty sorted candidates".to_string()))?;
         info!(
             "Selected package {} {} from repository {} (priority {})",
@@ -252,5 +250,4 @@ mod tests {
             system_arch
         ));
     }
-
 }

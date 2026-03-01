@@ -3,10 +3,10 @@
 
 use crate::server::ServerState;
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

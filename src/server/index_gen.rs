@@ -216,10 +216,12 @@ fn get_packages_for_distro(
 
         // For now, include all packages from the distro
         // In a full implementation, we'd match by checksum
-        let entry = packages.entry(name.clone()).or_insert_with(|| PackageIndexEntry {
-            name: name.clone(),
-            versions: Vec::new(),
-        });
+        let entry = packages
+            .entry(name.clone())
+            .or_insert_with(|| PackageIndexEntry {
+                name: name.clone(),
+                versions: Vec::new(),
+            });
 
         // Check if this version is converted (simplified matching by name/version)
         let converted_info = converted.iter().find(|c| {
@@ -266,12 +268,12 @@ fn get_packages_for_distro(
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
 
-                let entry = packages.entry(name.to_string()).or_insert_with(|| {
-                    PackageIndexEntry {
+                let entry = packages
+                    .entry(name.to_string())
+                    .or_insert_with(|| PackageIndexEntry {
                         name: name.to_string(),
                         versions: Vec::new(),
-                    }
-                });
+                    });
 
                 // Only add if not already present
                 if !entry.versions.iter().any(|v| v.version == version) {
@@ -348,12 +350,23 @@ fn sign_index(index_path: &Path, key_path: &str) -> Result<()> {
 
     // Parse key (expecting 32-byte seed or 64-byte keypair)
     let signing_key = if key_bytes.len() == 32 {
-        SigningKey::from_bytes(&key_bytes.try_into().map_err(|_| anyhow::anyhow!("Invalid key length"))?)
+        SigningKey::from_bytes(
+            &key_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Invalid key length"))?,
+        )
     } else if key_bytes.len() == 64 {
-        SigningKey::from_keypair_bytes(&key_bytes.try_into().map_err(|_| anyhow::anyhow!("Invalid keypair length"))?)
-            .map_err(|e| anyhow::anyhow!("Invalid keypair: {}", e))?
+        SigningKey::from_keypair_bytes(
+            &key_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Invalid keypair length"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("Invalid keypair: {}", e))?
     } else {
-        return Err(anyhow::anyhow!("Invalid key file: expected 32 or 64 bytes, got {}", key_bytes.len()));
+        return Err(anyhow::anyhow!(
+            "Invalid key file: expected 32 or 64 bytes, got {}",
+            key_bytes.len()
+        ));
     };
 
     // Read index content

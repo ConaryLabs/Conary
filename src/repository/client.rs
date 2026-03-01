@@ -5,7 +5,7 @@
 //! Provides a wrapper around reqwest with retry support for
 //! fetching metadata and downloading files.
 
-use crate::compression::{decompress_auto, CompressionFormat};
+use crate::compression::{CompressionFormat, decompress_auto};
 use crate::error::{Error, Result};
 use indicatif::ProgressBar;
 use reqwest::blocking::Client;
@@ -55,17 +55,16 @@ fn stream_response_to_file(
     let mut buffer = [0u8; STREAM_BUFFER_SIZE];
 
     loop {
-        let bytes_read = response.read(&mut buffer).map_err(|e| {
-            Error::IoError(format!("Failed to read response: {e}"))
-        })?;
+        let bytes_read = response
+            .read(&mut buffer)
+            .map_err(|e| Error::IoError(format!("Failed to read response: {e}")))?;
 
         if bytes_read == 0 {
             break;
         }
 
-        file.write_all(&buffer[..bytes_read]).map_err(|e| {
-            Error::IoError(format!("Failed to write data: {e}"))
-        })?;
+        file.write_all(&buffer[..bytes_read])
+            .map_err(|e| Error::IoError(format!("Failed to write data: {e}")))?;
 
         downloaded += bytes_read as u64;
 
@@ -130,7 +129,10 @@ impl RepositoryClient {
                                 status, metadata_url
                             )));
                         }
-                        warn!("Metadata fetch attempt {} got HTTP {}, retrying...", attempt, status);
+                        warn!(
+                            "Metadata fetch attempt {} got HTTP {}, retrying...",
+                            attempt, status
+                        );
                         std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
                         continue;
                     }
@@ -138,8 +140,7 @@ impl RepositoryClient {
                     if !status.is_success() {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
-                            status,
-                            metadata_url
+                            status, metadata_url
                         )));
                     }
 
@@ -147,7 +148,10 @@ impl RepositoryClient {
                         Error::DownloadError(format!("Failed to parse metadata JSON: {e}"))
                     })?;
 
-                    info!("Successfully fetched metadata for {} packages", metadata.packages.len());
+                    info!(
+                        "Successfully fetched metadata for {} packages",
+                        metadata.packages.len()
+                    );
                     return Ok(metadata);
                 }
                 Err(e) => {
@@ -156,7 +160,10 @@ impl RepositoryClient {
                             "Failed to fetch metadata after {attempt} attempts: {e}"
                         )));
                     }
-                    warn!("Metadata fetch attempt {} failed: {}, retrying...", attempt, e);
+                    warn!(
+                        "Metadata fetch attempt {} failed: {}, retrying...",
+                        attempt, e
+                    );
                     std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
                 }
             }
@@ -239,17 +246,18 @@ impl RepositoryClient {
             // No compression indicated, check magic bytes anyway
             let detected = CompressionFormat::from_magic_bytes(&bytes);
             if detected != CompressionFormat::None {
-                debug!("URL {} has no extension but detected {} compression", url, detected);
-                return decompress_auto(&bytes).map_err(|e| {
-                    Error::ParseError(format!("Failed to decompress: {}", e))
-                });
+                debug!(
+                    "URL {} has no extension but detected {} compression",
+                    url, detected
+                );
+                return decompress_auto(&bytes)
+                    .map_err(|e| Error::ParseError(format!("Failed to decompress: {}", e)));
             }
             return Ok(bytes);
         }
 
-        decompress_auto(&bytes).map_err(|e| {
-            Error::ParseError(format!("Failed to decompress {} data: {}", format, e))
-        })
+        decompress_auto(&bytes)
+            .map_err(|e| Error::ParseError(format!("Failed to decompress {} data: {}", format, e)))
     }
 
     /// Download a file to the specified path with retry support
@@ -273,7 +281,10 @@ impl RepositoryClient {
         // Create parent directory if it doesn't exist
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                Error::IoError(format!("Failed to create directory {}: {e}", parent.display()))
+                Error::IoError(format!(
+                    "Failed to create directory {}: {e}",
+                    parent.display()
+                ))
             })?;
         }
 
@@ -295,7 +306,10 @@ impl RepositoryClient {
                                 status, url
                             )));
                         }
-                        warn!("Download attempt {} got HTTP {}, retrying...", attempt, status);
+                        warn!(
+                            "Download attempt {} got HTTP {}, retrying...",
+                            attempt, status
+                        );
                         std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
                         continue;
                     }
@@ -303,8 +317,7 @@ impl RepositoryClient {
                     if !status.is_success() {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
-                            status,
-                            url
+                            status, url
                         )));
                     }
 
@@ -314,7 +327,10 @@ impl RepositoryClient {
                     // Write to temporary file first
                     let temp_path = dest_path.with_extension("tmp");
                     let mut file = File::create(&temp_path).map_err(|e| {
-                        Error::IoError(format!("Failed to create file {}: {e}", temp_path.display()))
+                        Error::IoError(format!(
+                            "Failed to create file {}: {e}",
+                            temp_path.display()
+                        ))
                     })?;
 
                     // Stream response to file, optionally updating progress bar

@@ -79,7 +79,11 @@ WantedBy=multi-user.target
     // Verify symlink
     assert!(symlink_path.exists());
     let link_target = fs::read_link(&symlink_path).unwrap();
-    assert!(link_target.to_string_lossy().contains("usr/lib/systemd/system/test.service"));
+    assert!(
+        link_target
+            .to_string_lossy()
+            .contains("usr/lib/systemd/system/test.service")
+    );
 }
 
 /// Test that config directories can be properly created in target root

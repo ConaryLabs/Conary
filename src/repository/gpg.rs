@@ -6,9 +6,9 @@
 //! using the sequoia-openpgp library (pure Rust implementation).
 
 use crate::error::{Error, Result};
-use sequoia_openpgp as openpgp;
 use openpgp::parse::Parse;
 use openpgp::policy::StandardPolicy;
+use sequoia_openpgp as openpgp;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -26,8 +26,9 @@ impl GpgVerifier {
     pub fn new(keyring_dir: PathBuf) -> Result<Self> {
         // Create keyring directory if it doesn't exist
         if !keyring_dir.exists() {
-            fs::create_dir_all(&keyring_dir)
-                .map_err(|e| Error::IoError(format!("Failed to create keyring directory: {}", e)))?;
+            fs::create_dir_all(&keyring_dir).map_err(|e| {
+                Error::IoError(format!("Failed to create keyring directory: {}", e))
+            })?;
         }
 
         Ok(Self {
@@ -53,7 +54,10 @@ impl GpgVerifier {
         fs::write(&key_path, key_data)
             .map_err(|e| Error::IoError(format!("Failed to write GPG key: {}", e)))?;
 
-        info!("Imported GPG key for repository '{}' (fingerprint: {})", repository_name, fingerprint);
+        info!(
+            "Imported GPG key for repository '{}' (fingerprint: {})",
+            repository_name, fingerprint
+        );
         Ok(fingerprint)
     }
 
@@ -89,7 +93,10 @@ impl GpgVerifier {
         signature_path: &Path,
         repository_name: &str,
     ) -> Result<()> {
-        debug!("Verifying signature for {:?} using repository '{}'", file_path, repository_name);
+        debug!(
+            "Verifying signature for {:?} using repository '{}'",
+            file_path, repository_name
+        );
 
         // Load the repository's GPG key
         let key_path = self.get_key_path(repository_name);
@@ -125,9 +132,7 @@ impl GpgVerifier {
             if let openpgp::Packet::Signature(sig) = packet {
                 // Try to verify with each valid key
                 for key in cert.keys().with_policy(&self.policy, None) {
-                    if key.for_signing()
-                        && sig.verify_message(key.key(), &message_data).is_ok()
-                    {
+                    if key.for_signing() && sig.verify_message(key.key(), &message_data).is_ok() {
                         found_valid_signature = true;
                         break;
                     }
@@ -140,7 +145,7 @@ impl GpgVerifier {
 
         if !found_valid_signature {
             return Err(Error::GpgVerificationFailed(
-                "No valid signatures found or verification failed".to_string()
+                "No valid signatures found or verification failed".to_string(),
             ));
         }
 
@@ -168,7 +173,8 @@ impl GpgVerifier {
         }
 
         for entry in fs::read_dir(&self.keyring_dir)
-            .map_err(|e| Error::IoError(format!("Failed to read keyring directory: {}", e)))? {
+            .map_err(|e| Error::IoError(format!("Failed to read keyring directory: {}", e)))?
+        {
             let entry = entry
                 .map_err(|e| Error::IoError(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();

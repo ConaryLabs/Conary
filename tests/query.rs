@@ -19,7 +19,11 @@ fn test_query_packages() {
     let mut conn = db::open(&db_path).unwrap();
 
     // Install multiple packages
-    for (name, version) in [("nginx", "1.21.0"), ("redis", "6.2.0"), ("postgres", "14.0")] {
+    for (name, version) in [
+        ("nginx", "1.21.0"),
+        ("redis", "6.2.0"),
+        ("postgres", "14.0"),
+    ] {
         db::transaction(&mut conn, |tx| {
             let mut changeset = Changeset::new(format!("Install {}-{}", name, version));
             let changeset_id = changeset.insert(tx)?;
@@ -119,8 +123,7 @@ fn test_whatprovides_query() {
     assert_eq!(providers[0].version, Some("3.0.0".to_string()));
 
     // Test soname lookup
-    let ssl_providers =
-        ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
     assert_eq!(ssl_providers.len(), 1);
 
     // Test pattern search
@@ -173,7 +176,10 @@ fn test_query_operations() {
 
     // Test non-existent package
     let nonexistent = Trove::find_by_name(&conn, "nonexistent").unwrap();
-    assert!(nonexistent.is_empty(), "Should not find nonexistent package");
+    assert!(
+        nonexistent.is_empty(),
+        "Should not find nonexistent package"
+    );
 }
 
 /// Test dependency query operations (equivalent to cmd_depends/cmd_rdepends)
@@ -194,12 +200,19 @@ fn test_dependency_queries() {
 
     // Test reverse dependency lookup via provides
     let openssl_providers = ProvideEntry::find_all_by_capability(&conn, "openssl").unwrap();
-    assert!(!openssl_providers.is_empty(), "Should find openssl provider");
+    assert!(
+        !openssl_providers.is_empty(),
+        "Should find openssl provider"
+    );
 
     // Verify soname provides
     let libssl_providers =
         ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
-    assert_eq!(libssl_providers.len(), 1, "Should find libssl.so.3 provider");
+    assert_eq!(
+        libssl_providers.len(),
+        1,
+        "Should find libssl.so.3 provider"
+    );
 }
 
 /// Test changeset history (equivalent to cmd_history)
@@ -246,8 +259,7 @@ fn test_whatprovides_operations() {
     assert_eq!(webserver_providers.len(), 1);
 
     // Test soname lookup
-    let ssl_providers =
-        ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
     assert_eq!(ssl_providers.len(), 1);
 
     // Test pattern search
@@ -287,7 +299,10 @@ fn test_dependency_tree() {
         .pop()
         .unwrap();
     let openssl_deps = DependencyEntry::find_by_trove(&conn, openssl.id.unwrap()).unwrap();
-    assert!(openssl_deps.is_empty(), "openssl should have no deps in test");
+    assert!(
+        openssl_deps.is_empty(),
+        "openssl should have no deps in test"
+    );
 
     // This verifies the structure needed for deptree command
 }

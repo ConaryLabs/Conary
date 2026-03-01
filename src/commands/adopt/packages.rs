@@ -5,20 +5,19 @@
 //! Adopts individual packages into Conary tracking.
 
 use super::super::create_state_snapshot;
-use super::system::{compute_file_hash, FileInfoTuple};
+use super::super::progress::{AdoptPhase, AdoptProgress};
+use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
     TroveType,
 };
-use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
+use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::path::PathBuf;
-use super::super::progress::{AdoptPhase, AdoptProgress};
 use tracing::debug;
 
 /// Adopt specific packages
 pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
-
     if packages.is_empty() {
         return Err(anyhow::anyhow!("No packages specified"));
     }
@@ -67,39 +66,58 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         }
 
         // Query package info based on package manager
-        let (pkg_name, pkg_version, pkg_arch, pkg_desc): (String, String, String, Option<String>) = match pkg_mgr {
-            SystemPackageManager::Rpm => {
-                match rpm_query::query_package(package_name) {
-                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone().or(info.summary.clone())),
+        let (pkg_name, pkg_version, pkg_arch, pkg_desc): (String, String, String, Option<String>) =
+            match pkg_mgr {
+                SystemPackageManager::Rpm => match rpm_query::query_package(package_name) {
+                    Ok(info) => (
+                        info.name.clone(),
+                        info.version_only(),
+                        info.arch.clone(),
+                        info.description.clone().or(info.summary.clone()),
+                    ),
                     Err(e) => {
-                        println!("Package '{}' not found in RPM database: {}", package_name, e);
+                        println!(
+                            "Package '{}' not found in RPM database: {}",
+                            package_name, e
+                        );
                         continue;
                     }
-                }
-            }
-            SystemPackageManager::Dpkg => {
-                match dpkg_query::query_package(package_name) {
-                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone()),
+                },
+                SystemPackageManager::Dpkg => match dpkg_query::query_package(package_name) {
+                    Ok(info) => (
+                        info.name.clone(),
+                        info.version_only(),
+                        info.arch.clone(),
+                        info.description.clone(),
+                    ),
                     Err(e) => {
-                        println!("Package '{}' not found in dpkg database: {}", package_name, e);
+                        println!(
+                            "Package '{}' not found in dpkg database: {}",
+                            package_name, e
+                        );
                         continue;
                     }
-                }
-            }
-            SystemPackageManager::Pacman => {
-                match pacman_query::query_package(package_name) {
-                    Ok(info) => (info.name.clone(), info.version_only(), info.arch.clone(), info.description.clone()),
+                },
+                SystemPackageManager::Pacman => match pacman_query::query_package(package_name) {
+                    Ok(info) => (
+                        info.name.clone(),
+                        info.version_only(),
+                        info.arch.clone(),
+                        info.description.clone(),
+                    ),
                     Err(e) => {
-                        println!("Package '{}' not found in pacman database: {}", package_name, e);
+                        println!(
+                            "Package '{}' not found in pacman database: {}",
+                            package_name, e
+                        );
                         continue;
                     }
+                },
+                _ => {
+                    println!("Unsupported package manager");
+                    continue;
                 }
-            }
-            _ => {
-                println!("Unsupported package manager");
-                continue;
-            }
-        };
+            };
 
         progress.set_phase(&pkg_name, AdoptPhase::Querying);
 
@@ -129,29 +147,62 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
 
             // Query and insert files based on package manager
             let files: Vec<FileInfoTuple> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_files(&pkg_name)?
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_files(&pkg_name)?
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_files(&pkg_name)?
-                        .into_iter()
-                        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
-                        .collect()
-                }
+                SystemPackageManager::Rpm => rpm_query::query_package_files(&pkg_name)?
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
+                SystemPackageManager::Dpkg => dpkg_query::query_package_files(&pkg_name)?
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
+                SystemPackageManager::Pacman => pacman_query::query_package_files(&pkg_name)?
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.path,
+                            f.size,
+                            f.mode,
+                            f.digest,
+                            f.user,
+                            f.group,
+                            f.link_target,
+                        )
+                    })
+                    .collect(),
                 _ => Vec::new(),
             };
             progress.set_phase(&pkg_name, AdoptPhase::Inserting);
 
-            for (file_path, file_size, file_mode, file_digest, file_user, file_group, file_link_target) in &files {
+            for (
+                file_path,
+                file_size,
+                file_mode,
+                file_digest,
+                file_user,
+                file_group,
+                file_link_target,
+            ) in &files
+            {
                 let hash = compute_file_hash(
                     file_path,
                     *file_mode,
@@ -161,13 +212,8 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                     cas.as_ref(),
                 );
 
-                let mut file_entry = FileEntry::new(
-                    file_path.clone(),
-                    hash,
-                    *file_size,
-                    *file_mode,
-                    trove_id,
-                );
+                let mut file_entry =
+                    FileEntry::new(file_path.clone(), hash, *file_size, *file_mode, trove_id);
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
 
@@ -179,9 +225,15 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
 
             // Query and insert dependencies with version constraints
             let deps: Vec<DependencyInfo> = match pkg_mgr {
-                SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                }
                 _ => Vec::new(),
             };
 
@@ -204,9 +256,15 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
 
             // Query and insert provides (capabilities this package offers)
             let provides: Vec<String> = match pkg_mgr {
-                SystemPackageManager::Rpm => rpm_query::query_package_provides(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Dpkg => dpkg_query::query_package_provides(&pkg_name).unwrap_or_default(),
-                SystemPackageManager::Pacman => pacman_query::query_package_provides(&pkg_name).unwrap_or_default(),
+                SystemPackageManager::Rpm => {
+                    rpm_query::query_package_provides(&pkg_name).unwrap_or_default()
+                }
+                SystemPackageManager::Dpkg => {
+                    dpkg_query::query_package_provides(&pkg_name).unwrap_or_default()
+                }
+                SystemPackageManager::Pacman => {
+                    pacman_query::query_package_provides(&pkg_name).unwrap_or_default()
+                }
                 _ => Vec::new(),
             };
 

@@ -46,7 +46,11 @@ impl std::fmt::Display for Conflict {
                 package,
                 constraints,
             } => {
-                writeln!(f, "Conflicting version requirements for package {}:", package)?;
+                writeln!(
+                    f,
+                    "Conflicting version requirements for package {}:",
+                    package
+                )?;
                 for (requirer, constraint) in constraints {
                     writeln!(f, "  - {} requires {}", requirer, constraint)?;
                 }

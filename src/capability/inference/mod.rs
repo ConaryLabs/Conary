@@ -29,7 +29,7 @@ mod heuristics;
 mod wellknown;
 
 pub use binary::BinaryAnalyzer;
-pub use cache::{global_cache, CacheStats, InferenceCache};
+pub use cache::{CacheStats, InferenceCache, global_cache};
 pub use confidence::{Confidence, ConfidenceScore};
 pub use error::InferenceError;
 pub use heuristics::HeuristicInferrer;
@@ -175,7 +175,9 @@ impl PackageFile {
 
     /// Check if this is a config file
     pub fn is_config(&self) -> bool {
-        self.path.starts_with("/etc/") || self.path.ends_with(".conf") || self.path.ends_with(".cfg")
+        self.path.starts_with("/etc/")
+            || self.path.ends_with(".conf")
+            || self.path.ends_with(".cfg")
     }
 
     /// Check if this is a systemd service file
@@ -308,7 +310,8 @@ impl InferredCapabilities {
 
         // Use higher confidence syscall profile
         if other.syscall_profile.is_some()
-            && (self.syscall_profile.is_none() || other.confidence.primary > self.confidence.primary)
+            && (self.syscall_profile.is_none()
+                || other.confidence.primary > self.confidence.primary)
         {
             self.syscall_profile = other.syscall_profile.clone();
         }
@@ -452,7 +455,10 @@ fn infer_capabilities_uncached(
 
     // Tier 3: Config file scanning (if files have content)
     if options.max_tier >= 3 {
-        let config_files: Vec<_> = files.iter().filter(|f| f.is_config() && f.content.is_some()).collect();
+        let config_files: Vec<_> = files
+            .iter()
+            .filter(|f| f.is_config() && f.content.is_some())
+            .collect();
         if !config_files.is_empty() {
             let config_result = scan_config_files(&config_files)?;
             result.merge(&config_result);
@@ -490,12 +496,12 @@ fn infer_capabilities_uncached(
 fn scan_config_files(files: &[&PackageFile]) -> InferenceResult<InferredCapabilities> {
     use std::sync::LazyLock;
 
-    static PORT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(?:listen|port|bind)[^\d]*(\d{1,5})").unwrap()
-    });
+    static PORT_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)(?:listen|port|bind)[^\d]*(\d{1,5})").unwrap());
 
     static PATH_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r#"(?:file|path|dir|log)[^\s"']*[\s=:]+["']?(/[a-zA-Z0-9/_.-]+)"#).unwrap()
+        regex::Regex::new(r#"(?:file|path|dir|log)[^\s"']*[\s=:]+["']?(/[a-zA-Z0-9/_.-]+)"#)
+            .unwrap()
     });
 
     let mut result = InferredCapabilities {
@@ -513,12 +519,12 @@ fn scan_config_files(files: &[&PackageFile]) -> InferenceResult<InferredCapabili
                 if let Some(port) = cap.get(1) {
                     let port_str = port.as_str();
                     // Validate port is in the valid TCP/UDP range
-                    if let Ok(port_num) = port_str.parse::<u32>() {
-                        if port_num >= 1 && port_num <= 65535 {
-                            let port_string = port_str.to_string();
-                            if !result.network.listen_ports.contains(&port_string) {
-                                result.network.listen_ports.push(port_string);
-                            }
+                    if let Ok(port_num) = port_str.parse::<u32>()
+                        && (1..=65535).contains(&port_num)
+                    {
+                        let port_string = port_str.to_string();
+                        if !result.network.listen_ports.contains(&port_string) {
+                            result.network.listen_ports.push(port_string);
                         }
                     }
                 }
@@ -632,7 +638,10 @@ mod tests {
         let mut inferred = InferredCapabilities::default();
         inferred.network.listen_ports.push("80".to_string());
         inferred.network.listen_ports.push("443".to_string());
-        inferred.filesystem.write_paths.push("/var/log/nginx".to_string());
+        inferred
+            .filesystem
+            .write_paths
+            .push("/var/log/nginx".to_string());
         inferred.syscall_profile = Some("network-server".to_string());
 
         let decl = inferred.to_declaration();
@@ -730,7 +739,11 @@ mod tests {
         base.merge(&other);
 
         assert_eq!(base.filesystem.read_paths.len(), 2);
-        assert!(base.filesystem.read_paths.contains(&"/etc/nginx".to_string()));
+        assert!(
+            base.filesystem
+                .read_paths
+                .contains(&"/etc/nginx".to_string())
+        );
         assert!(base.filesystem.read_paths.contains(&"/etc/ssl".to_string()));
         assert_eq!(base.filesystem.write_paths.len(), 2);
     }
@@ -938,10 +951,22 @@ mod tests {
 
     #[test]
     fn test_inference_source_display() {
-        assert_eq!(format!("{}", InferenceSource::WellKnown), "well-known profile");
-        assert_eq!(format!("{}", InferenceSource::Heuristic), "heuristic analysis");
-        assert_eq!(format!("{}", InferenceSource::BinaryAnalysis), "binary analysis");
-        assert_eq!(format!("{}", InferenceSource::Combined), "combined analysis");
+        assert_eq!(
+            format!("{}", InferenceSource::WellKnown),
+            "well-known profile"
+        );
+        assert_eq!(
+            format!("{}", InferenceSource::Heuristic),
+            "heuristic analysis"
+        );
+        assert_eq!(
+            format!("{}", InferenceSource::BinaryAnalysis),
+            "binary analysis"
+        );
+        assert_eq!(
+            format!("{}", InferenceSource::Combined),
+            "combined analysis"
+        );
     }
 
     #[test]

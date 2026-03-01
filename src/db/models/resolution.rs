@@ -131,7 +131,10 @@ impl PrimaryStrategy {
             "recipe" => Ok(Self::Recipe),
             "delegate" => Ok(Self::Delegate),
             "legacy" => Ok(Self::Legacy),
-            _ => Err(Error::ParseError(format!("Unknown primary strategy: {}", s))),
+            _ => Err(Error::ParseError(format!(
+                "Unknown primary strategy: {}",
+                s
+            ))),
         }
     }
 }
@@ -172,11 +175,7 @@ pub struct PackageResolution {
 
 impl PackageResolution {
     /// Create a new package resolution entry
-    pub fn new(
-        repository_id: i64,
-        name: String,
-        strategies: Vec<ResolutionStrategy>,
-    ) -> Self {
+    pub fn new(repository_id: i64, name: String, strategies: Vec<ResolutionStrategy>) -> Self {
         let primary_strategy = strategies
             .first()
             .map(PrimaryStrategy::from)
@@ -195,12 +194,7 @@ impl PackageResolution {
     }
 
     /// Create a binary resolution entry
-    pub fn binary(
-        repository_id: i64,
-        name: String,
-        url: String,
-        checksum: String,
-    ) -> Self {
+    pub fn binary(repository_id: i64, name: String, url: String, checksum: String) -> Self {
         Self::new(
             repository_id,
             name,
@@ -213,12 +207,7 @@ impl PackageResolution {
     }
 
     /// Create a Remi resolution entry
-    pub fn remi(
-        repository_id: i64,
-        name: String,
-        endpoint: String,
-        distro: String,
-    ) -> Self {
+    pub fn remi(repository_id: i64, name: String, endpoint: String, distro: String) -> Self {
         Self::new(
             repository_id,
             name,
@@ -235,7 +224,9 @@ impl PackageResolution {
         Self::new(
             repository_id,
             name,
-            vec![ResolutionStrategy::Legacy { repository_package_id }],
+            vec![ResolutionStrategy::Legacy {
+                repository_package_id,
+            }],
         )
     }
 
@@ -281,7 +272,13 @@ impl PackageResolution {
                  WHERE repository_id = ?1 AND name = ?2 AND version = ?3",
             )?;
 
-            if let Some(entry) = stmt.query_row([repository_id.to_string(), name.to_string(), v.to_string()], Self::from_row).optional()? {
+            if let Some(entry) = stmt
+                .query_row(
+                    [repository_id.to_string(), name.to_string(), v.to_string()],
+                    Self::from_row,
+                )
+                .optional()?
+            {
                 return Ok(Some(entry));
             }
         }
@@ -293,7 +290,9 @@ impl PackageResolution {
              WHERE repository_id = ?1 AND name = ?2 AND version IS NULL",
         )?;
 
-        stmt.query_row(params![repository_id, name], Self::from_row).optional().map_err(Into::into)
+        stmt.query_row(params![repository_id, name], Self::from_row)
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Find all resolution entries for a repository
@@ -379,20 +378,19 @@ impl PackageResolution {
     /// Convert from database row
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let strategies_json: String = row.get(4)?;
-        let strategies: Vec<ResolutionStrategy> = serde_json::from_str(&strategies_json)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                4,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            ))?;
+        let strategies: Vec<ResolutionStrategy> =
+            serde_json::from_str(&strategies_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
 
         let primary_strategy_str: String = row.get(5)?;
-        let primary_strategy = PrimaryStrategy::parse(&primary_strategy_str)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            ))?;
+        let primary_strategy = PrimaryStrategy::parse(&primary_strategy_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
         Ok(Self {
             id: Some(row.get(0)?),
@@ -428,11 +426,11 @@ impl CacheTier {
     /// Get the default cache TTL for this tier in seconds
     pub fn default_ttl(&self) -> Option<i32> {
         match self {
-            Self::BaseSystem => None, // Never expire
+            Self::BaseSystem => None,                 // Never expire
             Self::Popular => Some(30 * 24 * 60 * 60), // 30 days
-            Self::Common => Some(7 * 24 * 60 * 60), // 7 days
-            Self::Obscure => Some(0), // Don't cache
-            Self::Metadata => Some(3600), // 1 hour
+            Self::Common => Some(7 * 24 * 60 * 60),   // 7 days
+            Self::Obscure => Some(0),                 // Don't cache
+            Self::Metadata => Some(3600),             // 1 hour
         }
     }
 
@@ -466,7 +464,8 @@ mod tests {
         conn.execute(
             "INSERT INTO repositories (name, url) VALUES ('test-repo', 'https://example.com')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.last_insert_rowid()
     }
 
@@ -568,19 +567,25 @@ mod tests {
         let found = PackageResolution::find(&conn, repo_id, "nginx", Some("1.24.0"))
             .unwrap()
             .unwrap();
-        assert!(matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:specific"));
+        assert!(
+            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:specific")
+        );
 
         // Different version should fall back to any-version
         let found = PackageResolution::find(&conn, repo_id, "nginx", Some("1.23.0"))
             .unwrap()
             .unwrap();
-        assert!(matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest"));
+        assert!(
+            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest")
+        );
 
         // No version should use any-version
         let found = PackageResolution::find(&conn, repo_id, "nginx", None)
             .unwrap()
             .unwrap();
-        assert!(matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest"));
+        assert!(
+            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest")
+        );
     }
 
     #[test]
@@ -607,12 +612,14 @@ mod tests {
         remi.insert(&conn).unwrap();
 
         // Find only binary entries
-        let binaries = PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Binary).unwrap();
+        let binaries =
+            PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Binary).unwrap();
         assert_eq!(binaries.len(), 1);
         assert_eq!(binaries[0].name, "nginx");
 
         // Find only remi entries
-        let remis = PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Remi).unwrap();
+        let remis =
+            PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Remi).unwrap();
         assert_eq!(remis.len(), 1);
         assert_eq!(remis[0].name, "obscure-tool");
     }
@@ -695,7 +702,13 @@ mod tests {
         assert_eq!(found.primary_strategy, PrimaryStrategy::Binary);
 
         // Verify strategies are preserved in order
-        assert!(matches!(found.strategies[0], ResolutionStrategy::Binary { .. }));
-        assert!(matches!(found.strategies[1], ResolutionStrategy::Remi { .. }));
+        assert!(matches!(
+            found.strategies[0],
+            ResolutionStrategy::Binary { .. }
+        ));
+        assert!(matches!(
+            found.strategies[1],
+            ResolutionStrategy::Remi { .. }
+        ));
     }
 }

@@ -52,9 +52,7 @@ pub mod parser;
 pub mod pkgbuild;
 
 pub use cache::{BuildCache, CacheConfig, CacheEntry, CacheStats, DependencyHashes, ToolchainInfo};
-pub use format::{
-    BuildSection, BuildStage, CrossSection, PatchInfo, Recipe, SourceSection,
-};
+pub use format::{BuildSection, BuildStage, CrossSection, PatchInfo, Recipe, SourceSection};
 pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
 pub use kitchen::{
     Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,

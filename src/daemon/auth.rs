@@ -27,8 +27,8 @@
 //! - `com.conary.daemon.update` - Update packages
 //! - `com.conary.daemon.rollback` - System rollback
 
-use std::os::unix::net::UnixStream;
 use std::io;
+use std::os::unix::net::UnixStream;
 
 /// Peer credentials from a Unix socket connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +207,8 @@ impl AuthChecker {
         // This is a placeholder that always denies
         log::warn!(
             "PolicyKit check requested for action {:?} (UID {}), but implementation incomplete",
-            action, creds.uid
+            action,
+            creds.uid
         );
         Permission::Denied
     }
@@ -218,7 +219,8 @@ impl AuthChecker {
         log::warn!(
             "PolicyKit check required for action {:?} (UID {}), but `polkit` feature not enabled. \
             Enable the feature and install PolicyKit policy files.",
-            action, creds.uid
+            action,
+            creds.uid
         );
         Permission::Denied
     }
@@ -476,7 +478,10 @@ mod tests {
         };
 
         assert_eq!(checker.check(&wheel_user, Action::Query), Permission::Full);
-        assert_eq!(checker.check(&wheel_user, Action::Install), Permission::Full);
+        assert_eq!(
+            checker.check(&wheel_user, Action::Install),
+            Permission::Full
+        );
     }
 
     #[test]
@@ -515,8 +520,7 @@ mod tests {
             uid: 1000,
             gid: 1000,
         };
-        let entry = AuditEntry::new(creds, Action::Install, true)
-            .with_details("installed nginx");
+        let entry = AuditEntry::new(creds, Action::Install, true).with_details("installed nginx");
 
         let msg = entry.to_log_message();
         assert!(msg.contains("ALLOWED"));

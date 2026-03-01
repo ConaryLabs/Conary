@@ -5,8 +5,8 @@
 //! PackageBuilder for programmatic RPM creation.
 
 use super::{
-    arch_for_format, map_capability_to_package, CommonHookGenerator, GenerationResult,
-    HookConverter, LossReport,
+    CommonHookGenerator, GenerationResult, HookConverter, LossReport, arch_for_format,
+    map_capability_to_package,
 };
 use crate::ccs::builder::{BuildResult, FileType};
 use crate::ccs::manifest::Hooks;
@@ -98,11 +98,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     );
 
     // License (default to MIT if not specified)
-    let license = manifest
-        .package
-        .license
-        .as_deref()
-        .unwrap_or("Unspecified");
+    let license = manifest.package.license.as_deref().unwrap_or("Unspecified");
 
     // Start building the RPM
     let mut builder = PackageBuilder::new(name, version, license, &arch, description);

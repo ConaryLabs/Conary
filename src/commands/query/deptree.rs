@@ -13,7 +13,12 @@ use tracing::info;
 ///
 /// Displays a tree visualization of all transitive dependencies (forward)
 /// or all transitive reverse dependencies (what depends on this package).
-pub fn cmd_deptree(package_name: &str, db_path: &str, reverse: bool, max_depth: Option<usize>) -> Result<()> {
+pub fn cmd_deptree(
+    package_name: &str,
+    db_path: &str,
+    reverse: bool,
+    max_depth: Option<usize>,
+) -> Result<()> {
     info!(
         "Building {} dependency tree for package: {}",
         if reverse { "reverse" } else { "forward" },
@@ -24,7 +29,10 @@ pub fn cmd_deptree(package_name: &str, db_path: &str, reverse: bool, max_depth: 
     // Verify package exists
     let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' is not installed", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' is not installed",
+            package_name
+        ));
     }
 
     let trove = &troves[0];
@@ -32,7 +40,11 @@ pub fn cmd_deptree(package_name: &str, db_path: &str, reverse: bool, max_depth: 
         "{} {} ({})",
         trove.name,
         trove.version,
-        if reverse { "reverse deps" } else { "dependencies" }
+        if reverse {
+            "reverse deps"
+        } else {
+            "dependencies"
+        }
     );
 
     // Create tree context
@@ -113,7 +125,8 @@ fn print_dependency_tree(
             continue;
         }
         // Check if this dependency is installed
-        if let Ok(dep_troves) = conary::db::models::Trove::find_by_name(ctx.conn, &dep.depends_on_name)
+        if let Ok(dep_troves) =
+            conary::db::models::Trove::find_by_name(ctx.conn, &dep.depends_on_name)
             && let Some(dep_trove) = dep_troves.first()
         {
             installed_deps.push((dep.depends_on_name.clone(), dep_trove.clone()));
@@ -129,7 +142,10 @@ fn print_dependency_tree(
 
         // Check for cycles
         if ctx.visited.contains(dep_name) {
-            println!("{}{}{} {} [circular]", prefix, connector, dep_name, dep_trove.version);
+            println!(
+                "{}{}{} {} [circular]",
+                prefix, connector, dep_name, dep_trove.version
+            );
             ctx.stats.cycles_detected += 1;
             continue;
         }
@@ -188,12 +204,18 @@ fn print_reverse_tree(
 
         // Check for cycles
         if ctx.visited.contains(&dep_trove.name) {
-            println!("{}{}{} {} [circular]", prefix, connector, dep_trove.name, dep_trove.version);
+            println!(
+                "{}{}{} {} [circular]",
+                prefix, connector, dep_trove.name, dep_trove.version
+            );
             ctx.stats.cycles_detected += 1;
             continue;
         }
 
-        println!("{}{}{} {}", prefix, connector, dep_trove.name, dep_trove.version);
+        println!(
+            "{}{}{} {}",
+            prefix, connector, dep_trove.name, dep_trove.version
+        );
         ctx.stats.unique_packages += 1;
 
         // Mark as visited and recurse

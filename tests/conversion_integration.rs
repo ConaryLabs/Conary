@@ -9,8 +9,8 @@
 //! - Provenance extraction
 //! - Fidelity tracking
 
-use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::capability::inference::{Confidence, InferenceOptions};
+use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary::packages::common::PackageMetadata;
 use conary::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, Scriptlet,
@@ -100,7 +100,8 @@ fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
             Scriptlet {
                 phase: ScriptletPhase::PreInstall,
                 interpreter: "/bin/sh".to_string(),
-                content: "getent passwd myserver || useradd -r -s /sbin/nologin myserver".to_string(),
+                content: "getent passwd myserver || useradd -r -s /sbin/nologin myserver"
+                    .to_string(),
                 flags: None,
             },
             Scriptlet {
@@ -301,7 +302,10 @@ fn test_conversion_preserves_metadata() {
     assert_eq!(manifest.package.name, "metadata-test");
     assert_eq!(manifest.package.version, "1.0.0");
     assert!(
-        manifest.package.description.contains("detailed description"),
+        manifest
+            .package
+            .description
+            .contains("detailed description"),
         "Description should be preserved"
     );
 
@@ -353,7 +357,10 @@ fn test_server_package_conversion() {
         "Config files should be preserved"
     );
     assert!(
-        manifest.config.files.contains(&"/etc/myserver/myserver.conf".to_string()),
+        manifest
+            .config
+            .files
+            .contains(&"/etc/myserver/myserver.conf".to_string()),
         "Should include myserver.conf"
     );
 }
@@ -452,7 +459,9 @@ fn test_conversion_with_inference_enabled() {
 
     // Should detect config directory from file paths
     assert!(
-        caps.filesystem.read_paths.contains(&"/etc/myserver".to_string()),
+        caps.filesystem
+            .read_paths
+            .contains(&"/etc/myserver".to_string()),
         "Should detect config directory"
     );
 }
@@ -567,7 +576,10 @@ fn test_nginx_wellknown_inference_during_conversion() {
     );
 
     // Should use tier 1 (well-known)
-    assert_eq!(caps.tier_used, 1, "Should use tier 1 for well-known package");
+    assert_eq!(
+        caps.tier_used, 1,
+        "Should use tier 1 for well-known package"
+    );
 }
 
 // =============================================================================
@@ -774,7 +786,11 @@ fn test_empty_package_conversion() {
 
     // Empty package should still convert (meta-packages exist)
     let result = converter.convert(&metadata, &files, "rpm", "cs");
-    assert!(result.is_ok(), "Empty package should convert: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Empty package should convert: {:?}",
+        result.err()
+    );
 
     let result = result.unwrap();
     assert_eq!(result.build_result.manifest.package.name, "empty-pkg");
@@ -795,9 +811,7 @@ fn test_large_file_handling() {
     let converter = LegacyConverter::new(options);
 
     // Create a larger file (1MB of data)
-    let large_content: Vec<u8> = (0..1_000_000)
-        .map(|i| (i % 256) as u8)
-        .collect();
+    let large_content: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
 
     let metadata = PackageMetadata {
         package_path: PathBuf::from("/tmp/large-1.0.0.rpm"),
@@ -825,7 +839,11 @@ fn test_large_file_handling() {
     }];
 
     let result = converter.convert(&metadata, &files, "rpm", "cs");
-    assert!(result.is_ok(), "Large file should convert: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Large file should convert: {:?}",
+        result.err()
+    );
 
     let result = result.unwrap();
     assert!(result.package_path.is_some());
@@ -970,7 +988,11 @@ fn test_dependency_conversion() {
 
     // Runtime deps without version go to packages
     assert!(
-        manifest.requires.packages.iter().any(|p| p.name == "libbar"),
+        manifest
+            .requires
+            .packages
+            .iter()
+            .any(|p| p.name == "libbar"),
         "Unversioned runtime dep should become package dep"
     );
 

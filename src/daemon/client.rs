@@ -26,8 +26,8 @@
 //! }
 //! ```
 
-use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
 use crate::Result;
+use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -150,8 +150,7 @@ impl DaemonClient {
 
     /// Check if the daemon is running (without connecting)
     pub fn is_daemon_running(&self) -> bool {
-        self.socket_path.exists()
-            && self.check_connection().is_ok()
+        self.socket_path.exists() && self.check_connection().is_ok()
     }
 
     /// Install packages
@@ -165,11 +164,7 @@ impl DaemonClient {
             "options": options
         });
 
-        let response = self.request(
-            "POST",
-            "/v1/packages/install",
-            Some(&body.to_string()),
-        )?;
+        let response = self.request("POST", "/v1/packages/install", Some(&body.to_string()))?;
 
         self.parse_response(response)
     }
@@ -185,11 +180,7 @@ impl DaemonClient {
             "options": options
         });
 
-        let response = self.request(
-            "POST",
-            "/v1/packages/remove",
-            Some(&body.to_string()),
-        )?;
+        let response = self.request("POST", "/v1/packages/remove", Some(&body.to_string()))?;
 
         self.parse_response(response)
     }
@@ -205,33 +196,21 @@ impl DaemonClient {
             "options": options
         });
 
-        let response = self.request(
-            "POST",
-            "/v1/packages/update",
-            Some(&body.to_string()),
-        )?;
+        let response = self.request("POST", "/v1/packages/update", Some(&body.to_string()))?;
 
         self.parse_response(response)
     }
 
     /// Get transaction details
     pub fn get_transaction(&self, job_id: &str) -> Result<TransactionDetails> {
-        let response = self.request(
-            "GET",
-            &format!("/v1/transactions/{}", job_id),
-            None,
-        )?;
+        let response = self.request("GET", &format!("/v1/transactions/{}", job_id), None)?;
 
         self.parse_response(response)
     }
 
     /// Cancel a transaction
     pub fn cancel_transaction(&self, job_id: &str) -> Result<()> {
-        let response = self.request(
-            "DELETE",
-            &format!("/v1/transactions/{}", job_id),
-            None,
-        )?;
+        let response = self.request("DELETE", &format!("/v1/transactions/{}", job_id), None)?;
 
         if response.status_code == 204 || response.status_code == 200 {
             Ok(())
@@ -243,11 +222,7 @@ impl DaemonClient {
     /// Wait for a job to complete, calling the callback with progress events
     ///
     /// Returns the final transaction details when the job completes.
-    pub fn wait_for_job<F>(
-        &self,
-        job_id: &str,
-        mut on_event: F,
-    ) -> Result<TransactionDetails>
+    pub fn wait_for_job<F>(&self, job_id: &str, mut on_event: F) -> Result<TransactionDetails>
     where
         F: FnMut(DaemonEvent),
     {
@@ -349,11 +324,7 @@ impl DaemonClient {
     /// Poll for job completion (without SSE)
     ///
     /// Polls the job status at the given interval until it completes.
-    pub fn poll_job(
-        &self,
-        job_id: &str,
-        poll_interval: Duration,
-    ) -> Result<TransactionDetails> {
+    pub fn poll_job(&self, job_id: &str, poll_interval: Duration) -> Result<TransactionDetails> {
         loop {
             let details = self.get_transaction(job_id)?;
 
@@ -369,12 +340,7 @@ impl DaemonClient {
     }
 
     /// Make an HTTP request to the daemon
-    fn request(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<HttpResponse> {
+    fn request(&self, method: &str, path: &str, body: Option<&str>) -> Result<HttpResponse> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         stream.set_read_timeout(Some(self.timeout))?;
         stream.set_write_timeout(Some(self.timeout))?;
@@ -411,9 +377,9 @@ impl DaemonClient {
         let mut lines = response.lines();
 
         // Parse status line
-        let status_line = lines.next().ok_or_else(|| {
-            crate::Error::IoError("Empty response from daemon".to_string())
-        })?;
+        let status_line = lines
+            .next()
+            .ok_or_else(|| crate::Error::IoError("Empty response from daemon".to_string()))?;
 
         let status_code: u16 = status_line
             .split_whitespace()
@@ -447,14 +413,10 @@ impl DaemonClient {
     }
 
     /// Parse successful response body
-    fn parse_response<T: serde::de::DeserializeOwned>(
-        &self,
-        response: HttpResponse,
-    ) -> Result<T> {
+    fn parse_response<T: serde::de::DeserializeOwned>(&self, response: HttpResponse) -> Result<T> {
         if response.status_code >= 200 && response.status_code < 300 {
-            serde_json::from_str(&response.body).map_err(|e| {
-                crate::Error::IoError(format!("Failed to parse response: {}", e))
-            })
+            serde_json::from_str(&response.body)
+                .map_err(|e| crate::Error::IoError(format!("Failed to parse response: {}", e)))
         } else {
             self.parse_error(response)
         }

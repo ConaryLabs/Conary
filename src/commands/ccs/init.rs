@@ -10,12 +10,7 @@ use conary::ccs::CcsManifest;
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory
-pub fn cmd_ccs_init(
-    path: &str,
-    name: Option<String>,
-    version: &str,
-    force: bool,
-) -> Result<()> {
+pub fn cmd_ccs_init(path: &str, name: Option<String>, version: &str, force: bool) -> Result<()> {
     let dir = Path::new(path);
     let manifest_path = dir.join("ccs.toml");
 
@@ -44,7 +39,10 @@ pub fn cmd_ccs_init(
 
     println!("Created {}", manifest_path.display());
     println!();
-    println!("Package: {} v{}", manifest.package.name, manifest.package.version);
+    println!(
+        "Package: {} v{}",
+        manifest.package.name, manifest.package.version
+    );
     println!();
     println!("Next steps:");
     println!("  1. Edit ccs.toml to add dependencies and hooks");

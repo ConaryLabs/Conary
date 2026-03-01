@@ -11,8 +11,8 @@
 use crate::error::{Error, Result};
 use dashmap::DashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
 use tracing::debug;
 
@@ -266,9 +266,7 @@ mod tests {
 
         assert_eq!(coalescer.inflight_count(), 0);
 
-        let _ = coalescer
-            .coalesce("hash1", || async { Ok(vec![1]) })
-            .await;
+        let _ = coalescer.coalesce("hash1", || async { Ok(vec![1]) }).await;
 
         // After completion, should be cleaned up
         assert_eq!(coalescer.inflight_count(), 0);

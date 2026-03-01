@@ -1,13 +1,13 @@
 // src/server/handlers/jobs.rs
 //! Job status endpoint for 202 Accepted polling
 
-use crate::server::jobs::JobStatus;
 use crate::server::ServerState;
+use crate::server::jobs::JobStatus;
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 use std::sync::Arc;

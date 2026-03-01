@@ -123,11 +123,7 @@ impl RendezvousRouter {
             weighted.sort_by(|a, b| b.0.cmp(&a.0));
 
             // Take up to K
-            weighted
-                .into_iter()
-                .take(self.k)
-                .map(|(_, p)| p)
-                .collect()
+            weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
         };
 
         HierarchicalSelection {
@@ -143,11 +139,7 @@ impl RendezvousRouter {
     /// cell hubs first, then region hubs, then leaves.
     ///
     /// This is a convenience method for simple iteration.
-    pub fn select_peers_ordered<'a>(
-        &self,
-        chunk_hash: &str,
-        peers: &'a [Peer],
-    ) -> Vec<&'a Peer> {
+    pub fn select_peers_ordered<'a>(&self, chunk_hash: &str, peers: &'a [Peer]) -> Vec<&'a Peer> {
         let selection = self.select_peers_hierarchical(chunk_hash, peers);
         selection.into_ordered_vec()
     }
@@ -288,7 +280,9 @@ mod tests {
 
     fn make_peers(n: usize) -> Vec<Peer> {
         (0..n)
-            .map(|i| Peer::from_endpoint(&format!("http://peer{}:7891", i), PeerTier::CellHub).unwrap())
+            .map(|i| {
+                Peer::from_endpoint(&format!("http://peer{}:7891", i), PeerTier::CellHub).unwrap()
+            })
             .collect()
     }
 
@@ -446,7 +440,10 @@ mod tests {
         let tiers: Vec<_> = ordered.iter().map(|p| p.tier).collect();
 
         // Find transition points
-        let cell_count = tiers.iter().take_while(|&&t| t == PeerTier::CellHub).count();
+        let cell_count = tiers
+            .iter()
+            .take_while(|&&t| t == PeerTier::CellHub)
+            .count();
         let region_start = cell_count;
         let region_count = tiers[region_start..]
             .iter()
@@ -482,7 +479,9 @@ mod tests {
 
         // Only cell hubs
         let cell_only: Vec<Peer> = (0..5)
-            .map(|i| Peer::from_endpoint(&format!("http://cell{}:7891", i), PeerTier::CellHub).unwrap())
+            .map(|i| {
+                Peer::from_endpoint(&format!("http://cell{}:7891", i), PeerTier::CellHub).unwrap()
+            })
             .collect();
 
         let selection = router.select_peers_hierarchical("test", &cell_only);
@@ -509,9 +508,13 @@ mod tests {
         // Verify order
         let tiers: Vec<_> = collected.iter().map(|(_, t)| *t).collect();
         let expected = [
-            PeerTier::CellHub, PeerTier::CellHub, PeerTier::CellHub,
-            PeerTier::RegionHub, PeerTier::RegionHub,
-            PeerTier::Leaf, PeerTier::Leaf,
+            PeerTier::CellHub,
+            PeerTier::CellHub,
+            PeerTier::CellHub,
+            PeerTier::RegionHub,
+            PeerTier::RegionHub,
+            PeerTier::Leaf,
+            PeerTier::Leaf,
         ];
         assert_eq!(tiers, expected);
     }

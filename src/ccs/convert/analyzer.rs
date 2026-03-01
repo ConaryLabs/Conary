@@ -12,9 +12,7 @@
 use crate::ccs::convert::fidelity::{
     DetectedOperation, FidelityReport, OperationType, UncertainOperation, UncertaintySeverity,
 };
-use crate::ccs::manifest::{
-    DirectoryHook, GroupHook, Hooks, SystemdHook, UserHook,
-};
+use crate::ccs::manifest::{DirectoryHook, GroupHook, Hooks, SystemdHook, UserHook};
 use crate::packages::traits::Scriptlet;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -51,23 +49,33 @@ struct Patterns {
 static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
     Patterns {
         // User/Group management
-        useradd: Regex::new(r"(?m)^\s*(getent\s+passwd\s+(\S+)\s*\|\|\s*)?useradd\s+(.+)$").expect("Invalid regex pattern"),
-        groupadd: Regex::new(r"(?m)^\s*(getent\s+group\s+(\S+)\s*\|\|\s*)?groupadd\s+(.+)$").expect("Invalid regex pattern"),
+        useradd: Regex::new(r"(?m)^\s*(getent\s+passwd\s+(\S+)\s*\|\|\s*)?useradd\s+(.+)$")
+            .expect("Invalid regex pattern"),
+        groupadd: Regex::new(r"(?m)^\s*(getent\s+group\s+(\S+)\s*\|\|\s*)?groupadd\s+(.+)$")
+            .expect("Invalid regex pattern"),
 
         // Directory creation
         mkdir: Regex::new(r"(?m)^\s*mkdir\s+(-p\s+)?(.+)$").expect("Invalid regex pattern"),
         install_d: Regex::new(r"(?m)^\s*install\s+.*-d\s+(.+)$").expect("Invalid regex pattern"),
 
         // Systemd operations
-        systemctl_enable: Regex::new(r"(?m)^\s*systemctl\s+(--no-reload\s+)?(enable|disable)\s+(\S+)").expect("Invalid regex pattern"),
-        systemctl_reload: Regex::new(r"(?m)^\s*systemctl\s+daemon-reload").expect("Invalid regex pattern"),
+        systemctl_enable: Regex::new(
+            r"(?m)^\s*systemctl\s+(--no-reload\s+)?(enable|disable)\s+(\S+)",
+        )
+        .expect("Invalid regex pattern"),
+        systemctl_reload: Regex::new(r"(?m)^\s*systemctl\s+daemon-reload")
+            .expect("Invalid regex pattern"),
 
         // System cache updates (detected but handled by triggers)
         ldconfig: Regex::new(r"(?m)^\s*(/sbin/)?ldconfig").expect("Invalid regex pattern"),
 
         // Complex patterns to flag as uncertain
-        external_script: Regex::new(r"(?m)^\s*(/[\w/.-]+\.sh|source\s+|\.[\s/])").expect("Invalid regex pattern"),
-        complex_logic: Regex::new(r"(?m)(for\s+\w+\s+in|while\s+|case\s+|function\s+\w+|\$\([^)]+\))").expect("Invalid regex pattern"),
+        external_script: Regex::new(r"(?m)^\s*(/[\w/.-]+\.sh|source\s+|\.[\s/])")
+            .expect("Invalid regex pattern"),
+        complex_logic: Regex::new(
+            r"(?m)(for\s+\w+\s+in|while\s+|case\s+|function\s+\w+|\$\([^)]+\))",
+        )
+        .expect("Invalid regex pattern"),
     }
 });
 
@@ -127,7 +135,11 @@ impl ScriptletAnalyzer {
                     operation_type: OperationType::UserAdd,
                     phase: phase.to_string(),
                     parameters: params,
-                    source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                    source_lines: vec![
+                        cap.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    ],
                 });
 
                 hooks.push(DetectedHook::User(hook));
@@ -148,7 +160,11 @@ impl ScriptletAnalyzer {
                     operation_type: OperationType::GroupAdd,
                     phase: phase.to_string(),
                     parameters: params,
-                    source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                    source_lines: vec![
+                        cap.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    ],
                 });
 
                 hooks.push(DetectedHook::Group(hook));
@@ -174,7 +190,11 @@ impl ScriptletAnalyzer {
                     operation_type: OperationType::DirectoryCreate,
                     phase: phase.to_string(),
                     parameters: params,
-                    source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                    source_lines: vec![
+                        cap.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    ],
                 });
 
                 hooks.push(DetectedHook::Directory(hook));
@@ -200,7 +220,11 @@ impl ScriptletAnalyzer {
                     operation_type: OperationType::DirectoryCreate,
                     phase: phase.to_string(),
                     parameters: params,
-                    source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                    source_lines: vec![
+                        cap.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    ],
                 });
 
                 hooks.push(DetectedHook::Directory(hook));
@@ -226,7 +250,11 @@ impl ScriptletAnalyzer {
                     operation_type: OperationType::SystemdEnable,
                     phase: phase.to_string(),
                     parameters: params,
-                    source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                    source_lines: vec![
+                        cap.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                    ],
                 });
 
                 hooks.push(DetectedHook::Systemd(hook));
@@ -239,7 +267,11 @@ impl ScriptletAnalyzer {
                 operation_type: OperationType::Ldconfig,
                 phase: phase.to_string(),
                 parameters: std::collections::HashMap::new(),
-                source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                source_lines: vec![
+                    cap.get(0)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default(),
+                ],
             });
         }
 
@@ -248,13 +280,20 @@ impl ScriptletAnalyzer {
                 operation_type: OperationType::SystemdReload,
                 phase: phase.to_string(),
                 parameters: std::collections::HashMap::new(),
-                source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                source_lines: vec![
+                    cap.get(0)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default(),
+                ],
             });
         }
 
         // Detect uncertain operations
         for cap in PATTERNS.external_script.captures_iter(content) {
-            let line = cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let line = cap
+                .get(0)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
             // Skip if it's a shebang line
             if !line.trim().starts_with("#!") {
                 report.add_uncertain(UncertainOperation {
@@ -271,7 +310,11 @@ impl ScriptletAnalyzer {
                 description: "Complex control flow".to_string(),
                 reason: "Contains loops, conditionals, or command substitution".to_string(),
                 severity: UncertaintySeverity::Medium,
-                source_lines: vec![cap.get(0).map(|m| m.as_str().to_string()).unwrap_or_default()],
+                source_lines: vec![
+                    cap.get(0)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default(),
+                ],
             });
         }
     }
@@ -312,7 +355,8 @@ impl ScriptletAnalyzer {
                         i += 1;
                     }
                 }
-                "-M" | "--no-create-home" | "-c" | "--comment" | "-u" | "--uid" | "-G" | "--groups" => {
+                "-M" | "--no-create-home" | "-c" | "--comment" | "-u" | "--uid" | "-G"
+                | "--groups" => {
                     // Skip these and their arguments if any
                     if i + 1 < parts.len() && !parts[i + 1].starts_with('-') {
                         i += 1;
@@ -494,7 +538,9 @@ mod tests {
         // Should detect both enable and daemon-reload
         assert!(!hooks.is_empty());
 
-        let has_systemd = hooks.iter().any(|h| matches!(h, DetectedHook::Systemd(s) if s.unit == "nginx.service"));
+        let has_systemd = hooks
+            .iter()
+            .any(|h| matches!(h, DetectedHook::Systemd(s) if s.unit == "nginx.service"));
         assert!(has_systemd);
 
         assert!(report.hooks_extracted >= 1);

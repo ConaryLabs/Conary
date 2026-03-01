@@ -132,7 +132,11 @@ fn test_batch_install_rollback_removes_all() {
         let changeset_id = changeset.insert(tx)?;
 
         // First package succeeds
-        let mut pkg1 = Trove::new("good-pkg".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut pkg1 = Trove::new(
+            "good-pkg".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
         pkg1.installed_by_changeset_id = Some(changeset_id);
         pkg1.insert(tx)?;
 
@@ -176,22 +180,52 @@ fn test_batch_install_file_tracking() {
         pkg1.installed_by_changeset_id = Some(changeset_id);
         let pkg1_id = pkg1.insert(tx)?;
 
-        FileEntry::new("/usr/lib/liba.so.1".to_string(), "h1".to_string(), 100, 0o755, pkg1_id)
-            .insert(tx)?;
-        FileEntry::new("/usr/lib/liba.so".to_string(), "h2".to_string(), 50, 0o777, pkg1_id)
-            .insert(tx)?;
+        FileEntry::new(
+            "/usr/lib/liba.so.1".to_string(),
+            "h1".to_string(),
+            100,
+            0o755,
+            pkg1_id,
+        )
+        .insert(tx)?;
+        FileEntry::new(
+            "/usr/lib/liba.so".to_string(),
+            "h2".to_string(),
+            50,
+            0o777,
+            pkg1_id,
+        )
+        .insert(tx)?;
 
         // Package 2 with 3 files
         let mut pkg2 = Trove::new("lib-b".to_string(), "2.0".to_string(), TroveType::Package);
         pkg2.installed_by_changeset_id = Some(changeset_id);
         let pkg2_id = pkg2.insert(tx)?;
 
-        FileEntry::new("/usr/lib/libb.so.1".to_string(), "h3".to_string(), 200, 0o755, pkg2_id)
-            .insert(tx)?;
-        FileEntry::new("/usr/lib/libb.so".to_string(), "h4".to_string(), 50, 0o777, pkg2_id)
-            .insert(tx)?;
-        FileEntry::new("/usr/include/b.h".to_string(), "h5".to_string(), 500, 0o644, pkg2_id)
-            .insert(tx)?;
+        FileEntry::new(
+            "/usr/lib/libb.so.1".to_string(),
+            "h3".to_string(),
+            200,
+            0o755,
+            pkg2_id,
+        )
+        .insert(tx)?;
+        FileEntry::new(
+            "/usr/lib/libb.so".to_string(),
+            "h4".to_string(),
+            50,
+            0o777,
+            pkg2_id,
+        )
+        .insert(tx)?;
+        FileEntry::new(
+            "/usr/include/b.h".to_string(),
+            "h5".to_string(),
+            500,
+            0o644,
+            pkg2_id,
+        )
+        .insert(tx)?;
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok((pkg1_id, pkg2_id))
@@ -276,9 +310,7 @@ fn test_cross_package_file_conflict_detection() {
     use std::collections::HashSet;
 
     // Simulate the conflict detection from BatchInstaller::plan_batch
-    fn detect_conflicts(
-        packages: &[(&str, Vec<&str>)],
-    ) -> Vec<(String, String, String)> {
+    fn detect_conflicts(packages: &[(&str, Vec<&str>)]) -> Vec<(String, String, String)> {
         let mut all_paths: HashSet<String> = HashSet::new();
         let mut conflicts = Vec::new();
 

@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 use conary::capability::{
-    list_packages_with_capabilities, load_capabilities_by_name, CapabilityDeclaration,
+    CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
 };
 use conary::ccs::manifest::CcsManifest;
 
@@ -34,7 +34,9 @@ pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result
             if exists.is_some() {
                 println!("Package '{}' has no capability declarations.", package);
                 println!();
-                println!("To add capabilities, include a [capabilities] section in the package's ccs.toml.");
+                println!(
+                    "To add capabilities, include a [capabilities] section in the package's ccs.toml."
+                );
             } else {
                 anyhow::bail!("Package '{}' not found", package);
             }
@@ -150,7 +152,10 @@ pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
         .with_context(|| format!("Failed to parse manifest: {}", path))?;
 
     if verbose {
-        println!("Parsed manifest for: {} v{}", manifest.package.name, manifest.package.version);
+        println!(
+            "Parsed manifest for: {} v{}",
+            manifest.package.name, manifest.package.version
+        );
     }
 
     // Check for capabilities section
@@ -164,14 +169,24 @@ pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
                 println!();
                 println!("Capability declaration found:");
                 println!("  Version:    {}", caps.version);
-                println!("  Network:    {} rules",
-                    caps.network.outbound.len() + caps.network.listen.len() + if caps.network.none { 1 } else { 0 });
-                println!("  Filesystem: {} rules",
-                    caps.filesystem.read.len() + caps.filesystem.write.len() +
-                    caps.filesystem.execute.len() + caps.filesystem.deny.len());
-                println!("  Syscalls:   {} rules (profile: {})",
+                println!(
+                    "  Network:    {} rules",
+                    caps.network.outbound.len()
+                        + caps.network.listen.len()
+                        + if caps.network.none { 1 } else { 0 }
+                );
+                println!(
+                    "  Filesystem: {} rules",
+                    caps.filesystem.read.len()
+                        + caps.filesystem.write.len()
+                        + caps.filesystem.execute.len()
+                        + caps.filesystem.deny.len()
+                );
+                println!(
+                    "  Syscalls:   {} rules (profile: {})",
                     caps.syscalls.allow.len() + caps.syscalls.deny.len(),
-                    caps.syscalls.profile.as_deref().unwrap_or("none"));
+                    caps.syscalls.profile.as_deref().unwrap_or("none")
+                );
             }
 
             println!("[VALID] Capability declaration in '{}' is valid.", path);
@@ -243,7 +258,13 @@ pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> R
 
             for (name, version, has_caps) in &packages {
                 let status = if *has_caps { "[DECLARED]" } else { "[MISSING]" };
-                println!("  {:<width$} {:12} {}", name, version, status, width = max_name_len);
+                println!(
+                    "  {:<width$} {:12} {}",
+                    name,
+                    version,
+                    status,
+                    width = max_name_len
+                );
             }
 
             println!();
@@ -251,7 +272,10 @@ pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> R
             let declared_count = packages.iter().filter(|(_, _, h)| *h).count();
             let missing_count = packages.len() - declared_count;
 
-            println!("Summary: {} declared, {} missing", declared_count, missing_count);
+            println!(
+                "Summary: {} declared, {} missing",
+                declared_count, missing_count
+            );
         }
     }
 

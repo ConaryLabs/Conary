@@ -5,8 +5,8 @@
 //! These commands manage the suggest+confirm automation flow,
 //! allowing users to review and apply automated changes.
 
+use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
-use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum AutomationCommands {

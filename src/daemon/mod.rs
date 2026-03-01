@@ -47,24 +47,21 @@ pub mod systemd;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::broadcast;
 
-pub use auth::{
-    Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission,
-};
+pub use auth::{Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission};
 pub use client::{DaemonClient, should_forward_to_daemon, try_connect};
 pub use enhance::{
-    enhancement_background_worker, execute_enhance_job, EnhanceJobResult, EnhanceJobSpec,
-    EnhancedPackageResult,
+    EnhanceJobResult, EnhanceJobSpec, EnhancedPackageResult, enhancement_background_worker,
+    execute_enhance_job,
 };
 pub use jobs::{DaemonJob, JobPriority, OperationQueue, QueuedJob};
 pub use lock::SystemLock;
 pub use systemd::{
-    is_socket_activated, listen_fds, listen_fds_count,
+    IdleTracker, SystemdManager, WatchdogTask, is_socket_activated, listen_fds, listen_fds_count,
     notify_ready, notify_status, notify_stopping, notify_watchdog,
-    IdleTracker, SystemdManager, WatchdogTask,
 };
 
 /// Daemon configuration
@@ -247,7 +244,12 @@ impl DaemonError {
 
     /// Not found error
     pub fn not_found(resource: &str) -> Self {
-        Self::new("not_found", "Not Found", 404, &format!("{} not found", resource))
+        Self::new(
+            "not_found",
+            "Not Found",
+            404,
+            &format!("{} not found", resource),
+        )
     }
 
     /// Conflict error
@@ -262,7 +264,12 @@ impl DaemonError {
 
     /// Cancelled error
     pub fn cancelled() -> Self {
-        Self::new("cancelled", "Operation Cancelled", 499, "The operation was cancelled")
+        Self::new(
+            "cancelled",
+            "Operation Cancelled",
+            499,
+            "The operation was cancelled",
+        )
     }
 
     /// Bad request error
@@ -298,19 +305,11 @@ impl DaemonError {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
     /// Job was queued
-    JobQueued {
-        job_id: JobId,
-        position: usize,
-    },
+    JobQueued { job_id: JobId, position: usize },
     /// Job execution started
-    JobStarted {
-        job_id: JobId,
-    },
+    JobStarted { job_id: JobId },
     /// Job phase changed
-    JobPhase {
-        job_id: JobId,
-        phase: String,
-    },
+    JobPhase { job_id: JobId, phase: String },
     /// Job progress update
     JobProgress {
         job_id: JobId,
@@ -319,42 +318,21 @@ pub enum DaemonEvent {
         message: String,
     },
     /// Job completed successfully
-    JobCompleted {
-        job_id: JobId,
-        duration_ms: u64,
-    },
+    JobCompleted { job_id: JobId, duration_ms: u64 },
     /// Job failed
-    JobFailed {
-        job_id: JobId,
-        error: DaemonError,
-    },
+    JobFailed { job_id: JobId, error: DaemonError },
     /// Job was cancelled
-    JobCancelled {
-        job_id: JobId,
-    },
+    JobCancelled { job_id: JobId },
     /// Package was installed
-    PackageInstalled {
-        name: String,
-        version: String,
-    },
+    PackageInstalled { name: String, version: String },
     /// Package was removed
-    PackageRemoved {
-        name: String,
-        version: String,
-    },
+    PackageRemoved { name: String, version: String },
     /// System state snapshot created
-    StateCreated {
-        state_number: i64,
-    },
+    StateCreated { state_number: i64 },
     /// Automation check complete
-    AutomationCheckComplete {
-        pending_actions: usize,
-    },
+    AutomationCheckComplete { pending_actions: usize },
     /// Enhancement started for a package
-    EnhancementStarted {
-        trove_id: i64,
-        package_name: String,
-    },
+    EnhancementStarted { trove_id: i64, package_name: String },
     /// Enhancement progress for a package
     EnhancementProgress {
         trove_id: i64,
@@ -540,15 +518,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     if systemd_manager.is_systemd() {
         log::info!("Running under systemd supervision");
         if systemd::is_socket_activated() {
-            log::info!("Socket activation detected, {} FDs passed", systemd::listen_fds_count());
+            log::info!(
+                "Socket activation detected, {} FDs passed",
+                systemd::listen_fds_count()
+            );
         }
     }
 
     // Acquire system lock
-    let system_lock = SystemLock::try_acquire(&config.lock_path)?
-        .ok_or_else(|| crate::Error::IoError(
-            "Another daemon instance is already running".to_string()
-        ))?;
+    let system_lock = SystemLock::try_acquire(&config.lock_path)?.ok_or_else(|| {
+        crate::Error::IoError("Another daemon instance is already running".to_string())
+    })?;
 
     // Write our PID
     system_lock.write_pid()?;
@@ -577,7 +557,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     log::info!("Notified systemd: READY");
 
     // Get Unix listener
-    let unix_listener = socket_manager.take_unix_listener()
+    let unix_listener = socket_manager
+        .take_unix_listener()
         .expect("Unix listener should be bound");
 
     log::info!("Daemon ready, accepting connections");

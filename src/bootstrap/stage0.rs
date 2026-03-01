@@ -191,10 +191,10 @@ impl Stage0Builder {
         if self.config.seed_url.is_some() || self.has_local_seed() {
             info!("Using Stage 0 seed...");
             self.download_and_install_seed()?;
-            
+
             // Verify
             self.verify_toolchain()?;
-            
+
             return Toolchain::from_prefix(&self.config.tools_prefix)
                 .map_err(|e| Stage0Error::VerificationFailed(e.to_string()));
         }
@@ -266,12 +266,13 @@ impl Stage0Builder {
     }
 
     fn download_and_install_seed(&mut self) -> Result<(), Stage0Error> {
-        let url = self.config.seed_url.as_ref()
-            .ok_or_else(|| Stage0Error::MissingPrerequisite("No seed URL configured".to_string()))?;
-        
+        let url = self.config.seed_url.as_ref().ok_or_else(|| {
+            Stage0Error::MissingPrerequisite("No seed URL configured".to_string())
+        })?;
+
         let filename = url.split('/').next_back().unwrap_or("stage0-seed.tar.xz");
         let target_path = self.work_dir.join(filename);
-        
+
         // Download
         if !target_path.exists() {
             info!("Downloading seed: {}", url);
@@ -279,9 +280,11 @@ impl Stage0Builder {
                 .args(["-fsSL", "-o", target_path.to_str().unwrap(), url])
                 .status()
                 .map_err(|e| Stage0Error::BuildFailed(format!("Curl failed: {}", e)))?;
-                
+
             if !status.success() {
-                return Err(Stage0Error::BuildFailed("Failed to download seed".to_string()));
+                return Err(Stage0Error::BuildFailed(
+                    "Failed to download seed".to_string(),
+                ));
             }
         }
 
@@ -292,31 +295,43 @@ impl Stage0Builder {
                 .arg(&target_path)
                 .output()
                 .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
-                
+
             let computed = String::from_utf8_lossy(&output.stdout)
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
                 .to_string();
-                
+
             if !computed.eq_ignore_ascii_case(expected) {
-                 return Err(Stage0Error::VerificationFailed(format!(
-                    "Checksum mismatch! Expected {}, got {}", expected, computed
+                return Err(Stage0Error::VerificationFailed(format!(
+                    "Checksum mismatch! Expected {}, got {}",
+                    expected, computed
                 )));
             }
         }
 
         // Extract
-        info!("Extracting seed to {}...", self.config.tools_prefix.display());
+        info!(
+            "Extracting seed to {}...",
+            self.config.tools_prefix.display()
+        );
         std::fs::create_dir_all(&self.config.tools_prefix)?;
-        
+
         let status = Command::new("tar")
-            .args(["xJf", target_path.to_str().unwrap(), "-C", self.config.tools_prefix.to_str().unwrap(), "--strip-components=1"])
+            .args([
+                "xJf",
+                target_path.to_str().unwrap(),
+                "-C",
+                self.config.tools_prefix.to_str().unwrap(),
+                "--strip-components=1",
+            ])
             .status()
             .map_err(|e| Stage0Error::BuildFailed(format!("Tar failed: {}", e)))?;
 
         if !status.success() {
-            return Err(Stage0Error::BuildFailed("Failed to extract seed".to_string()));
+            return Err(Stage0Error::BuildFailed(
+                "Failed to extract seed".to_string(),
+            ));
         }
 
         Ok(())
@@ -411,8 +426,8 @@ impl Stage0Builder {
 
     /// Test that the toolchain can compile a simple program
     fn test_compile(&self, gcc: &Path) -> Result<(), Stage0Error> {
-        let temp_dir = tempfile::tempdir()
-            .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
 
         let src = temp_dir.path().join("test.c");
         let bin = temp_dir.path().join("test");

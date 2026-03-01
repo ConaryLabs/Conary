@@ -83,10 +83,7 @@ impl<'db> Resolver<'db> {
 
         // Get installation order via topological sort (uses full graph, which is fine —
         // the order just needs to be valid, and including existing packages is harmless)
-        let install_order = match self.graph.topological_sort() {
-            Ok(order) => order,
-            Err(_) => Vec::new(),
-        };
+        let install_order = self.graph.topological_sort().unwrap_or_default();
 
         Ok(ResolutionPlan {
             install_order,
@@ -176,8 +173,10 @@ impl<'db> Resolver<'db> {
     /// Check all version constraints and return conflicts.
     fn check_all_constraints(&self) -> Vec<Conflict> {
         let mut conflicts = Vec::new();
-        let mut constraint_map: std::collections::HashMap<String, Vec<(String, VersionConstraint)>> =
-            std::collections::HashMap::new();
+        let mut constraint_map: std::collections::HashMap<
+            String,
+            Vec<(String, VersionConstraint)>,
+        > = std::collections::HashMap::new();
 
         for (requirer, edges) in &self.graph.edges {
             for edge in edges {

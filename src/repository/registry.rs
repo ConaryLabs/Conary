@@ -110,9 +110,9 @@ pub fn create_parser(
             let arch = detect_system_arch();
             Ok(Box::new(parsers::fedora::FedoraParser::new(arch)))
         }
-        RepositoryFormat::Json => {
-            Err(Error::ParseError("JSON format has no native parser".to_string()))
-        }
+        RepositoryFormat::Json => Err(Error::ParseError(
+            "JSON format has no native parser".to_string(),
+        )),
     }
 }
 
@@ -126,8 +126,17 @@ mod tests {
         assert!(!arch.is_empty());
         // Should be one of the known architectures
         let known_arches = [
-            "x86_64", "aarch64", "x86", "i686", "arm", "armv7",
-            "powerpc64", "s390x", "riscv64", "mips64", "loongarch64",
+            "x86_64",
+            "aarch64",
+            "x86",
+            "i686",
+            "arm",
+            "armv7",
+            "powerpc64",
+            "s390x",
+            "riscv64",
+            "mips64",
+            "loongarch64",
         ];
         // The system arch should be recognizable (or at least non-empty)
         assert!(

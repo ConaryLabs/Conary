@@ -35,10 +35,12 @@ impl ChunkBloomFilter {
     pub fn new(expected_items: usize, false_positive_rate: f64) -> Self {
         // Calculate optimal size: m = -n * ln(p) / (ln(2)^2)
         let ln2_squared = std::f64::consts::LN_2 * std::f64::consts::LN_2;
-        let num_bits = (-(expected_items as f64) * false_positive_rate.ln() / ln2_squared).ceil() as usize;
+        let num_bits =
+            (-(expected_items as f64) * false_positive_rate.ln() / ln2_squared).ceil() as usize;
 
         // Calculate optimal number of hash functions: k = (m/n) * ln(2)
-        let num_hashes = ((num_bits as f64 / expected_items as f64) * std::f64::consts::LN_2).ceil() as usize;
+        let num_hashes =
+            ((num_bits as f64 / expected_items as f64) * std::f64::consts::LN_2).ceil() as usize;
         let num_hashes = num_hashes.clamp(1, 16); // Reasonable bounds
 
         // Round up to nearest u64 boundary
@@ -209,11 +211,20 @@ mod tests {
         filter.add("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
         // Check presence
-        assert!(filter.might_contain("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"));
-        assert!(filter.might_contain("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"));
+        assert!(
+            filter
+                .might_contain("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+        );
+        assert!(
+            filter
+                .might_contain("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        );
 
         // Check absence (high probability)
-        assert!(!filter.might_contain("0000000000000000000000000000000000000000000000000000000000000000"));
+        assert!(
+            !filter
+                .might_contain("0000000000000000000000000000000000000000000000000000000000000000")
+        );
 
         assert_eq!(filter.count(), 2);
     }
@@ -248,7 +259,9 @@ mod tests {
 
         filter.clear();
         assert_eq!(filter.count(), 0);
-        assert!(!filter.might_contain("test_hash_1234567890123456789012345678901234567890123456789012"));
+        assert!(
+            !filter.might_contain("test_hash_1234567890123456789012345678901234567890123456789012")
+        );
     }
 
     #[test]

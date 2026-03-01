@@ -6,7 +6,7 @@
 //! dependency checking, and hook execution.
 
 use anyhow::{Context, Result};
-use conary::ccs::{verify, CcsPackage, HookExecutor, TrustPolicy};
+use conary::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
 use conary::packages::traits::PackageFormat;
 use std::path::Path;
 
@@ -37,8 +37,7 @@ pub fn cmd_ccs_install(
     // Step 1: Verify signature (unless --allow-unsigned)
     if !allow_unsigned {
         let trust_policy = if let Some(policy_path) = &policy {
-            TrustPolicy::from_file(Path::new(policy_path))
-                .context("Failed to load trust policy")?
+            TrustPolicy::from_file(Path::new(policy_path)).context("Failed to load trust policy")?
         } else {
             TrustPolicy::default()
         };
@@ -46,7 +45,9 @@ pub fn cmd_ccs_install(
         let result = verify::verify_package(package_path, &trust_policy)?;
         if !result.valid {
             if trust_policy.allow_unsigned {
-                println!("Warning: Package signature verification failed, but continuing (allow_unsigned policy)");
+                println!(
+                    "Warning: Package signature verification failed, but continuing (allow_unsigned policy)"
+                );
                 for warning in &result.warnings {
                     println!("  - {}", warning);
                 }
@@ -88,7 +89,12 @@ pub fn cmd_ccs_install(
                 ccs_pkg.version()
             );
         }
-        println!("Upgrading {} from {} to {}", ccs_pkg.name(), old.version, ccs_pkg.version());
+        println!(
+            "Upgrading {} from {} to {}",
+            ccs_pkg.name(),
+            old.version,
+            ccs_pkg.version()
+        );
     }
 
     // Step 4: Check dependencies
@@ -97,7 +103,8 @@ pub fn cmd_ccs_install(
     } else {
         println!("Checking dependencies...");
         for dep in ccs_pkg.dependencies() {
-            let satisfied = conary::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
+            let satisfied =
+                conary::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
             if !satisfied {
                 let pkg_exists = conary::db::models::Trove::find_by_name(&conn, &dep.name)?;
                 if pkg_exists.is_empty() {
@@ -171,7 +178,10 @@ pub fn cmd_ccs_install(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(file.mode as u32))?;
+            std::fs::set_permissions(
+                &dest_path,
+                std::fs::Permissions::from_mode(file.mode as u32),
+            )?;
         }
 
         files_deployed += 1;
@@ -225,11 +235,8 @@ pub fn cmd_ccs_install(
         // Register additional provides from manifest
         for cap in &ccs_pkg.manifest().provides.capabilities {
             if cap != ccs_pkg.name() {
-                let mut cap_provide = conary::db::models::ProvideEntry::new(
-                    trove_id,
-                    cap.clone(),
-                    None,
-                );
+                let mut cap_provide =
+                    conary::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
                 cap_provide.insert(&tx)?;
             }
         }
@@ -250,7 +257,11 @@ pub fn cmd_ccs_install(
     }
 
     println!();
-    println!("Successfully installed {} v{}", ccs_pkg.name(), ccs_pkg.version());
+    println!(
+        "Successfully installed {} v{}",
+        ccs_pkg.name(),
+        ccs_pkg.version()
+    );
 
     Ok(())
 }

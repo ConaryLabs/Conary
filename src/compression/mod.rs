@@ -149,10 +149,11 @@ pub fn create_decoder<'a, R: Read + 'a>(
         CompressionFormat::Gzip => Ok(Box::new(flate2::read::GzDecoder::new(reader))),
         CompressionFormat::Xz => Ok(Box::new(xz2::read::XzDecoder::new(reader))),
         CompressionFormat::Zstd => {
-            let decoder = zstd::Decoder::new(reader).map_err(|e| CompressionError::DecoderCreation {
-                format: "zstd",
-                source: e,
-            })?;
+            let decoder =
+                zstd::Decoder::new(reader).map_err(|e| CompressionError::DecoderCreation {
+                    format: "zstd",
+                    source: e,
+                })?;
             Ok(Box::new(decoder))
         }
     }
@@ -195,13 +196,34 @@ mod tests {
 
     #[test]
     fn test_format_from_extension() {
-        assert_eq!(CompressionFormat::from_extension("data.tar.gz"), CompressionFormat::Gzip);
-        assert_eq!(CompressionFormat::from_extension("data.tgz"), CompressionFormat::Gzip);
-        assert_eq!(CompressionFormat::from_extension("data.tar.xz"), CompressionFormat::Xz);
-        assert_eq!(CompressionFormat::from_extension("data.tar.zst"), CompressionFormat::Zstd);
-        assert_eq!(CompressionFormat::from_extension("data.tar.zstd"), CompressionFormat::Zstd);
-        assert_eq!(CompressionFormat::from_extension("data.tar"), CompressionFormat::None);
-        assert_eq!(CompressionFormat::from_extension("plain.txt"), CompressionFormat::None);
+        assert_eq!(
+            CompressionFormat::from_extension("data.tar.gz"),
+            CompressionFormat::Gzip
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("data.tgz"),
+            CompressionFormat::Gzip
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("data.tar.xz"),
+            CompressionFormat::Xz
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("data.tar.zst"),
+            CompressionFormat::Zstd
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("data.tar.zstd"),
+            CompressionFormat::Zstd
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("data.tar"),
+            CompressionFormat::None
+        );
+        assert_eq!(
+            CompressionFormat::from_extension("plain.txt"),
+            CompressionFormat::None
+        );
     }
 
     #[test]
@@ -231,7 +253,10 @@ mod tests {
         );
 
         // Too short for any magic
-        assert_eq!(CompressionFormat::from_magic_bytes(&[0x1f]), CompressionFormat::None);
+        assert_eq!(
+            CompressionFormat::from_magic_bytes(&[0x1f]),
+            CompressionFormat::None
+        );
     }
 
     #[test]

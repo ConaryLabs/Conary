@@ -264,7 +264,10 @@ impl Lockfile {
     }
 
     /// Get dependencies by kind
-    pub fn dependencies_by_kind(&self, kind: DependencyKind) -> impl Iterator<Item = &LockedDependency> {
+    pub fn dependencies_by_kind(
+        &self,
+        kind: DependencyKind,
+    ) -> impl Iterator<Item = &LockedDependency> {
         self.dependencies.iter().filter(move |d| d.kind == kind)
     }
 
@@ -329,12 +332,7 @@ impl Lockfile {
 
     /// Get total dependency count
     pub fn total_deps(&self) -> usize {
-        self.dependencies.len()
-            + self
-                .platform_deps
-                .values()
-                .map(|v| v.len())
-                .sum::<usize>()
+        self.dependencies.len() + self.platform_deps.values().map(|v| v.len()).sum::<usize>()
     }
 
     /// Check if empty
@@ -422,31 +420,27 @@ mod tests {
         let mut lockfile = Lockfile::new("myapp", "1.0.0");
 
         lockfile.add_dependency(
-            LockedDependency::new("libc", "2.38", "sha256:aaa")
-                .with_kind(DependencyKind::Runtime),
+            LockedDependency::new("libc", "2.38", "sha256:aaa").with_kind(DependencyKind::Runtime),
         );
         lockfile.add_dependency(
-            LockedDependency::new("gcc", "13.2", "sha256:bbb")
-                .with_kind(DependencyKind::Build),
+            LockedDependency::new("gcc", "13.2", "sha256:bbb").with_kind(DependencyKind::Build),
         );
         lockfile.add_dependency(
-            LockedDependency::new("gdb", "14.1", "sha256:ccc")
-                .with_kind(DependencyKind::Dev),
+            LockedDependency::new("gdb", "14.1", "sha256:ccc").with_kind(DependencyKind::Dev),
         );
 
         assert_eq!(lockfile.runtime_deps().count(), 1);
         assert_eq!(lockfile.build_deps().count(), 1);
-        assert_eq!(lockfile.dependencies_by_kind(DependencyKind::Dev).count(), 1);
+        assert_eq!(
+            lockfile.dependencies_by_kind(DependencyKind::Dev).count(),
+            1
+        );
     }
 
     #[test]
     fn test_lockfile_serialization() {
         let mut lockfile = Lockfile::new("myapp", "1.0.0");
-        lockfile.add_dependency(LockedDependency::new(
-            "openssl",
-            "3.1.4",
-            "sha256:abc123",
-        ));
+        lockfile.add_dependency(LockedDependency::new("openssl", "3.1.4", "sha256:abc123"));
 
         let toml = lockfile.to_toml().unwrap();
         assert!(toml.contains("openssl"));
@@ -462,11 +456,7 @@ mod tests {
     #[test]
     fn test_lockfile_validation() {
         let mut lockfile = Lockfile::new("myapp", "1.0.0");
-        lockfile.add_dependency(LockedDependency::new(
-            "openssl",
-            "3.1.4",
-            "sha256:abc123",
-        ));
+        lockfile.add_dependency(LockedDependency::new("openssl", "3.1.4", "sha256:abc123"));
 
         // Matching resolved deps
         let resolved = vec![LockedDependency::new("openssl", "3.1.4", "sha256:abc123")];
@@ -479,8 +469,11 @@ mod tests {
         assert!(result.is_err());
 
         // Content hash mismatch
-        let resolved_wrong_hash =
-            vec![LockedDependency::new("openssl", "3.1.4", "sha256:different")];
+        let resolved_wrong_hash = vec![LockedDependency::new(
+            "openssl",
+            "3.1.4",
+            "sha256:different",
+        )];
         let result = lockfile.validate_against(&resolved_wrong_hash);
         assert!(result.is_err());
     }

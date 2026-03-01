@@ -7,7 +7,7 @@ use clap_complete::Shell;
 use super::redirect::RedirectCommands;
 use super::state::StateCommands;
 use super::trigger::TriggerCommands;
-use super::{DbArgs, CommonArgs};
+use super::{CommonArgs, DbArgs};
 
 #[derive(Subcommand)]
 pub enum SystemCommands {

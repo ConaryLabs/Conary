@@ -227,11 +227,7 @@ impl DeltaStats {
         Ok(Self {
             id: {
                 let id: i64 = row.get(0)?;
-                if id == 0 {
-                    None
-                } else {
-                    Some(id)
-                }
+                if id == 0 { None } else { Some(id) }
             },
             changeset_id: row.get(1)?,
             total_bytes_saved: row.get::<_, Option<i64>>(2)?.unwrap_or(0),

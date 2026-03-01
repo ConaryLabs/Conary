@@ -1,8 +1,8 @@
 // src/cli/model.rs
 //! System model management commands
 
+use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
-use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum ModelCommands {

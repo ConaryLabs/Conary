@@ -8,7 +8,7 @@
 //! - `nginx:runtime` depends on `openssl:lib` (different package)
 
 use crate::error::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Dependency type for component dependencies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,7 +287,11 @@ mod tests {
         (temp_file, conn)
     }
 
-    fn create_test_trove_and_component(conn: &Connection, name: &str, comp_name: &str) -> (i64, i64) {
+    fn create_test_trove_and_component(
+        conn: &Connection,
+        name: &str,
+        comp_name: &str,
+    ) -> (i64, i64) {
         let mut trove = Trove::new(name.to_string(), "1.0.0".to_string(), TroveType::Package);
         let trove_id = trove.insert(conn).unwrap();
 
@@ -303,9 +307,18 @@ mod tests {
         assert_eq!(ComponentDepType::Build.as_str(), "build");
         assert_eq!(ComponentDepType::Optional.as_str(), "optional");
 
-        assert_eq!(ComponentDepType::parse("runtime"), Some(ComponentDepType::Runtime));
-        assert_eq!(ComponentDepType::parse("build"), Some(ComponentDepType::Build));
-        assert_eq!(ComponentDepType::parse("optional"), Some(ComponentDepType::Optional));
+        assert_eq!(
+            ComponentDepType::parse("runtime"),
+            Some(ComponentDepType::Runtime)
+        );
+        assert_eq!(
+            ComponentDepType::parse("build"),
+            Some(ComponentDepType::Build)
+        );
+        assert_eq!(
+            ComponentDepType::parse("optional"),
+            Some(ComponentDepType::Optional)
+        );
         assert_eq!(ComponentDepType::parse("invalid"), None);
     }
 

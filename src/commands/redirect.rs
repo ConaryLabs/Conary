@@ -6,16 +6,16 @@ use anyhow::{Context, Result};
 use conary::db::models::{Redirect, RedirectType};
 
 /// List all redirects
-pub fn cmd_redirect_list(
-    db_path: &str,
-    type_filter: Option<&str>,
-    verbose: bool,
-) -> Result<()> {
+pub fn cmd_redirect_list(db_path: &str, type_filter: Option<&str>, verbose: bool) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     let redirects = if let Some(type_str) = type_filter {
-        let redirect_type = type_str.parse::<RedirectType>()
-            .map_err(|_| anyhow::anyhow!("Invalid redirect type: {}. Use: rename, obsolete, merge, split", type_str))?;
+        let redirect_type = type_str.parse::<RedirectType>().map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid redirect type: {}. Use: rename, obsolete, merge, split",
+                type_str
+            )
+        })?;
         Redirect::list_by_type(&conn, redirect_type)?
     } else {
         Redirect::list_all(&conn)?
@@ -75,8 +75,12 @@ pub fn cmd_redirect_add(
 ) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
-    let rtype = redirect_type.parse::<RedirectType>()
-        .map_err(|_| anyhow::anyhow!("Invalid redirect type: {}. Use: rename, obsolete, merge, split", redirect_type))?;
+    let rtype = redirect_type.parse::<RedirectType>().map_err(|_| {
+        anyhow::anyhow!(
+            "Invalid redirect type: {}. Use: rename, obsolete, merge, split",
+            redirect_type
+        )
+    })?;
 
     // Check if redirect already exists
     if Redirect::find_by_source(&conn, source, source_version)?.is_some() {
@@ -85,7 +89,10 @@ pub fn cmd_redirect_add(
         } else {
             source.to_string()
         };
-        return Err(anyhow::anyhow!("Redirect for '{}' already exists", source_desc));
+        return Err(anyhow::anyhow!(
+            "Redirect for '{}' already exists",
+            source_desc
+        ));
     }
 
     // Check for circular redirects before adding
@@ -94,7 +101,9 @@ pub fn cmd_redirect_add(
     if resolve_result.chain.contains(&source.to_string()) {
         return Err(anyhow::anyhow!(
             "Adding this redirect would create a circular chain: {} -> {} -> {}",
-            source, target, source
+            source,
+            target,
+            source
         ));
     }
 
@@ -112,7 +121,9 @@ pub fn cmd_redirect_add(
         redirect.message = Some(msg.to_string());
     }
 
-    redirect.insert(&conn).context("Failed to insert redirect")?;
+    redirect
+        .insert(&conn)
+        .context("Failed to insert redirect")?;
 
     let source_desc = if let Some(ver) = source_version {
         format!("{}={}", source, ver)
@@ -126,7 +137,10 @@ pub fn cmd_redirect_add(
         target.to_string()
     };
 
-    println!("Created redirect: {} -> {} ({})", source_desc, target_desc, redirect_type);
+    println!(
+        "Created redirect: {} -> {} ({})",
+        source_desc, target_desc, redirect_type
+    );
 
     if let Some(msg) = message {
         println!("Message: {}", msg);
@@ -136,11 +150,7 @@ pub fn cmd_redirect_add(
 }
 
 /// Show details of a redirect
-pub fn cmd_redirect_show(
-    source: &str,
-    db_path: &str,
-    version: Option<&str>,
-) -> Result<()> {
+pub fn cmd_redirect_show(source: &str, db_path: &str, version: Option<&str>) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     let redirect = Redirect::find_by_source(&conn, source, version)?;
@@ -202,11 +212,7 @@ pub fn cmd_redirect_remove(source: &str, db_path: &str) -> Result<()> {
 }
 
 /// Resolve a package name through redirect chain
-pub fn cmd_redirect_resolve(
-    package: &str,
-    db_path: &str,
-    version: Option<&str>,
-) -> Result<()> {
+pub fn cmd_redirect_resolve(package: &str, db_path: &str, version: Option<&str>) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     let result = Redirect::resolve(&conn, package, version)?;

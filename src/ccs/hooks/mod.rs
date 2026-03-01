@@ -172,7 +172,8 @@ impl HookExecutor {
         // Groups first (users may depend on them)
         for group in &hooks.groups {
             if self.create_group(&group.name, group.system)? {
-                self.applied_hooks.push(AppliedHook::Group(group.name.clone()));
+                self.applied_hooks
+                    .push(AppliedHook::Group(group.name.clone()));
             }
         }
 
@@ -185,7 +186,8 @@ impl HookExecutor {
                 user.shell.as_deref(),
                 user.group.as_deref(),
             )? {
-                self.applied_hooks.push(AppliedHook::User(user.name.clone()));
+                self.applied_hooks
+                    .push(AppliedHook::User(user.name.clone()));
             }
         }
 
@@ -193,7 +195,8 @@ impl HookExecutor {
         for dir in &hooks.directories {
             let path = self.root.join(dir.path.trim_start_matches('/'));
             let created = self.create_directory(&path, &dir.mode, &dir.owner, &dir.group)?;
-            self.applied_hooks.push(AppliedHook::Directory(path, created));
+            self.applied_hooks
+                .push(AppliedHook::Directory(path, created));
         }
 
         Ok(())
@@ -222,9 +225,7 @@ impl HookExecutor {
                     }
                 }
                 AppliedHook::Directory(path, was_created) => {
-                    if was_created
-                        && let Err(e) = self.remove_directory(&path)
-                    {
+                    if was_created && let Err(e) = self.remove_directory(&path) {
                         warn!("Failed to revert directory '{}': {}", path.display(), e);
                     }
                 }
@@ -265,7 +266,8 @@ impl HookExecutor {
             let hook_result = match result {
                 Ok(created) => {
                     if created {
-                        self.applied_hooks.push(AppliedHook::Group(group.name.clone()));
+                        self.applied_hooks
+                            .push(AppliedHook::Group(group.name.clone()));
                     }
                     HookResult {
                         hook_type: HookType::Group,
@@ -303,7 +305,8 @@ impl HookExecutor {
             let hook_result = match result {
                 Ok(created) => {
                     if created {
-                        self.applied_hooks.push(AppliedHook::User(user.name.clone()));
+                        self.applied_hooks
+                            .push(AppliedHook::User(user.name.clone()));
                     }
                     HookResult {
                         hook_type: HookType::User,
@@ -335,7 +338,8 @@ impl HookExecutor {
 
             let hook_result = match result {
                 Ok(created) => {
-                    self.applied_hooks.push(AppliedHook::Directory(path, created));
+                    self.applied_hooks
+                        .push(AppliedHook::Directory(path, created));
                     HookResult {
                         hook_type: HookType::Directory,
                         name: dir.path.clone(),

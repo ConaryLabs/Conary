@@ -30,8 +30,8 @@
 //! progress.finish_with_message("Installation complete");
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
 /// Progress reporting style
@@ -143,7 +143,12 @@ impl ProgressTracker for SilentProgress {
         self.finished.load(Ordering::Relaxed)
     }
 
-    fn child(&self, _message: &str, length: u64, _style: ProgressStyle) -> Box<dyn ProgressTracker> {
+    fn child(
+        &self,
+        _message: &str,
+        length: u64,
+        _style: ProgressStyle,
+    ) -> Box<dyn ProgressTracker> {
         Box::new(SilentProgress::with_length(length))
     }
 }
@@ -234,7 +239,10 @@ impl ProgressTracker for LogProgress {
     }
 
     fn child(&self, message: &str, length: u64, _style: ProgressStyle) -> Box<dyn ProgressTracker> {
-        Box::new(LogProgress::new(format!("{}:{}", self.name, message), length))
+        Box::new(LogProgress::new(
+            format!("{}:{}", self.name, message),
+            length,
+        ))
     }
 }
 
@@ -332,7 +340,12 @@ where
         self.finished.load(Ordering::Relaxed)
     }
 
-    fn child(&self, _message: &str, length: u64, _style: ProgressStyle) -> Box<dyn ProgressTracker> {
+    fn child(
+        &self,
+        _message: &str,
+        length: u64,
+        _style: ProgressStyle,
+    ) -> Box<dyn ProgressTracker> {
         // For callback progress, children are silent to avoid callback complexity
         Box::new(SilentProgress::with_length(length))
     }
@@ -426,7 +439,10 @@ impl ProgressTracker for MultiProgress {
     }
 
     fn child(&self, message: &str, length: u64, _style: ProgressStyle) -> Box<dyn ProgressTracker> {
-        Box::new(LogProgress::new(format!("{}:{}", self.name, message), length))
+        Box::new(LogProgress::new(
+            format!("{}:{}", self.name, message),
+            length,
+        ))
     }
 }
 
@@ -494,7 +510,13 @@ mod tests {
         assert_eq!(captured.len(), 3);
 
         assert!(matches!(&captured[0], ProgressEvent::Message(m) if m == "starting"));
-        assert!(matches!(&captured[1], ProgressEvent::Position { current: 50, total: 100 }));
+        assert!(matches!(
+            &captured[1],
+            ProgressEvent::Position {
+                current: 50,
+                total: 100
+            }
+        ));
         assert!(matches!(&captured[2], ProgressEvent::Finished(m) if m == "done"));
     }
 

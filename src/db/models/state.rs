@@ -88,11 +88,10 @@ impl SystemState {
 
     /// Get the next state number
     pub fn next_state_number(conn: &Connection) -> Result<i64> {
-        let max: Option<i64> = conn.query_row(
-            "SELECT MAX(state_number) FROM system_states",
-            [],
-            |row| row.get(0),
-        )?;
+        let max: Option<i64> =
+            conn.query_row("SELECT MAX(state_number) FROM system_states", [], |row| {
+                row.get(0)
+            })?;
 
         Ok(max.unwrap_or(-1) + 1)
     }
@@ -135,13 +134,13 @@ impl SystemState {
 
         let result = (|| -> Result<()> {
             // Unset all active states
-            conn.execute("UPDATE system_states SET is_active = 0 WHERE is_active = 1", [])?;
+            conn.execute(
+                "UPDATE system_states SET is_active = 0 WHERE is_active = 1",
+                [],
+            )?;
 
             // Set this one as active
-            conn.execute(
-                "UPDATE system_states SET is_active = 1 WHERE id = ?1",
-                [id],
-            )?;
+            conn.execute("UPDATE system_states SET is_active = 1 WHERE id = ?1", [id])?;
 
             Ok(())
         })();
@@ -166,7 +165,11 @@ impl SystemState {
     }
 
     /// Delete states older than a certain state number (for pruning)
-    pub fn delete_older_than(conn: &Connection, state_number: i64, keep_active: bool) -> Result<i64> {
+    pub fn delete_older_than(
+        conn: &Connection,
+        state_number: i64,
+        keep_active: bool,
+    ) -> Result<i64> {
         let deleted = if keep_active {
             conn.execute(
                 "DELETE FROM system_states WHERE state_number < ?1 AND is_active = 0",
@@ -222,11 +225,7 @@ pub struct StateMember {
 
 impl StateMember {
     /// Create a new state member
-    pub fn new(
-        state_id: i64,
-        trove_name: String,
-        trove_version: String,
-    ) -> Self {
+    pub fn new(state_id: i64, trove_name: String, trove_version: String) -> Self {
         Self {
             id: None,
             state_id,
@@ -366,7 +365,12 @@ impl<'a> StateEngine<'a> {
     }
 
     /// Create a new state snapshot from current system
-    pub fn create_snapshot(&self, summary: &str, description: Option<&str>, changeset_id: Option<i64>) -> Result<SystemState> {
+    pub fn create_snapshot(
+        &self,
+        summary: &str,
+        description: Option<&str>,
+        changeset_id: Option<i64>,
+    ) -> Result<SystemState> {
         let state_number = SystemState::next_state_number(self.conn)?;
 
         // Count current packages
@@ -404,7 +408,8 @@ impl<'a> StateEngine<'a> {
         let current = SystemState::get_active(self.conn)?
             .ok_or_else(|| crate::error::Error::InitError("No active state found".to_string()))?;
 
-        let current_id = current.id
+        let current_id = current
+            .id
             .ok_or_else(|| crate::error::Error::InitError("Current state has no ID".to_string()))?;
 
         // Get the diff from current to target
@@ -412,8 +417,9 @@ impl<'a> StateEngine<'a> {
 
         Ok(RestorePlan {
             from_state: current,
-            to_state: SystemState::find_by_id(self.conn, target_state_id)?
-                .ok_or_else(|| crate::error::Error::InitError("Target state not found".to_string()))?,
+            to_state: SystemState::find_by_id(self.conn, target_state_id)?.ok_or_else(|| {
+                crate::error::Error::InitError("Target state not found".to_string())
+            })?,
             to_remove: diff.removed,
             to_install: diff.added,
             to_upgrade: diff.upgraded,
@@ -423,13 +429,16 @@ impl<'a> StateEngine<'a> {
     /// Prune old states, keeping only the most recent N states
     pub fn prune(&self, keep_count: i64) -> Result<i64> {
         // Get the state number threshold
-        let threshold: Option<i64> = self.conn.query_row(
-            "SELECT state_number FROM system_states
+        let threshold: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT state_number FROM system_states
              ORDER BY state_number DESC
              LIMIT 1 OFFSET ?1",
-            [keep_count - 1],
-            |row| row.get(0),
-        ).optional()?;
+                [keep_count - 1],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         if let Some(threshold) = threshold {
             SystemState::delete_older_than(self.conn, threshold, true)
@@ -551,16 +560,28 @@ mod tests {
         // Create state 1 with packages A, B, C
         let mut state1 = SystemState::new(1, "State 1".to_string());
         let state1_id = state1.insert(&conn).unwrap();
-        StateMember::new(state1_id, "pkg-a".to_string(), "1.0".to_string()).insert(&conn).unwrap();
-        StateMember::new(state1_id, "pkg-b".to_string(), "1.0".to_string()).insert(&conn).unwrap();
-        StateMember::new(state1_id, "pkg-c".to_string(), "1.0".to_string()).insert(&conn).unwrap();
+        StateMember::new(state1_id, "pkg-a".to_string(), "1.0".to_string())
+            .insert(&conn)
+            .unwrap();
+        StateMember::new(state1_id, "pkg-b".to_string(), "1.0".to_string())
+            .insert(&conn)
+            .unwrap();
+        StateMember::new(state1_id, "pkg-c".to_string(), "1.0".to_string())
+            .insert(&conn)
+            .unwrap();
 
         // Create state 2 with packages B (upgraded), C, D (new)
         let mut state2 = SystemState::new(2, "State 2".to_string());
         let state2_id = state2.insert(&conn).unwrap();
-        StateMember::new(state2_id, "pkg-b".to_string(), "2.0".to_string()).insert(&conn).unwrap();
-        StateMember::new(state2_id, "pkg-c".to_string(), "1.0".to_string()).insert(&conn).unwrap();
-        StateMember::new(state2_id, "pkg-d".to_string(), "1.0".to_string()).insert(&conn).unwrap();
+        StateMember::new(state2_id, "pkg-b".to_string(), "2.0".to_string())
+            .insert(&conn)
+            .unwrap();
+        StateMember::new(state2_id, "pkg-c".to_string(), "1.0".to_string())
+            .insert(&conn)
+            .unwrap();
+        StateMember::new(state2_id, "pkg-d".to_string(), "1.0".to_string())
+            .insert(&conn)
+            .unwrap();
 
         let diff = StateDiff::compare(&conn, state1_id, state2_id).unwrap();
 
@@ -588,10 +609,13 @@ mod tests {
             "INSERT INTO troves (name, version, type, architecture, install_reason)
              VALUES ('test-pkg', '1.0', 'package', 'x86_64', 'explicit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let engine = StateEngine::new(&conn);
-        let state = engine.create_snapshot("Test snapshot", Some("Description"), None).unwrap();
+        let state = engine
+            .create_snapshot("Test snapshot", Some("Description"), None)
+            .unwrap();
 
         assert_eq!(state.state_number, 0); // First state after clearing
         assert_eq!(state.package_count, 1);

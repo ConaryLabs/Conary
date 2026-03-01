@@ -17,8 +17,8 @@ pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> 
     println!("Initializing bootstrap environment...");
     println!("  Work directory: {}", work_dir);
 
-    let target_arch =
-        TargetArch::parse(target).context("Invalid target architecture. Use: x86_64, aarch64, riscv64")?;
+    let target_arch = TargetArch::parse(target)
+        .context("Invalid target architecture. Use: x86_64, aarch64, riscv64")?;
 
     println!("  Target: {} ({})", target_arch, target_arch.triple());
 
@@ -31,7 +31,10 @@ pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> 
 
     let bootstrap = Bootstrap::with_config(work_dir, config)?;
 
-    println!("\nBootstrap environment initialized at {}", bootstrap.work_dir().display());
+    println!(
+        "\nBootstrap environment initialized at {}",
+        bootstrap.work_dir().display()
+    );
     println!("\nNext steps:");
     println!("  1. Run 'conary bootstrap check' to verify prerequisites");
     println!("  2. Run 'conary bootstrap stage0' to build the cross-toolchain");
@@ -149,7 +152,10 @@ pub fn cmd_bootstrap_stage0(
     if let Some(ref ver) = toolchain.gcc_version {
         println!("  GCC: {}", ver);
     }
-    println!("  Static: {}", if toolchain.is_static { "yes" } else { "no" });
+    println!(
+        "  Static: {}",
+        if toolchain.is_static { "yes" } else { "no" }
+    );
 
     println!("\nNext steps:");
     println!("  Run 'conary bootstrap stage1' to build the self-hosted toolchain");
@@ -196,7 +202,10 @@ pub fn cmd_bootstrap_stage1(
         .unwrap_or_else(|| PathBuf::from("recipes/core"));
 
     if !recipe_path.exists() {
-        println!("[ERROR] Recipe directory not found: {}", recipe_path.display());
+        println!(
+            "[ERROR] Recipe directory not found: {}",
+            recipe_path.display()
+        );
         println!("Specify --recipe-dir or ensure recipes/core exists.");
         return Err(anyhow::anyhow!("Recipe directory not found"));
     }
@@ -253,7 +262,10 @@ pub fn cmd_bootstrap_base(
         .unwrap_or_else(|| PathBuf::from("recipes/core"));
 
     if !recipe_path.exists() {
-        println!("[ERROR] Recipe directory not found: {}", recipe_path.display());
+        println!(
+            "[ERROR] Recipe directory not found: {}",
+            recipe_path.display()
+        );
         println!("Specify --recipe-dir or ensure recipes/core exists.");
         return Err(anyhow::anyhow!("Recipe directory not found"));
     }
@@ -271,8 +283,10 @@ pub fn cmd_bootstrap_base(
     println!("  {}", summary);
 
     if summary.failed > 0 {
-        println!("\n[WARN] {} packages failed (see logs in {}/base/logs/)",
-                 summary.failed, work_dir);
+        println!(
+            "\n[WARN] {} packages failed (see logs in {}/base/logs/)",
+            summary.failed, work_dir
+        );
     }
 
     println!("\nNext steps:");
@@ -282,12 +296,7 @@ pub fn cmd_bootstrap_base(
 }
 
 /// Generate bootable image
-pub fn cmd_bootstrap_image(
-    work_dir: &str,
-    output: &str,
-    format: &str,
-    size: &str,
-) -> Result<()> {
+pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &str) -> Result<()> {
     println!("Generating bootable image...");
     println!("  Work directory: {}", work_dir);
     println!("  Output: {}", output);
@@ -295,12 +304,11 @@ pub fn cmd_bootstrap_image(
     println!("  Size: {}", size);
 
     // Parse format
-    let image_format = ImageFormat::from_str(format)
-        .context("Invalid image format. Use: raw, qcow2, iso")?;
+    let image_format =
+        ImageFormat::from_str(format).context("Invalid image format. Use: raw, qcow2, iso")?;
 
     // Parse size
-    let image_size = ImageSize::from_str(size)
-        .context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
+    let image_size = ImageSize::from_str(size).context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
 
     // Check prerequisites
     println!("\nChecking required tools...");
@@ -361,22 +369,47 @@ pub fn cmd_bootstrap_image(
     println!("\n[OK] Image generated successfully!");
     println!("  Path: {}", result.path.display());
     println!("  Format: {}", result.format);
-    println!("  Size: {} bytes ({:.1} GB)", result.size, result.size as f64 / 1_073_741_824.0);
-    println!("  EFI bootable: {}", if result.efi_bootable { "yes" } else { "no" });
-    println!("  BIOS bootable: {}", if result.bios_bootable { "yes" } else { "no" });
+    println!(
+        "  Size: {} bytes ({:.1} GB)",
+        result.size,
+        result.size as f64 / 1_073_741_824.0
+    );
+    println!(
+        "  EFI bootable: {}",
+        if result.efi_bootable { "yes" } else { "no" }
+    );
+    println!(
+        "  BIOS bootable: {}",
+        if result.bios_bootable { "yes" } else { "no" }
+    );
 
     println!("\nUsage:");
     match image_format {
         ImageFormat::Raw => {
-            println!("  QEMU: qemu-system-x86_64 -drive file={},format=raw -m 2G -enable-kvm", output);
-            println!("  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress", output);
+            println!(
+                "  QEMU: qemu-system-x86_64 -drive file={},format=raw -m 2G -enable-kvm",
+                output
+            );
+            println!(
+                "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
+                output
+            );
         }
         ImageFormat::Qcow2 => {
-            println!("  QEMU: qemu-system-x86_64 -drive file={},format=qcow2 -m 2G -enable-kvm", output);
+            println!(
+                "  QEMU: qemu-system-x86_64 -drive file={},format=qcow2 -m 2G -enable-kvm",
+                output
+            );
         }
         ImageFormat::Iso => {
-            println!("  QEMU: qemu-system-x86_64 -cdrom {} -m 2G -enable-kvm", output);
-            println!("  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress", output);
+            println!(
+                "  QEMU: qemu-system-x86_64 -cdrom {} -m 2G -enable-kvm",
+                output
+            );
+            println!(
+                "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
+                output
+            );
         }
     }
 
@@ -402,9 +435,7 @@ pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     for (stage, complete, status) in bootstrap.stages().summary() {
         let marker = if complete { "[COMPLETE]" } else { "[PENDING]" };
         print!("  {} {}", marker, stage);
-        if verbose
-            && let Some(ref s) = status
-        {
+        if verbose && let Some(ref s) = status {
             print!(" - {}", s);
         }
         println!();
@@ -426,15 +457,18 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming from: {}", current);
 
     match current {
-        BootstrapStage::Stage0 => {
-            cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false)
-        }
+        BootstrapStage::Stage0 => cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false),
         BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose),
-        BootstrapStage::BaseSystem => cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose),
+        BootstrapStage::BaseSystem => {
+            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose)
+        }
         BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
         stage => {
             // Handle other stages (Stage2, Boot, Networking, Conary) - not yet implemented
-            println!("[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.", stage);
+            println!(
+                "[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.",
+                stage
+            );
             Ok(())
         }
     }

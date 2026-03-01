@@ -5,13 +5,13 @@
 //! Jobs represent asynchronous operations (install, remove, update, etc.) that
 //! are queued for execution. They persist across daemon restarts.
 
-use crate::daemon::{DaemonError, JobId, JobKind, JobStatus};
 use crate::Result;
+use crate::daemon::{DaemonError, JobId, JobKind, JobStatus};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, RwLock};
 
 /// A persisted job record
@@ -82,8 +82,8 @@ impl DaemonJob {
 
     /// Insert this job into the database
     pub fn insert(&self, conn: &Connection) -> Result<()> {
-        let kind_str = serde_json::to_string(&self.kind)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let kind_str =
+            serde_json::to_string(&self.kind).map_err(|e| crate::Error::IoError(e.to_string()))?;
         // Remove quotes from serialized enum
         let kind_str = kind_str.trim_matches('"');
 
@@ -91,16 +91,18 @@ impl DaemonJob {
             .map_err(|e| crate::Error::IoError(e.to_string()))?;
         let status_str = status_str.trim_matches('"');
 
-        let spec_json = serde_json::to_string(&self.spec)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let spec_json =
+            serde_json::to_string(&self.spec).map_err(|e| crate::Error::IoError(e.to_string()))?;
 
-        let error_json = self.error.as_ref().map(|e| {
-            serde_json::to_string(e).unwrap_or_default()
-        });
+        let error_json = self
+            .error
+            .as_ref()
+            .map(|e| serde_json::to_string(e).unwrap_or_default());
 
-        let result_json = self.result.as_ref().map(|r| {
-            serde_json::to_string(r).unwrap_or_default()
-        });
+        let result_json = self
+            .result
+            .as_ref()
+            .map(|r| serde_json::to_string(r).unwrap_or_default());
 
         conn.execute(
             "INSERT INTO daemon_jobs (id, idempotency_key, kind, spec_json, status, result_json,
@@ -130,7 +132,7 @@ impl DaemonJob {
         let mut stmt = conn.prepare(
             "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
              requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE id = ?1"
+             FROM daemon_jobs WHERE id = ?1",
         )?;
 
         let job = stmt.query_row([id], Self::from_row).optional()?;
@@ -142,7 +144,7 @@ impl DaemonJob {
         let mut stmt = conn.prepare(
             "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
              requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE idempotency_key = ?1"
+             FROM daemon_jobs WHERE idempotency_key = ?1",
         )?;
 
         let job = stmt.query_row([key], Self::from_row).optional()?;
@@ -151,14 +153,14 @@ impl DaemonJob {
 
     /// List jobs by status
     pub fn list_by_status(conn: &Connection, status: JobStatus) -> Result<Vec<Self>> {
-        let status_str = serde_json::to_string(&status)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let status_str =
+            serde_json::to_string(&status).map_err(|e| crate::Error::IoError(e.to_string()))?;
         let status_str = status_str.trim_matches('"');
 
         let mut stmt = conn.prepare(
             "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
              requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC"
+             FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC",
         )?;
 
         let jobs = stmt
@@ -176,12 +178,14 @@ impl DaemonJob {
                 format!(
                     "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
                      requested_by_uid, client_info, created_at, started_at, completed_at
-                     FROM daemon_jobs ORDER BY created_at DESC LIMIT {}", n
+                     FROM daemon_jobs ORDER BY created_at DESC LIMIT {}",
+                    n
                 )
             }
             None => "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
                  requested_by_uid, client_info, created_at, started_at, completed_at
-                 FROM daemon_jobs ORDER BY created_at DESC".to_string(),
+                 FROM daemon_jobs ORDER BY created_at DESC"
+                .to_string(),
         };
 
         let mut stmt = conn.prepare(&sql)?;
@@ -194,8 +198,8 @@ impl DaemonJob {
 
     /// Update job status
     pub fn update_status(conn: &Connection, id: &str, status: JobStatus) -> Result<bool> {
-        let status_str = serde_json::to_string(&status)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let status_str =
+            serde_json::to_string(&status).map_err(|e| crate::Error::IoError(e.to_string()))?;
         let status_str = status_str.trim_matches('"');
 
         let timestamp = chrono::Utc::now().to_rfc3339();
@@ -229,8 +233,8 @@ impl DaemonJob {
 
     /// Update job with result
     pub fn set_result(conn: &Connection, id: &str, result: &serde_json::Value) -> Result<bool> {
-        let result_json = serde_json::to_string(result)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let result_json =
+            serde_json::to_string(result).map_err(|e| crate::Error::IoError(e.to_string()))?;
 
         let rows = conn.execute(
             "UPDATE daemon_jobs SET result_json = ?1 WHERE id = ?2",
@@ -242,8 +246,8 @@ impl DaemonJob {
 
     /// Update job with error
     pub fn set_error(conn: &Connection, id: &str, error: &DaemonError) -> Result<bool> {
-        let error_json = serde_json::to_string(error)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let error_json =
+            serde_json::to_string(error).map_err(|e| crate::Error::IoError(e.to_string()))?;
 
         let rows = conn.execute(
             "UPDATE daemon_jobs SET error_json = ?1 WHERE id = ?2",
@@ -283,24 +287,23 @@ impl DaemonJob {
         let completed_at: Option<String> = row.get(11)?;
 
         // Parse kind
-        let kind: JobKind = serde_json::from_str(&format!("\"{}\"", kind_str))
-            .unwrap_or(JobKind::Install);
+        let kind: JobKind =
+            serde_json::from_str(&format!("\"{}\"", kind_str)).unwrap_or(JobKind::Install);
 
         // Parse status
-        let status: JobStatus = serde_json::from_str(&format!("\"{}\"", status_str))
-            .unwrap_or(JobStatus::Queued);
+        let status: JobStatus =
+            serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(JobStatus::Queued);
 
         // Parse spec
-        let spec: serde_json::Value = serde_json::from_str(&spec_json)
-            .unwrap_or(serde_json::Value::Null);
+        let spec: serde_json::Value =
+            serde_json::from_str(&spec_json).unwrap_or(serde_json::Value::Null);
 
         // Parse result
-        let result: Option<serde_json::Value> = result_json
-            .and_then(|s| serde_json::from_str(&s).ok());
+        let result: Option<serde_json::Value> =
+            result_json.and_then(|s| serde_json::from_str(&s).ok());
 
         // Parse error
-        let error: Option<DaemonError> = error_json
-            .and_then(|s| serde_json::from_str(&s).ok());
+        let error: Option<DaemonError> = error_json.and_then(|s| serde_json::from_str(&s).ok());
 
         Ok(Self {
             id,
@@ -371,11 +374,15 @@ impl OperationQueue {
         };
 
         // Store cancel token
-        self.cancel_tokens.write().await.insert(job.id.clone(), cancel_token.clone());
+        self.cancel_tokens
+            .write()
+            .await
+            .insert(job.id.clone(), cancel_token.clone());
 
         // Insert in priority order
         let mut queue = self.queue.lock().await;
-        let insert_pos = queue.iter()
+        let insert_pos = queue
+            .iter()
             .position(|j| j.priority < priority)
             .unwrap_or(queue.len());
         queue.insert(insert_pos, queued);
@@ -481,10 +488,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create a job
-        let job = DaemonJob::new(
-            JobKind::Install,
-            serde_json::json!({"packages": ["nginx"]}),
-        );
+        let job = DaemonJob::new(JobKind::Install, serde_json::json!({"packages": ["nginx"]}));
         let job_id = job.id.clone();
 
         job.insert(&conn).unwrap();
@@ -515,10 +519,8 @@ mod tests {
     fn test_idempotency_key() {
         let (_temp, conn) = create_test_db();
 
-        let job = DaemonJob::new(
-            JobKind::Install,
-            serde_json::json!({"packages": ["nginx"]}),
-        ).with_idempotency_key("unique-key-123".to_string());
+        let job = DaemonJob::new(JobKind::Install, serde_json::json!({"packages": ["nginx"]}))
+            .with_idempotency_key("unique-key-123".to_string());
 
         job.insert(&conn).unwrap();
 
@@ -529,10 +531,8 @@ mod tests {
         assert_eq!(found.id, job.id);
 
         // Duplicate idempotency key should fail
-        let dup = DaemonJob::new(
-            JobKind::Install,
-            serde_json::json!({"packages": ["curl"]}),
-        ).with_idempotency_key("unique-key-123".to_string());
+        let dup = DaemonJob::new(JobKind::Install, serde_json::json!({"packages": ["curl"]}))
+            .with_idempotency_key("unique-key-123".to_string());
 
         assert!(dup.insert(&conn).is_err());
     }

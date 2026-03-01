@@ -13,8 +13,8 @@
 use super::confidence::{Confidence, ConfidenceBuilder};
 use super::error::InferenceError;
 use super::{InferenceResult, InferenceSource, InferredCapabilities, PackageFile};
-use goblin::elf::Elf;
 use goblin::Object;
+use goblin::elf::Elf;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::HashSet;
 
@@ -59,8 +59,7 @@ impl BinaryAnalyzer {
                 .filter_map(|file| {
                     file.content.as_ref().map(|content| {
                         let path = file.path.clone();
-                        let result = Self::analyze_binary(content)
-                            .map_err(|e| e.to_string());
+                        let result = Self::analyze_binary(content).map_err(|e| e.to_string());
                         (path, result)
                     })
                 })
@@ -72,8 +71,7 @@ impl BinaryAnalyzer {
                 .filter_map(|file| {
                     file.content.as_ref().map(|content| {
                         let path = file.path.clone();
-                        let result = Self::analyze_binary(content)
-                            .map_err(|e| e.to_string());
+                        let result = Self::analyze_binary(content).map_err(|e| e.to_string());
                         (path, result)
                     })
                 })
@@ -123,12 +121,14 @@ impl BinaryAnalyzer {
 
         if lib_hints.has_network {
             combined.network.no_network = false;
-            confidence_builder.add_network_evidence("Links against network libraries", Confidence::High);
+            confidence_builder
+                .add_network_evidence("Links against network libraries", Confidence::High);
         }
 
         if lib_hints.has_ssl {
             combined.network.outbound_ports.push("443".to_string());
-            confidence_builder.add_network_evidence("Links against SSL/TLS libraries", Confidence::High);
+            confidence_builder
+                .add_network_evidence("Links against SSL/TLS libraries", Confidence::High);
         }
 
         if lib_hints.has_database {
@@ -138,14 +138,18 @@ impl BinaryAnalyzer {
             if all_libs.iter().any(|l| l.contains("pq")) {
                 combined.network.outbound_ports.push("5432".to_string());
             }
-            if all_libs.iter().any(|l| l.contains("mysql") || l.contains("mariadb")) {
+            if all_libs
+                .iter()
+                .any(|l| l.contains("mysql") || l.contains("mariadb"))
+            {
                 combined.network.outbound_ports.push("3306".to_string());
             }
         }
 
         if lib_hints.has_gui {
             combined.syscall_profile = Some("gui-app".to_string());
-            confidence_builder.add_syscall_evidence("Links against GUI libraries", Confidence::High);
+            confidence_builder
+                .add_syscall_evidence("Links against GUI libraries", Confidence::High);
         }
 
         // Infer from collected symbols
@@ -153,8 +157,7 @@ impl BinaryAnalyzer {
 
         if symbol_hints.uses_sockets {
             combined.network.no_network = false;
-            confidence_builder
-                .add_network_evidence("Uses socket system calls", Confidence::High);
+            confidence_builder.add_network_evidence("Uses socket system calls", Confidence::High);
         }
 
         if symbol_hints.uses_privileged {

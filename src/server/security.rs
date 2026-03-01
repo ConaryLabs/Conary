@@ -115,8 +115,7 @@ impl BanList {
         let mut failures = self.failures.write().await;
         let now = Instant::now();
 
-        let (count, first_failure) = failures.entry(ip.to_string())
-            .or_insert((0, now));
+        let (count, first_failure) = failures.entry(ip.to_string()).or_insert((0, now));
 
         // Reset if window passed
         if now.duration_since(*first_failure) > self.failure_window {
@@ -140,12 +139,16 @@ impl BanList {
     pub async fn ban(&self, ip: &str) {
         let mut bans = self.bans.write().await;
         let mut failures = self.failures.write().await;
-        
+
         bans.insert(ip.to_string(), Instant::now());
         // Clear failures
         failures.remove(ip);
-        
-        warn!(ip = ip, "IP banned for {} seconds", self.ban_duration.as_secs());
+
+        warn!(
+            ip = ip,
+            "IP banned for {} seconds",
+            self.ban_duration.as_secs()
+        );
     }
 
     /// Cleanup expired bans and old failure records
@@ -161,7 +164,9 @@ impl BanList {
         // Cleanup failures
         {
             let mut failures = self.failures.write().await;
-            failures.retain(|_, (_, first_failure)| now.duration_since(*first_failure) < self.failure_window);
+            failures.retain(|_, (_, first_failure)| {
+                now.duration_since(*first_failure) < self.failure_window
+            });
         }
     }
 }
@@ -231,7 +236,7 @@ mod tests {
 
         assert!(!ban_list.record_failure("user").await); // 1
         assert!(!ban_list.record_failure("user").await); // 2
-        assert!(ban_list.record_failure("user").await);  // 3 -> Ban
+        assert!(ban_list.record_failure("user").await); // 3 -> Ban
 
         assert!(ban_list.is_banned("user").await);
     }
@@ -241,7 +246,7 @@ mod tests {
         let ban_list = BanList::new(1, 3); // 1 second ban
 
         ban_list.ban("ip1").await;
-        
+
         // Wait and cleanup
         tokio::time::sleep(Duration::from_secs(2)).await;
         ban_list.cleanup().await;

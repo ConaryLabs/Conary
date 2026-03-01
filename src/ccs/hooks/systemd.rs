@@ -111,10 +111,7 @@ impl HookExecutor {
         let unit_path = match unit_path {
             Some(p) => p,
             None => {
-                debug!(
-                    "Unit file '{}' not found in target, skipping enable",
-                    unit
-                );
+                debug!("Unit file '{}' not found in target, skipping enable", unit);
                 return Ok(());
             }
         };

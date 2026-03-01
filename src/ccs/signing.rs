@@ -6,7 +6,7 @@
 
 use crate::ccs::verify::PackageSignature;
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -174,7 +174,10 @@ mod tests {
         // Verify the signature manually
         let sig_bytes = BASE64.decode(&signature.signature).unwrap();
         let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
-        keypair.verifying_key().verify_strict(content, &sig).unwrap();
+        keypair
+            .verifying_key()
+            .verify_strict(content, &sig)
+            .unwrap();
     }
 
     #[test]

@@ -21,7 +21,7 @@
 
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
-use crate::recipe::{parse_recipe_file, Recipe};
+use crate::recipe::{Recipe, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -138,7 +138,15 @@ impl Stage1Builder {
         fs::create_dir_all(&logs_dir)?;
 
         // Create sysroot directory structure
-        for dir in &["usr", "usr/bin", "usr/lib", "usr/include", "lib", "lib64", "bin"] {
+        for dir in &[
+            "usr",
+            "usr/bin",
+            "usr/lib",
+            "usr/include",
+            "lib",
+            "lib64",
+            "bin",
+        ] {
             fs::create_dir_all(sysroot.join(dir))?;
         }
 
@@ -305,24 +313,30 @@ impl Stage1Builder {
         // Check if already downloaded
         if target_path.exists() {
             info!("  Using cached source: {}", filename);
-            self.packages[idx].log.push_str(&format!("Using cached source: {}\n", filename));
+            self.packages[idx]
+                .log
+                .push_str(&format!("Using cached source: {}\n", filename));
             return Ok(target_path);
         }
 
         info!("  Fetching: {}", url);
-        self.packages[idx].log.push_str(&format!("Fetching: {}\n", url));
+        self.packages[idx]
+            .log
+            .push_str(&format!("Fetching: {}\n", url));
 
         let output = Command::new("curl")
-            .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
+            .args([
+                "-fsSL",
+                "-o",
+                target_path.to_str().expect("path must be valid utf-8"),
+                &url,
+            ])
             .output()
             .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Stage1Error::SourceFetchFailed(
-                pkg_name,
-                stderr.to_string(),
-            ));
+            return Err(Stage1Error::SourceFetchFailed(pkg_name, stderr.to_string()));
         }
 
         // Verify checksum
@@ -332,11 +346,7 @@ impl Stage1Builder {
     }
 
     /// Fetch additional sources (like GMP, MPFR, MPC for GCC)
-    fn fetch_additional_sources(
-        &mut self,
-        idx: usize,
-        src_dir: &Path,
-    ) -> Result<(), Stage1Error> {
+    fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), Stage1Error> {
         // Clone the data we need upfront to avoid borrow conflicts
         let pkg_name = self.packages[idx].name.clone();
         let additional_sources: Vec<_> = self.packages[idx]
@@ -357,14 +367,19 @@ impl Stage1Builder {
             // Download if not cached
             if !target_path.exists() {
                 info!("  Fetching additional: {}", filename);
-                self.packages[idx].log.push_str(&format!("Fetching additional: {}\n", filename));
+                self.packages[idx]
+                    .log
+                    .push_str(&format!("Fetching additional: {}\n", filename));
 
                 let output = Command::new("curl")
-                    .args(["-fsSL", "-o", target_path.to_str().expect("path must be valid utf-8"), &url])
+                    .args([
+                        "-fsSL",
+                        "-o",
+                        target_path.to_str().expect("path must be valid utf-8"),
+                        &url,
+                    ])
                     .output()
-                    .map_err(|e| {
-                        Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string())
-                    })?;
+                    .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -397,26 +412,24 @@ impl Stage1Builder {
 
         // Skip if checksum is a placeholder
         if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
-            warn!("  Skipping checksum verification for {} (placeholder)", pkg_name);
+            warn!(
+                "  Skipping checksum verification for {} (placeholder)",
+                pkg_name
+            );
             return Ok(());
         }
 
         // Extract algorithm and hash
-        let (algo, hash) = expected
-            .split_once(':')
-            .ok_or_else(|| Stage1Error::SourceFetchFailed(
-                pkg_name.clone(),
-                "Invalid checksum format".to_string(),
-            ))?;
+        let (algo, hash) = expected.split_once(':').ok_or_else(|| {
+            Stage1Error::SourceFetchFailed(pkg_name.clone(), "Invalid checksum format".to_string())
+        })?;
 
         match algo {
             "sha256" => {
                 let output = Command::new("sha256sum")
                     .arg(path)
                     .output()
-                    .map_err(|e| {
-                        Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string())
-                    })?;
+                    .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let computed = stdout.split_whitespace().next().unwrap_or("");
@@ -442,30 +455,56 @@ impl Stage1Builder {
     fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
         fs::create_dir_all(dest)?;
 
-        let filename = archive.file_name().expect("archive path must have a filename").to_string_lossy();
+        let filename = archive
+            .file_name()
+            .expect("archive path must have a filename")
+            .to_string_lossy();
 
         let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
             Command::new("tar")
-                .args(["xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
+                .args([
+                    "xJf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                    "--strip-components=1",
+                ])
                 .output()
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
             Command::new("tar")
-                .args(["xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
+                .args([
+                    "xzf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                    "--strip-components=1",
+                ])
                 .output()
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
             Command::new("tar")
-                .args(["xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
+                .args([
+                    "xjf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                    "--strip-components=1",
+                ])
                 .output()
         } else {
             // Try generic tar
             Command::new("tar")
-                .args(["xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8"), "--strip-components=1"])
+                .args([
+                    "xf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                    "--strip-components=1",
+                ])
                 .output()
         };
 
-        let output = output.map_err(|e| {
-            Stage1Error::BuildFailed("extract".to_string(), e.to_string())
-        })?;
+        let output =
+            output.map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -482,30 +521,52 @@ impl Stage1Builder {
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
         fs::create_dir_all(dest)?;
 
-        let filename = archive.file_name().expect("archive path must have a filename").to_string_lossy();
+        let filename = archive
+            .file_name()
+            .expect("archive path must have a filename")
+            .to_string_lossy();
 
         let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
             Command::new("tar")
-                .args(["xJf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
+                .args([
+                    "xJf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                ])
                 .output()
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
             Command::new("tar")
-                .args(["xzf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
+                .args([
+                    "xzf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                ])
                 .output()
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
             Command::new("tar")
-                .args(["xjf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
+                .args([
+                    "xjf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                ])
                 .output()
         } else {
             // Try generic tar
             Command::new("tar")
-                .args(["xf", archive.to_str().expect("archive path must be valid utf-8"), "-C", dest.to_str().expect("dest path must be valid utf-8")])
+                .args([
+                    "xf",
+                    archive.to_str().expect("archive path must be valid utf-8"),
+                    "-C",
+                    dest.to_str().expect("dest path must be valid utf-8"),
+                ])
                 .output()
         };
 
-        let output = output.map_err(|e| {
-            Stage1Error::BuildFailed("extract".to_string(), e.to_string())
-        })?;
+        let output =
+            output.map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -553,13 +614,17 @@ impl Stage1Builder {
 
         // Substitute variables
         let destdir = self.sysroot.to_string_lossy().to_string();
-        let mut cmd = self.packages[idx].recipe.substitute(&configure_cmd, &destdir);
+        let mut cmd = self.packages[idx]
+            .recipe
+            .substitute(&configure_cmd, &destdir);
 
         // Substitute cross-compilation variables
         cmd = self.substitute_cross_vars(&cmd, idx);
 
         info!("  Configuring...");
-        self.packages[idx].log.push_str(&format!("=== Configure ===\n{}\n", cmd));
+        self.packages[idx]
+            .log
+            .push_str(&format!("=== Configure ===\n{}\n", cmd));
 
         // Determine working directory - some packages build out-of-tree
         let workdir = if has_workdir {
@@ -590,7 +655,9 @@ impl Stage1Builder {
         cmd = self.substitute_cross_vars(&cmd, idx);
 
         info!("  Building...");
-        self.packages[idx].log.push_str(&format!("=== Make ===\n{}\n", cmd));
+        self.packages[idx]
+            .log
+            .push_str(&format!("=== Make ===\n{}\n", cmd));
 
         self.run_shell_command(idx, &cmd, build_dir, "make")
     }
@@ -614,7 +681,9 @@ impl Stage1Builder {
         cmd = self.substitute_cross_vars(&cmd, idx);
 
         info!("  Installing...");
-        self.packages[idx].log.push_str(&format!("=== Install ===\n{}\n", cmd));
+        self.packages[idx]
+            .log
+            .push_str(&format!("=== Install ===\n{}\n", cmd));
 
         self.run_shell_command(idx, &cmd, build_dir, "install")
     }
@@ -651,7 +720,7 @@ impl Stage1Builder {
         workdir: &Path,
         phase: &str,
     ) -> Result<(), Stage1Error> {
-        use crate::container::{ContainerConfig, Sandbox, BindMount};
+        use crate::container::{BindMount, ContainerConfig, Sandbox};
 
         // Clone all data upfront to avoid borrow conflicts
         let pkg_name = self.packages[idx].name.clone();
@@ -671,7 +740,7 @@ impl Stage1Builder {
 
         // Construct environment vector
         let mut env_vec: Vec<(String, String)> = Vec::new();
-        
+
         // Add base environment
         for (key, value) in &self.build_env {
             env_vec.push((key.clone(), value.clone()));
@@ -700,7 +769,8 @@ impl Stage1Builder {
         }
 
         // Prepare environment for sandbox (Vec<(&str, &str)>)
-        let env_refs: Vec<(&str, &str)> = env_vec.iter()
+        let env_refs: Vec<(&str, &str)> = env_vec
+            .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
@@ -710,15 +780,15 @@ impl Stage1Builder {
         // Configure sandbox
         // Stage 0 path usually ends in .../bin, we want the root (e.g. /tools)
         let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
-        
+
         // We use pristine_for_bootstrap to set up the core mounts
         // sysroot -> /tools/x86_64.../sysroot (target sysroot)
         // stage0_root -> /tools (cross compiler)
         let mut config = ContainerConfig::pristine_for_bootstrap(
-             &self.sysroot, // target sysroot (destdir)
-             &self.work_dir.join("sources"), // source dir
-             &self.work_dir.join("build"), // build dir
-             &self.sysroot, // dest dir (same as sysroot)
+            &self.sysroot,                  // target sysroot (destdir)
+            &self.work_dir.join("sources"), // source dir
+            &self.work_dir.join("build"),   // build dir
+            &self.sysroot,                  // dest dir (same as sysroot)
         );
 
         // Explicitly mount Stage 0 tools at /tools so the cross-compiler is available
@@ -732,28 +802,41 @@ impl Stage1Builder {
         config.deny_network();
 
         let mut sandbox = Sandbox::new(config);
-        
-        let (code, stdout, stderr) = sandbox.execute(
-            "bash",
-            &format!("set -e\n{}", cmd), // Wrap in script, fail fast
-            &[],
-            &env_refs
-        ).map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
+
+        let (code, stdout, stderr) = sandbox
+            .execute(
+                "bash",
+                &format!("set -e\n{}", cmd), // Wrap in script, fail fast
+                &[],
+                &env_refs,
+            )
+            .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
 
         // Log output
         if !stdout.is_empty() {
-            self.packages[idx].log.push_str(&format!("stdout:\n{}\n", stdout));
-            if verbose { println!("{}", stdout); }
+            self.packages[idx]
+                .log
+                .push_str(&format!("stdout:\n{}\n", stdout));
+            if verbose {
+                println!("{}", stdout);
+            }
         }
         if !stderr.is_empty() {
-            self.packages[idx].log.push_str(&format!("stderr:\n{}\n", stderr));
-            if verbose { eprintln!("{}", stderr); }
+            self.packages[idx]
+                .log
+                .push_str(&format!("stderr:\n{}\n", stderr));
+            if verbose {
+                eprintln!("{}", stderr);
+            }
         }
 
         if code != 0 {
             return Err(Stage1Error::BuildFailed(
                 pkg_name,
-                format!("{} phase failed with exit code {}:\n{}", phase, code, stderr),
+                format!(
+                    "{} phase failed with exit code {}:\n{}",
+                    phase, code, stderr
+                ),
             ));
         }
 
@@ -799,7 +882,12 @@ impl Stage1Builder {
                     .cloned()
                     .or_else(|| std::env::var(var_name).ok())
                     .unwrap_or_default();
-                result = format!("{}{}{}", &result[..start], replacement, &result[start + end + 1..]);
+                result = format!(
+                    "{}{}{}",
+                    &result[..start],
+                    replacement,
+                    &result[start + end + 1..]
+                );
             } else {
                 break;
             }

@@ -181,10 +181,7 @@ fn build_purl(trove: &conary::db::models::Trove) -> String {
 }
 
 /// Get SHA256 hashes for package files (aggregate)
-fn get_package_hashes(
-    conn: &rusqlite::Connection,
-    trove_id: i64,
-) -> Result<Vec<cyclonedx::Hash>> {
+fn get_package_hashes(conn: &rusqlite::Connection, trove_id: i64) -> Result<Vec<cyclonedx::Hash>> {
     // Get unique file hashes from the package
     let files = conary::db::models::FileEntry::find_by_trove(conn, trove_id)?;
 

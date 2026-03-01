@@ -44,22 +44,39 @@
 //! packages = ["nginx-module-geoip"]
 //! ```
 
-pub mod parser;
 mod diff;
+pub mod parser;
 mod state;
 
-pub use parser::{
-    SystemModel, ModelConfig, parse_model_file, DerivedPackage as ModelDerivedPackage,
-    IncludeConfig, ConflictStrategy,
-    // Automation config types
-    AutomationConfig, AutomationMode, AutomationCategory, AiFeature,
-    AiAssistConfig, AiAssistMode, SecurityAutomation, OrphanAutomation,
-    UpdateAutomation, MajorUpgradeAutomation, RepairAutomation, RollbackTrigger,
-    // Federation config types
-    FederationConfig, FederationTier,
+pub use diff::{
+    ApplyOptions, DiffAction, ModelDiff, compute_diff, compute_diff_from_resolved,
+    compute_diff_with_includes,
 };
-pub use diff::{ModelDiff, DiffAction, compute_diff, compute_diff_with_includes, compute_diff_from_resolved, ApplyOptions};
-pub use state::{SystemState, InstalledPackage, capture_current_state, snapshot_to_model};
+pub use parser::{
+    AiAssistConfig,
+    AiAssistMode,
+    AiFeature,
+    AutomationCategory,
+    // Automation config types
+    AutomationConfig,
+    AutomationMode,
+    ConflictStrategy,
+    DerivedPackage as ModelDerivedPackage,
+    // Federation config types
+    FederationConfig,
+    FederationTier,
+    IncludeConfig,
+    MajorUpgradeAutomation,
+    ModelConfig,
+    OrphanAutomation,
+    RepairAutomation,
+    RollbackTrigger,
+    SecurityAutomation,
+    SystemModel,
+    UpdateAutomation,
+    parse_model_file,
+};
+pub use state::{InstalledPackage, SystemState, capture_current_state, snapshot_to_model};
 
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -193,17 +210,17 @@ fn fetch_collection(
     use crate::db::models::{CollectionMember, Trove, TroveType};
 
     // First, try to find locally
-    let troves = Trove::find_by_name(conn, name)
-        .map_err(|e| ModelError::DatabaseError(e.to_string()))?;
+    let troves =
+        Trove::find_by_name(conn, name).map_err(|e| ModelError::DatabaseError(e.to_string()))?;
 
     let collection = troves
         .into_iter()
         .find(|t| t.trove_type == TroveType::Collection);
 
     if let Some(coll) = collection {
-        let coll_id = coll.id.ok_or_else(|| {
-            ModelError::DatabaseError("Collection has no ID".to_string())
-        })?;
+        let coll_id = coll
+            .id
+            .ok_or_else(|| ModelError::DatabaseError("Collection has no ID".to_string()))?;
 
         let members = CollectionMember::find_by_collection(conn, coll_id)
             .map_err(|e| ModelError::DatabaseError(e.to_string()))?;
@@ -239,10 +256,7 @@ fn fetch_collection(
 /// 2. Fetch each collection, detect cycles, and merge members
 ///
 /// Returns a fully resolved model with all includes expanded.
-pub fn resolve_includes(
-    model: &SystemModel,
-    conn: &Connection,
-) -> ModelResult<ResolvedModel> {
+pub fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<ResolvedModel> {
     let mut resolved = ResolvedModel::from_model(model);
 
     if model.include.models.is_empty() {
@@ -287,13 +301,7 @@ fn resolve_includes_recursive(
 
         // Recursively resolve nested includes if the collection has them
         if !collection.includes.is_empty() {
-            resolve_includes_recursive(
-                &collection.includes,
-                on_conflict,
-                conn,
-                resolved,
-                visited,
-            )?;
+            resolve_includes_recursive(&collection.includes, on_conflict, conn, resolved, visited)?;
         }
 
         // Merge members according to conflict strategy
@@ -310,7 +318,9 @@ fn resolve_includes_recursive(
                     parser::ConflictStrategy::Remote => {
                         // Remote wins, update pin if provided
                         if let Some(constraint) = &member.version_constraint {
-                            resolved.pins.insert(member.name.clone(), constraint.clone());
+                            resolved
+                                .pins
+                                .insert(member.name.clone(), constraint.clone());
                         }
                         resolved.sources.insert(
                             member.name.clone(),
@@ -333,7 +343,9 @@ fn resolve_includes_recursive(
                 }
 
                 if let Some(constraint) = &member.version_constraint {
-                    resolved.pins.insert(member.name.clone(), constraint.clone());
+                    resolved
+                        .pins
+                        .insert(member.name.clone(), constraint.clone());
                 }
 
                 resolved.sources.insert(
@@ -350,17 +362,21 @@ fn resolve_includes_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_parse_minimal_model() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"
+        writeln!(
+            file,
+            r#"
 [model]
 version = 1
 install = ["nginx"]
-"#).unwrap();
+"#
+        )
+        .unwrap();
 
         let model = parse_model_file(file.path()).unwrap();
         assert_eq!(model.config.version, 1);
@@ -370,7 +386,9 @@ install = ["nginx"]
     #[test]
     fn test_parse_full_model() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"
+        writeln!(
+            file,
+            r#"
 [model]
 version = 1
 search = ["fedora@f41:stable", "extras@local:dev"]
@@ -383,7 +401,9 @@ kernel = "6.12.*"
 
 [optional]
 packages = ["nginx-module-geoip"]
-"#).unwrap();
+"#
+        )
+        .unwrap();
 
         let model = parse_model_file(file.path()).unwrap();
         assert_eq!(model.config.version, 1);

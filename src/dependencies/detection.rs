@@ -318,9 +318,11 @@ mod tests {
     fn test_detect_python_module_simple() {
         let provides =
             LanguageDepDetector::detect_provides("/usr/lib/python3.11/site-packages/requests.py");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name == "requests"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name == "requests")
+        );
     }
 
     #[test]
@@ -328,9 +330,11 @@ mod tests {
         let provides = LanguageDepDetector::detect_provides(
             "/usr/lib/python3.11/site-packages/flask/__init__.py",
         );
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name == "flask"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name == "flask")
+        );
     }
 
     #[test]
@@ -338,9 +342,11 @@ mod tests {
         let provides = LanguageDepDetector::detect_provides(
             "/usr/lib64/python3.11/site-packages/numpy.cpython-311-x86_64-linux-gnu.so",
         );
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name == "numpy"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name == "numpy")
+        );
     }
 
     #[test]
@@ -349,9 +355,11 @@ mod tests {
         let provides = LanguageDepDetector::detect_provides(
             "/usr/lib/python3/dist-packages/apt_pkg.cpython-311-x86_64-linux-gnu.so",
         );
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name == "apt_pkg"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name == "apt_pkg")
+        );
     }
 
     #[test]
@@ -359,9 +367,11 @@ mod tests {
         let provides = LanguageDepDetector::detect_provides(
             "/usr/lib/python3.11/site-packages/_internal/__init__.py",
         );
-        assert!(!provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name == "_internal"));
+        assert!(
+            !provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name == "_internal")
+        );
     }
 
     #[test]
@@ -369,9 +379,11 @@ mod tests {
         let provides = LanguageDepDetector::detect_provides(
             "/usr/lib/python3.11/site-packages/requests-2.28.0.dist-info/METADATA",
         );
-        assert!(!provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python && d.name.contains("dist-info")));
+        assert!(
+            !provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Python && d.name.contains("dist-info"))
+        );
     }
 
     // ====================
@@ -381,18 +393,22 @@ mod tests {
     #[test]
     fn test_detect_perl_module() {
         let provides = LanguageDepDetector::detect_provides("/usr/share/perl5/DBI.pm");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Perl && d.name == "DBI"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Perl && d.name == "DBI")
+        );
     }
 
     #[test]
     fn test_detect_perl_nested_module() {
         let provides =
             LanguageDepDetector::detect_provides("/usr/share/perl5/vendor_perl/XML/Parser.pm");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Perl && d.name == "XML::Parser"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Perl && d.name == "XML::Parser")
+        );
     }
 
     #[test]
@@ -408,11 +424,14 @@ mod tests {
 
     #[test]
     fn test_detect_ruby_gem() {
-        let provides =
-            LanguageDepDetector::detect_provides("/usr/share/gems/gems/bundler-2.4.0/lib/bundler.rb");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Ruby && d.name == "bundler"));
+        let provides = LanguageDepDetector::detect_provides(
+            "/usr/share/gems/gems/bundler-2.4.0/lib/bundler.rb",
+        );
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Ruby && d.name == "bundler")
+        );
     }
 
     // ====================
@@ -423,17 +442,21 @@ mod tests {
     fn test_detect_java_jar() {
         let provides =
             LanguageDepDetector::detect_provides("/usr/share/java/commons-lang3-3.12.0.jar");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Java && d.name == "commons-lang3"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Java && d.name == "commons-lang3")
+        );
     }
 
     #[test]
     fn test_detect_java_jar_no_version() {
         let provides = LanguageDepDetector::detect_provides("/usr/share/java/junit.jar");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Java && d.name == "junit"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Java && d.name == "junit")
+        );
     }
 
     // ====================
@@ -443,18 +466,22 @@ mod tests {
     #[test]
     fn test_detect_soname() {
         let provides = LanguageDepDetector::detect_provides("/usr/lib64/libssl.so.3");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Soname && d.name == "libssl.so.3"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Soname && d.name == "libssl.so.3")
+        );
     }
 
     #[test]
     fn test_detect_soname_multiarch() {
         let provides =
             LanguageDepDetector::detect_provides("/usr/lib/x86_64-linux-gnu/libz.so.1.2.13");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Soname && d.name == "libz.so.1.2.13"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Soname && d.name == "libz.so.1.2.13")
+        );
     }
 
     // ====================
@@ -464,9 +491,11 @@ mod tests {
     #[test]
     fn test_detect_file_provides() {
         let provides = LanguageDepDetector::detect_provides("/usr/bin/python3");
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::File && d.name == "/usr/bin/python3"));
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::File && d.name == "/usr/bin/python3")
+        );
     }
 
     // ====================
@@ -483,13 +512,9 @@ mod tests {
 
         let provides = LanguageDepDetector::detect_all_provides(&paths);
 
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Python));
+        assert!(provides.iter().any(|d| d.class == DependencyClass::Python));
         assert!(provides.iter().any(|d| d.class == DependencyClass::Perl));
-        assert!(provides
-            .iter()
-            .any(|d| d.class == DependencyClass::Soname));
+        assert!(provides.iter().any(|d| d.class == DependencyClass::Soname));
     }
 
     #[test]
@@ -502,7 +527,13 @@ mod tests {
 
         let analysis = LanguageDepDetector::analyze_provides(&paths);
 
-        assert_eq!(analysis.get(&DependencyClass::Python).map(|v| v.len()), Some(2));
-        assert_eq!(analysis.get(&DependencyClass::Perl).map(|v| v.len()), Some(1));
+        assert_eq!(
+            analysis.get(&DependencyClass::Python).map(|v| v.len()),
+            Some(2)
+        );
+        assert_eq!(
+            analysis.get(&DependencyClass::Perl).map(|v| v.len()),
+            Some(1)
+        );
     }
 }

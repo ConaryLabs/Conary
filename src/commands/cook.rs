@@ -3,7 +3,7 @@
 //! Cook command - build packages from recipes
 
 use anyhow::{Context, Result};
-use conary::recipe::{parse_recipe_file, validate_recipe, Kitchen, KitchenConfig};
+use conary::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_recipe};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -39,11 +39,13 @@ pub fn cmd_cook(
     let recipe = parse_recipe_file(recipe_path)
         .with_context(|| format!("Failed to parse recipe: {}", recipe_path.display()))?;
 
-    println!("Recipe: {} version {}", recipe.package.name, recipe.package.version);
+    println!(
+        "Recipe: {} version {}",
+        recipe.package.name, recipe.package.version
+    );
 
     // Validate the recipe
-    let warnings = validate_recipe(&recipe)
-        .with_context(|| "Recipe validation failed")?;
+    let warnings = validate_recipe(&recipe).with_context(|| "Recipe validation failed")?;
 
     for warning in &warnings {
         println!("Warning: {}", warning);
@@ -65,7 +67,7 @@ pub fn cmd_cook(
         source_cache: PathBuf::from(source_cache),
         keep_builddir,
         use_isolation: !no_isolation, // Isolation is on by default
-        pristine_mode: hermetic, // Hermetic mode disables host mounts
+        pristine_mode: hermetic,      // Hermetic mode disables host mounts
         ..Default::default()
     };
 
@@ -78,7 +80,8 @@ pub fn cmd_cook(
     // Fetch-only mode: just download sources and exit
     if fetch_only {
         println!("Fetching sources (fetch-only mode)...");
-        let sources = kitchen.fetch(&recipe)
+        let sources = kitchen
+            .fetch(&recipe)
             .with_context(|| format!("Failed to fetch sources for {}", recipe.package.name))?;
 
         println!("\n[COMPLETE] Fetched {} source file(s):", sources.len());
@@ -94,15 +97,22 @@ pub fn cmd_cook(
     }
 
     // Create output directory if needed
-    std::fs::create_dir_all(output_dir)
-        .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
+    std::fs::create_dir_all(output_dir).with_context(|| {
+        format!(
+            "Failed to create output directory: {}",
+            output_dir.display()
+        )
+    })?;
 
     // Print mode information
     if no_isolation {
         println!("[WARNING] Running without isolation - build may not be reproducible");
         println!("Cooking with {} parallel jobs (UNSAFE)...", config.jobs);
     } else if hermetic {
-        println!("Cooking with {} parallel jobs (hermetic mode)...", config.jobs);
+        println!(
+            "Cooking with {} parallel jobs (hermetic mode)...",
+            config.jobs
+        );
         println!("  - Network isolated during build");
         println!("  - No host system mounts");
     } else {
@@ -116,7 +126,8 @@ pub fn cmd_cook(
     }
 
     // Create kitchen and cook
-    let result = kitchen.cook(&recipe, output_dir)
+    let result = kitchen
+        .cook(&recipe, output_dir)
         .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
 
     println!("\n[COMPLETE] Cooked: {}", result.package_path.display());

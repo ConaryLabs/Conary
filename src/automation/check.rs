@@ -8,11 +8,10 @@
 //! - Available update checking
 //! - Integrity verification
 
-use super::action::{
-    integrity_repair_action, orphan_cleanup_action, package_update_action,
-    security_update_action,
-};
 use super::PendingAction;
+use super::action::{
+    integrity_repair_action, orphan_cleanup_action, package_update_action, security_update_action,
+};
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
@@ -93,7 +92,9 @@ impl<'a> AutomationChecker<'a> {
         if self.config.repair.integrity_check
             && let Err(e) = self.check_integrity(&mut results)
         {
-            results.errors.push(format!("Integrity check failed: {}", e));
+            results
+                .errors
+                .push(format!("Integrity check failed: {}", e));
         }
 
         Ok(results)
@@ -171,10 +172,7 @@ impl<'a> AutomationChecker<'a> {
     }
 
     /// Calculate deadline for security update based on severity and config
-    fn calculate_security_deadline(
-        &self,
-        severity: &str,
-    ) -> Option<chrono::DateTime<Utc>> {
+    fn calculate_security_deadline(&self, severity: &str) -> Option<chrono::DateTime<Utc>> {
         let window = super::parse_duration(&self.config.security.within).ok()?;
         let multiplier = match severity.to_lowercase().as_str() {
             "critical" => 0.25, // 25% of window for critical
@@ -212,7 +210,9 @@ impl<'a> AutomationChecker<'a> {
         let orphans_with_age = self.filter_by_grace_period(&orphans, grace_period)?;
 
         if !orphans_with_age.is_empty() {
-            results.orphans.push(orphan_cleanup_action(&orphans_with_age));
+            results
+                .orphans
+                .push(orphan_cleanup_action(&orphans_with_age));
         }
 
         Ok(())
@@ -364,7 +364,9 @@ impl<'a> AutomationChecker<'a> {
                 continue;
             }
 
-            results.updates.push(package_update_action(&name, &current, &new));
+            results
+                .updates
+                .push(package_update_action(&name, &current, &new));
         }
 
         Ok(())
@@ -399,9 +401,9 @@ impl<'a> AutomationChecker<'a> {
     /// Returns paths of files that are missing or have hash mismatches.
     fn find_corrupted_files(&self) -> Result<Vec<String>> {
         // Query all managed files with their expected hashes
-        let mut stmt = self.conn.prepare(
-            "SELECT path, sha256_hash FROM files ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, sha256_hash FROM files ORDER BY path")?;
 
         let files: Vec<(String, String)> = stmt
             .query_map([], |row| {
@@ -496,11 +498,9 @@ mod tests {
         let mut results = CheckResults::default();
         assert_eq!(results.total(), 0);
 
-        results.security.push(security_update_action(
-            &["test".to_string()],
-            &[],
-            "high",
-        ));
+        results
+            .security
+            .push(security_update_action(&["test".to_string()], &[], "high"));
         assert_eq!(results.total(), 1);
     }
 
@@ -522,7 +522,8 @@ mod tests {
                 name TEXT NOT NULL,
                 version TEXT NOT NULL
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
@@ -548,7 +549,8 @@ mod tests {
                 permissions INTEGER NOT NULL,
                 trove_id INTEGER NOT NULL
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Create a temp file with known content
         let mut temp_file = NamedTempFile::new().unwrap();
@@ -565,7 +567,8 @@ mod tests {
             "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
              VALUES (?1, ?2, 11, 644, 1)",
             [temp_path, wrong_hash],
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
@@ -578,7 +581,8 @@ mod tests {
         conn.execute(
             "UPDATE files SET sha256_hash = ?1 WHERE path = ?2",
             [correct_hash, temp_path],
-        ).unwrap();
+        )
+        .unwrap();
 
         let corrupted = checker.find_corrupted_files().unwrap();
         assert!(corrupted.is_empty());
@@ -596,14 +600,16 @@ mod tests {
                 permissions INTEGER NOT NULL,
                 trove_id INTEGER NOT NULL
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Insert a file that doesn't exist
         conn.execute(
             "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
              VALUES ('/nonexistent/file/path/abc123.txt', 'abc123', 100, 644, 1)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
@@ -622,7 +628,8 @@ mod tests {
                 name TEXT NOT NULL,
                 orphan_since TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
@@ -644,20 +651,31 @@ mod tests {
                 orphan_since TEXT
             );
             INSERT INTO troves (name) VALUES ('libfoo');",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
 
         // First time detecting orphan - should mark it but not return it
         let result = checker
-            .filter_by_grace_period(&["libfoo".to_string()], std::time::Duration::from_secs(3600))
+            .filter_by_grace_period(
+                &["libfoo".to_string()],
+                std::time::Duration::from_secs(3600),
+            )
             .unwrap();
-        assert!(result.is_empty(), "New orphan should not be returned immediately");
+        assert!(
+            result.is_empty(),
+            "New orphan should not be returned immediately"
+        );
 
         // Verify orphan_since was set
         let orphan_since: Option<String> = conn
-            .query_row("SELECT orphan_since FROM troves WHERE name = 'libfoo'", [], |row| row.get(0))
+            .query_row(
+                "SELECT orphan_since FROM troves WHERE name = 'libfoo'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!(orphan_since.is_some(), "orphan_since should be set");
     }
@@ -671,21 +689,24 @@ mod tests {
                 name TEXT NOT NULL,
                 orphan_since TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Insert package that was orphaned 2 hours ago
         let two_hours_ago = Utc::now() - Duration::hours(2);
         conn.execute(
             "INSERT INTO troves (name, orphan_since) VALUES ('libold', ?1)",
             [two_hours_ago.to_rfc3339()],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Insert package that was orphaned 30 minutes ago
         let thirty_mins_ago = Utc::now() - Duration::minutes(30);
         conn.execute(
             "INSERT INTO troves (name, orphan_since) VALUES ('libnew', ?1)",
             [thirty_mins_ago.to_rfc3339()],
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
@@ -711,24 +732,32 @@ mod tests {
                 name TEXT NOT NULL,
                 orphan_since TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Insert package with orphan_since set
         let yesterday = Utc::now() - Duration::days(1);
         conn.execute(
             "INSERT INTO troves (name, orphan_since) VALUES ('libfoo', ?1)",
             [yesterday.to_rfc3339()],
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = AutomationConfig::default();
         let checker = AutomationChecker::new(&conn, &config);
 
         // Clear orphan status
-        checker.clear_orphan_status(&["libfoo".to_string()]).unwrap();
+        checker
+            .clear_orphan_status(&["libfoo".to_string()])
+            .unwrap();
 
         // Verify orphan_since is now NULL
         let orphan_since: Option<String> = conn
-            .query_row("SELECT orphan_since FROM troves WHERE name = 'libfoo'", [], |row| row.get(0))
+            .query_row(
+                "SELECT orphan_since FROM troves WHERE name = 'libfoo'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!(orphan_since.is_none(), "orphan_since should be cleared");
     }

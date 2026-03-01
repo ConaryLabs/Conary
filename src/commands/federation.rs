@@ -134,11 +134,7 @@ pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
 }
 
 /// List federation peers
-pub fn cmd_federation_peers(
-    db_path: &str,
-    tier: Option<&str>,
-    enabled_only: bool,
-) -> Result<()> {
+pub fn cmd_federation_peers(db_path: &str, tier: Option<&str>, enabled_only: bool) -> Result<()> {
     let conn = Connection::open(db_path)?;
 
     let base_query = "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
@@ -148,7 +144,10 @@ pub fn cmd_federation_peers(
     // Build different queries based on filters
     let peers: Vec<PeerRow> = if let Some(t) = tier {
         let query = if enabled_only {
-            format!("{} WHERE tier = ?1 AND is_enabled = 1 ORDER BY tier, latency_ms", base_query)
+            format!(
+                "{} WHERE tier = ?1 AND is_enabled = 1 ORDER BY tier, latency_ms",
+                base_query
+            )
         } else {
             format!("{} WHERE tier = ?1 ORDER BY tier, latency_ms", base_query)
         };
@@ -166,10 +165,14 @@ pub fn cmd_federation_peers(
                 enabled: row.get::<_, i64>(8)? == 1,
                 last_seen: row.get(9)?,
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         let query = if enabled_only {
-            format!("{} WHERE is_enabled = 1 ORDER BY tier, latency_ms", base_query)
+            format!(
+                "{} WHERE is_enabled = 1 ORDER BY tier, latency_ms",
+                base_query
+            )
         } else {
             format!("{} ORDER BY tier, latency_ms", base_query)
         };
@@ -187,7 +190,8 @@ pub fn cmd_federation_peers(
                 enabled: row.get::<_, i64>(8)? == 1,
                 last_seen: row.get(9)?,
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     };
 
     println!(
@@ -238,7 +242,10 @@ pub fn cmd_federation_add_peer(
 ) -> Result<()> {
     // Validate URL format (basic check)
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        anyhow::bail!("Invalid peer URL: {}. Must start with http:// or https://", url);
+        anyhow::bail!(
+            "Invalid peer URL: {}. Must start with http:// or https://",
+            url
+        );
     }
 
     // Validate tier
@@ -328,10 +335,7 @@ pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
         let stats = row?;
         let total = stats.bytes_peers + stats.bytes_upstream;
         let savings = if total > 0 {
-            format!(
-                "{:.1}%",
-                (stats.bytes_peers as f64 / total as f64) * 100.0
-            )
+            format!("{:.1}%", (stats.bytes_peers as f64 / total as f64) * 100.0)
         } else {
             "-".to_string()
         };
@@ -396,19 +400,14 @@ pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Re
 }
 
 /// Test connectivity to peers
-pub fn cmd_federation_test(
-    db_path: &str,
-    peer: Option<&str>,
-    timeout: u64,
-) -> Result<()> {
+pub fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> Result<()> {
     let conn = Connection::open(db_path)?;
 
     let endpoints: Vec<String> = if let Some(p) = peer {
         vec![p.to_string()]
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT endpoint FROM federation_peers WHERE is_enabled = 1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT endpoint FROM federation_peers WHERE is_enabled = 1")?;
         stmt.query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?
     };
@@ -457,10 +456,7 @@ pub fn cmd_federation_test(
     }
 
     println!();
-    println!(
-        "Results: {} OK, {} failed",
-        success_count, failure_count
-    );
+    println!("Results: {} OK, {} failed", success_count, failure_count);
 
     Ok(())
 }
@@ -543,12 +539,7 @@ pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -
                     conn.execute(
                         "INSERT INTO federation_peers (id, endpoint, node_name, tier)
                          VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![
-                            peer.id,
-                            peer.endpoint,
-                            peer.name,
-                            tier_str
-                        ],
+                        rusqlite::params![peer.id, peer.endpoint, peer.name, tier_str],
                     )?;
 
                     println!("[OK] Added peer: {}", peer.endpoint);

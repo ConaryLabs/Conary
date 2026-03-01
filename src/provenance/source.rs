@@ -186,11 +186,12 @@ mod tests {
 
     #[test]
     fn test_from_tarball() {
-        let source = SourceProvenance::from_tarball(
-            "https://example.com/source.tar.gz",
-            "sha256:abc123",
+        let source =
+            SourceProvenance::from_tarball("https://example.com/source.tar.gz", "sha256:abc123");
+        assert_eq!(
+            source.upstream_url.as_deref(),
+            Some("https://example.com/source.tar.gz")
         );
-        assert_eq!(source.upstream_url.as_deref(), Some("https://example.com/source.tar.gz"));
         assert!(source.has_verified_hash());
     }
 
@@ -207,12 +208,9 @@ mod tests {
 
     #[test]
     fn test_patch_info() {
-        let patch = PatchInfo::with_url(
-            "https://example.com/fix.patch",
-            "sha256:def456",
-        )
-        .with_reason("Fix segfault")
-        .with_cve("CVE-2026-1234");
+        let patch = PatchInfo::with_url("https://example.com/fix.patch", "sha256:def456")
+            .with_reason("Fix segfault")
+            .with_cve("CVE-2026-1234");
 
         assert_eq!(patch.cve.as_deref(), Some("CVE-2026-1234"));
     }

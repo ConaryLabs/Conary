@@ -127,9 +127,8 @@ impl RepositoryParser for ArchParser {
 
         // Iterate through tarball entries
         for entry in archive.entries()? {
-            let mut entry = entry.map_err(|e| {
-                Error::ParseError(format!("Failed to read tarball entry: {}", e))
-            })?;
+            let mut entry = entry
+                .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
 
             let path = entry
                 .path()
@@ -140,9 +139,9 @@ impl RepositoryParser for ArchParser {
             // Each package has a directory with desc and depends files
             if path_str.ends_with("/desc") {
                 let mut content = String::new();
-                entry.read_to_string(&mut content).map_err(|e| {
-                    Error::ParseError(format!("Failed to read desc file: {}", e))
-                })?;
+                entry
+                    .read_to_string(&mut content)
+                    .map_err(|e| Error::ParseError(format!("Failed to read desc file: {}", e)))?;
 
                 let desc_fields = self.parse_desc_file(&content);
 
@@ -175,7 +174,9 @@ impl RepositoryParser for ArchParser {
                     .get("CSIZE")
                     .and_then(|v| v.first())
                     .and_then(|s| s.parse().ok())
-                    .ok_or_else(|| Error::ParseError("Missing or invalid %CSIZE% field".to_string()))?;
+                    .ok_or_else(|| {
+                        Error::ParseError("Missing or invalid %CSIZE% field".to_string())
+                    })?;
 
                 let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
 
@@ -187,18 +188,33 @@ impl RepositoryParser for ArchParser {
                 // Build extra metadata
                 let mut extra = serde_json::Map::new();
                 if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
-                    extra.insert("homepage".to_string(), serde_json::Value::String(url.clone()));
+                    extra.insert(
+                        "homepage".to_string(),
+                        serde_json::Value::String(url.clone()),
+                    );
                 }
                 if let Some(license) = desc_fields.get("LICENSE").and_then(|v| v.first()) {
-                    extra.insert("license".to_string(), serde_json::Value::String(license.clone()));
+                    extra.insert(
+                        "license".to_string(),
+                        serde_json::Value::String(license.clone()),
+                    );
                 }
                 if let Some(builddate) = desc_fields.get("BUILDDATE").and_then(|v| v.first()) {
-                    extra.insert("builddate".to_string(), serde_json::Value::String(builddate.clone()));
+                    extra.insert(
+                        "builddate".to_string(),
+                        serde_json::Value::String(builddate.clone()),
+                    );
                 }
                 if let Some(isize) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
-                    extra.insert("installed_size".to_string(), serde_json::Value::String(isize.clone()));
+                    extra.insert(
+                        "installed_size".to_string(),
+                        serde_json::Value::String(isize.clone()),
+                    );
                 }
-                extra.insert("format".to_string(), serde_json::Value::String("arch".to_string()));
+                extra.insert(
+                    "format".to_string(),
+                    serde_json::Value::String("arch".to_string()),
+                );
 
                 let package = PackageMetadata {
                     name,
@@ -222,9 +238,8 @@ impl RepositoryParser for ArchParser {
         let mut package_deps: HashMap<String, Vec<Dependency>> = HashMap::new();
 
         for entry in archive.entries()? {
-            let mut entry = entry.map_err(|e| {
-                Error::ParseError(format!("Failed to read tarball entry: {}", e))
-            })?;
+            let mut entry = entry
+                .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
 
             let path = entry
                 .path()
@@ -270,7 +285,8 @@ mod tests {
     #[test]
     fn test_parse_desc_file() {
         let parser = ArchParser::new("core".to_string());
-        let content = "%NAME%\nbash\n\n%VERSION%\n5.2.037-1\n\n%DESC%\nThe GNU Bourne Again shell\n";
+        let content =
+            "%NAME%\nbash\n\n%VERSION%\n5.2.037-1\n\n%DESC%\nThe GNU Bourne Again shell\n";
 
         let fields = parser.parse_desc_file(content);
 

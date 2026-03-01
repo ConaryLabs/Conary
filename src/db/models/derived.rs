@@ -462,7 +462,10 @@ impl DerivedPatch {
 
     /// Delete all patches for a derived package
     pub fn delete_all(conn: &Connection, derived_id: i64) -> Result<()> {
-        conn.execute("DELETE FROM derived_patches WHERE derived_id = ?1", [derived_id])?;
+        conn.execute(
+            "DELETE FROM derived_patches WHERE derived_id = ?1",
+            [derived_id],
+        )?;
         Ok(())
     }
 
@@ -553,19 +556,28 @@ impl DerivedOverride {
     }
 
     /// Find an override by target path
-    pub fn find_by_path(conn: &Connection, derived_id: i64, target_path: &str) -> Result<Option<Self>> {
+    pub fn find_by_path(
+        conn: &Connection,
+        derived_id: i64,
+        target_path: &str,
+    ) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, derived_id, target_path, source_hash, source_path, permissions
              FROM derived_overrides WHERE derived_id = ?1 AND target_path = ?2",
         )?;
 
-        let ov = stmt.query_row(params![derived_id, target_path], Self::from_row).optional()?;
+        let ov = stmt
+            .query_row(params![derived_id, target_path], Self::from_row)
+            .optional()?;
         Ok(ov)
     }
 
     /// Delete all overrides for a derived package
     pub fn delete_all(conn: &Connection, derived_id: i64) -> Result<()> {
-        conn.execute("DELETE FROM derived_overrides WHERE derived_id = ?1", [derived_id])?;
+        conn.execute(
+            "DELETE FROM derived_overrides WHERE derived_id = ?1",
+            [derived_id],
+        )?;
         Ok(())
     }
 
@@ -616,11 +628,16 @@ mod tests {
         let found = DerivedPackage::find_by_id(&conn, id).unwrap().unwrap();
         assert_eq!(found.name, "nginx-custom");
         assert_eq!(found.parent_name, "nginx");
-        assert_eq!(found.version_policy, VersionPolicy::Suffix("+corp".to_string()));
+        assert_eq!(
+            found.version_policy,
+            VersionPolicy::Suffix("+corp".to_string())
+        );
         assert_eq!(found.status, DerivedStatus::Pending);
 
         // Find by name
-        let found = DerivedPackage::find_by_name(&conn, "nginx-custom").unwrap().unwrap();
+        let found = DerivedPackage::find_by_name(&conn, "nginx-custom")
+            .unwrap()
+            .unwrap();
         assert_eq!(found.id, Some(id));
 
         // Find by parent
@@ -629,7 +646,11 @@ mod tests {
 
         // Create a trove for the built package (required for FK constraint)
         use crate::db::models::{Trove, TroveType};
-        let mut trove = Trove::new("nginx-custom".to_string(), "1.0.0+corp".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "nginx-custom".to_string(),
+            "1.0.0+corp".to_string(),
+            TroveType::Package,
+        );
         let trove_id = trove.insert(&conn).unwrap();
 
         // Update status
@@ -708,10 +729,8 @@ mod tests {
         override1.insert(&conn).unwrap();
 
         // Add file override (remove)
-        let mut override2 = DerivedOverride::new_remove(
-            derived_id,
-            "/etc/nginx/default.conf".to_string(),
-        );
+        let mut override2 =
+            DerivedOverride::new_remove(derived_id, "/etc/nginx/default.conf".to_string());
         override2.insert(&conn).unwrap();
 
         // Get overrides
@@ -736,10 +755,15 @@ mod tests {
         let mut derived = DerivedPackage::new("test-derived".to_string(), "test".to_string());
         let derived_id = derived.insert(&conn).unwrap();
 
-        let mut patch = DerivedPatch::new(derived_id, 1, "test.patch".to_string(), "hash".to_string());
+        let mut patch =
+            DerivedPatch::new(derived_id, 1, "test.patch".to_string(), "hash".to_string());
         patch.insert(&conn).unwrap();
 
-        let mut override_entry = DerivedOverride::new_replace(derived_id, "/etc/test.conf".to_string(), "hash".to_string());
+        let mut override_entry = DerivedOverride::new_replace(
+            derived_id,
+            "/etc/test.conf".to_string(),
+            "hash".to_string(),
+        );
         override_entry.insert(&conn).unwrap();
 
         // Delete the derived package

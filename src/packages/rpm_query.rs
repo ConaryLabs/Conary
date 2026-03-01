@@ -172,31 +172,67 @@ pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
         release: parts[2].to_string(),
         epoch,
         arch: parts.get(4).map_or("noarch".to_string(), |s| {
-            if *s == "(none)" { "noarch".to_string() } else { s.to_string() }
+            if *s == "(none)" {
+                "noarch".to_string()
+            } else {
+                s.to_string()
+            }
         }),
         description: parts.get(5).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         summary: parts.get(6).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         license: parts.get(7).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         url: parts.get(8).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         vendor: parts.get(9).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         source_rpm: parts.get(10).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         build_host: parts.get(11).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
         install_time: parts.get(12).and_then(|s| {
-            if *s == "(none)" { None } else { Some(s.to_string()) }
+            if *s == "(none)" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         }),
     })
 }
@@ -259,7 +295,8 @@ fn parse_rpm_dump_line(line: &str) -> Option<InstalledFileInfo> {
 
     // Get the digest
     let digest_str = &line[digest_start + 1..digest_end]; // +1 to skip leading space
-    let digest = if digest_str == "0000000000000000000000000000000000000000000000000000000000000000" {
+    let digest = if digest_str == "0000000000000000000000000000000000000000000000000000000000000000"
+    {
         None
     } else {
         Some(digest_str.to_string())
@@ -368,7 +405,10 @@ pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
 
 /// Query dependencies of an installed package with full version constraints
 pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!("Querying dependencies with constraints for package: {}", name);
+    debug!(
+        "Querying dependencies with constraints for package: {}",
+        name
+    );
 
     let output = Command::new("rpm")
         .args(["-qR", name])

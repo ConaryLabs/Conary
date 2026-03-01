@@ -12,15 +12,14 @@ use anyhow::Result;
 use conary::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary::ccs::manifest::{Capability, CcsManifest, PackageDep, Platform};
 use conary::db::models::{
-    Changeset, ChangesetStatus, ConvertedPackage, DependencyEntry,
-    FileEntry, ProvideEntry, Trove,
+    Changeset, ChangesetStatus, ConvertedPackage, DependencyEntry, FileEntry, ProvideEntry, Trove,
 };
 use rayon::prelude::*;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, warn};
 
 /// Options for batch conversion (public API for programmatic use)
@@ -49,10 +48,7 @@ struct ConversionSuccess {
 /// Per-package conversion result returned from parallel workers
 enum PackageConversionResult {
     Success(Box<ConversionSuccess>),
-    Failed {
-        name: String,
-        error: String,
-    },
+    Failed { name: String, error: String },
 }
 
 /// Query adopted troves that lack a ConvertedPackage record.
@@ -179,8 +175,7 @@ pub fn cmd_adopt_convert(
     let mut failed_names: Vec<String> = Vec::new();
 
     let changeset_id = conary::db::transaction(&mut conn, |tx| {
-        let mut changeset =
-            Changeset::new("Batch CCS conversion of adopted packages".to_string());
+        let mut changeset = Changeset::new("Batch CCS conversion of adopted packages".to_string());
         let cs_id = changeset.insert(tx)?;
 
         for result in results {
@@ -194,7 +189,10 @@ pub fn cmd_adopt_convert(
                     converted.trove_id = Some(trove_id);
                     converted.ccs_path = Some(ccs_path.to_string_lossy().to_string());
                     if let Err(e) = converted.insert(tx) {
-                        warn!("Failed to insert ConvertedPackage for trove {}: {}", trove_id, e);
+                        warn!(
+                            "Failed to insert ConvertedPackage for trove {}: {}",
+                            trove_id, e
+                        );
                         failed_count += 1;
                     } else {
                         converted_count += 1;
@@ -242,13 +240,13 @@ fn convert_single_package(
     enable_chunking: bool,
 ) -> PackageConversionResult {
     match convert_single_package_inner(bundle, output_dir, enable_chunking) {
-        Ok((converted, ccs_path)) => PackageConversionResult::Success(Box::new(
-            ConversionSuccess {
+        Ok((converted, ccs_path)) => {
+            PackageConversionResult::Success(Box::new(ConversionSuccess {
                 trove_id: bundle.trove.id.expect("trove must have an id"),
                 converted,
                 ccs_path,
-            },
-        )),
+            }))
+        }
         Err(e) => PackageConversionResult::Failed {
             name: bundle.trove.name.clone(),
             error: e.to_string(),
@@ -423,21 +421,9 @@ mod tests {
                 "runtime".to_string(),
                 None,
             ),
-            DependencyEntry::new(
-                42,
-                "pcre2".to_string(),
-                None,
-                "runtime".to_string(),
-                None,
-            ),
+            DependencyEntry::new(42, "pcre2".to_string(), None, "runtime".to_string(), None),
             // Non-runtime dep should be excluded
-            DependencyEntry::new(
-                42,
-                "gcc".to_string(),
-                None,
-                "build".to_string(),
-                None,
-            ),
+            DependencyEntry::new(42, "gcc".to_string(), None, "build".to_string(), None),
         ];
 
         let provides = vec![
@@ -473,8 +459,18 @@ mod tests {
 
         // Provides
         assert_eq!(manifest.provides.capabilities.len(), 2);
-        assert!(manifest.provides.capabilities.contains(&"nginx".to_string()));
-        assert!(manifest.provides.capabilities.contains(&"webserver".to_string()));
+        assert!(
+            manifest
+                .provides
+                .capabilities
+                .contains(&"nginx".to_string())
+        );
+        assert!(
+            manifest
+                .provides
+                .capabilities
+                .contains(&"webserver".to_string())
+        );
     }
 
     #[test]
@@ -516,11 +512,7 @@ mod tests {
         assert_eq!(key, "adopted:adopted:bash:5.2.21:x86_64");
 
         // Non-adopted source should produce "unknown"
-        let mut non_adopted = Trove::new(
-            "foo".to_string(),
-            "1.0".to_string(),
-            TroveType::Package,
-        );
+        let mut non_adopted = Trove::new("foo".to_string(), "1.0".to_string(), TroveType::Package);
         non_adopted.id = Some(99);
         let format_str2 = if non_adopted.install_source.is_adopted() {
             "adopted"

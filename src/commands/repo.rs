@@ -216,7 +216,10 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
                 let gpg_note = gpg_key
                     .map(|fp| format!(" (GPG key imported: {})", &fp[..16]))
                     .unwrap_or_default();
-                println!("  [OK] Synchronized {} packages from {}{}", count, name, gpg_note);
+                println!(
+                    "  [OK] Synchronized {} packages from {}{}",
+                    count, name, gpg_note
+                );
             }
             Err(e) => println!("  [FAILED] Failed to sync {}: {}", name, e),
         }

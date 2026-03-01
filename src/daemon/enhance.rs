@@ -7,15 +7,15 @@
 //! - Supporting cancellation via cancel tokens
 
 use crate::ccs::enhancement::{
-    get_pending_by_priority, EnhancementOptions, EnhancementPriority, EnhancementRunner,
-    EnhancementType,
+    EnhancementOptions, EnhancementPriority, EnhancementRunner, EnhancementType,
+    get_pending_by_priority,
 };
 use crate::daemon::{DaemonEvent, DaemonState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, warn};
 
 /// Enhancement job specification
@@ -102,7 +102,10 @@ pub async fn execute_enhance_job(
     spec: EnhanceJobSpec,
     cancel_token: Arc<AtomicBool>,
 ) -> Result<EnhanceJobResult, crate::Error> {
-    info!("Starting enhancement job with batch_size={}", spec.batch_size);
+    info!(
+        "Starting enhancement job with batch_size={}",
+        spec.batch_size
+    );
 
     // Get database connection
     let conn = state.open_db()?;
@@ -167,8 +170,8 @@ pub async fn execute_enhance_job(
         }
 
         // Get package name for events
-        let package_name = get_package_name(&conn, *trove_id)
-            .unwrap_or_else(|| format!("trove_{}", trove_id));
+        let package_name =
+            get_package_name(&conn, *trove_id).unwrap_or_else(|| format!("trove_{}", trove_id));
 
         // Emit start event
         state.emit(DaemonEvent::EnhancementStarted {
@@ -271,11 +274,9 @@ pub async fn execute_enhance_job(
 
 /// Get package name from trove ID
 fn get_package_name(conn: &Connection, trove_id: i64) -> Option<String> {
-    conn.query_row(
-        "SELECT name FROM troves WHERE id = ?1",
-        [trove_id],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT name FROM troves WHERE id = ?1", [trove_id], |row| {
+        row.get(0)
+    })
     .ok()
 }
 

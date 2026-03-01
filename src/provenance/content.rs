@@ -181,7 +181,7 @@ impl ContentProvenanceBuilder {
 
     /// Build the content provenance
     pub fn build(self) -> ContentProvenance {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         // Compute merkle root from sorted file hashes
         let mut hasher = Sha256::new();

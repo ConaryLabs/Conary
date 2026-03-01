@@ -51,7 +51,9 @@ mod stage1;
 mod stages;
 mod toolchain;
 
-pub use base::{BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary};
+pub use base::{
+    BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary,
+};
 pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};

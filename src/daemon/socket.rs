@@ -74,11 +74,12 @@ impl SocketManager {
         }
 
         // Bind Unix socket
-        let unix_listener = UnixListener::bind(&self.config.unix_path)
-            .map_err(|e| crate::Error::IoError(format!(
+        let unix_listener = UnixListener::bind(&self.config.unix_path).map_err(|e| {
+            crate::Error::IoError(format!(
                 "Failed to bind Unix socket at {:?}: {}",
                 self.config.unix_path, e
-            )))?;
+            ))
+        })?;
 
         // Set socket permissions
         let perms = std::fs::Permissions::from_mode(self.config.unix_mode);
@@ -101,11 +102,12 @@ impl SocketManager {
         // Optionally bind TCP socket
         if self.config.enable_tcp {
             if let Some(ref bind_addr) = self.config.tcp_bind {
-                let tcp_listener = TcpListener::bind(bind_addr).await
-                    .map_err(|e| crate::Error::IoError(format!(
+                let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+                    crate::Error::IoError(format!(
                         "Failed to bind TCP socket at {}: {}",
                         bind_addr, e
-                    )))?;
+                    ))
+                })?;
 
                 log::info!("Listening on TCP: {}", bind_addr);
                 self.tcp_listener = Some(tcp_listener);
@@ -159,7 +161,7 @@ impl Drop for SocketManager {
 /// Set group ownership on a socket file
 #[cfg(unix)]
 fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
-    use nix::unistd::{chown, Gid};
+    use nix::unistd::{Gid, chown};
     use std::ffi::CString;
 
     // Look up group ID
@@ -196,9 +198,7 @@ fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
     };
 
     chown(path, None, Some(Gid::from_raw(gid)))
-        .map_err(|e| crate::Error::IoError(format!(
-            "Failed to set socket group: {}", e
-        )))?;
+        .map_err(|e| crate::Error::IoError(format!("Failed to set socket group: {}", e)))?;
 
     Ok(())
 }

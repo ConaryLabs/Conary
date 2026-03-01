@@ -115,7 +115,10 @@ impl Repository {
 
     /// Find a repository by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!("SELECT {} FROM repositories WHERE id = ?1", REPOSITORY_COLUMNS);
+        let sql = format!(
+            "SELECT {} FROM repositories WHERE id = ?1",
+            REPOSITORY_COLUMNS
+        );
         let mut stmt = conn.prepare(&sql)?;
         let repo = stmt.query_row([id], Self::from_row).optional()?;
         Ok(repo)
@@ -123,7 +126,10 @@ impl Repository {
 
     /// Find a repository by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
-        let sql = format!("SELECT {} FROM repositories WHERE name = ?1", REPOSITORY_COLUMNS);
+        let sql = format!(
+            "SELECT {} FROM repositories WHERE name = ?1",
+            REPOSITORY_COLUMNS
+        );
         let mut stmt = conn.prepare(&sql)?;
         let repo = stmt.query_row([name], Self::from_row).optional()?;
         Ok(repo)
@@ -410,7 +416,11 @@ impl RepositoryPackage {
     }
 
     /// Find a specific package by name and version in enabled repositories
-    pub fn find_by_name_version(conn: &Connection, name: &str, version: &str) -> Result<Option<Self>> {
+    pub fn find_by_name_version(
+        conn: &Connection,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
                     rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,

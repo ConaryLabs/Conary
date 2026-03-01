@@ -5,13 +5,13 @@
 //! provenance, and subpackage relationships to already-installed converted
 //! packages.
 
-use conary::ccs::enhancement::{
-    check_enhancement_window, get_pending_by_priority, schedule_for_enhancement,
-    EnhancementPriority, EnhancementResult_, EnhancementRunner, EnhancementStatus,
-    EnhancementType, EnhancementWindowStatus, ENHANCEMENT_VERSION,
-};
 use conary::ccs::enhancement::context::ConvertedPackageInfo;
 use conary::ccs::enhancement::runner::EnhancementOptions;
+use conary::ccs::enhancement::{
+    ENHANCEMENT_VERSION, EnhancementPriority, EnhancementResult_, EnhancementRunner,
+    EnhancementStatus, EnhancementType, EnhancementWindowStatus, check_enhancement_window,
+    get_pending_by_priority, schedule_for_enhancement,
+};
 use conary::db;
 use rusqlite::params;
 use std::path::PathBuf;
@@ -90,7 +90,8 @@ fn create_test_package(
     deps: &[&str],
 ) -> (i64, i64) {
     let trove_id = insert_test_trove(conn, name, "1.0.0");
-    let converted_id = insert_converted_package(conn, trove_id, "rpm", &format!("checksum_{}", name));
+    let converted_id =
+        insert_converted_package(conn, trove_id, "rpm", &format!("checksum_{}", name));
     insert_test_files(conn, trove_id, files);
     insert_dependencies(conn, trove_id, deps);
     (trove_id, converted_id)
@@ -171,7 +172,9 @@ fn test_find_pending_packages() {
         "Should find pending-pkg-2"
     );
     assert!(
-        pending.iter().all(|p| p.enhancement_status == EnhancementStatus::Pending),
+        pending
+            .iter()
+            .all(|p| p.enhancement_status == EnhancementStatus::Pending),
         "All should be pending"
     );
 }
@@ -210,30 +213,30 @@ fn test_find_outdated_packages() {
 #[test]
 fn test_enhancement_type_parsing() {
     assert_eq!(
-        EnhancementType::from_str("capabilities"),
+        EnhancementType::parse_name("capabilities"),
         Some(EnhancementType::Capabilities)
     );
     assert_eq!(
-        EnhancementType::from_str("caps"),
+        EnhancementType::parse_name("caps"),
         Some(EnhancementType::Capabilities)
     );
     assert_eq!(
-        EnhancementType::from_str("provenance"),
+        EnhancementType::parse_name("provenance"),
         Some(EnhancementType::Provenance)
     );
     assert_eq!(
-        EnhancementType::from_str("prov"),
+        EnhancementType::parse_name("prov"),
         Some(EnhancementType::Provenance)
     );
     assert_eq!(
-        EnhancementType::from_str("subpackages"),
+        EnhancementType::parse_name("subpackages"),
         Some(EnhancementType::Subpackages)
     );
     assert_eq!(
-        EnhancementType::from_str("subpkg"),
+        EnhancementType::parse_name("subpkg"),
         Some(EnhancementType::Subpackages)
     );
-    assert_eq!(EnhancementType::from_str("unknown"), None);
+    assert_eq!(EnhancementType::parse_name("unknown"), None);
 }
 
 #[test]
@@ -324,7 +327,11 @@ fn test_runner_with_default_options() {
 
     // Enhancement should work (may skip some enhancements if files don't exist)
     let result = runner.enhance(trove_id);
-    assert!(result.is_ok(), "Enhancement should not error: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Enhancement should not error: {:?}",
+        result.err()
+    );
 
     let result = result.unwrap();
     assert_eq!(result.trove_id, trove_id);
@@ -366,7 +373,9 @@ fn test_runner_with_specific_types() {
 
     // All processed types should be Capabilities (the only requested type)
     assert!(
-        processed_types.iter().all(|t| **t == EnhancementType::Capabilities)
+        processed_types
+            .iter()
+            .all(|t| **t == EnhancementType::Capabilities)
             || processed_types.is_empty(),
         "Should only process requested enhancement type"
     );
@@ -450,7 +459,11 @@ fn test_runner_force_enhancement() {
     let result = runner.enhance(trove_id);
 
     // Should complete without error (force allows re-enhancement)
-    assert!(result.is_ok(), "Force enhancement should work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Force enhancement should work: {:?}",
+        result.err()
+    );
 }
 
 // =============================================================================
@@ -542,12 +555,12 @@ fn test_enhancement_version_updated() {
 fn test_subpackage_naming_patterns() {
     // Test common subpackage naming patterns
     let patterns = [
-        ("nginx-devel", "nginx", true),      // -devel suffix
-        ("nginx-doc", "nginx", true),        // -doc suffix
-        ("nginx-libs", "nginx", true),       // -libs suffix
-        ("libfoo-devel", "libfoo", true),    // lib prefix with -devel
-        ("httpd-common", "httpd", true),     // -common suffix
-        ("nginx", "nginx", false),           // Not a subpackage
+        ("nginx-devel", "nginx", true),   // -devel suffix
+        ("nginx-doc", "nginx", true),     // -doc suffix
+        ("nginx-libs", "nginx", true),    // -libs suffix
+        ("libfoo-devel", "libfoo", true), // lib prefix with -devel
+        ("httpd-common", "httpd", true),  // -common suffix
+        ("nginx", "nginx", false),        // Not a subpackage
     ];
 
     for (subpkg, base, should_match) in patterns {
@@ -574,7 +587,9 @@ fn test_subpackage_naming_patterns() {
 /// Simple helper to detect base package from subpackage name
 /// (mirrors logic in subpackage enhancer)
 fn detect_base_package(name: &str) -> Option<String> {
-    let suffixes = ["-devel", "-dev", "-doc", "-libs", "-common", "-data", "-tools"];
+    let suffixes = [
+        "-devel", "-dev", "-doc", "-libs", "-common", "-data", "-tools",
+    ];
     for suffix in suffixes {
         if name.ends_with(suffix) {
             return Some(name.trim_end_matches(suffix).to_string());
@@ -594,10 +609,8 @@ fn test_parallel_enhancement() {
     // Create multiple packages with unique file paths
     for i in 0..5 {
         let files = [(format!("/usr/bin/parallel-{}", i), 100i64, 0o755)];
-        let files_slice: Vec<(&str, i64, i32)> = files
-            .iter()
-            .map(|(p, s, m)| (p.as_str(), *s, *m))
-            .collect();
+        let files_slice: Vec<(&str, i64, i32)> =
+            files.iter().map(|(p, s, m)| (p.as_str(), *s, *m)).collect();
         create_test_package(&conn, &format!("parallel-pkg-{}", i), &files_slice, &[]);
     }
 
@@ -614,7 +627,11 @@ fn test_parallel_enhancement() {
     let runner = EnhancementRunner::with_options(&conn, options);
     let results = runner.enhance_all_pending().unwrap();
 
-    assert_eq!(results.len(), 5, "Should process all 5 packages in parallel");
+    assert_eq!(
+        results.len(),
+        5,
+        "Should process all 5 packages in parallel"
+    );
 }
 
 // =============================================================================
@@ -628,10 +645,7 @@ fn test_enhancement_nonexistent_trove() {
     let runner = EnhancementRunner::new(&conn);
     let result = runner.enhance(99999); // Non-existent trove ID
 
-    assert!(
-        result.is_err(),
-        "Should fail for non-existent trove"
-    );
+    assert!(result.is_err(), "Should fail for non-existent trove");
 }
 
 #[test]
@@ -665,12 +679,8 @@ fn test_capability_inference_server_package() {
         ("/etc/myserver/config.conf", 256i64, 0o644),
         ("/var/log/myserver/.keep", 0i64, 0o644),
     ];
-    let (trove_id, converted_id) = create_test_package(
-        &conn,
-        "myserver-daemon",
-        &files,
-        &["libssl3", "libc6"],
-    );
+    let (trove_id, converted_id) =
+        create_test_package(&conn, "myserver-daemon", &files, &["libssl3", "libc6"]);
 
     let options = EnhancementOptions {
         types: vec![EnhancementType::Capabilities],
@@ -738,7 +748,10 @@ fn test_enhancement_window_status() {
 
     // Test for non-existent trove
     let status_nonexistent = check_enhancement_window(&conn, 99999);
-    assert!(matches!(status_nonexistent, EnhancementWindowStatus::NotConverted));
+    assert!(matches!(
+        status_nonexistent,
+        EnhancementWindowStatus::NotConverted
+    ));
 }
 
 // =============================================================================

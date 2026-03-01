@@ -8,8 +8,8 @@
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use tracing::{debug, info};
 
 /// Fedora/RPM repository parser
@@ -52,22 +52,21 @@ impl FedoraParser {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"type")
                             .unwrap_or(false)
-                    })
-                        && attr.value.as_ref() == b"primary"
+                    }) && attr.value.as_ref() == b"primary"
                     {
                         in_primary = true;
                     }
                 }
-                Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == b"location" && in_primary => {
+                Ok(Event::Start(e) | Event::Empty(e))
+                    if e.name().as_ref() == b"location" && in_primary =>
+                {
                     // Extract href attribute
                     if let Some(Ok(attr)) = e.attributes().find(|a| {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"href")
                             .unwrap_or(false)
                     }) {
-                        location = Some(
-                            String::from_utf8_lossy(attr.value.as_ref()).to_string(),
-                        );
+                        location = Some(String::from_utf8_lossy(attr.value.as_ref()).to_string());
                     }
                 }
                 Ok(Event::End(e)) if e.name().as_ref() == b"data" => {
@@ -78,7 +77,7 @@ impl FedoraParser {
                     return Err(Error::ParseError(format!(
                         "Failed to parse repomd.xml: {}",
                         e
-                    )))
+                    )));
                 }
                 _ => {}
             }
@@ -262,7 +261,10 @@ impl FedoraParser {
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => {
-                    return Err(Error::ParseError(format!("Failed to parse primary.xml: {}", e)))
+                    return Err(Error::ParseError(format!(
+                        "Failed to parse primary.xml: {}",
+                        e
+                    )));
                 }
                 _ => {}
             }
@@ -382,7 +384,10 @@ impl PackageBuilder {
         if let Some(summary) = self.summary {
             extra.insert("summary".to_string(), serde_json::Value::String(summary));
         }
-        extra.insert("format".to_string(), serde_json::Value::String("rpm".to_string()));
+        extra.insert(
+            "format".to_string(),
+            serde_json::Value::String("rpm".to_string()),
+        );
         extra.insert("epoch".to_string(), serde_json::Value::String(epoch));
 
         Ok(PackageMetadata {

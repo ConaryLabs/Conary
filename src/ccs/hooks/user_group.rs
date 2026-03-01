@@ -24,10 +24,7 @@ impl HookExecutor {
     /// When root != "/", parses the target's /etc/passwd directly.
     pub(super) fn user_exists(&self, name: &str) -> bool {
         if self.is_live_root() {
-            nix::unistd::User::from_name(name)
-                .ok()
-                .flatten()
-                .is_some()
+            nix::unistd::User::from_name(name).ok().flatten().is_some()
         } else {
             self.user_exists_in_target(name)
         }
@@ -62,10 +59,7 @@ impl HookExecutor {
     /// When root != "/", parses the target's /etc/group directly.
     pub(super) fn group_exists(&self, name: &str) -> bool {
         if self.is_live_root() {
-            nix::unistd::Group::from_name(name)
-                .ok()
-                .flatten()
-                .is_some()
+            nix::unistd::Group::from_name(name).ok().flatten().is_some()
         } else {
             self.group_exists_in_target(name)
         }
@@ -158,11 +152,7 @@ impl HookExecutor {
         let status = cmd.status().context("Failed to run useradd")?;
 
         if status.success() {
-            info!(
-                "Created user '{}' (root: {})",
-                name,
-                self.root.display()
-            );
+            info!("Created user '{}' (root: {})", name, self.root.display());
             Ok(true)
         } else {
             Err(anyhow::anyhow!(
@@ -234,11 +224,7 @@ impl HookExecutor {
         let status = cmd.status().context("Failed to run groupadd")?;
 
         if status.success() {
-            info!(
-                "Created group '{}' (root: {})",
-                name,
-                self.root.display()
-            );
+            info!("Created group '{}' (root: {})", name, self.root.display());
             Ok(true)
         } else {
             Err(anyhow::anyhow!(

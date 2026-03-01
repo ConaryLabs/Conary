@@ -17,9 +17,7 @@ pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
     let trove = troves
         .first()
         .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
     let deps = conary::db::models::DependencyEntry::find_by_trove(&conn, trove_id)?;
 
@@ -43,10 +41,7 @@ pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
 
 /// Show reverse dependencies
 pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
-    info!(
-        "Showing reverse dependencies for package: {}",
-        package_name
-    );
+    info!("Showing reverse dependencies for package: {}", package_name);
     let conn = conary::db::open(db_path)?;
 
     let dependents = conary::db::models::DependencyEntry::find_dependents(&conn, package_name)?;
@@ -66,7 +61,7 @@ pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
                 } else {
                     String::new()
                 };
-                print!("  {} ({}){}",trove.name, dep.dependency_type, kind_str);
+                print!("  {} ({}){}", trove.name, dep.dependency_type, kind_str);
                 if let Some(constraint) = dep.version_constraint {
                     print!(" - requires: {}", constraint);
                 }
@@ -124,7 +119,8 @@ pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     let conn = conary::db::open(db_path)?;
 
     // First try exact match
-    let mut providers = conary::db::models::ProvideEntry::find_all_by_capability(&conn, capability)?;
+    let mut providers =
+        conary::db::models::ProvideEntry::find_all_by_capability(&conn, capability)?;
 
     // If no exact match, try pattern search
     if providers.is_empty() {

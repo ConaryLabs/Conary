@@ -64,7 +64,11 @@ impl<'a> TriggerExecutor<'a> {
     }
 
     /// Record which triggers need to run based on installed files
-    pub fn record_triggers(&self, changeset_id: i64, file_paths: &[String]) -> Result<Vec<Trigger>> {
+    pub fn record_triggers(
+        &self,
+        changeset_id: i64,
+        file_paths: &[String],
+    ) -> Result<Vec<Trigger>> {
         let engine = TriggerEngine::new(self.conn);
         engine.record_triggers(changeset_id, file_paths)
     }
@@ -213,12 +217,18 @@ impl<'a> TriggerExecutor<'a> {
 
                 if status.success() {
                     let combined = format!("{}{}", stdout, stderr);
-                    Ok(if combined.is_empty() { None } else { Some(combined) })
+                    Ok(if combined.is_empty() {
+                        None
+                    } else {
+                        Some(combined)
+                    })
                 } else {
                     let code = status.code().unwrap_or(-1);
                     Err(Error::TriggerError(format!(
                         "Handler '{}' failed with exit code {}: {}",
-                        cmd, code, stderr.trim()
+                        cmd,
+                        code,
+                        stderr.trim()
                     )))
                 }
             }
@@ -279,10 +289,7 @@ impl<'a> TriggerExecutor<'a> {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                Error::TriggerError(format!(
-                    "Failed to spawn chroot for '{}': {}",
-                    cmd, e
-                ))
+                Error::TriggerError(format!("Failed to spawn chroot for '{}': {}", cmd, e))
             })?;
 
         // Wait with timeout
@@ -372,7 +379,12 @@ pub fn handler_exists_in_root(cmd: &str, root: &Path) -> bool {
 
     // Otherwise, check common bin directories in target
     let search_paths = [
-        "usr/bin", "usr/sbin", "bin", "sbin", "usr/local/bin", "usr/local/sbin",
+        "usr/bin",
+        "usr/sbin",
+        "bin",
+        "sbin",
+        "usr/local/bin",
+        "usr/local/sbin",
     ];
 
     for search_path in &search_paths {
@@ -438,7 +450,10 @@ mod tests {
         assert!(!results.all_succeeded());
         assert_eq!(results.total(), 8);
 
-        let results2 = TriggerResults { succeeded: 3, ..TriggerResults::default() };
+        let results2 = TriggerResults {
+            succeeded: 3,
+            ..TriggerResults::default()
+        };
         assert!(results2.all_succeeded());
     }
 }

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// TOML configuration file structure
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct RemiConfig {
     /// Server settings
     #[serde(default)]
@@ -63,24 +63,6 @@ pub struct RemiConfig {
     /// Web frontend settings
     #[serde(default)]
     pub web: WebSection,
-}
-
-impl Default for RemiConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerSection::default(),
-            storage: StorageSection::default(),
-            upstream: HashMap::new(),
-            conversion: ConversionSection::default(),
-            federation: FederationSection::default(),
-            security: SecuritySection::default(),
-            builder: BuilderSection::default(),
-            r2: R2Section::default(),
-            search: SearchSection::default(),
-            prewarm: PrewarmConfigSection::default(),
-            web: WebSection::default(),
-        }
-    }
 }
 
 /// Server configuration section
@@ -544,7 +526,7 @@ fn default_convert_top_n() -> usize {
 }
 
 /// Web frontend configuration
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct WebSection {
     /// Enable web frontend serving
     #[serde(default)]
@@ -552,15 +534,6 @@ pub struct WebSection {
 
     /// Path to the built web frontend directory
     pub root: Option<PathBuf>,
-}
-
-impl Default for WebSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            root: None,
-        }
-    }
 }
 
 fn default_max_builds() -> usize {
@@ -597,9 +570,15 @@ impl RemiConfig {
             .parse::<SocketAddr>()
             .with_context(|| format!("Invalid server.bind address: {}", self.server.bind))?;
 
-        self.server.admin_bind.parse::<SocketAddr>().with_context(|| {
-            format!("Invalid server.admin_bind address: {}", self.server.admin_bind)
-        })?;
+        self.server
+            .admin_bind
+            .parse::<SocketAddr>()
+            .with_context(|| {
+                format!(
+                    "Invalid server.admin_bind address: {}",
+                    self.server.admin_bind
+                )
+            })?;
 
         // Validate eviction threshold
         if !(0.0..=1.0).contains(&self.storage.eviction_threshold) {
@@ -670,18 +649,17 @@ impl RemiConfig {
 
     /// Get admin bind address
     pub fn admin_bind_addr(&self) -> Result<SocketAddr> {
-        self.server.admin_bind.parse().with_context(|| {
-            format!("Invalid admin bind address: {}", self.server.admin_bind)
-        })
+        self.server
+            .admin_bind
+            .parse()
+            .with_context(|| format!("Invalid admin bind address: {}", self.server.admin_bind))
     }
 
     /// Get primary upstream URL (first configured)
     fn get_primary_upstream_url(&self) -> Option<String> {
-        self.upstream.values().find_map(|u| {
-            u.base_url
-                .clone()
-                .or_else(|| u.metalink.clone())
-        })
+        self.upstream
+            .values()
+            .find_map(|u| u.base_url.clone().or_else(|| u.metalink.clone()))
     }
 
     /// Get the storage root directory
@@ -808,7 +786,10 @@ mod tests {
         assert_eq!(parse_size("1GB").unwrap(), 1024 * 1024 * 1024);
         assert_eq!(parse_size("1TB").unwrap(), 1024u64 * 1024 * 1024 * 1024);
         assert_eq!(parse_size("700GB").unwrap(), 700 * 1024 * 1024 * 1024);
-        assert_eq!(parse_size("1.5GB").unwrap(), (1.5 * 1024.0 * 1024.0 * 1024.0) as u64);
+        assert_eq!(
+            parse_size("1.5GB").unwrap(),
+            (1.5 * 1024.0 * 1024.0 * 1024.0) as u64
+        );
     }
 
     #[test]
@@ -817,7 +798,10 @@ mod tests {
         assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
         assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(15 * 60));
         assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert_eq!(parse_duration("2d").unwrap(), Duration::from_secs(2 * 24 * 3600));
+        assert_eq!(
+            parse_duration("2d").unwrap(),
+            Duration::from_secs(2 * 24 * 3600)
+        );
     }
 
     #[test]

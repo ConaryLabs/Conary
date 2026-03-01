@@ -38,7 +38,7 @@ pub use declaration::{
 };
 pub use resolver::{
     CapabilityProvider, CapabilityRequirement, CapabilityResolver, CapabilitySpec,
-    FilesystemCapabilitySpec, FilesystemCapType, NetworkCapabilitySpec, NetworkCapType,
+    FilesystemCapType, FilesystemCapabilitySpec, NetworkCapType, NetworkCapabilitySpec,
     ResolvedCapability, ResolverPreferences, parse_capability_spec,
 };
 
@@ -107,8 +107,9 @@ pub fn load_capabilities(
 
     match result {
         Some(json) => {
-            let capabilities: CapabilityDeclaration = serde_json::from_str(&json)
-                .map_err(|e| CapabilityError::Other(format!("Failed to parse capabilities: {}", e)))?;
+            let capabilities: CapabilityDeclaration = serde_json::from_str(&json).map_err(|e| {
+                CapabilityError::Other(format!("Failed to parse capabilities: {}", e))
+            })?;
             Ok(Some(capabilities))
         }
         None => Ok(None),
@@ -334,8 +335,16 @@ mod tests {
         // List all packages
         let all = list_packages_with_capabilities(&conn, false).unwrap();
         assert_eq!(all.len(), 2);
-        assert!(all.iter().find(|(n, _, has)| n == "nginx" && *has).is_some());
-        assert!(all.iter().find(|(n, _, has)| n == "curl" && !*has).is_some());
+        assert!(
+            all.iter()
+                .find(|(n, _, has)| n == "nginx" && *has)
+                .is_some()
+        );
+        assert!(
+            all.iter()
+                .find(|(n, _, has)| n == "curl" && !*has)
+                .is_some()
+        );
 
         // List only missing
         let missing = list_packages_with_capabilities(&conn, true).unwrap();

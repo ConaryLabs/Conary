@@ -18,7 +18,7 @@ use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary::db::models::{ProvideEntry, Redirect};
 use conary::db::paths::keyring_dir;
-use conary::repository::{resolve_package, PackageSource, ResolutionOptions};
+use conary::repository::{PackageSource, ResolutionOptions, resolve_package};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -106,8 +106,7 @@ pub fn resolve_package_path(
     info!("Searching repositories for package: {}", package);
     progress.set_status("Searching repositories...");
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     // Check for package redirects (renames, obsoletes, etc.)
     let resolved_name = resolve_redirects(&conn, package, version);
@@ -134,11 +133,7 @@ pub fn resolve_package_path(
 }
 
 /// Resolve package redirects (renames, obsoletes)
-fn resolve_redirects(
-    conn: &rusqlite::Connection,
-    package: &str,
-    version: Option<&str>,
-) -> String {
+fn resolve_redirects(conn: &rusqlite::Connection, package: &str, version: Option<&str>) -> String {
     match Redirect::resolve(conn, package, version) {
         Ok(result) => {
             if result.was_redirected {
@@ -164,7 +159,10 @@ fn resolve_redirects(
         Err(e) => {
             // Log the error but continue with original name
             // (redirect table might not exist on older DBs)
-            info!("Redirect check failed (continuing with original name): {}", e);
+            info!(
+                "Redirect check failed (continuing with original name): {}",
+                e
+            );
             package.to_string()
         }
     }
@@ -178,7 +176,11 @@ fn convert_source_to_resolved(
 ) -> Result<ResolutionOutcome> {
     match source {
         PackageSource::Binary { path, _temp_dir } => {
-            info!("Resolved {} from binary source: {}", package, path.display());
+            info!(
+                "Resolved {} from binary source: {}",
+                package,
+                path.display()
+            );
             progress.set_phase(package, InstallPhase::Downloading);
             Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
@@ -197,10 +199,16 @@ fn convert_source_to_resolved(
             }))
         }
 
-        PackageSource::Delta { base_version, delta_path, _temp_dir } => {
+        PackageSource::Delta {
+            base_version,
+            delta_path,
+            _temp_dir,
+        } => {
             info!(
                 "Resolved {} from delta (base: {}): {}",
-                package, base_version, delta_path.display()
+                package,
+                base_version,
+                delta_path.display()
             );
             progress.set_phase(package, InstallPhase::Downloading);
             // For now, treat delta as binary - the installer will handle it

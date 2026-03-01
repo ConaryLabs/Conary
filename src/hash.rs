@@ -310,7 +310,11 @@ impl std::error::Error for VerifyError {}
 /// let hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 /// assert!(verify_bytes(data, hash, HashAlgorithm::Sha256).is_ok());
 /// ```
-pub fn verify_bytes(data: &[u8], expected: &str, algorithm: HashAlgorithm) -> Result<(), VerifyError> {
+pub fn verify_bytes(
+    data: &[u8],
+    expected: &str,
+    algorithm: HashAlgorithm,
+) -> Result<(), VerifyError> {
     let actual = hash_bytes(algorithm, data);
     if actual.value == expected.to_lowercase() {
         Ok(())
@@ -435,10 +439,22 @@ mod tests {
 
     #[test]
     fn test_algorithm_parse() {
-        assert_eq!("sha256".parse::<HashAlgorithm>().unwrap(), HashAlgorithm::Sha256);
-        assert_eq!("SHA-256".parse::<HashAlgorithm>().unwrap(), HashAlgorithm::Sha256);
-        assert_eq!("xxh128".parse::<HashAlgorithm>().unwrap(), HashAlgorithm::Xxh128);
-        assert_eq!("xxhash".parse::<HashAlgorithm>().unwrap(), HashAlgorithm::Xxh128);
+        assert_eq!(
+            "sha256".parse::<HashAlgorithm>().unwrap(),
+            HashAlgorithm::Sha256
+        );
+        assert_eq!(
+            "SHA-256".parse::<HashAlgorithm>().unwrap(),
+            HashAlgorithm::Sha256
+        );
+        assert_eq!(
+            "xxh128".parse::<HashAlgorithm>().unwrap(),
+            HashAlgorithm::Xxh128
+        );
+        assert_eq!(
+            "xxhash".parse::<HashAlgorithm>().unwrap(),
+            HashAlgorithm::Xxh128
+        );
         assert!("unknown".parse::<HashAlgorithm>().is_err());
     }
 

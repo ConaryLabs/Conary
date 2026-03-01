@@ -102,13 +102,15 @@ impl ArchPackage {
         let mut archive = Self::open_archive(path)?;
         let mut files = Vec::new();
 
-        for entry in archive.entries()
+        for entry in archive
+            .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive entries: {}", e)))?
         {
             let entry = entry
                 .map_err(|e| Error::InitError(format!("Failed to read archive entry: {}", e)))?;
 
-            let entry_path = entry.path()
+            let entry_path = entry
+                .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                 .to_string_lossy()
                 .to_string();
@@ -117,7 +119,8 @@ impl ArchPackage {
             if entry_path == ".PKGINFO"
                 || entry_path == ".MTREE"
                 || entry_path == ".BUILDINFO"
-                || entry_path == ".INSTALL" {
+                || entry_path == ".INSTALL"
+            {
                 continue;
             }
 
@@ -126,14 +129,19 @@ impl ArchPackage {
                 continue;
             }
 
-            let size = entry.header().size()
+            let size = entry
+                .header()
+                .size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
-            let mode = entry.header().mode()
+            let mode = entry
+                .header()
+                .mode()
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
             files.push(PackageFile {
-                path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                path: normalize_path(&entry_path)
+                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 size: size as i64,
                 mode: mode as i32,
                 sha256: None, // We'll compute this during extraction if needed
@@ -332,20 +340,23 @@ impl PackageFormat for ArchPackage {
         let mut archive = Self::open_archive(path)?;
         let mut pkginfo_content = None;
 
-        for entry in archive.entries()
+        for entry in archive
+            .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?
         {
-            let mut entry = entry
-                .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            let mut entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-            let entry_path = entry.path()
+            let entry_path = entry
+                .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                 .to_string_lossy()
                 .to_string();
 
             if entry_path == ".PKGINFO" {
                 let mut content = String::new();
-                entry.read_to_string(&mut content)
+                entry
+                    .read_to_string(&mut content)
                     .map_err(|e| Error::InitError(format!("Failed to read .PKGINFO: {}", e)))?;
                 pkginfo_content = Some(content);
                 break;
@@ -358,10 +369,12 @@ impl PackageFormat for ArchPackage {
         // Parse .PKGINFO
         let pkginfo = Self::parse_pkginfo(&pkginfo_content)?;
 
-        let name = pkginfo.name
+        let name = pkginfo
+            .name
             .ok_or_else(|| Error::InitError("Package name not found in .PKGINFO".to_string()))?;
 
-        let version = pkginfo.version
+        let version = pkginfo
+            .version
             .ok_or_else(|| Error::InitError("Package version not found in .PKGINFO".to_string()))?;
 
         // Extract file list
@@ -369,9 +382,18 @@ impl PackageFormat for ArchPackage {
 
         // Parse dependencies
         let mut dependencies = Vec::new();
-        dependencies.extend(Self::parse_dependencies(&pkginfo.dependencies, DependencyType::Runtime));
-        dependencies.extend(Self::parse_dependencies(&pkginfo.optional_deps, DependencyType::Optional));
-        dependencies.extend(Self::parse_dependencies(&pkginfo.make_deps, DependencyType::Build));
+        dependencies.extend(Self::parse_dependencies(
+            &pkginfo.dependencies,
+            DependencyType::Runtime,
+        ));
+        dependencies.extend(Self::parse_dependencies(
+            &pkginfo.optional_deps,
+            DependencyType::Optional,
+        ));
+        dependencies.extend(Self::parse_dependencies(
+            &pkginfo.make_deps,
+            DependencyType::Build,
+        ));
 
         // Extract scriptlets from .INSTALL file
         let scriptlets = Self::extract_install_script(path)
@@ -385,7 +407,8 @@ impl PackageFormat for ArchPackage {
         for entry in &pkginfo.backup {
             let path = entry.split('\t').next().unwrap_or(entry);
             config_files.push(ConfigFileInfo {
-                path: normalize_path(path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                path: normalize_path(path)
+                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 noreplace: true, // Arch backup files always preserve user changes
                 ghost: false,
             });
@@ -448,20 +471,27 @@ impl PackageFormat for ArchPackage {
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        debug!("Extracting file contents from Arch package: {:?}", self.meta.package_path());
+        debug!(
+            "Extracting file contents from Arch package: {:?}",
+            self.meta.package_path()
+        );
 
-        let path_str = self.meta.package_path().to_str()
-            .ok_or_else(|| Error::InitError("Package path contains invalid UTF-8".to_string()))?;
+        let path_str =
+            self.meta.package_path().to_str().ok_or_else(|| {
+                Error::InitError("Package path contains invalid UTF-8".to_string())
+            })?;
         let mut archive = Self::open_archive(path_str)?;
         let mut extracted_files = Vec::new();
 
-        for entry in archive.entries()
+        for entry in archive
+            .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?
         {
-            let mut entry = entry
-                .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            let mut entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-            let entry_path = entry.path()
+            let entry_path = entry
+                .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
                 .to_string_lossy()
                 .to_string();
@@ -470,7 +500,8 @@ impl PackageFormat for ArchPackage {
             if entry_path == ".PKGINFO"
                 || entry_path == ".MTREE"
                 || entry_path == ".BUILDINFO"
-                || entry_path == ".INSTALL" {
+                || entry_path == ".INSTALL"
+            {
                 continue;
             }
 
@@ -479,7 +510,9 @@ impl PackageFormat for ArchPackage {
                 continue;
             }
 
-            let size = entry.header().size()
+            let size = entry
+                .header()
+                .size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
             // Check file size using shared utility
@@ -487,19 +520,23 @@ impl PackageFormat for ArchPackage {
                 continue;
             }
 
-            let mode = entry.header().mode()
+            let mode = entry
+                .header()
+                .mode()
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
             // Read file content
             let mut content = Vec::new();
-            entry.read_to_end(&mut content)
+            entry
+                .read_to_end(&mut content)
                 .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
             // Compute SHA-256 using shared utility
             let hash = hash::sha256(&content);
 
             extracted_files.push(ExtractedFile {
-                path: normalize_path(&entry_path).map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                path: normalize_path(&entry_path)
+                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 content,
                 size: size as i64,
                 mode: mode as i32,
@@ -507,7 +544,10 @@ impl PackageFormat for ArchPackage {
             });
         }
 
-        debug!("Extracted {} files from Arch package", extracted_files.len());
+        debug!(
+            "Extracted {} files from Arch package",
+            extracted_files.len()
+        );
         Ok(extracted_files)
     }
 
@@ -602,10 +642,7 @@ makedepend = gcc
 
     #[test]
     fn test_dependency_parsing() {
-        let deps = vec![
-            "glibc>=2.34".to_string(),
-            "zlib".to_string(),
-        ];
+        let deps = vec!["glibc>=2.34".to_string(), "zlib".to_string()];
 
         let parsed = ArchPackage::parse_dependencies(&deps, DependencyType::Runtime);
         assert_eq!(parsed.len(), 2);
@@ -625,7 +662,10 @@ makedepend = gcc
         let parsed = ArchPackage::parse_dependencies(&deps, DependencyType::Optional);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].name, "python");
-        assert_eq!(parsed[0].description, Some("for running scripts".to_string()));
+        assert_eq!(
+            parsed[0].description,
+            Some("for running scripts".to_string())
+        );
         assert_eq!(parsed[1].name, "ruby");
         assert_eq!(parsed[1].description, None);
     }

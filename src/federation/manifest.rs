@@ -31,7 +31,7 @@
 
 use crate::ccs::signing::SigningKeyPair;
 use crate::ccs::verify::PackageSignature;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -172,11 +172,12 @@ impl FederationManifest {
         }
 
         // Check if public key is trusted
-        if !policy.trusted_keys.is_empty()
-            && !policy.trusted_keys.contains(&signature.public_key)
-        {
+        if !policy.trusted_keys.is_empty() && !policy.trusted_keys.contains(&signature.public_key) {
             return Err(ManifestError::UntrustedKey(
-                signature.key_id.clone().unwrap_or_else(|| signature.public_key.clone()),
+                signature
+                    .key_id
+                    .clone()
+                    .unwrap_or_else(|| signature.public_key.clone()),
             ));
         }
 
@@ -215,8 +216,7 @@ impl FederationManifest {
 
     /// Serialize to JSON
     pub fn to_json(&self) -> Result<String, ManifestError> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| ManifestError::InvalidData(e.to_string()))
+        serde_json::to_string_pretty(self).map_err(|e| ManifestError::InvalidData(e.to_string()))
     }
 
     /// Deserialize from JSON

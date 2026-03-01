@@ -10,23 +10,23 @@
 //!
 //! Every package can answer: "Show me everything that went into this binary"
 
-mod source;
 mod build;
-mod signature;
 mod content;
 mod dna;
+mod signature;
 mod slsa;
+mod source;
 
-pub use source::{SourceProvenance, PatchInfo};
-pub use build::{BuildProvenance, BuildDependency, HostAttestation, ReproducibilityInfo};
-pub use signature::{SignatureProvenance, Signature, SignatureScope, TransparencyLog};
-pub use content::{ContentProvenance, ComponentHash};
+pub use build::{BuildDependency, BuildProvenance, HostAttestation, ReproducibilityInfo};
+pub use content::{ComponentHash, ContentProvenance};
 pub use dna::{DnaHash, DnaHashError, PackageDna};
-pub use slsa::{build_slsa_statement, SlsaContext, SlsaError};
+pub use signature::{Signature, SignatureProvenance, SignatureScope, TransparencyLog};
+pub use slsa::{SlsaContext, SlsaError, build_slsa_statement};
+pub use source::{PatchInfo, SourceProvenance};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Complete provenance record for a package
 #[derive(Debug, Clone, Serialize, Deserialize)]

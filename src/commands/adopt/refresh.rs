@@ -6,13 +6,16 @@
 //! updates any that have drifted (version changed, package removed, etc.).
 
 use super::super::create_state_snapshot;
-use super::system::{compute_file_hash, FileInfoTuple};
+use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
 };
-use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
+use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use tracing::{debug, warn};
+
+/// Map of package name -> (version, arch, description).
+type InstalledPackageMap = std::collections::HashMap<String, (String, String, Option<String>)>;
 
 /// Outcome for a single adopted package after drift check
 #[derive(Debug)]
@@ -20,7 +23,10 @@ enum DriftOutcome {
     /// Version in DB matches system — no action needed
     Unchanged,
     /// Version changed — DB record updated
-    Updated { old_version: String, new_version: String },
+    Updated {
+        old_version: String,
+        new_version: String,
+    },
     /// Package no longer present in system package manager
     Removed,
 }
@@ -65,10 +71,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
     }
 
     if !quiet {
-        println!(
-            "Checking {} adopted package(s) for drift...",
-            adopted.len()
-        );
+        println!("Checking {} adopted package(s) for drift...", adopted.len());
     }
 
     // Build current system version map: name -> (version, arch, description)
@@ -115,7 +118,11 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
             if updated_count > 0 {
                 println!("Would update:");
                 for (trove, outcome) in &results {
-                    if let DriftOutcome::Updated { old_version, new_version } = outcome {
+                    if let DriftOutcome::Updated {
+                        old_version,
+                        new_version,
+                    } = outcome
+                    {
                         println!("  {} {} -> {}", trove.name, old_version, new_version);
                     }
                 }
@@ -179,12 +186,18 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                     tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
                     Trove::delete(tx, trove_id)?;
                     if !quiet {
-                        println!("Removed: {} {} (no longer installed)", trove.name, trove.version);
+                        println!(
+                            "Removed: {} {} (no longer installed)",
+                            trove.name, trove.version
+                        );
                     }
                     actually_removed += 1;
                 }
 
-                DriftOutcome::Updated { old_version, new_version } => {
+                DriftOutcome::Updated {
+                    old_version,
+                    new_version,
+                } => {
                     let (sys_ver, sys_arch, sys_desc) = system_packages
                         .get(&trove.name)
                         .expect("version drift entry must exist in system_packages");
@@ -194,13 +207,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                         "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
                          installed_by_changeset_id = ?4
                          WHERE id = ?5",
-                        rusqlite::params![
-                            sys_ver,
-                            sys_arch,
-                            sys_desc,
-                            changeset_id,
-                            trove_id,
-                        ],
+                        rusqlite::params![sys_ver, sys_arch, sys_desc, changeset_id, trove_id,],
                     )?;
 
                     // Replace files: drop old, insert fresh
@@ -211,7 +218,16 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                     let use_cas = trove.install_source == InstallSource::AdoptedFull;
 
                     let files: Vec<FileInfoTuple> = query_package_files(pkg_mgr, &trove.name);
-                    for (file_path, file_size, file_mode, file_digest, file_user, file_group, link_target) in &files {
+                    for (
+                        file_path,
+                        file_size,
+                        file_mode,
+                        file_digest,
+                        file_user,
+                        file_group,
+                        link_target,
+                    ) in &files
+                    {
                         let hash = compute_file_hash(
                             file_path,
                             *file_mode,
@@ -230,14 +246,16 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                         fe.owner = file_user.clone();
                         fe.group_name = file_group.clone();
                         if let Err(e) = fe.insert_or_replace(tx) {
-                            debug!("Failed to insert file {} for {}: {}", file_path, trove.name, e);
+                            debug!(
+                                "Failed to insert file {} for {}: {}",
+                                file_path, trove.name, e
+                            );
                         }
                     }
 
                     // Replace deps
                     tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-                    let deps: Vec<DependencyInfo> =
-                        query_package_deps(pkg_mgr, &trove.name);
+                    let deps: Vec<DependencyInfo> = query_package_deps(pkg_mgr, &trove.name);
                     for dep in deps {
                         if dep.name.is_empty() {
                             continue;
@@ -256,8 +274,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
 
                     // Replace provides
                     tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-                    let provides: Vec<String> =
-                        query_package_provides(pkg_mgr, &trove.name);
+                    let provides: Vec<String> = query_package_provides(pkg_mgr, &trove.name);
                     for provide in provides {
                         if provide.is_empty() {
                             continue;
@@ -269,10 +286,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                     }
 
                     if !quiet {
-                        println!(
-                            "Updated: {} {} -> {}",
-                            trove.name, old_version, new_version
-                        );
+                        println!("Updated: {} {} -> {}", trove.name, old_version, new_version);
                     }
                     actually_updated += 1;
                 }
@@ -307,9 +321,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
 
 /// Query all currently installed packages from the active package manager.
 /// Returns a map of name -> (version, arch, description).
-fn query_all_current(
-    pkg_mgr: SystemPackageManager,
-) -> Result<std::collections::HashMap<String, (String, String, Option<String>)>> {
+fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<InstalledPackageMap> {
     let map = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_all_packages()?
             .into_iter()
@@ -321,13 +333,27 @@ fn query_all_current(
         SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
             .into_iter()
             .map(|(name, info)| {
-                (name, (info.version_only(), info.arch.clone(), info.description.clone()))
+                (
+                    name,
+                    (
+                        info.version_only(),
+                        info.arch.clone(),
+                        info.description.clone(),
+                    ),
+                )
             })
             .collect(),
         SystemPackageManager::Pacman => pacman_query::query_all_packages()?
             .into_iter()
             .map(|(name, info)| {
-                (name, (info.version_only(), info.arch.clone(), info.description.clone()))
+                (
+                    name,
+                    (
+                        info.version_only(),
+                        info.arch.clone(),
+                        info.description.clone(),
+                    ),
+                )
             })
             .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
@@ -337,25 +363,54 @@ fn query_all_current(
 
 /// Query files for a package from the active package manager.
 fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Vec<FileInfoTuple> {
-    let result = match pkg_mgr {
+    match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .unwrap_or_default()
             .into_iter()
-            .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+            .map(|f| {
+                (
+                    f.path,
+                    f.size,
+                    f.mode,
+                    f.digest,
+                    f.user,
+                    f.group,
+                    f.link_target,
+                )
+            })
             .collect(),
         _ => Vec::new(),
-    };
-    result
+    }
 }
 
 /// Query runtime dependencies for a package from the active package manager.
@@ -378,9 +433,7 @@ fn query_package_deps(pkg_mgr: SystemPackageManager, name: &str) -> Vec<Dependen
 fn query_package_provides(pkg_mgr: SystemPackageManager, name: &str) -> Vec<String> {
     match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_provides(name).unwrap_or_default(),
-        SystemPackageManager::Dpkg => {
-            dpkg_query::query_package_provides(name).unwrap_or_default()
-        }
+        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name).unwrap_or_default(),
         SystemPackageManager::Pacman => {
             pacman_query::query_package_provides(name).unwrap_or_default()
         }

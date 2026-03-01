@@ -191,8 +191,7 @@ impl BootstrapConfig {
 
     /// Get the path to a toolchain binary (e.g., "gcc" -> "/tools/bin/x86_64-conary-linux-gnu-gcc")
     pub fn tool_path(&self, tool: &str) -> PathBuf {
-        self.tools_bin()
-            .join(format!("{}-{}", self.triple(), tool))
+        self.tools_bin().join(format!("{}-{}", self.triple(), tool))
     }
 }
 

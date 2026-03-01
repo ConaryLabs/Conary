@@ -169,7 +169,11 @@ impl HttpChunkFetcher {
     }
 
     /// Create with custom options (legacy API)
-    pub fn with_options(base_url: &str, max_concurrent: usize, verify_hashes: bool) -> Result<Self> {
+    pub fn with_options(
+        base_url: &str,
+        max_concurrent: usize,
+        verify_hashes: bool,
+    ) -> Result<Self> {
         HttpChunkFetcherBuilder::new(base_url)
             .max_concurrent(max_concurrent)
             .verify_hashes(verify_hashes)
@@ -198,9 +202,10 @@ impl ChunkFetcher for HttpChunkFetcher {
         let url = format!("{}/v1/chunks/{}", self.base_url, hash);
         debug!("Fetching chunk via HTTP: {}", hash);
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash))
-        })?;
+        let response =
+            self.client.get(&url).send().await.map_err(|e| {
+                Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash))
+            })?;
 
         if !response.status().is_success() {
             return Err(Error::DownloadError(format!(
@@ -220,9 +225,10 @@ impl ChunkFetcher for HttpChunkFetcher {
             )));
         }
 
-        let data = response.bytes().await.map_err(|e| {
-            Error::DownloadError(format!("Failed to read chunk {}: {e}", hash))
-        })?;
+        let data = response
+            .bytes()
+            .await
+            .map_err(|e| Error::DownloadError(format!("Failed to read chunk {}: {e}", hash)))?;
 
         // Double-check size after download
         if data.len() > self.max_chunk_size {
@@ -330,7 +336,7 @@ impl HttpChunkFetcher {
             )));
         }
 
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
         let mut chunks = HashMap::new();
         for chunk_data in batch_response.chunks {
@@ -420,19 +426,19 @@ impl LocalCacheFetcher {
         let path = self.chunk_path(hash);
 
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                Error::IoError(format!("Failed to create cache directory: {e}"))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::IoError(format!("Failed to create cache directory: {e}")))?;
         }
 
         // Write atomically via temp file
         let temp_path = path.with_extension("tmp");
-        tokio::fs::write(&temp_path, data).await.map_err(|e| {
-            Error::IoError(format!("Failed to write chunk to cache: {e}"))
-        })?;
-        tokio::fs::rename(&temp_path, &path).await.map_err(|e| {
-            Error::IoError(format!("Failed to rename temp file: {e}"))
-        })?;
+        tokio::fs::write(&temp_path, data)
+            .await
+            .map_err(|e| Error::IoError(format!("Failed to write chunk to cache: {e}")))?;
+        tokio::fs::rename(&temp_path, &path)
+            .await
+            .map_err(|e| Error::IoError(format!("Failed to rename temp file: {e}")))?;
 
         debug!("Cached chunk: {}", hash);
         Ok(())
@@ -448,9 +454,9 @@ impl ChunkFetcher for LocalCacheFetcher {
             return Err(Error::NotFound(format!("Chunk {} not in cache", hash)));
         }
 
-        let data = tokio::fs::read(&path).await.map_err(|e| {
-            Error::IoError(format!("Failed to read cached chunk {}: {e}", hash))
-        })?;
+        let data = tokio::fs::read(&path)
+            .await
+            .map_err(|e| Error::IoError(format!("Failed to read cached chunk {}: {e}", hash)))?;
 
         debug!("Cache hit: {}", hash);
         Ok(data)
@@ -515,7 +521,12 @@ impl ChunkFetcher for CompositeChunkFetcher {
                     return Ok(data);
                 }
                 Err(e) => {
-                    debug!("Fetcher '{}' failed for chunk {}: {}", fetcher.name(), hash, e);
+                    debug!(
+                        "Fetcher '{}' failed for chunk {}: {}",
+                        fetcher.name(),
+                        hash,
+                        e
+                    );
                     last_error = Some(e);
                 }
             }
@@ -689,8 +700,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let builder = ChunkFetcherBuilder::new()
-            .with_local_cache("/tmp/test-cache");
+        let builder = ChunkFetcherBuilder::new().with_local_cache("/tmp/test-cache");
 
         let composite = builder.build();
         assert_eq!(composite.fetchers.len(), 1);

@@ -60,11 +60,7 @@ impl InferenceCache {
     /// - Package name
     /// - Package version
     /// - All file content hashes (sorted for consistency)
-    pub fn compute_key(
-        package_name: &str,
-        package_version: &str,
-        file_hashes: &[&str],
-    ) -> String {
+    pub fn compute_key(package_name: &str, package_version: &str, file_hashes: &[&str]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(package_name.as_bytes());
         hasher.update(b"|");

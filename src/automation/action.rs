@@ -163,7 +163,10 @@ pub fn package_update_action(
 ) -> PendingAction {
     ActionBuilder::new(
         AutomationCategory::Updates,
-        format!("Update {} from {} to {}", package, current_version, new_version),
+        format!(
+            "Update {} from {} to {}",
+            package, current_version, new_version
+        ),
     )
     .package(package)
     .detail(format!("Current version: {}", current_version))
@@ -200,18 +203,14 @@ pub fn major_upgrade_action(
 }
 
 /// Creates an integrity repair action
-pub fn integrity_repair_action(
-    files: &[String],
-    package: Option<&str>,
-) -> PendingAction {
+pub fn integrity_repair_action(files: &[String], package: Option<&str>) -> PendingAction {
     let summary = if let Some(pkg) = package {
         format!("Repair {} corrupted files in {}", files.len(), pkg)
     } else {
         format!("Repair {} corrupted system files", files.len())
     };
 
-    let mut builder = ActionBuilder::new(AutomationCategory::Repair, summary)
-        .risk(0.4);
+    let mut builder = ActionBuilder::new(AutomationCategory::Repair, summary).risk(0.4);
 
     if let Some(pkg) = package {
         builder = builder.package(pkg);
@@ -355,10 +354,7 @@ mod tests {
 
     #[test]
     fn test_orphan_cleanup_action() {
-        let action = orphan_cleanup_action(&[
-            "libfoo".to_string(),
-            "libbar".to_string(),
-        ]);
+        let action = orphan_cleanup_action(&["libfoo".to_string(), "libbar".to_string()]);
 
         assert_eq!(action.category, AutomationCategory::Orphans);
         assert!(action.summary.contains("2 orphaned packages"));

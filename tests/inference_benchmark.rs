@@ -7,8 +7,8 @@
 //! 3. Memory usage for binary analysis
 
 use conary::capability::inference::{
-    infer_capabilities, BinaryAnalyzer, Confidence, HeuristicInferrer, InferenceOptions,
-    PackageFile, PackageMetadataRef, WellKnownProfiles,
+    BinaryAnalyzer, Confidence, HeuristicInferrer, InferenceOptions, PackageFile,
+    PackageMetadataRef, WellKnownProfiles, infer_capabilities,
 };
 use std::fs;
 use std::time::Instant;
@@ -35,8 +35,8 @@ struct ExpectedCapabilities {
     name: &'static str,
     binary_path: &'static str,
     expected_needs_network: bool,
-    expected_ports: &'static [&'static str],  // Reserved for future port detection tests
-    expected_syscall_profile: Option<&'static str>,  // Reserved for future syscall profile tests
+    expected_ports: &'static [&'static str], // Reserved for future port detection tests
+    expected_syscall_profile: Option<&'static str>, // Reserved for future syscall profile tests
 }
 
 const KNOWN_PACKAGES: &[ExpectedCapabilities] = &[
@@ -73,8 +73,18 @@ const KNOWN_PACKAGES: &[ExpectedCapabilities] = &[
 #[test]
 fn benchmark_wellknown_lookup() {
     let packages = [
-        "nginx", "postgresql", "redis", "curl", "git", "docker", "systemd",
-        "openssh-server", "mysql-server", "haproxy", "prometheus", "grafana",
+        "nginx",
+        "postgresql",
+        "redis",
+        "curl",
+        "git",
+        "docker",
+        "systemd",
+        "openssh-server",
+        "mysql-server",
+        "haproxy",
+        "prometheus",
+        "grafana",
     ];
 
     let start = Instant::now();
@@ -320,9 +330,16 @@ fn test_tier_selection() {
         ..Default::default()
     };
     let nginx_files = vec![PackageFile::new("/usr/sbin/nginx")];
-    let nginx_result = infer_capabilities(&nginx_files, &nginx_metadata, &InferenceOptions::default()).unwrap();
-    assert_eq!(nginx_result.tier_used, 1, "nginx should use tier 1 (well-known)");
-    println!("nginx: tier {}, confidence {:?}", nginx_result.tier_used, nginx_result.confidence.primary);
+    let nginx_result =
+        infer_capabilities(&nginx_files, &nginx_metadata, &InferenceOptions::default()).unwrap();
+    assert_eq!(
+        nginx_result.tier_used, 1,
+        "nginx should use tier 1 (well-known)"
+    );
+    println!(
+        "nginx: tier {}, confidence {:?}",
+        nginx_result.tier_used, nginx_result.confidence.primary
+    );
 
     // Unknown package should use tier 2
     let unknown_metadata = PackageMetadataRef {
@@ -331,9 +348,20 @@ fn test_tier_selection() {
         ..Default::default()
     };
     let unknown_files = vec![PackageFile::new("/usr/bin/unknown")];
-    let unknown_result = infer_capabilities(&unknown_files, &unknown_metadata, &InferenceOptions::default()).unwrap();
-    assert!(unknown_result.tier_used >= 2, "unknown package should use tier 2+");
-    println!("unknown: tier {}, confidence {:?}", unknown_result.tier_used, unknown_result.confidence.primary);
+    let unknown_result = infer_capabilities(
+        &unknown_files,
+        &unknown_metadata,
+        &InferenceOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        unknown_result.tier_used >= 2,
+        "unknown package should use tier 2+"
+    );
+    println!(
+        "unknown: tier {}, confidence {:?}",
+        unknown_result.tier_used, unknown_result.confidence.primary
+    );
 }
 
 #[test]
@@ -362,10 +390,7 @@ fn test_confidence_correlation() {
         ..Default::default()
     };
     let minimal_result = HeuristicInferrer::infer(&minimal_files, &minimal_metadata).unwrap();
-    println!(
-        "Minimal heuristic: {:?}",
-        minimal_result.confidence.primary
-    );
+    println!("Minimal heuristic: {:?}", minimal_result.confidence.primary);
 
     // Heuristic inference with more evidence should have higher confidence
     let rich_files = vec![

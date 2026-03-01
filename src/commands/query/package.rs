@@ -89,9 +89,13 @@ fn query_by_path(
     }
 
     // Group by trove
-    let mut trove_files: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    let mut trove_files: std::collections::HashMap<i64, Vec<String>> =
+        std::collections::HashMap::new();
     for file in &files {
-        trove_files.entry(file.trove_id).or_default().push(file.path.clone());
+        trove_files
+            .entry(file.trove_id)
+            .or_default()
+            .push(file.path.clone());
     }
 
     println!("Packages owning files matching '{}':", file_path);
@@ -170,7 +174,11 @@ fn show_package_info(
     if !components.is_empty() {
         println!("\nComponents ({}):", components.len());
         for comp in &components {
-            let installed = if comp.is_installed { "" } else { " [not installed]" };
+            let installed = if comp.is_installed {
+                ""
+            } else {
+                " [not installed]"
+            };
             println!("  :{}{}", comp.name, installed);
         }
     }
@@ -192,7 +200,12 @@ fn list_package_files(
         return Ok(());
     }
 
-    println!("Files in {} {} ({} files):", trove.name, trove.version, files.len());
+    println!(
+        "Files in {} {} ({} files):",
+        trove.name,
+        trove.version,
+        files.len()
+    );
 
     if lsl {
         // ls -l style output

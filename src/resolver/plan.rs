@@ -4,8 +4,8 @@
 //!
 //! Contains the result types for dependency resolution.
 
-use crate::version::VersionConstraint;
 use super::conflict::Conflict;
+use crate::version::VersionConstraint;
 
 /// Result of dependency resolution
 #[derive(Debug, Clone)]

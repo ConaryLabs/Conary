@@ -166,7 +166,13 @@ impl DependencyClass {
     pub fn is_system(&self) -> bool {
         matches!(
             self,
-            Self::Package | Self::Soname | Self::File | Self::Interpreter | Self::Abi | Self::Binary | Self::KernelModule
+            Self::Package
+                | Self::Soname
+                | Self::File
+                | Self::Interpreter
+                | Self::Abi
+                | Self::Binary
+                | Self::KernelModule
         )
     }
 

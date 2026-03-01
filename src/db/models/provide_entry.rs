@@ -35,7 +35,12 @@ impl ProvideEntry {
     }
 
     /// Create a new typed ProvideEntry
-    pub fn new_typed(trove_id: i64, kind: &str, capability: String, version: Option<String>) -> Self {
+    pub fn new_typed(
+        trove_id: i64,
+        kind: &str,
+        capability: String,
+        version: Option<String>,
+    ) -> Self {
         Self {
             id: None,
             trove_id,
@@ -97,7 +102,9 @@ impl ProvideEntry {
              FROM provides WHERE kind = ?1 AND capability = ?2 LIMIT 1",
         )?;
 
-        let provide = stmt.query_row([kind, capability], Self::from_row).optional()?;
+        let provide = stmt
+            .query_row([kind, capability], Self::from_row)
+            .optional()?;
         Ok(provide)
     }
 
@@ -144,7 +151,11 @@ impl ProvideEntry {
     }
 
     /// Find all provides of a specific kind for a trove
-    pub fn find_by_trove_and_kind(conn: &Connection, trove_id: i64, kind: &str) -> Result<Vec<Self>> {
+    pub fn find_by_trove_and_kind(
+        conn: &Connection,
+        trove_id: i64,
+        kind: &str,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, trove_id, capability, version, kind
              FROM provides WHERE trove_id = ?1 AND kind = ?2",
@@ -269,7 +280,9 @@ impl ProvideEntry {
             trove_id: row.get(1)?,
             capability: row.get(2)?,
             version: row.get(3)?,
-            kind: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "package".to_string()),
+            kind: row
+                .get::<_, Option<String>>(4)?
+                .unwrap_or_else(|| "package".to_string()),
         })
     }
 
@@ -334,7 +347,7 @@ impl ProvideEntry {
     pub fn is_virtual_provide(name: &str) -> bool {
         name.contains('(')  // perl(Foo), python3dist(bar), etc.
             || name.starts_with("lib") && name.contains(".so")  // libfoo.so.1
-            || name.starts_with('/')  // File path dependencies
+            || name.starts_with('/') // File path dependencies
     }
 }
 
@@ -348,7 +361,7 @@ pub fn generate_capability_variations(capability: &str) -> Vec<String> {
 
     // Perl module variations: perl(Foo::Bar) <-> perl-Foo-Bar
     if capability.starts_with("perl(") && capability.ends_with(')') {
-        let module = &capability[5..capability.len()-1];
+        let module = &capability[5..capability.len() - 1];
         // perl(Foo::Bar) -> perl-Foo-Bar
         variations.push(format!("perl-{}", module.replace("::", "-")));
         // Also try lowercase
@@ -364,7 +377,7 @@ pub fn generate_capability_variations(capability: &str) -> Vec<String> {
         variations.push(format!("python3dist({})", module));
         variations.push(format!("python({})", module));
     } else if capability.starts_with("python3dist(") && capability.ends_with(')') {
-        let module = &capability[12..capability.len()-1];
+        let module = &capability[12..capability.len() - 1];
         variations.push(format!("python3-{}", module));
     }
 
@@ -393,7 +406,7 @@ pub fn generate_capability_variations(capability: &str) -> Vec<String> {
     // Debian perl library naming: libfoo-bar-perl -> perl-Foo-Bar, perl(Foo::Bar)
     if capability.starts_with("lib") && capability.ends_with("-perl") {
         // libtext-charwidth-perl -> text-charwidth -> Text::CharWidth
-        let middle = &capability[3..capability.len()-5]; // strip "lib" and "-perl"
+        let middle = &capability[3..capability.len() - 5]; // strip "lib" and "-perl"
         // Convert to title case with :: separators
         let module_name: String = middle
             .split('-')
@@ -407,20 +420,32 @@ pub fn generate_capability_variations(capability: &str) -> Vec<String> {
             .collect::<Vec<_>>()
             .join("::");
         variations.push(format!("perl({})", module_name));
-        variations.push(format!("perl-{}", middle.split('-').map(|p| {
-            let mut c = p.chars();
-            match c.next() {
-                Some(f) => f.to_uppercase().chain(c).collect(),
-                None => String::new(),
-            }
-        }).collect::<Vec<_>>().join("-")));
+        variations.push(format!(
+            "perl-{}",
+            middle
+                .split('-')
+                .map(|p| {
+                    let mut c = p.chars();
+                    match c.next() {
+                        Some(f) => f.to_uppercase().chain(c).collect(),
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("-")
+        ));
     }
 
     // Package name might be used directly
     // Try stripping version suffixes: foo-1.0 -> foo
     if let Some(pos) = capability.rfind('-') {
         let potential_name = &capability[..pos];
-        if !potential_name.is_empty() && capability[pos+1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if !potential_name.is_empty()
+            && capability[pos + 1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        {
             variations.push(potential_name.to_string());
         }
     }
@@ -464,7 +489,12 @@ mod tests {
     fn test_insert_and_find() {
         let conn = setup_test_db();
 
-        let mut provide = ProvideEntry::new_typed(1, "perl", "Text::CharWidth".to_string(), Some("0.04".to_string()));
+        let mut provide = ProvideEntry::new_typed(
+            1,
+            "perl",
+            "Text::CharWidth".to_string(),
+            Some("0.04".to_string()),
+        );
         provide.insert(&conn).unwrap();
 
         let found = ProvideEntry::find_typed(&conn, "perl", "Text::CharWidth").unwrap();
@@ -502,7 +532,12 @@ mod tests {
 
     #[test]
     fn test_to_typed_string() {
-        let provide = ProvideEntry::new_typed(1, "python", "requests".to_string(), Some("2.28".to_string()));
+        let provide = ProvideEntry::new_typed(
+            1,
+            "python",
+            "requests".to_string(),
+            Some("2.28".to_string()),
+        );
         assert_eq!(provide.to_typed_string(), "python(requests)");
 
         let provide = ProvideEntry::new(1, "nginx".to_string(), Some("1.24".to_string()));

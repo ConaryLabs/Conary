@@ -36,11 +36,11 @@ pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use cache::ChunkCache;
 pub use config::RemiConfig;
 pub use conversion::{ConversionService, ServerConversionResult};
-pub use index_gen::{generate_indices, IndexGenConfig, IndexGenResult};
+pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
-pub use prewarm::{run_prewarm, PrewarmConfig, PrewarmResult};
+pub use prewarm::{PrewarmConfig, PrewarmResult, run_prewarm};
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_router};
 pub use search::SearchEngine;
@@ -234,10 +234,16 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     tracing::info!("  Admin API:  {} (localhost only)", admin_bind);
     tracing::info!("  Storage root: {:?}", remi_config.storage_root());
     tracing::info!("  Database: {:?}", server_config.db_path);
-    tracing::info!("  Max concurrent conversions: {}", server_config.max_concurrent_conversions);
+    tracing::info!(
+        "  Max concurrent conversions: {}",
+        server_config.max_concurrent_conversions
+    );
 
     if server_config.enable_bloom_filter {
-        tracing::info!("  Bloom filter: enabled ({} expected chunks)", server_config.bloom_expected_chunks);
+        tracing::info!(
+            "  Bloom filter: enabled ({} expected chunks)",
+            server_config.bloom_expected_chunks
+        );
     }
     if let Some(ref upstream) = server_config.upstream_url {
         tracing::info!("  Pull-through caching: enabled (upstream: {})", upstream);
@@ -352,10 +358,16 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     tracing::info!("Starting Conary Remi server on {}", config.bind_addr);
     tracing::info!("Database: {:?}", config.db_path);
     tracing::info!("Chunk store: {:?}", config.chunk_dir);
-    tracing::info!("Max concurrent conversions: {}", config.max_concurrent_conversions);
+    tracing::info!(
+        "Max concurrent conversions: {}",
+        config.max_concurrent_conversions
+    );
 
     if config.enable_bloom_filter {
-        tracing::info!("Bloom filter: enabled ({} expected chunks)", config.bloom_expected_chunks);
+        tracing::info!(
+            "Bloom filter: enabled ({} expected chunks)",
+            config.bloom_expected_chunks
+        );
     }
     if let Some(ref upstream) = config.upstream_url {
         tracing::info!("Pull-through caching: enabled (upstream: {})", upstream);
@@ -372,7 +384,9 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
 
     // Initialize search engine if a search index dir is available
     {
-        let index_dir = config.db_path.parent()
+        let index_dir = config
+            .db_path
+            .parent()
             .unwrap_or(std::path::Path::new("/tmp"))
             .join("search-index");
         match SearchEngine::new(&index_dir) {
@@ -425,7 +439,11 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!("Remi is ready to serve");
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

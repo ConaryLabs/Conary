@@ -6,9 +6,9 @@
 //! using the VFS tree to detect conflicts and compute the correct order of
 //! operations.
 
+use crate::Result;
 use crate::db::models::FileEntry;
 use crate::filesystem::{CasStore, VfsTree};
-use crate::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -72,10 +72,18 @@ impl fmt::Display for ConflictInfo {
                 write!(f, "{}: untracked file exists", path.display())
             }
             ConflictInfo::DirectoryBlocksFile { path } => {
-                write!(f, "{}: directory exists where file expected", path.display())
+                write!(
+                    f,
+                    "{}: directory exists where file expected",
+                    path.display()
+                )
             }
             ConflictInfo::FileBlocksDirectory { path } => {
-                write!(f, "{}: file exists where directory expected", path.display())
+                write!(
+                    f,
+                    "{}: file exists where directory expected",
+                    path.display()
+                )
             }
             ConflictInfo::ParentMissing { path, parent } => {
                 write!(
@@ -228,9 +236,8 @@ impl<'a> TransactionPlanner<'a> {
         let mut plan = TransactionPlan::new();
 
         // Build map of old file paths for quick lookup
-        let old_file_map: HashMap<&str, &FileToRemove> = old_files.iter()
-            .map(|f| (f.path.as_str(), f))
-            .collect();
+        let old_file_map: HashMap<&str, &FileToRemove> =
+            old_files.iter().map(|f| (f.path.as_str(), f)).collect();
 
         // Phase 1: Analyze new files, detect conflicts, plan directories
         for file in new_files {
@@ -361,7 +368,9 @@ impl<'a> TransactionPlanner<'a> {
                 let _ = self.vfs.add_symlink(&file.path, target);
             } else {
                 let hash = self.cas.compute_hash(&file.content);
-                let _ = self.vfs.add_file(&file.path, &hash, file.content.len() as u64, file.mode);
+                let _ = self
+                    .vfs
+                    .add_file(&file.path, &hash, file.content.len() as u64, file.mode);
             }
         }
 
@@ -521,7 +530,11 @@ mod tests {
 
         assert!(!plan.has_conflicts());
         assert_eq!(plan.files_to_stage.len(), 1);
-        assert!(plan.dirs_to_create.iter().any(|d| d == Path::new("usr/bin")));
+        assert!(
+            plan.dirs_to_create
+                .iter()
+                .any(|d| d == Path::new("usr/bin"))
+        );
     }
 
     #[test]
@@ -639,16 +652,18 @@ mod tests {
         assert!(!plan.has_conflicts());
 
         // Should have operation to remove old file
-        assert!(plan
-            .operations
-            .iter()
-            .any(|op| op.op_type == OperationType::RemoveFile
-                && op.path == PathBuf::from("usr/bin/old")));
+        assert!(
+            plan.operations
+                .iter()
+                .any(|op| op.op_type == OperationType::RemoveFile
+                    && op.path == PathBuf::from("usr/bin/old"))
+        );
 
         // Old file should be in backup list
-        assert!(plan
-            .files_to_backup
-            .iter()
-            .any(|b| b.path == PathBuf::from("usr/bin/old")));
+        assert!(
+            plan.files_to_backup
+                .iter()
+                .any(|b| b.path == PathBuf::from("usr/bin/old"))
+        );
     }
 }

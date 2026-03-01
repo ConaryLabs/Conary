@@ -46,7 +46,11 @@ pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
 /// Security note: The checksum from trusted metadata is verified after download,
 /// so even if content_url points to an untrusted source, the downloaded content
 /// is validated against the hash from the signed metadata.
-fn rebase_download_url(download_url: &str, metadata_url: &str, content_url: Option<&str>) -> String {
+fn rebase_download_url(
+    download_url: &str,
+    metadata_url: &str,
+    content_url: Option<&str>,
+) -> String {
     match content_url {
         Some(content_base) => {
             // Normalize URLs by removing trailing slashes for consistent matching
@@ -76,7 +80,10 @@ fn sync_repository_native(
     repo: &mut Repository,
     format: RepositoryFormat,
 ) -> Result<usize> {
-    info!("Syncing repository {} using native {:?} format", repo.name, format);
+    info!(
+        "Syncing repository {} using native {:?} format",
+        repo.name, format
+    );
 
     // Create and use parser from registry
     let parser = registry::create_parser(format, &repo.name, &repo.url)?;
@@ -383,7 +390,10 @@ mod tests {
         let result = rebase_download_url(download_url, metadata_url, Some(content_url));
         assert_eq!(result, "https://mirror.local/fedora/Packages/foo-1.0.rpm");
         // Verify no double slashes
-        assert!(!result.contains("//P"), "Should not have double slashes before path");
+        assert!(
+            !result.contains("//P"),
+            "Should not have double slashes before path"
+        );
     }
 
     #[test]
@@ -405,7 +415,10 @@ mod tests {
         let content_url = "https://archive.ubuntu.com/ubuntu";
 
         let result = rebase_download_url(download_url, metadata_url, Some(content_url));
-        assert_eq!(result, "https://archive.ubuntu.com/ubuntu/pool/main/n/nginx/nginx_1.24.0.deb");
+        assert_eq!(
+            result,
+            "https://archive.ubuntu.com/ubuntu/pool/main/n/nginx/nginx_1.24.0.deb"
+        );
     }
 
     #[test]

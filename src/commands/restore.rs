@@ -25,14 +25,20 @@ pub fn cmd_restore(
     force: bool,
     dry_run: bool,
 ) -> Result<()> {
-    info!("Restoring package: {} (force={}, dry_run={})", package_name, force, dry_run);
+    info!(
+        "Restoring package: {} (force={}, dry_run={})",
+        package_name, force, dry_run
+    );
 
     let conn = conary::db::open(db_path)?;
 
     // Find the package
     let troves = Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
-        return Err(anyhow::anyhow!("Package '{}' not found in database", package_name));
+        return Err(anyhow::anyhow!(
+            "Package '{}' not found in database",
+            package_name
+        ));
     }
 
     let trove = &troves[0];
@@ -79,13 +85,19 @@ pub fn cmd_restore(
     println!("  Missing (can restore): {}", missing_files.len());
     println!("  Existing on disk:      {}", existing_files.len());
     if !not_in_cas.is_empty() {
-        println!("  Missing from CAS:      {} (cannot restore)", not_in_cas.len());
+        println!(
+            "  Missing from CAS:      {} (cannot restore)",
+            not_in_cas.len()
+        );
     }
 
     // Determine what to restore
     let files_to_restore: Vec<&FileEntry> = if force {
         // Force mode: restore all files that are in CAS
-        files.iter().filter(|f| deployer.cas().exists(&f.sha256_hash)).collect()
+        files
+            .iter()
+            .filter(|f| deployer.cas().exists(&f.sha256_hash))
+            .collect()
     } else {
         // Normal mode: only restore missing files
         missing_files
@@ -137,7 +149,10 @@ pub fn cmd_restore(
 
     // Show warnings for files not in CAS
     if !not_in_cas.is_empty() {
-        println!("\nWarning: {} files could not be restored (not in CAS):", not_in_cas.len());
+        println!(
+            "\nWarning: {} files could not be restored (not in CAS):",
+            not_in_cas.len()
+        );
         for file in not_in_cas.iter().take(10) {
             println!("  {}", file.path);
         }
@@ -153,7 +168,10 @@ pub fn cmd_restore(
 
 /// Restore all packages with missing files
 pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
-    info!("Restoring all packages with missing files (dry_run={})", dry_run);
+    info!(
+        "Restoring all packages with missing files (dry_run={})",
+        dry_run
+    );
 
     let conn = conary::db::open(db_path)?;
 
@@ -221,7 +239,10 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
     if packages_restored == 0 {
         println!("All files are present. Nothing to restore.");
     } else if dry_run {
-        println!("\nDry run - would restore {} files across {} packages", total_restored, packages_restored);
+        println!(
+            "\nDry run - would restore {} files across {} packages",
+            total_restored, packages_restored
+        );
     } else {
         println!("\nRestore complete:");
         println!("  Packages:  {}", packages_restored);

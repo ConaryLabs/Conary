@@ -39,11 +39,23 @@ fn build_cli() -> Command {
         .subcommand(
             Command::new("install")
                 .about("Install a package from file or repository")
-                .arg(Arg::new("package").required(true).help("Package file path or package name"))
+                .arg(
+                    Arg::new("package")
+                        .required(true)
+                        .help("Package file path or package name"),
+                )
                 .arg(db_path_arg())
                 .arg(root_arg())
-                .arg(Arg::new("version").long("version").help("Specific version to install"))
-                .arg(Arg::new("repo").long("repo").help("Specific repository to use"))
+                .arg(
+                    Arg::new("version")
+                        .long("version")
+                        .help("Specific version to install"),
+                )
+                .arg(
+                    Arg::new("repo")
+                        .long("repo")
+                        .help("Specific repository to use"),
+                )
                 .arg(
                     Arg::new("dry_run")
                         .long("dry-run")
@@ -54,7 +66,11 @@ fn build_cli() -> Command {
         .subcommand(
             Command::new("remove")
                 .about("Remove an installed package")
-                .arg(Arg::new("package_name").required(true).help("Package name to remove"))
+                .arg(
+                    Arg::new("package_name")
+                        .required(true)
+                        .help("Package name to remove"),
+                )
                 .arg(db_path_arg())
                 .arg(root_arg()),
         )
@@ -72,7 +88,11 @@ fn build_cli() -> Command {
         .subcommand(
             Command::new("rollback")
                 .about("Rollback a changeset")
-                .arg(Arg::new("changeset_id").required(true).help("Changeset ID to rollback"))
+                .arg(
+                    Arg::new("changeset_id")
+                        .required(true)
+                        .help("Changeset ID to rollback"),
+                )
                 .arg(db_path_arg())
                 .arg(root_arg()),
         )

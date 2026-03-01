@@ -71,7 +71,9 @@ pub enum ActionDecision {
     /// User rejected the action
     Rejected,
     /// User wants to defer to later
-    Deferred { until: Option<chrono::DateTime<chrono::Utc>> },
+    Deferred {
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
     /// User wants more details
     NeedsDetails,
     /// Action should be auto-applied per configuration
@@ -96,7 +98,9 @@ pub enum ActionStatus {
     /// Action was rejected by user
     Rejected,
     /// Action was deferred
-    Deferred { until: Option<chrono::DateTime<chrono::Utc>> },
+    Deferred {
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
 }
 
 /// AI suggestion with confidence score
@@ -210,9 +214,10 @@ impl AutomationManager {
                     return true;
                 }
                 // Check if any affected package is in the allow_auto list
-                !action.packages.iter().all(|p| {
-                    self.config.major_upgrades.allow_auto.contains(p)
-                })
+                !action
+                    .packages
+                    .iter()
+                    .all(|p| self.config.major_upgrades.allow_auto.contains(p))
             }
             AutomationCategory::Security => {
                 // High-risk security changes might still need approval
@@ -345,7 +350,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
             return Err(crate::error::Error::Config(format!(
                 "Invalid duration unit: {}",
                 unit
-            )))
+            )));
         }
     };
 

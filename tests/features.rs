@@ -118,7 +118,9 @@ fn test_language_dep_parsing() {
 /// Test language deps stored in database during install
 #[test]
 fn test_language_deps_in_database() {
-    use conary::db::models::{Changeset, ChangesetStatus, FileEntry, ProvideEntry, Trove, TroveType};
+    use conary::db::models::{
+        Changeset, ChangesetStatus, FileEntry, ProvideEntry, Trove, TroveType,
+    };
     use conary::dependencies::LanguageDepDetector;
 
     let temp_file = NamedTempFile::new().unwrap();
@@ -462,9 +464,7 @@ fn test_state_snapshot_operations() {
     let engine = StateEngine::new(&conn);
 
     // Create a snapshot
-    let state = engine
-        .create_snapshot("Test snapshot", None, None)
-        .unwrap();
+    let state = engine.create_snapshot("Test snapshot", None, None).unwrap();
     assert!(state.id.is_some());
     assert_eq!(state.summary, "Test snapshot");
     // First state is numbered 0 (state_number starts at 0, not 1)
@@ -565,10 +565,7 @@ fn test_derived_package_creation() {
     let conn = db::open(&db_path).unwrap();
 
     // Create a derived package from nginx
-    let mut derived = DerivedPackage::new(
-        "nginx-custom".to_string(),
-        "nginx".to_string(),
-    );
+    let mut derived = DerivedPackage::new("nginx-custom".to_string(), "nginx".to_string());
     derived.description = Some("Custom nginx with patches".to_string());
     derived.version_policy = VersionPolicy::Suffix("+custom".to_string());
 
@@ -581,7 +578,10 @@ fn test_derived_package_creation() {
     let found = found.unwrap();
     assert_eq!(found.parent_name, "nginx");
     assert_eq!(found.status, DerivedStatus::Pending);
-    assert_eq!(found.version_policy, VersionPolicy::Suffix("+custom".to_string()));
+    assert_eq!(
+        found.version_policy,
+        VersionPolicy::Suffix("+custom".to_string())
+    );
 
     // List all derived packages
     let all = DerivedPackage::list_all(&conn).unwrap();
@@ -598,10 +598,7 @@ fn test_derived_package_patches() {
     let conn = db::open(&db_path).unwrap();
 
     // Create derived package
-    let mut derived = DerivedPackage::new(
-        "nginx-patched".to_string(),
-        "nginx".to_string(),
-    );
+    let mut derived = DerivedPackage::new("nginx-patched".to_string(), "nginx".to_string());
     let derived_id = derived.insert(&conn).unwrap();
 
     // Add patches
@@ -650,10 +647,7 @@ fn test_derived_package_overrides() {
     let conn = db::open(&db_path).unwrap();
 
     // Create derived package
-    let mut derived = DerivedPackage::new(
-        "nginx-config".to_string(),
-        "nginx".to_string(),
-    );
+    let mut derived = DerivedPackage::new("nginx-config".to_string(), "nginx".to_string());
     let derived_id = derived.insert(&conn).unwrap();
 
     // Add file replacement
@@ -667,10 +661,8 @@ fn test_derived_package_overrides() {
     override1.insert(&conn).unwrap();
 
     // Add file removal
-    let mut override2 = DerivedOverride::new_remove(
-        derived_id,
-        "/etc/nginx/sites-enabled/default".to_string(),
-    );
+    let mut override2 =
+        DerivedOverride::new_remove(derived_id, "/etc/nginx/sites-enabled/default".to_string());
     override2.insert(&conn).unwrap();
 
     // Retrieve overrides
@@ -678,13 +670,22 @@ fn test_derived_package_overrides() {
     assert_eq!(overrides.len(), 2);
 
     // Check replacement
-    let replacement = overrides.iter().find(|o| o.target_path == "/etc/nginx/nginx.conf").unwrap();
+    let replacement = overrides
+        .iter()
+        .find(|o| o.target_path == "/etc/nginx/nginx.conf")
+        .unwrap();
     assert!(!replacement.is_removal());
-    assert_eq!(replacement.source_hash.as_deref(), Some("custom_config_hash"));
+    assert_eq!(
+        replacement.source_hash.as_deref(),
+        Some("custom_config_hash")
+    );
     assert_eq!(replacement.permissions, Some(0o644));
 
     // Check removal
-    let removal = overrides.iter().find(|o| o.target_path == "/etc/nginx/sites-enabled/default").unwrap();
+    let removal = overrides
+        .iter()
+        .find(|o| o.target_path == "/etc/nginx/sites-enabled/default")
+        .unwrap();
     assert!(removal.is_removal());
     assert!(removal.source_hash.is_none());
 
@@ -702,14 +703,13 @@ fn test_derived_package_status() {
     let conn = db::open(&db_path).unwrap();
 
     // Create derived package
-    let mut derived = DerivedPackage::new(
-        "nginx-status-test".to_string(),
-        "nginx".to_string(),
-    );
+    let mut derived = DerivedPackage::new("nginx-status-test".to_string(), "nginx".to_string());
     let _derived_id = derived.insert(&conn).unwrap();
 
     // Initial status is Pending
-    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test").unwrap().unwrap();
+    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test")
+        .unwrap()
+        .unwrap();
     assert_eq!(found.status, DerivedStatus::Pending);
 
     // Mark as built (need to create a trove first)
@@ -721,16 +721,22 @@ fn test_derived_package_status() {
     let trove_id = built_trove.insert(&conn).unwrap();
 
     // Re-fetch as mutable to call mark_built
-    let mut found = DerivedPackage::find_by_name(&conn, "nginx-status-test").unwrap().unwrap();
+    let mut found = DerivedPackage::find_by_name(&conn, "nginx-status-test")
+        .unwrap()
+        .unwrap();
     found.mark_built(&conn, trove_id).unwrap();
 
-    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test").unwrap().unwrap();
+    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test")
+        .unwrap()
+        .unwrap();
     assert_eq!(found.status, DerivedStatus::Built);
     assert_eq!(found.built_trove_id, Some(trove_id));
 
     // Mark parent as stale
     DerivedPackage::mark_stale(&conn, "nginx").unwrap();
-    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test").unwrap().unwrap();
+    let found = DerivedPackage::find_by_name(&conn, "nginx-status-test")
+        .unwrap()
+        .unwrap();
     assert_eq!(found.status, DerivedStatus::Stale);
 
     // Find stale packages
@@ -772,7 +778,9 @@ fn test_system_model_parsing() {
 
     // Write a test model file
     let mut file = std::fs::File::create(&model_path).unwrap();
-    writeln!(file, r#"
+    writeln!(
+        file,
+        r#"
 [model]
 version = 1
 search = ["fedora@f41:stable"]
@@ -790,7 +798,9 @@ name = "nginx-custom"
 from = "nginx"
 version = "inherit"
 patches = []
-"#).unwrap();
+"#
+    )
+    .unwrap();
 
     // Parse the model
     let model = parse_model_file(&model_path).unwrap();
@@ -809,8 +819,8 @@ patches = []
 /// Test system model diff computation
 #[test]
 fn test_system_model_diff() {
-    use conary::model::{compute_diff, DiffAction, SystemState};
     use conary::model::parse_model_file;
+    use conary::model::{DiffAction, SystemState, compute_diff};
     use std::io::Write;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -818,63 +828,82 @@ fn test_system_model_diff() {
 
     // Write a model requesting nginx and redis
     let mut file = std::fs::File::create(&model_path).unwrap();
-    writeln!(file, r#"
+    writeln!(
+        file,
+        r#"
 [model]
 version = 1
 install = ["nginx", "redis"]
 exclude = ["sendmail"]
-"#).unwrap();
+"#
+    )
+    .unwrap();
 
     let model = parse_model_file(&model_path).unwrap();
 
     // Create a state with only nginx installed
     let mut state = SystemState::new();
-    state.installed.insert("nginx".to_string(), conary::model::InstalledPackage {
-        name: "nginx".to_string(),
-        version: "1.24.0".to_string(),
-        architecture: None,
-        explicit: true,
-        label: None,
-    });
+    state.installed.insert(
+        "nginx".to_string(),
+        conary::model::InstalledPackage {
+            name: "nginx".to_string(),
+            version: "1.24.0".to_string(),
+            architecture: None,
+            explicit: true,
+            label: None,
+        },
+    );
     state.explicit.insert("nginx".to_string());
 
     // Also have sendmail installed (should be removed)
-    state.installed.insert("sendmail".to_string(), conary::model::InstalledPackage {
-        name: "sendmail".to_string(),
-        version: "8.0.0".to_string(),
-        architecture: None,
-        explicit: true,
-        label: None,
-    });
+    state.installed.insert(
+        "sendmail".to_string(),
+        conary::model::InstalledPackage {
+            name: "sendmail".to_string(),
+            version: "8.0.0".to_string(),
+            architecture: None,
+            explicit: true,
+            label: None,
+        },
+    );
     state.explicit.insert("sendmail".to_string());
 
     // Compute diff
     let diff = compute_diff(&model, &state);
 
     // Should need to install redis
-    assert!(diff.actions.iter().any(|a| matches!(
-        a,
-        DiffAction::Install { package, .. } if package == "redis"
-    )), "Should need to install redis");
+    assert!(
+        diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::Install { package, .. } if package == "redis"
+        )),
+        "Should need to install redis"
+    );
 
     // Should need to remove sendmail (excluded)
-    assert!(diff.actions.iter().any(|a| matches!(
-        a,
-        DiffAction::Remove { package, .. } if package == "sendmail"
-    )), "Should need to remove sendmail");
+    assert!(
+        diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::Remove { package, .. } if package == "sendmail"
+        )),
+        "Should need to remove sendmail"
+    );
 
     // nginx is already installed, no action needed for it
-    assert!(!diff.actions.iter().any(|a| matches!(
-        a,
-        DiffAction::Install { package, .. } if package == "nginx"
-    )), "Should not need to install nginx again");
+    assert!(
+        !diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::Install { package, .. } if package == "nginx"
+        )),
+        "Should not need to install nginx again"
+    );
 }
 
 /// Test system model diff with derived packages
 #[test]
 fn test_system_model_diff_derived() {
-    use conary::model::{compute_diff, DiffAction, SystemState};
     use conary::model::parse_model_file;
+    use conary::model::{DiffAction, SystemState, compute_diff};
     use std::io::Write;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -882,7 +911,9 @@ fn test_system_model_diff_derived() {
 
     // Write a model with a derived package
     let mut file = std::fs::File::create(&model_path).unwrap();
-    writeln!(file, r#"
+    writeln!(
+        file,
+        r#"
 [model]
 version = 1
 install = ["nginx"]
@@ -892,30 +923,38 @@ name = "nginx-custom"
 from = "nginx"
 version = "inherit"
 patches = []
-"#).unwrap();
+"#
+    )
+    .unwrap();
 
     let model = parse_model_file(&model_path).unwrap();
 
     // State with nginx installed but not the derived package
     let mut state = SystemState::new();
-    state.installed.insert("nginx".to_string(), conary::model::InstalledPackage {
-        name: "nginx".to_string(),
-        version: "1.24.0".to_string(),
-        architecture: None,
-        explicit: true,
-        label: None,
-    });
+    state.installed.insert(
+        "nginx".to_string(),
+        conary::model::InstalledPackage {
+            name: "nginx".to_string(),
+            version: "1.24.0".to_string(),
+            architecture: None,
+            explicit: true,
+            label: None,
+        },
+    );
     state.explicit.insert("nginx".to_string());
 
     // Compute diff
     let diff = compute_diff(&model, &state);
 
     // Should need to build the derived package
-    assert!(diff.actions.iter().any(|a| matches!(
-        a,
-        DiffAction::BuildDerived { name, parent, needs_parent }
-        if name == "nginx-custom" && parent == "nginx" && !*needs_parent
-    )), "Should need to build derived package with parent already installed");
+    assert!(
+        diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::BuildDerived { name, parent, needs_parent }
+            if name == "nginx-custom" && parent == "nginx" && !*needs_parent
+        )),
+        "Should need to build derived package with parent already installed"
+    );
 }
 
 /// Test system model state capture
@@ -941,8 +980,8 @@ fn test_system_model_state_capture() {
 /// Test system model snapshot to model conversion
 #[test]
 fn test_system_model_snapshot() {
-    use conary::model::{capture_current_state, snapshot_to_model};
     use conary::db::models::InstallReason;
+    use conary::model::{capture_current_state, snapshot_to_model};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let mut conn = db::open(&db_path).unwrap();
@@ -954,15 +993,18 @@ fn test_system_model_snapshot() {
             rusqlite::params![InstallReason::Explicit.as_str(), "nginx"],
         )?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     // Capture state and convert to model
     let state = capture_current_state(&conn).unwrap();
     let model = snapshot_to_model(&state);
 
     // Model should include explicitly installed packages
-    assert!(model.config.install.contains(&"nginx".to_string()),
-        "Model should include explicitly installed nginx");
+    assert!(
+        model.config.install.contains(&"nginx".to_string()),
+        "Model should include explicitly installed nginx"
+    );
 }
 
 // =============================================================================
@@ -991,12 +1033,20 @@ fn test_reference_mirror_creation() {
     repo.insert(&conn).unwrap();
 
     // Retrieve and verify
-    let found = Repository::find_by_name(&conn, "fedora-mirror").unwrap().unwrap();
+    let found = Repository::find_by_name(&conn, "fedora-mirror")
+        .unwrap()
+        .unwrap();
     assert_eq!(found.url, "https://mirrors.fedoraproject.org/metalink");
-    assert_eq!(found.content_url, Some("https://local-cache.example.com/fedora".to_string()));
+    assert_eq!(
+        found.content_url,
+        Some("https://local-cache.example.com/fedora".to_string())
+    );
 
     // Effective content URL should be the content_url
-    assert_eq!(found.effective_content_url(), "https://local-cache.example.com/fedora");
+    assert_eq!(
+        found.effective_content_url(),
+        "https://local-cache.example.com/fedora"
+    );
 }
 
 /// Test repository without content mirror (standard pattern)
@@ -1025,7 +1075,10 @@ fn test_repository_without_content_mirror() {
     assert!(found.content_url.is_none());
 
     // Effective content URL should fall back to url
-    assert_eq!(found.effective_content_url(), "https://mirrors.fedoraproject.org/metalink");
+    assert_eq!(
+        found.effective_content_url(),
+        "https://mirrors.fedoraproject.org/metalink"
+    );
 }
 
 /// Test multiple repositories with different mirror configurations
@@ -1064,8 +1117,14 @@ fn test_mixed_mirror_configurations() {
     assert_eq!(repos[1].name, "base");
 
     // Verify effective URLs
-    assert_eq!(repos[0].effective_content_url(), "https://updates.example.com");
-    assert_eq!(repos[1].effective_content_url(), "https://cdn.example.com/packages");
+    assert_eq!(
+        repos[0].effective_content_url(),
+        "https://updates.example.com"
+    );
+    assert_eq!(
+        repos[1].effective_content_url(),
+        "https://cdn.example.com/packages"
+    );
 }
 
 /// Test repository update preserves content_url
@@ -1089,13 +1148,20 @@ fn test_repository_update_content_mirror() {
     repo.insert(&conn).unwrap();
 
     // Update URLs
-    let mut found = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+    let mut found = Repository::find_by_name(&conn, "test-repo")
+        .unwrap()
+        .unwrap();
     found.url = "https://new-metadata.example.com".to_string();
     found.content_url = Some("https://new-cdn.example.com".to_string());
     found.update(&conn).unwrap();
 
     // Verify update
-    let updated = Repository::find_by_name(&conn, "test-repo").unwrap().unwrap();
+    let updated = Repository::find_by_name(&conn, "test-repo")
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.url, "https://new-metadata.example.com");
-    assert_eq!(updated.content_url, Some("https://new-cdn.example.com".to_string()));
+    assert_eq!(
+        updated.content_url,
+        Some("https://new-cdn.example.com".to_string())
+    );
 }

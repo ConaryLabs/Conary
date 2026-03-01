@@ -5,7 +5,7 @@ use crate::db::models::{Repository, RepositoryPackage};
 use crate::server::ServerState;
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use rusqlite::Connection;
@@ -69,7 +69,11 @@ pub async fn get_metadata(
         }
         Err(e) => {
             tracing::error!("Failed to build metadata for {}: {}", distro, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build metadata").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build metadata",
+            )
+                .into_response()
         }
     }
 }
@@ -163,10 +167,7 @@ fn find_repository_for_distro(
 }
 
 /// Build a set of "name:version" keys for converted packages
-fn build_converted_set(
-    conn: &Connection,
-    distro: &str,
-) -> Result<HashSet<String>, anyhow::Error> {
+fn build_converted_set(conn: &Connection, distro: &str) -> Result<HashSet<String>, anyhow::Error> {
     // Query converted_packages for this distro
     let mut stmt = conn.prepare(
         "SELECT package_name, package_version FROM converted_packages
@@ -220,7 +221,11 @@ pub async fn get_metadata_sig(
             .unwrap(),
         Err(e) => {
             tracing::error!("Failed to read signature: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read signature").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read signature",
+            )
+                .into_response()
         }
     }
 }
@@ -259,7 +264,8 @@ mod tests {
         let (temp_file, conn) = create_test_db();
 
         // Create a repository with default_strategy_distro
-        let mut repo = Repository::new("fedora-base".to_string(), "https://example.com".to_string());
+        let mut repo =
+            Repository::new("fedora-base".to_string(), "https://example.com".to_string());
         repo.default_strategy_distro = Some("fedora".to_string());
         repo.insert(&conn).unwrap();
 
@@ -381,7 +387,11 @@ mod tests {
         assert!(!curl.converted);
 
         // nginx is converted
-        let nginx = metadata.packages.iter().find(|p| p.name == "nginx").unwrap();
+        let nginx = metadata
+            .packages
+            .iter()
+            .find(|p| p.name == "nginx")
+            .unwrap();
         assert!(nginx.converted);
     }
 
@@ -390,7 +400,10 @@ mod tests {
         let (_temp_file, conn) = create_test_db();
 
         // Create repo with default_strategy_distro
-        let mut repo = Repository::new("my-fedora-repo".to_string(), "https://example.com".to_string());
+        let mut repo = Repository::new(
+            "my-fedora-repo".to_string(),
+            "https://example.com".to_string(),
+        );
         repo.default_strategy_distro = Some("fedora".to_string());
         repo.insert(&conn).unwrap();
 
@@ -417,10 +430,16 @@ mod tests {
         let (_temp_file, conn) = create_test_db();
 
         // Create two repos - one with matching name, one with matching strategy_distro
-        let mut repo1 = Repository::new("debian-old".to_string(), "https://old.example.com".to_string());
+        let mut repo1 = Repository::new(
+            "debian-old".to_string(),
+            "https://old.example.com".to_string(),
+        );
         repo1.insert(&conn).unwrap();
 
-        let mut repo2 = Repository::new("my-deb-repo".to_string(), "https://new.example.com".to_string());
+        let mut repo2 = Repository::new(
+            "my-deb-repo".to_string(),
+            "https://new.example.com".to_string(),
+        );
         repo2.default_strategy_distro = Some("debian".to_string());
         repo2.insert(&conn).unwrap();
 
@@ -536,7 +555,7 @@ mod tests {
         for (name, version) in [
             ("zlib", "1.3.0"),
             ("acl", "2.3.2"),
-            ("zlib", "1.2.0"),  // older version
+            ("zlib", "1.2.0"), // older version
             ("bash", "5.2.0"),
         ] {
             let mut pkg = RepositoryPackage::new(

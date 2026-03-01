@@ -64,9 +64,7 @@ impl AnalyticsRecorder {
             buffer.len() >= self.flush_threshold
         };
 
-        if should_flush
-            && let Err(e) = self.flush().await
-        {
+        if should_flush && let Err(e) = self.flush().await {
             tracing::error!("Failed to auto-flush analytics: {}", e);
         }
     }
@@ -178,8 +176,12 @@ mod tests {
         let recorder = AnalyticsRecorder::new(db_path.clone());
 
         // Record some events
-        recorder.record("fedora", "nginx", Some("1.24"), None, None).await;
-        recorder.record("fedora", "nginx", Some("1.24"), None, None).await;
+        recorder
+            .record("fedora", "nginx", Some("1.24"), None, None)
+            .await;
+        recorder
+            .record("fedora", "nginx", Some("1.24"), None, None)
+            .await;
         recorder.record("arch", "curl", None, None, None).await;
 
         // Flush

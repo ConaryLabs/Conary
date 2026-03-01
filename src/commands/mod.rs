@@ -15,11 +15,11 @@ mod federation;
 mod install;
 mod label;
 mod model;
+pub mod progress;
 mod provenance;
+mod query;
 mod redirect;
 mod remove;
-pub mod progress;
-mod query;
 mod repo;
 mod restore;
 mod state;
@@ -28,54 +28,72 @@ mod triggers;
 mod update;
 
 // Re-export all command handlers
-pub use adopt::{cmd_adopt, cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_adopt_takeover, cmd_sync_hook_install, cmd_conflicts};
-pub use capability::{
-    cmd_capability_show, cmd_capability_validate, cmd_capability_list,
-    cmd_capability_generate, cmd_capability_audit, cmd_capability_run,
-};
-pub use automation::{
-    cmd_automation_status, cmd_automation_check, cmd_automation_apply,
-    cmd_automation_configure, cmd_automation_daemon, cmd_automation_history,
+pub use adopt::{
+    cmd_adopt, cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system,
+    cmd_adopt_takeover, cmd_conflicts, cmd_sync_hook_install,
 };
 #[cfg(feature = "experimental")]
-pub use automation::{cmd_ai_find, cmd_ai_translate, cmd_ai_query, cmd_ai_explain};
+pub use automation::{cmd_ai_explain, cmd_ai_find, cmd_ai_query, cmd_ai_translate};
+pub use automation::{
+    cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
+    cmd_automation_history, cmd_automation_status,
+};
 pub use bootstrap::{
     cmd_bootstrap_base, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_image,
     cmd_bootstrap_init, cmd_bootstrap_resume, cmd_bootstrap_stage0, cmd_bootstrap_stage1,
     cmd_bootstrap_status,
 };
+pub use capability::{
+    cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,
+    cmd_capability_show, cmd_capability_validate,
+};
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
     cmd_collection_list, cmd_collection_remove_member, cmd_collection_show,
 };
+pub use conary::scriptlet::SandboxMode;
 pub use config::{
     cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
     cmd_config_restore,
 };
-pub use derived::{
-    cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list,
-    cmd_derive_override, cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
-};
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
-pub use install::{cmd_install, InstallOptions};
-pub use model::{cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot};
+pub use derived::{
+    cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
+    cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
+};
+pub use install::{InstallOptions, cmd_install};
+pub use label::{
+    cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
+    cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
+};
+pub use model::{
+    cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot,
+};
 pub use provenance::{
-    cmd_provenance_show, cmd_provenance_verify, cmd_provenance_diff, cmd_provenance_find_by_dep,
-    cmd_provenance_export, cmd_provenance_register, cmd_provenance_audit,
+    cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,
+    cmd_provenance_register, cmd_provenance_show, cmd_provenance_verify,
 };
 pub use remove::{cmd_autoremove, cmd_remove};
-pub use conary::scriptlet::SandboxMode;
-pub use label::{cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path, cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-pub use query::{cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom, cmd_whatbreaks, cmd_whatprovides, QueryOptions};
+#[cfg(feature = "server")]
+pub use federation::cmd_federation_scan;
+pub use federation::{
+    cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
+    cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
+};
+pub use query::{
+    QueryOptions, cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query,
+    cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom, cmd_whatbreaks,
+    cmd_whatprovides,
+};
 pub use redirect::{
     cmd_redirect_add, cmd_redirect_list, cmd_redirect_remove, cmd_redirect_resolve,
     cmd_redirect_show,
 };
 pub use repo::{
-    cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
-    cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
+    cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable, cmd_repo_enable,
+    cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use restore::{cmd_restore, cmd_restore_all};
 pub use state::{
@@ -84,24 +102,19 @@ pub use state::{
 };
 pub use system::{cmd_gc, cmd_init, cmd_rollback, cmd_verify};
 pub use triggers::{
-    cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list,
-    cmd_trigger_remove, cmd_trigger_run, cmd_trigger_show,
+    cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list, cmd_trigger_remove,
+    cmd_trigger_run, cmd_trigger_show,
 };
-pub use update::{cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group};
-pub use federation::{
-    cmd_federation_status, cmd_federation_peers, cmd_federation_add_peer,
-    cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_enable_peer,
-    cmd_federation_test,
+pub use update::{
+    cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
 };
-#[cfg(feature = "server")]
-pub use federation::cmd_federation_scan;
 
 use anyhow::Result;
+use conary::packages::PackageFormat;
 use conary::packages::arch::ArchPackage;
 use conary::packages::deb::DebPackage;
 use conary::packages::rpm::RpmPackage;
 use conary::packages::traits::ScriptletPhase;
-use conary::packages::PackageFormat;
 use std::fs::File;
 use std::io::Read;
 
@@ -149,10 +162,11 @@ pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
         return Ok(PackageFormatType::Arch);
     }
 
-    Err(anyhow::anyhow!("Unable to detect package format for: {}", path))
+    Err(anyhow::anyhow!(
+        "Unable to detect package format for: {}",
+        path
+    ))
 }
-
-
 
 /// Display scriptlets from a package file
 pub fn cmd_scripts(package_path: &str) -> Result<()> {
@@ -167,7 +181,11 @@ pub fn cmd_scripts(package_path: &str) -> Result<()> {
     let scriptlets = package.scriptlets();
 
     if scriptlets.is_empty() {
-        println!("[INFO] {} v{} has no scriptlets", package.name(), package.version());
+        println!(
+            "[INFO] {} v{} has no scriptlets",
+            package.name(),
+            package.version()
+        );
         return Ok(());
     }
 
@@ -206,7 +224,11 @@ pub fn cmd_scripts(package_path: &str) -> Result<()> {
 }
 
 /// Create a state snapshot after a successful operation
-pub(crate) fn create_state_snapshot(conn: &rusqlite::Connection, changeset_id: i64, summary: &str) -> Result<()> {
+pub(crate) fn create_state_snapshot(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    summary: &str,
+) -> Result<()> {
     use conary::db::models::StateEngine;
     use tracing::{info, warn};
 

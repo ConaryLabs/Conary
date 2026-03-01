@@ -412,7 +412,9 @@ impl DownloadProgress {
         let overall = ProgressBar::new(total_size);
         overall.set_style(
             ProgressStyle::default_bar()
-                .template("Total: [{bar:40.green/dim}] {bytes}/{total_bytes} ({bytes_per_sec}) - {msg}")
+                .template(
+                    "Total: [{bar:40.green/dim}] {bytes}/{total_bytes} ({bytes_per_sec}) - {msg}",
+                )
                 .expect("Invalid progress bar template")
                 .progress_chars("=>-"),
         );

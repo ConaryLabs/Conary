@@ -6,10 +6,10 @@
 
 use crate::server::ServerState;
 use axum::{
-    extract::{Query, State},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    extract::{Query, State},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -91,11 +91,10 @@ pub async fn search_packages(
     // Run search on blocking thread since Tantivy is synchronous
     let query_clone = query.clone();
     let distro_owned = distro.map(String::from);
-    let results =
-        tokio::task::spawn_blocking(move || {
-            search_engine.search(&query_clone, distro_owned.as_deref(), limit)
-        })
-        .await;
+    let results = tokio::task::spawn_blocking(move || {
+        search_engine.search(&query_clone, distro_owned.as_deref(), limit)
+    })
+    .await;
 
     match results {
         Ok(Ok(results)) => {

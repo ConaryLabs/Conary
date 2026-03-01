@@ -32,7 +32,12 @@ pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<
         return show_repo_package_info(&conn, &packages[0]);
     }
 
-    println!("Available packages{}:", pattern.map(|p| format!(" matching '{}'", p)).unwrap_or_default());
+    println!(
+        "Available packages{}:",
+        pattern
+            .map(|p| format!(" matching '{}'", p))
+            .unwrap_or_default()
+    );
     for pkg in &packages {
         print!("  {} {}", pkg.name, pkg.version);
         if let Some(arch) = &pkg.architecture {

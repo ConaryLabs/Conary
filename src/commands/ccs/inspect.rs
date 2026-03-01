@@ -5,7 +5,7 @@
 //! Commands for inspecting package contents and verifying signatures.
 
 use anyhow::{Context, Result};
-use conary::ccs::{inspector, verify, InspectedPackage, TrustPolicy};
+use conary::ccs::{InspectedPackage, TrustPolicy, inspector, verify};
 use std::path::Path;
 
 /// Inspect a CCS package
@@ -23,8 +23,7 @@ pub fn cmd_ccs_inspect(
     }
 
     // Load and parse the package
-    let pkg = InspectedPackage::from_file(path)
-        .context("Failed to read CCS package")?;
+    let pkg = InspectedPackage::from_file(path).context("Failed to read CCS package")?;
 
     // Output in requested format
     if format == "json" {
@@ -69,8 +68,7 @@ pub fn cmd_ccs_verify(
 
     // Load or create trust policy
     let policy = if let Some(policy_file) = policy_path {
-        TrustPolicy::from_file(Path::new(&policy_file))
-            .context("Failed to load trust policy")?
+        TrustPolicy::from_file(Path::new(&policy_file)).context("Failed to load trust policy")?
     } else if allow_unsigned {
         TrustPolicy::permissive()
     } else {
@@ -82,8 +80,7 @@ pub fn cmd_ccs_verify(
     };
 
     // Run verification
-    let result = verify::verify_package(path, &policy)
-        .context("Verification failed")?;
+    let result = verify::verify_package(path, &policy).context("Verification failed")?;
 
     // Print results
     verify::print_result(&result);

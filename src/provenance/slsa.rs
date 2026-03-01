@@ -121,7 +121,8 @@ fn build_materials(context: SlsaContext<'_>) -> Result<Vec<Material>, SlsaError>
     let mut materials = Vec::new();
 
     if let (Some(url), Some(hash)) = (context.upstream_url, context.upstream_hash)
-        && let Some((alg, value)) = split_hash(hash) {
+        && let Some((alg, value)) = split_hash(hash)
+    {
         materials.push(Material {
             uri: url.to_string(),
             digest: single_digest(&alg, &value),

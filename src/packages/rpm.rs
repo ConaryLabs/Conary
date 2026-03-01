@@ -2,12 +2,12 @@
 
 //! RPM package format parser
 
+use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::archive_utils::{check_file_size, normalize_path, is_regular_file_mode};
+use crate::packages::archive_utils::{check_file_size, is_regular_file_mode, normalize_path};
 use crate::packages::common::PackageMetadata;
 use crate::packages::cpio::CpioReader;
-use crate::compression::{self, CompressionFormat};
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet, ScriptletPhase,
@@ -37,32 +37,54 @@ impl RpmPackage {
         let mut scriptlets = Vec::new();
 
         // Helper to add scriptlet
-        let mut add_scriptlet = |phase: ScriptletPhase, result: std::result::Result<rpm::Scriptlet, rpm::Error>| {
-            if let Ok(s) = result {
-                let content = s.script; // Accessing field directly
-                if !content.is_empty() {
-                    let interpreter = if let Some(progs) = s.program {
-                        progs.first().cloned().unwrap_or_else(|| "/bin/sh".to_string())
-                    } else {
-                        "/bin/sh".to_string()
-                    };
-                    
-                    scriptlets.push(Scriptlet {
-                        phase,
-                        interpreter,
-                        content,
-                        flags: None,
-                    });
-                }
-            }
-        };
+        let mut add_scriptlet =
+            |phase: ScriptletPhase, result: std::result::Result<rpm::Scriptlet, rpm::Error>| {
+                if let Ok(s) = result {
+                    let content = s.script; // Accessing field directly
+                    if !content.is_empty() {
+                        let interpreter = if let Some(progs) = s.program {
+                            progs
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "/bin/sh".to_string())
+                        } else {
+                            "/bin/sh".to_string()
+                        };
 
-        add_scriptlet(ScriptletPhase::PreInstall, pkg.metadata.get_pre_install_script());
-        add_scriptlet(ScriptletPhase::PostInstall, pkg.metadata.get_post_install_script());
-        add_scriptlet(ScriptletPhase::PreRemove, pkg.metadata.get_pre_uninstall_script());
-        add_scriptlet(ScriptletPhase::PostRemove, pkg.metadata.get_post_uninstall_script());
-        add_scriptlet(ScriptletPhase::PreTransaction, pkg.metadata.get_pre_trans_script());
-        add_scriptlet(ScriptletPhase::PostTransaction, pkg.metadata.get_post_trans_script());
+                        scriptlets.push(Scriptlet {
+                            phase,
+                            interpreter,
+                            content,
+                            flags: None,
+                        });
+                    }
+                }
+            };
+
+        add_scriptlet(
+            ScriptletPhase::PreInstall,
+            pkg.metadata.get_pre_install_script(),
+        );
+        add_scriptlet(
+            ScriptletPhase::PostInstall,
+            pkg.metadata.get_post_install_script(),
+        );
+        add_scriptlet(
+            ScriptletPhase::PreRemove,
+            pkg.metadata.get_pre_uninstall_script(),
+        );
+        add_scriptlet(
+            ScriptletPhase::PostRemove,
+            pkg.metadata.get_post_uninstall_script(),
+        );
+        add_scriptlet(
+            ScriptletPhase::PreTransaction,
+            pkg.metadata.get_pre_trans_script(),
+        );
+        add_scriptlet(
+            ScriptletPhase::PostTransaction,
+            pkg.metadata.get_post_trans_script(),
+        );
 
         scriptlets
     }
@@ -286,7 +308,10 @@ impl PackageFormat for RpmPackage {
         let payload = &pkg.content;
         if payload.is_empty() {
             // Check if we expected files from metadata
-            let expected_file_count = self.meta.files.iter()
+            let expected_file_count = self
+                .meta
+                .files
+                .iter()
                 .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
                 .count();
             if expected_file_count > 0 {
@@ -296,7 +321,10 @@ impl PackageFormat for RpmPackage {
                     expected_file_count
                 );
             } else {
-                debug!("RPM {} has empty payload (meta-package with no files)", self.meta.name);
+                debug!(
+                    "RPM {} has empty payload (meta-package with no files)",
+                    self.meta.name
+                );
             }
             return Ok(Vec::new());
         }
@@ -311,7 +339,10 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         // Map paths to metadata for O(1) lookup
-        let file_map: HashMap<&str, &PackageFile> = self.meta.files.iter()
+        let file_map: HashMap<&str, &PackageFile> = self
+            .meta
+            .files
+            .iter()
             .map(|f| (f.path.as_str(), f))
             .collect();
 
@@ -319,7 +350,10 @@ impl PackageFormat for RpmPackage {
         let mut cpio = CpioReader::new(decoder);
         let mut extracted_files = Vec::new();
 
-        while let Some((entry, content)) = cpio.next_entry().map_err(|e| Error::InitError(format!("CPIO error: {}", e)))? {
+        while let Some((entry, content)) = cpio
+            .next_entry()
+            .map_err(|e| Error::InitError(format!("CPIO error: {}", e)))?
+        {
             // Check if regular file (S_IFREG = 0o100000)
             if !is_regular_file_mode(entry.mode) {
                 continue;
@@ -347,7 +381,10 @@ impl PackageFormat for RpmPackage {
         }
 
         // Validate extraction completeness
-        let expected_regular_files = self.meta.files.iter()
+        let expected_regular_files = self
+            .meta
+            .files
+            .iter()
             .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
             .count();
 

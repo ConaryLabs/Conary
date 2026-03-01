@@ -71,7 +71,9 @@ pub fn sanitize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
 
     // Reject empty paths
     if normalized.as_os_str().is_empty() {
-        return Err(Error::InvalidPath("Empty path after sanitization".to_string()));
+        return Err(Error::InvalidPath(
+            "Empty path after sanitization".to_string(),
+        ));
     }
 
     Ok(normalized)
@@ -112,8 +114,7 @@ pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathB
 
     // Defense in depth: verify the result is under root
     // This catches any edge cases we might have missed
-    if let (Ok(canonical_root), Ok(canonical_joined)) =
-        (root.canonicalize(), joined.canonicalize())
+    if let (Ok(canonical_root), Ok(canonical_joined)) = (root.canonicalize(), joined.canonicalize())
         && !canonical_joined.starts_with(&canonical_root)
     {
         return Err(Error::PathTraversal(format!(
@@ -156,10 +157,7 @@ pub fn sanitize_filename(name: &str) -> Result<String> {
 
     // Check for path traversal
     if name == ".." || name == "." {
-        return Err(Error::PathTraversal(format!(
-            "Invalid filename: {}",
-            name
-        )));
+        return Err(Error::PathTraversal(format!("Invalid filename: {}", name)));
     }
 
     // Check for empty
@@ -246,7 +244,10 @@ mod tests {
     #[test]
     fn test_sanitize_filename_normal() {
         assert_eq!(sanitize_filename("package.rpm").unwrap(), "package.rpm");
-        assert_eq!(sanitize_filename("file-1.0.tar.gz").unwrap(), "file-1.0.tar.gz");
+        assert_eq!(
+            sanitize_filename("file-1.0.tar.gz").unwrap(),
+            "file-1.0.tar.gz"
+        );
     }
 
     #[test]

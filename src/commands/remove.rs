@@ -5,7 +5,9 @@ use super::create_state_snapshot;
 use super::progress::{RemovePhase, RemoveProgress};
 use anyhow::{Context, Result};
 use conary::db::models::ScriptletEntry;
-use conary::scriptlet::{ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor};
+use conary::scriptlet::{
+    ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -31,14 +33,21 @@ struct FileSnapshot {
 }
 
 /// Remove an installed package
-pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option<String>, no_scripts: bool, sandbox_mode: SandboxMode, purge_files: bool) -> Result<()> {
+pub fn cmd_remove(
+    package_name: &str,
+    db_path: &str,
+    root: &str,
+    version: Option<String>,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    purge_files: bool,
+) -> Result<()> {
     info!("Removing package: {}", package_name);
 
     // Create progress tracker for removal
     let progress = RemoveProgress::new(package_name);
 
-    let mut conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let mut conn = conary::db::open(db_path).context("Failed to open package database")?;
     let troves = conary::db::models::Trove::find_by_name(&conn, package_name)
         .with_context(|| format!("Failed to query package '{}'", package_name))?;
 
@@ -52,13 +61,18 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     // Handle version-specific removal
     let trove = if let Some(ref ver) = version {
         // Find the specific version
-        troves.iter().find(|t| t.version == *ver)
-            .ok_or_else(|| anyhow::anyhow!(
+        troves.iter().find(|t| t.version == *ver).ok_or_else(|| {
+            anyhow::anyhow!(
                 "Package '{}' version '{}' is not installed. Installed versions: {}",
                 package_name,
                 ver,
-                troves.iter().map(|t| t.version.as_str()).collect::<Vec<_>>().join(", ")
-            ))?
+                troves
+                    .iter()
+                    .map(|t| t.version.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?
     } else if troves.len() > 1 {
         println!("Multiple versions of '{}' found:", package_name);
         for trove in &troves {
@@ -70,9 +84,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     } else {
         &troves[0]
     };
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
     // Check if package is pinned
     if trove.pinned {
@@ -86,12 +98,16 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     // Check if package is adopted from system PM
     if trove.install_source.is_adopted() && !purge_files {
         // Remove from Conary tracking only -- don't touch files on disk
-        info!("Package '{}' is adopted -- removing from Conary tracking only", package_name);
+        info!(
+            "Package '{}' is adopted -- removing from Conary tracking only",
+            package_name
+        );
 
         let remove_changeset_id = conary::db::transaction(&mut conn, |tx| {
-            let mut changeset = conary::db::models::Changeset::new(
-                format!("Remove tracking for adopted {}-{}", trove.name, trove.version),
-            );
+            let mut changeset = conary::db::models::Changeset::new(format!(
+                "Remove tracking for adopted {}-{}",
+                trove.name, trove.version
+            ));
             let changeset_id = changeset.insert(tx)?;
 
             // Remove DB records (files, deps, provides, trove)
@@ -110,7 +126,11 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
             pkg_mgr.remove_command(package_name)
         );
 
-        create_state_snapshot(&conn, remove_changeset_id, &format!("Remove tracking for {}", trove.name))?;
+        create_state_snapshot(
+            &conn,
+            remove_changeset_id,
+            &format!("Remove tracking for {}", trove.name),
+        )?;
         return Ok(());
     }
 
@@ -166,7 +186,8 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
             &trove.name,
             &trove.version,
             scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
+        )
+        .with_sandbox_mode(sandbox_mode);
 
         if let Some(pre) = stored_scriptlets.iter().find(|s| s.phase == "pre-remove") {
             info!("Running pre-remove scriptlet...");
@@ -257,9 +278,9 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     // Separate files and directories
     // Directories typically have mode starting with 040xxx (directory bit)
     // or path ending with /
-    let (directories, regular_files): (Vec<_>, Vec<_>) = files.iter().partition(|f| {
-        f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000
-    });
+    let (directories, regular_files): (Vec<_>, Vec<_>) = files
+        .iter()
+        .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
 
     // Remove regular files first
     progress.set_phase(RemovePhase::RemovingFiles);
@@ -309,13 +330,17 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
             &trove.name,
             &trove.version,
             scriptlet_format,
-        ).with_sandbox_mode(sandbox_mode);
+        )
+        .with_sandbox_mode(sandbox_mode);
 
         if let Some(post) = stored_scriptlets.iter().find(|s| s.phase == "post-remove") {
             info!("Running post-remove scriptlet...");
             if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
                 // Post-remove failure is not critical - files are already removed
-                warn!("Post-remove scriptlet failed: {}. Package files already removed.", e);
+                warn!(
+                    "Post-remove scriptlet failed: {}. Package files already removed.",
+                    e
+                );
                 eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
             }
         }
@@ -323,19 +348,12 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
 
     progress.finish(&format!("Removed {} {}", trove.name, trove.version));
 
-    println!(
-        "Removed package: {} version {}",
-        trove.name, trove.version
-    );
+    println!("Removed package: {} version {}", trove.name, trove.version);
     println!(
         "  Architecture: {}",
         trove.architecture.as_deref().unwrap_or("none")
     );
-    println!(
-        "  Files removed: {}/{}",
-        removed_count,
-        regular_files.len()
-    );
+    println!("  Files removed: {}/{}", removed_count, regular_files.len());
     if dirs_removed > 0 {
         println!("  Directories removed: {}", dirs_removed);
     }
@@ -344,7 +362,11 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     }
 
     // Create state snapshot after successful remove
-    create_state_snapshot(&conn, remove_changeset_id, &format!("Remove {}", trove.name))?;
+    create_state_snapshot(
+        &conn,
+        remove_changeset_id,
+        &format!("Remove {}", trove.name),
+    )?;
 
     Ok(())
 }
@@ -353,11 +375,16 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_autoremove(
+    db_path: &str,
+    root: &str,
+    dry_run: bool,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
     info!("Finding orphaned packages...");
 
-    let conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     let orphans = conary::db::models::Trove::find_orphans(&conn)?;
 
@@ -389,7 +416,15 @@ pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool
 
     for trove in &orphans {
         println!("\nRemoving {} {}...", trove.name, trove.version);
-        match cmd_remove(&trove.name, db_path, root, Some(trove.version.clone()), no_scripts, sandbox_mode, false) {
+        match cmd_remove(
+            &trove.name,
+            db_path,
+            root,
+            Some(trove.version.clone()),
+            no_scripts,
+            sandbox_mode,
+            false,
+        ) {
             Ok(()) => {
                 removed_count += 1;
             }

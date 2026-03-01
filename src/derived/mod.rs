@@ -25,4 +25,6 @@
 
 mod builder;
 
-pub use builder::{build_from_definition, store_in_cas, DerivedBuilder, DerivedResult, DerivedSpec};
+pub use builder::{
+    DerivedBuilder, DerivedResult, DerivedSpec, build_from_definition, store_in_cas,
+};

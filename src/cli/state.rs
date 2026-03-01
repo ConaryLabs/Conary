@@ -1,8 +1,8 @@
 // src/cli/state.rs
 //! System state snapshot and rollback commands
 
+use super::{CommonArgs, DbArgs};
 use clap::Subcommand;
-use super::{DbArgs, CommonArgs};
 
 #[derive(Subcommand)]
 pub enum StateCommands {

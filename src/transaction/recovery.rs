@@ -12,14 +12,14 @@
 //! since a crash can occur after SQLite commits but before the journal record
 //! is written.
 
-use crate::filesystem::path::{safe_join, sanitize_path};
 use crate::Result;
+use crate::filesystem::path::{safe_join, sanitize_path};
 use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 
-use super::journal::{find_incomplete_journals, JournalRecord, TransactionJournal};
-use super::{move_file_atomic, FileType, TransactionEngine, TransactionState};
+use super::journal::{JournalRecord, TransactionJournal, find_incomplete_journals};
+use super::{FileType, TransactionEngine, TransactionState, move_file_atomic};
 
 /// Outcome of recovering a transaction
 #[derive(Debug, Clone)]
@@ -37,7 +37,10 @@ pub enum RecoveryOutcome {
 }
 
 /// Recover all incomplete transactions
-pub fn recover_all(engine: &TransactionEngine, conn: &mut Connection) -> Result<Vec<RecoveryOutcome>> {
+pub fn recover_all(
+    engine: &TransactionEngine,
+    conn: &mut Connection,
+) -> Result<Vec<RecoveryOutcome>> {
     let journals = find_incomplete_journals(&engine.config().journal_dir)?;
     let mut outcomes = Vec::new();
 
@@ -144,9 +147,7 @@ fn recover_single(
                 cleanup_work_dir(engine, &tx_uuid)?;
                 journal.archive()?;
                 let _changeset_id = get_changeset_id_by_uuid(conn, &tx_uuid)?;
-                Ok(RecoveryOutcome::CompletedPending {
-                    tx_uuid,
-                })
+                Ok(RecoveryOutcome::CompletedPending { tx_uuid })
             } else {
                 // This shouldn't happen - journal says DB committed but DB doesn't have it
                 Ok(RecoveryOutcome::Corrupted {
@@ -199,9 +200,9 @@ pub fn rollback_transaction(
                 let final_path = safe_join(root, Path::new(path))?;
                 if final_path.exists() {
                     // Check if there's a corresponding backup - if not, this was a new file
-                    let has_backup = records.iter().any(|r| {
-                        matches!(r, JournalRecord::Backup { path: bp, .. } if bp == path)
-                    });
+                    let has_backup = records
+                        .iter()
+                        .any(|r| matches!(r, JournalRecord::Backup { path: bp, .. } if bp == path));
 
                     if !has_backup {
                         // New file with no backup - remove it
@@ -265,8 +266,7 @@ pub fn rollback_transaction(
                                 // Restore symlink
                                 #[cfg(unix)]
                                 {
-                                    if let Err(e) =
-                                        std::os::unix::fs::symlink(target, &final_path)
+                                    if let Err(e) = std::os::unix::fs::symlink(target, &final_path)
                                     {
                                         log::warn!(
                                             "Failed to restore symlink {:?}: {}",
@@ -306,9 +306,7 @@ pub fn rollback_transaction(
                 .iter()
                 .any(|r| matches!(r, JournalRecord::Backup { path: bp, .. } if bp == path));
 
-            if !has_backup
-                && let Some(parent) = path.parent()
-            {
+            if !has_backup && let Some(parent) = path.parent() {
                 dirs_to_check.push(parent.to_path_buf());
             }
         }
@@ -559,5 +557,4 @@ mod tests {
         // New file should be removed
         assert!(!new_file.exists());
     }
-
 }

@@ -18,7 +18,7 @@ pub mod rpm_query;
 pub mod traits;
 
 pub use common::{PackageMetadata, PackageMetadataBuilder};
-pub use registry::{detect_format, parse_package, PackageFormatType};
+pub use registry::{PackageFormatType, detect_format, parse_package};
 
 use crate::error::Result;
 use rayon::prelude::*;
@@ -129,10 +129,7 @@ pub fn extract_packages_parallel(
         return Vec::new();
     }
 
-    info!(
-        "Extracting {} packages in parallel...",
-        package_paths.len()
-    );
+    info!("Extracting {} packages in parallel...", package_paths.len());
 
     package_paths
         .par_iter()

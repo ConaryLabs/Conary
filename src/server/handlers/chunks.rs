@@ -13,11 +13,11 @@
 
 use crate::server::ServerState;
 use axum::{
+    Json,
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -244,7 +244,10 @@ pub async fn get_chunk(
 
         tracing::debug!(
             "Range request for chunk {}: bytes {}-{}/{}",
-            hash, start, end, file_size
+            hash,
+            start,
+            end,
+            file_size
         );
 
         return Response::builder()
@@ -296,7 +299,11 @@ async fn pull_through_fetch(
         None => return (StatusCode::NOT_FOUND, "Chunk not found").into_response(),
     };
 
-    tracing::debug!("Pull-through fetch for chunk {} from {}", hash, upstream_url);
+    tracing::debug!(
+        "Pull-through fetch for chunk {} from {}",
+        hash,
+        upstream_url
+    );
     state_guard.metrics.record_upstream_fetch();
 
     // Build upstream URL
@@ -371,7 +378,7 @@ async fn pull_through_fetch(
 
 /// Compute SHA-256 hash of data
 fn sha2_hash(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let hash = Sha256::digest(data);
     hex::encode(hash)
 }
@@ -491,7 +498,9 @@ pub async fn batch_fetch(
     if request.hashes.len() > MAX_BATCH_SIZE {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("Too many hashes (max {})", MAX_BATCH_SIZE) })),
+            Json(
+                serde_json::json!({ "error": format!("Too many hashes (max {})", MAX_BATCH_SIZE) }),
+            ),
         )
             .into_response();
     }
@@ -603,9 +612,7 @@ pub async fn batch_fetch(
 /// GET /v1/admin/cache/stats
 ///
 /// Get cache statistics
-pub async fn cache_stats(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
+pub async fn cache_stats(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
     let state = state.read().await;
 
     #[derive(Serialize)]
@@ -642,9 +649,7 @@ pub async fn cache_stats(
 /// POST /v1/admin/evict
 ///
 /// Manually trigger LRU eviction (admin endpoint)
-pub async fn trigger_eviction(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
+pub async fn trigger_eviction(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
     let state = state.read().await;
 
     match state.chunk_cache.run_eviction().await {
@@ -675,9 +680,7 @@ pub async fn trigger_eviction(
 /// POST /v1/admin/bloom/rebuild
 ///
 /// Rebuild the Bloom filter from disk
-pub async fn rebuild_bloom(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
+pub async fn rebuild_bloom(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
     let mut state = state.write().await;
 
     if state.bloom_filter.is_none() {
@@ -691,10 +694,8 @@ pub async fn rebuild_bloom(
         Ok(stats) => {
             // Create new filter sized for current chunk count (with headroom)
             let expected_count = (stats.chunk_count as f64 * 1.5) as usize;
-            let new_bloom = crate::server::bloom::ChunkBloomFilter::new(
-                expected_count.max(100_000),
-                0.01,
-            );
+            let new_bloom =
+                crate::server::bloom::ChunkBloomFilter::new(expected_count.max(100_000), 0.01);
 
             // Scan and add all chunks
             let objects_dir = state.config.chunk_dir.join("objects");
@@ -702,10 +703,7 @@ pub async fn rebuild_bloom(
                 for hash in &hashes {
                     new_bloom.add(hash);
                 }
-                tracing::info!(
-                    "Bloom filter rebuilt with {} chunks",
-                    new_bloom.count()
-                );
+                tracing::info!("Bloom filter rebuilt with {} chunks", new_bloom.count());
             }
 
             new_bloom.mark_clean();
@@ -852,15 +850,21 @@ mod tests {
     #[test]
     fn test_is_valid_hash() {
         // Valid 64-char hex hash
-        assert!(is_valid_hash("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"));
+        assert!(is_valid_hash(
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        ));
 
         // Wrong length
         assert!(!is_valid_hash("abcdef"));
         assert!(!is_valid_hash(""));
 
         // Invalid characters
-        assert!(!is_valid_hash("ghijklmnopqrstuv1234567890abcdef1234567890abcdef1234567890abcd"));
-        assert!(!is_valid_hash("ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF12345678901")); // too long
+        assert!(!is_valid_hash(
+            "ghijklmnopqrstuv1234567890abcdef1234567890abcdef1234567890abcd"
+        ));
+        assert!(!is_valid_hash(
+            "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF12345678901"
+        )); // too long
     }
 
     #[test]

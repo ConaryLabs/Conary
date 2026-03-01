@@ -115,12 +115,12 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
     let rows = stmt
         .query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,                    // name
-                row.get::<_, String>(1)?,                    // version
-                row.get::<_, Option<String>>(2)?,            // architecture
-                row.get::<_, Option<String>>(3)?,            // install_reason
-                row.get::<_, bool>(4).unwrap_or(false),      // pinned
-                row.get::<_, Option<String>>(5)?,            // label_name
+                row.get::<_, String>(0)?,               // name
+                row.get::<_, String>(1)?,               // version
+                row.get::<_, Option<String>>(2)?,       // architecture
+                row.get::<_, Option<String>>(3)?,       // install_reason
+                row.get::<_, bool>(4).unwrap_or(false), // pinned
+                row.get::<_, Option<String>>(5)?,       // label_name
             ))
         })
         .map_err(|e| ModelError::DatabaseError(e.to_string()))?;
@@ -158,11 +158,7 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
     let mut model = super::SystemModel::new();
 
     // Add explicitly installed packages
-    model.config.install = state
-        .explicit
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
+    model.config.install = state.explicit.iter().cloned().collect::<Vec<_>>();
     model.config.install.sort();
 
     // Add pinned packages with their current versions

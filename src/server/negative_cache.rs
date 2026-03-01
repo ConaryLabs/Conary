@@ -44,10 +44,10 @@ impl NegativeCache {
     /// Returns true if the key was recently marked as "not found".
     pub async fn is_negative(&self, key: &str) -> bool {
         let entries = self.entries.read().await;
-        if let Some(entry) = entries.get(key) {
-            if entry.created_at.elapsed() < self.ttl {
-                return true;
-            }
+        if let Some(entry) = entries.get(key)
+            && entry.created_at.elapsed() < self.ttl
+        {
+            return true;
         }
         false
     }
@@ -163,7 +163,10 @@ pub async fn run_cleanup_loop(state: Arc<RwLock<ServerState>>) {
         let state_guard = state.read().await;
         let removed = state_guard.negative_cache.cleanup().await;
         if removed > 0 {
-            tracing::debug!("Negative cache cleanup: removed {} expired entries", removed);
+            tracing::debug!(
+                "Negative cache cleanup: removed {} expired entries",
+                removed
+            );
         }
     }
 }

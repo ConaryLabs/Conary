@@ -9,15 +9,17 @@ mod prepare;
 mod resolve;
 mod scriptlets;
 
-pub use batch::{prepare_package_for_batch, BatchInstaller};
+pub use batch::{BatchInstaller, prepare_package_for_batch};
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
-use conversion::{install_converted_ccs, try_convert_to_ccs, ConversionResult};
+use conversion::{ConversionResult, install_converted_ccs, try_convert_to_ccs};
 use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
-use resolve::{check_provides_dependencies, resolve_package_path, ResolutionOutcome, ResolvedSourceType};
+use resolve::{
+    ResolutionOutcome, ResolvedSourceType, check_provides_dependencies, resolve_package_path,
+};
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
@@ -25,9 +27,11 @@ use scriptlets::{
 
 use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
-use super::{detect_package_format, PackageFormatType};
+use super::{PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
-use conary::components::{parse_component_spec, should_run_scriptlets, ComponentClassifier, ComponentType};
+use conary::components::{
+    ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
+};
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::db::paths::keyring_dir;
 use conary::dependencies::LanguageDepDetector;
@@ -36,8 +40,7 @@ use conary::repository;
 use conary::resolver::Resolver;
 use conary::scriptlet::SandboxMode;
 use conary::transaction::{
-    PackageInfo, TransactionConfig,
-    TransactionEngine, TransactionOperations,
+    PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
 };
 use conary::version::RpmVersion;
 use std::collections::HashMap;
@@ -143,7 +146,9 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         force,
     } = opts;
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
-    let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
+    let (package_name, component_selection) = if let Some((pkg, comp)) =
+        parse_component_spec(package)
+    {
         let selection = if comp == "all" {
             ComponentSelection::All
         } else if let Some(comp_type) = ComponentType::parse(&comp) {
@@ -160,7 +165,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         (package.to_string(), ComponentSelection::Defaults)
     };
 
-    info!("Installing package: {} (components: {})", package_name, component_selection.display());
+    info!(
+        "Installing package: {} (components: {})",
+        package_name,
+        component_selection.display()
+    );
 
     // Check if the package is adopted from the system PM
     {
@@ -180,7 +189,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                     package_name
                 ));
             }
-            println!("[INFO] Package '{}' is adopted -- proceeding with --force", package_name);
+            println!(
+                "[INFO] Package '{}' is adopted -- proceeding with --force",
+                package_name
+            );
         }
     }
 
@@ -207,7 +219,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 return Ok(());
             }
             // Otherwise continue with version upgrade
-            info!("Continuing with version change: {} -> {:?}", existing.version, version);
+            info!(
+                "Continuing with version change: {} -> {:?}",
+                existing.version, version
+            );
         }
     }
 
@@ -224,7 +239,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         &progress,
     )? {
         ResolutionOutcome::AlreadyInstalled { name, version } => {
-            println!("{} {} is already installed (skipping download)", name, version);
+            println!(
+                "{} {} is already installed (skipping download)",
+                name, version
+            );
             return Ok(());
         }
         ResolutionOutcome::Resolved(pkg) => pkg,
@@ -233,13 +251,15 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // If resolved from Remi, it's already CCS format - install directly
     if resolved.source_type == ResolvedSourceType::Remi {
         info!("Package from Remi is already CCS format, installing directly");
-        let ccs_path = resolved.path
+        let ccs_path = resolved
+            .path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
         return install_converted_ccs(ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
     }
 
-    let path_str = resolved.path
+    let path_str = resolved
+        .path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
 
@@ -262,9 +282,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
         match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path, !no_capture)? {
-            ConversionResult::Converted { ccs_path, temp_dir: _temp_dir } => {
+            ConversionResult::Converted {
+                ccs_path,
+                temp_dir: _temp_dir,
+            } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
-                return install_converted_ccs(&ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
+                return install_converted_ccs(
+                    &ccs_path,
+                    db_path,
+                    root,
+                    dry_run,
+                    sandbox_mode,
+                    no_deps,
+                );
             }
             ConversionResult::Skipped => {
                 // Already converted - fall through to regular install path
@@ -272,12 +302,16 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
     }
 
-    let mut conn = conary::db::open(db_path)
-        .context("Failed to open package database")?;
+    let mut conn = conary::db::open(db_path).context("Failed to open package database")?;
 
     // Build dependency edges from the package
-    let package_version = RpmVersion::parse(pkg.version())
-        .with_context(|| format!("Failed to parse version '{}' for package '{}'", pkg.version(), pkg.name()))?;
+    let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
+        format!(
+            "Failed to parse version '{}' for package '{}'",
+            pkg.version(),
+            pkg.name()
+        )
+    })?;
     let dependency_edges = build_dependency_edges(pkg.as_ref());
 
     if no_deps && !dependency_edges.is_empty() {
@@ -295,15 +329,17 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         println!("Checking dependencies for {}...", pkg.name());
 
         // Build resolver from current system state
-        let mut resolver = Resolver::new(&conn)
-            .context("Failed to initialize dependency resolver")?;
+        let mut resolver =
+            Resolver::new(&conn).context("Failed to initialize dependency resolver")?;
 
         // Resolve with the new package
-        let plan = resolver.resolve_install(
-            pkg.name().to_string(),
-            package_version.clone(),
-            dependency_edges,
-        ).with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))?;
+        let plan = resolver
+            .resolve_install(
+                pkg.name().to_string(),
+                package_version.clone(),
+                dependency_edges,
+            )
+            .with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))?;
 
         // Check for conflicts (fail on any conflict)
         if !plan.conflicts.is_empty() {
@@ -341,17 +377,25 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                             progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
                             let temp_dir = TempDir::new()?;
                             let keyring_dir = keyring_dir(db_path);
-                            match repository::download_dependencies(&to_download, temp_dir.path(), Some(&keyring_dir)) {
+                            match repository::download_dependencies(
+                                &to_download,
+                                temp_dir.path(),
+                                Some(&keyring_dir),
+                            ) {
                                 Ok(downloaded) => {
                                     // Use batch installer for atomic dependency installation
                                     // This ensures all dependencies are installed in a single
                                     // transaction - if any fails, all are rolled back.
                                     let parent_name = pkg.name().to_string();
-                                    let mut prepared_packages = Vec::with_capacity(downloaded.len());
+                                    let mut prepared_packages =
+                                        Vec::with_capacity(downloaded.len());
 
                                     // Prepare all dependencies
                                     for (dep_name, dep_path) in &downloaded {
-                                        progress.set_status(&format!("Preparing dependency: {}", dep_name));
+                                        progress.set_status(&format!(
+                                            "Preparing dependency: {}",
+                                            dep_name
+                                        ));
                                         info!("Preparing dependency: {}", dep_name);
                                         let reason = format!("Required by {}", parent_name);
                                         match prepare_package_for_batch(
@@ -367,7 +411,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                                                 // Check for "already installed" error
                                                 let err_str = e.to_string();
                                                 if err_str.contains("already installed") {
-                                                    info!("Dependency {} already installed, skipping", dep_name);
+                                                    info!(
+                                                        "Dependency {} already installed, skipping",
+                                                        dep_name
+                                                    );
                                                     continue;
                                                 }
                                                 return Err(anyhow::anyhow!(
@@ -404,14 +451,17 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                                             ));
                                         }
 
-                                        println!("  [OK] Installed {} dependencies atomically", downloaded.len());
+                                        println!(
+                                            "  [OK] Installed {} dependencies atomically",
+                                            downloaded.len()
+                                        );
                                     }
                                 }
                                 Err(e) => {
                                     return Err(anyhow::anyhow!(
                                         "Failed to download dependencies: {}",
                                         e
-                                    ))
+                                    ));
                                 }
                             }
                         }
@@ -456,19 +506,24 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             pkg.name(),
             pkg.version()
         );
-        println!(
-            "  Architecture: {}",
-            pkg.architecture().unwrap_or("none")
-        );
+        println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
         println!(
             "  Components to install: {} ({} files)",
-            dry_run_selected.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+            dry_run_selected
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
             selected_file_count
         );
         if !dry_run_skipped.is_empty() {
             println!(
                 "  Components skipped: {} (use {}:all to include)",
-                dry_run_skipped.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+                dry_run_skipped
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 pkg.name()
             );
         }
@@ -486,7 +541,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Extract and install
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
     info!("Extracting file contents from package...");
-    let extracted_files = pkg.extract_file_contents()
+    let extracted_files = pkg
+        .extract_file_contents()
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
     info!("Extracted {} files", extracted_files.len());
 
@@ -499,7 +555,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     info!(
         "Package contains {} component types: {:?}",
         available_components.len(),
-        available_components.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+        available_components
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
     );
 
     // Filter to only selected components
@@ -509,11 +568,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         .collect();
 
     // Build set of paths for selected components
-    let selected_paths: std::collections::HashSet<&str> = classified
-        .values()
-        .flatten()
-        .map(|s| s.as_str())
-        .collect();
+    let selected_paths: std::collections::HashSet<&str> =
+        classified.values().flatten().map(|s| s.as_str()).collect();
 
     // Filter extracted files to only include selected components
     let extracted_files: Vec<_> = extracted_files
@@ -541,7 +597,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         "Installing {} files from {} component(s): {:?}",
         extracted_files.len(),
         classified.len(),
-        installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+        installed_component_types
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
     );
 
     // Detect language-specific provides from installed files
@@ -552,15 +611,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         info!(
             "Detected {} language-specific provides: {:?}",
             language_provides.len(),
-            language_provides.iter().take(5).map(|d| d.to_dep_string()).collect::<Vec<_>>()
+            language_provides
+                .iter()
+                .take(5)
+                .map(|d| d.to_dep_string())
+                .collect::<Vec<_>>()
         );
     }
 
     // Determine package format and execution mode for scriptlet execution
     let scriptlet_format = to_scriptlet_format(format);
-    let execution_mode = build_execution_mode(
-        old_trove_to_upgrade.as_ref().map(|t| t.version.as_str())
-    );
+    let execution_mode =
+        build_execution_mode(old_trove_to_upgrade.as_ref().map(|t| t.version.as_str()));
 
     // Execute pre-install scriptlet (before any changes)
     // Scriptlets only run when :runtime or :lib is being installed
@@ -580,7 +642,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     } else if !no_scripts && !scriptlets.is_empty() && !run_scriptlets {
         info!(
             "Skipping scriptlets: no :runtime or :lib component being installed (components: {:?})",
-            installed_component_types.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+            installed_component_types
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -590,9 +655,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let old_package_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
-    if !no_scripts
-        && let Some(ref old_trove) = old_trove_to_upgrade
-    {
+    if !no_scripts && let Some(ref old_trove) = old_trove_to_upgrade {
         run_old_pre_remove(
             Path::new(root),
             &old_trove.name,
@@ -611,11 +674,12 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Create transaction engine for crash-safe atomic operations
     let db_path_buf = PathBuf::from(db_path);
     let tx_config = TransactionConfig::new(PathBuf::from(root), db_path_buf.clone());
-    let engine = TransactionEngine::new(tx_config)
-        .context("Failed to create transaction engine")?;
+    let engine =
+        TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
     // Recover any incomplete transactions from previous crashes
-    let recovery_outcomes = engine.recover(&mut conn)
+    let recovery_outcomes = engine
+        .recover(&mut conn)
         .context("Failed to recover incomplete transactions")?;
     for outcome in &recovery_outcomes {
         info!("Recovery outcome: {:?}", outcome);
@@ -623,11 +687,17 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Begin new transaction
     let tx_description = if let Some(ref old_trove) = old_trove_to_upgrade {
-        format!("Upgrade {} from {} to {}", pkg.name(), old_trove.version, pkg.version())
+        format!(
+            "Upgrade {} from {} to {}",
+            pkg.name(),
+            old_trove.version,
+            pkg.version()
+        )
     } else {
         format!("Install {}-{}", pkg.name(), pkg.version())
     };
-    let mut txn = engine.begin(&tx_description)
+    let mut txn = engine
+        .begin(&tx_description)
         .context("Failed to begin transaction")?;
 
     info!("Started transaction {} for {}", txn.uuid(), tx_description);
@@ -666,7 +736,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }),
     };
 
-    let plan = txn.plan_operations(operations, &conn)
+    let plan = txn
+        .plan_operations(operations, &conn)
         .context("Failed to plan transaction")?;
 
     // Extract plan data before further mutations (to avoid borrow checker issues)
@@ -677,16 +748,22 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Check for conflicts
     if !plan_conflicts.is_empty() {
-        let conflict_msgs: Vec<String> = plan_conflicts.iter().map(|c| format!("{:?}", c)).collect();
-        txn.abort().context("Failed to abort transaction after conflicts")?;
+        let conflict_msgs: Vec<String> =
+            plan_conflicts.iter().map(|c| format!("{:?}", c)).collect();
+        txn.abort()
+            .context("Failed to abort transaction after conflicts")?;
         return Err(anyhow::anyhow!(
             "File conflicts detected:\n  {}",
             conflict_msgs.join("\n  ")
         ));
     }
 
-    info!("Transaction plan: {} files to stage, {} files to backup, {} dirs to create",
-          plan_files_to_stage.len(), plan_files_to_backup_len, plan_dirs_to_create_len);
+    info!(
+        "Transaction plan: {} files to stage, {} files to backup, {} dirs to create",
+        plan_files_to_stage.len(),
+        plan_files_to_backup_len,
+        plan_dirs_to_create_len
+    );
 
     // Prepare: store content in CAS
     txn.prepare(&tx_files)
@@ -697,15 +774,17 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         .context("Failed to backup existing files")?;
 
     // Stage new files from CAS
-    txn.stage_files()
-        .context("Failed to stage files")?;
+    txn.stage_files().context("Failed to stage files")?;
 
     // Apply filesystem changes (atomic renames)
-    let fs_result = txn.apply_filesystem()
+    let fs_result = txn
+        .apply_filesystem()
         .context("Failed to apply filesystem changes")?;
 
-    info!("Filesystem changes: {} added, {} replaced, {} removed",
-          fs_result.files_added, fs_result.files_replaced, fs_result.files_removed);
+    info!(
+        "Filesystem changes: {} added, {} replaced, {} removed",
+        fs_result.files_added, fs_result.files_replaced, fs_result.files_removed
+    );
 
     // Write DB commit intent for crash recovery correlation
     txn.write_db_commit_intent()
@@ -864,7 +943,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         Err(e) => {
             // DB failed - abort transaction (will restore backups)
             if let Err(abort_err) = txn.abort() {
-                warn!("Failed to abort transaction after DB failure: {}", abort_err);
+                warn!(
+                    "Failed to abort transaction after DB failure: {}",
+                    abort_err
+                );
             }
             return Err(anyhow::anyhow!("Database transaction failed: {}", e));
         }
@@ -874,9 +956,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let _ = trove_id;
 
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
-    if !no_scripts
-        && let Some(ref old_trove) = old_trove_to_upgrade
-    {
+    if !no_scripts && let Some(ref old_trove) = old_trove_to_upgrade {
         run_old_post_remove(
             Path::new(root),
             &old_trove.name,
@@ -912,7 +992,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let trigger_executor = conary::trigger::TriggerExecutor::new(&conn, Path::new(root));
 
     // Record which triggers need to run
-    let triggered = trigger_executor.record_triggers(changeset_id, &file_paths)
+    let triggered = trigger_executor
+        .record_triggers(changeset_id, &file_paths)
         .unwrap_or_else(|e| {
             warn!("Failed to record triggers: {}", e);
             Vec::new()
@@ -955,10 +1036,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         pkg.name(),
         pkg.version()
     );
-    println!(
-        "  Architecture: {}",
-        pkg.architecture().unwrap_or("none")
-    );
+    println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
     println!("  Files installed: {}", extracted_files.len());
     println!(
         "  Components: {}{}",
@@ -971,17 +1049,21 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     );
     println!("  Dependencies: {}", pkg.dependencies().len());
     if !language_provides.is_empty() {
-        println!("  Provides: {} (language-specific capabilities)", language_provides.len());
+        println!(
+            "  Provides: {} (language-specific capabilities)",
+            language_provides.len()
+        );
     }
 
     // Finish transaction (cleanup working directory, archive journal)
-    let tx_result = txn.finish()
-        .context("Failed to finish transaction")?;
-    info!("Transaction {} completed in {}ms", tx_result.tx_uuid, tx_result.duration_ms);
+    let tx_result = txn.finish().context("Failed to finish transaction")?;
+    info!(
+        "Transaction {} completed in {}ms",
+        tx_result.tx_uuid, tx_result.duration_ms
+    );
 
     // Create state snapshot after successful install
     create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;
 
     Ok(())
 }
-

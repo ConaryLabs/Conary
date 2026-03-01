@@ -42,11 +42,13 @@ pub struct CcsPackage {
 
 /// Convert a BinaryManifest to CcsManifest for internal compatibility
 /// This is also exposed publicly for use by the verify module.
-pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryManifest) -> CcsManifest {
+pub fn convert_binary_to_ccs_manifest(
+    bin: &crate::ccs::binary_manifest::BinaryManifest,
+) -> CcsManifest {
     use crate::ccs::manifest::{
-        AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook,
-        GroupHook, Hooks, Package, PackageDep, Platform, Provides, Requires, Suggests,
-        SysctlHook, SystemdHook, TmpfilesHook, UserHook,
+        AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook, GroupHook,
+        Hooks, Package, PackageDep, Platform, Provides, Requires, Suggests, SysctlHook,
+        SystemdHook, TmpfilesHook, UserHook,
     };
 
     let platform = bin.platform.as_ref().map(|p| Platform {
@@ -90,48 +92,80 @@ pub fn convert_binary_to_ccs_manifest(bin: &crate::ccs::binary_manifest::BinaryM
             .collect(),
     };
 
-    let hooks = bin.hooks.as_ref().map(|h| Hooks {
-        users: h.users.iter().map(|u| UserHook {
-            name: u.name.clone(),
-            system: u.system,
-            home: u.home.clone(),
-            shell: u.shell.clone(),
-            group: u.group.clone(),
-        }).collect(),
-        groups: h.groups.iter().map(|g| GroupHook {
-            name: g.name.clone(),
-            system: g.system,
-        }).collect(),
-        directories: h.directories.iter().map(|d| DirectoryHook {
-            path: d.path.clone(),
-            mode: format!("{:04o}", d.mode),
-            owner: d.owner.clone(),
-            group: d.group.clone(),
-            cleanup: None,
-        }).collect(),
-        services: Vec::new(), // Not yet supported in binary format
-        systemd: h.systemd.iter().map(|s| SystemdHook {
-            unit: s.unit.clone(),
-            enable: s.enable,
-        }).collect(),
-        tmpfiles: h.tmpfiles.iter().map(|t| TmpfilesHook {
-            entry_type: t.entry_type.clone(),
-            path: t.path.clone(),
-            mode: format!("{:04o}", t.mode),
-            owner: t.owner.clone(),
-            group: t.group.clone(),
-        }).collect(),
-        sysctl: h.sysctl.iter().map(|s| SysctlHook {
-            key: s.key.clone(),
-            value: s.value.clone(),
-            only_if_lower: s.only_if_lower,
-        }).collect(),
-        alternatives: h.alternatives.iter().map(|a| AlternativeHook {
-            name: a.name.clone(),
-            path: a.path.clone(),
-            priority: a.priority,
-        }).collect(),
-    }).unwrap_or_default();
+    let hooks = bin
+        .hooks
+        .as_ref()
+        .map(|h| Hooks {
+            users: h
+                .users
+                .iter()
+                .map(|u| UserHook {
+                    name: u.name.clone(),
+                    system: u.system,
+                    home: u.home.clone(),
+                    shell: u.shell.clone(),
+                    group: u.group.clone(),
+                })
+                .collect(),
+            groups: h
+                .groups
+                .iter()
+                .map(|g| GroupHook {
+                    name: g.name.clone(),
+                    system: g.system,
+                })
+                .collect(),
+            directories: h
+                .directories
+                .iter()
+                .map(|d| DirectoryHook {
+                    path: d.path.clone(),
+                    mode: format!("{:04o}", d.mode),
+                    owner: d.owner.clone(),
+                    group: d.group.clone(),
+                    cleanup: None,
+                })
+                .collect(),
+            services: Vec::new(), // Not yet supported in binary format
+            systemd: h
+                .systemd
+                .iter()
+                .map(|s| SystemdHook {
+                    unit: s.unit.clone(),
+                    enable: s.enable,
+                })
+                .collect(),
+            tmpfiles: h
+                .tmpfiles
+                .iter()
+                .map(|t| TmpfilesHook {
+                    entry_type: t.entry_type.clone(),
+                    path: t.path.clone(),
+                    mode: format!("{:04o}", t.mode),
+                    owner: t.owner.clone(),
+                    group: t.group.clone(),
+                })
+                .collect(),
+            sysctl: h
+                .sysctl
+                .iter()
+                .map(|s| SysctlHook {
+                    key: s.key.clone(),
+                    value: s.value.clone(),
+                    only_if_lower: s.only_if_lower,
+                })
+                .collect(),
+            alternatives: h
+                .alternatives
+                .iter()
+                .map(|a| AlternativeHook {
+                    name: a.name.clone(),
+                    path: a.path.clone(),
+                    priority: a.priority,
+                })
+                .collect(),
+        })
+        .unwrap_or_default();
 
     let build = bin.build.as_ref().map(|b| BuildInfo {
         source: b.source.clone(),
@@ -339,7 +373,10 @@ impl PackageFormat for CcsPackage {
             );
             convert_binary_to_ccs_manifest(bin_manifest)
         } else if let Some(toml) = toml_manifest {
-            debug!("Using TOML manifest (legacy) for {} v{}", toml.package.name, toml.package.version);
+            debug!(
+                "Using TOML manifest (legacy) for {} v{}",
+                toml.package.name, toml.package.version
+            );
             toml
         } else {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -349,10 +386,7 @@ impl PackageFormat for CcsPackage {
         };
 
         // Collect files from components (spec says files live in components/*.json)
-        let files: Vec<FileEntry> = components
-            .values()
-            .flat_map(|c| c.files.clone())
-            .collect();
+        let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
 
         // Pre-compute trait data
         let package_files = Self::convert_files(&files);
@@ -428,10 +462,7 @@ impl PackageFormat for CcsPackage {
                     let chunk_data = blobs.get(chunk_hash).ok_or_else(|| {
                         crate::Error::Io(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
-                            format!(
-                                "Chunk {} not found for file {}",
-                                chunk_hash, file.path
-                            ),
+                            format!("Chunk {} not found for file {}", chunk_hash, file.path),
                         ))
                     })?;
                     reassembled.extend_from_slice(chunk_data);
@@ -439,22 +470,21 @@ impl PackageFormat for CcsPackage {
                 reassembled
             } else {
                 // Non-chunked file - look up by file hash
-                blobs
-                    .get(&file.hash)
-                    .cloned()
-                    .ok_or_else(|| {
-                        crate::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!(
-                                "Content not found for file {} (hash: {})",
-                                file.path, file.hash
-                            ),
-                        ))
-                    })?
+                blobs.get(&file.hash).cloned().ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "Content not found for file {} (hash: {})",
+                            file.path, file.hash
+                        ),
+                    ))
+                })?
             };
 
             let sha256 = if file.file_type == CcsFileType::Symlink {
-                file.target.as_ref().map(|t| CasStore::compute_symlink_hash(t))
+                file.target
+                    .as_ref()
+                    .map(|t| CasStore::compute_symlink_hash(t))
             } else {
                 Some(file.hash.clone())
             };
@@ -468,10 +498,7 @@ impl PackageFormat for CcsPackage {
             });
         }
 
-        debug!(
-            "Extracted {} files from CCS package",
-            extracted.len()
-        );
+        debug!("Extracted {} files from CCS package", extracted.len());
 
         Ok(extracted)
     }

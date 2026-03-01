@@ -10,7 +10,7 @@
 //! - Re-convert when conversion algorithm is upgraded
 
 use crate::error::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages
@@ -101,6 +101,7 @@ impl ConvertedPackage {
     }
 
     /// Create a new server-side converted package record (for Remi)
+    #[allow(clippy::too_many_arguments)]
     pub fn new_server(
         distro: String,
         package_name: String,
@@ -337,7 +338,9 @@ impl ConvertedPackage {
         )?;
 
         let results = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
@@ -353,7 +356,9 @@ impl ConvertedPackage {
         error: Option<&str>,
     ) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::Error::NotFound("Cannot update enhancement status on unsaved package".to_string())
+            crate::Error::NotFound(
+                "Cannot update enhancement status on unsaved package".to_string(),
+            )
         })?;
 
         conn.execute(
@@ -477,13 +482,25 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create multiple converted packages
-        let mut high1 = ConvertedPackage::new("rpm".to_string(), "sha256:111".to_string(), "high".to_string());
+        let mut high1 = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:111".to_string(),
+            "high".to_string(),
+        );
         high1.insert(&conn).unwrap();
 
-        let mut high2 = ConvertedPackage::new("deb".to_string(), "sha256:222".to_string(), "high".to_string());
+        let mut high2 = ConvertedPackage::new(
+            "deb".to_string(),
+            "sha256:222".to_string(),
+            "high".to_string(),
+        );
         high2.insert(&conn).unwrap();
 
-        let mut low1 = ConvertedPackage::new("arch".to_string(), "sha256:333".to_string(), "low".to_string());
+        let mut low1 = ConvertedPackage::new(
+            "arch".to_string(),
+            "sha256:333".to_string(),
+            "low".to_string(),
+        );
         low1.insert(&conn).unwrap();
 
         // Find by fidelity
@@ -499,13 +516,25 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create converted packages with different formats
-        let mut rpm1 = ConvertedPackage::new("rpm".to_string(), "sha256:r1".to_string(), "high".to_string());
+        let mut rpm1 = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:r1".to_string(),
+            "high".to_string(),
+        );
         rpm1.insert(&conn).unwrap();
 
-        let mut rpm2 = ConvertedPackage::new("rpm".to_string(), "sha256:r2".to_string(), "high".to_string());
+        let mut rpm2 = ConvertedPackage::new(
+            "rpm".to_string(),
+            "sha256:r2".to_string(),
+            "high".to_string(),
+        );
         rpm2.insert(&conn).unwrap();
 
-        let mut deb1 = ConvertedPackage::new("deb".to_string(), "sha256:d1".to_string(), "high".to_string());
+        let mut deb1 = ConvertedPackage::new(
+            "deb".to_string(),
+            "sha256:d1".to_string(),
+            "high".to_string(),
+        );
         deb1.insert(&conn).unwrap();
 
         // Count by format
@@ -591,7 +620,10 @@ mod tests {
             .set_enhancement_failed(&conn, "Test error message")
             .unwrap();
         assert_eq!(converted.enhancement_status, "failed");
-        assert_eq!(converted.enhancement_error.as_deref(), Some("Test error message"));
+        assert_eq!(
+            converted.enhancement_error.as_deref(),
+            Some("Test error message")
+        );
 
         // Verify persisted
         let found = ConvertedPackage::find_by_checksum(&conn, "sha256:fail_test")

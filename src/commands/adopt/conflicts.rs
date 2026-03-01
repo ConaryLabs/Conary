@@ -47,7 +47,7 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
             "SELECT f.path, f.sha256_hash, t.name, t.install_source
              FROM files f
              JOIN troves t ON f.trove_id = t.id
-             ORDER BY f.path"
+             ORDER BY f.path",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -62,11 +62,16 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
 
     // For adopted packages, verify the file still matches what RPM says
     if rpm_query::is_rpm_available() {
-        let mut rpm_owners: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut rpm_owners: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
 
         // Build a cache of file -> rpm owners for faster lookups
         // We'll check a sample of files to avoid being too slow
-        let sample_size = if verbose { files.len() } else { files.len().min(1000) };
+        let sample_size = if verbose {
+            files.len()
+        } else {
+            files.len().min(1000)
+        };
 
         for (path, _hash, pkg_name, source) in files.iter().take(sample_size) {
             if source.starts_with("adopted") {
@@ -97,7 +102,10 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
         }
 
         if count > 10 && !verbose {
-            println!("... and {} more ownership issues (use --verbose to see all)\n", count - 10);
+            println!(
+                "... and {} more ownership issues (use --verbose to see all)\n",
+                count - 10
+            );
         }
     }
 
@@ -115,7 +123,7 @@ fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Resul
     // Find packages installed via Conary (not adopted)
     let _conary_packages: Vec<(i64, String)> = {
         let mut stmt = conn.prepare(
-            "SELECT id, name FROM troves WHERE install_source IN ('file', 'repository')"
+            "SELECT id, name FROM troves WHERE install_source IN ('file', 'repository')",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -128,7 +136,7 @@ fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Resul
         let mut stmt = conn.prepare(
             "SELECT f.path FROM files f
              JOIN troves t ON f.trove_id = t.id
-             WHERE t.install_source IN ('file', 'repository')"
+             WHERE t.install_source IN ('file', 'repository')",
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?
@@ -143,7 +151,7 @@ fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Resul
         let mut stmt = conn.prepare(
             "SELECT f.path, t.name, t.version FROM files f
              JOIN troves t ON f.trove_id = t.id
-             WHERE t.install_source LIKE 'adopted%'"
+             WHERE t.install_source LIKE 'adopted%'",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -155,7 +163,8 @@ fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Resul
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let mut conflicts_by_pkg: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut conflicts_by_pkg: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for (path, pkg_name, _version) in &adopted_files {
         if conary_file_paths.contains(path) {
@@ -195,7 +204,7 @@ fn check_stale_files(conn: &rusqlite::Connection, verbose: bool) -> Result<usize
         let mut stmt = conn.prepare(
             "SELECT f.path, t.name FROM files f
              JOIN troves t ON f.trove_id = t.id
-             ORDER BY t.name, f.path"
+             ORDER BY t.name, f.path",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -203,7 +212,8 @@ fn check_stale_files(conn: &rusqlite::Connection, verbose: bool) -> Result<usize
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let mut missing_by_pkg: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut missing_by_pkg: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for (path, pkg_name) in &files {
         if !std::path::Path::new(path).exists() {
