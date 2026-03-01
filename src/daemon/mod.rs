@@ -161,6 +161,19 @@ pub enum JobStatus {
     Cancelled,
 }
 
+impl JobStatus {
+    /// Return the lowercase string representation (matches serde)
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// Job kind (type of operation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +194,22 @@ pub enum JobKind {
     GarbageCollect,
     /// Enhance converted packages (background capability inference)
     Enhance,
+}
+
+impl JobKind {
+    /// Return the snake_case string representation (matches serde)
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Remove => "remove",
+            Self::Update => "update",
+            Self::DryRun => "dry_run",
+            Self::Rollback => "rollback",
+            Self::Verify => "verify",
+            Self::GarbageCollect => "garbage_collect",
+            Self::Enhance => "enhance",
+        }
+    }
 }
 
 /// A job in the queue
@@ -375,6 +404,29 @@ pub enum DaemonEvent {
         package_name: String,
         error: String,
     },
+}
+
+impl DaemonEvent {
+    /// Return the SSE event type name for this event
+    pub fn event_type_name(&self) -> &'static str {
+        match self {
+            Self::JobQueued { .. } => "job_queued",
+            Self::JobStarted { .. } => "job_started",
+            Self::JobPhase { .. } => "job_phase",
+            Self::JobProgress { .. } => "job_progress",
+            Self::JobCompleted { .. } => "job_completed",
+            Self::JobFailed { .. } => "job_failed",
+            Self::JobCancelled { .. } => "job_cancelled",
+            Self::PackageInstalled { .. } => "package_installed",
+            Self::PackageRemoved { .. } => "package_removed",
+            Self::StateCreated { .. } => "state_created",
+            Self::AutomationCheckComplete { .. } => "automation_check",
+            Self::EnhancementStarted { .. } => "enhancement_started",
+            Self::EnhancementProgress { .. } => "enhancement_progress",
+            Self::EnhancementCompleted { .. } => "enhancement_completed",
+            Self::EnhancementFailed { .. } => "enhancement_failed",
+        }
+    }
 }
 
 /// Daemon state (shared across handlers)

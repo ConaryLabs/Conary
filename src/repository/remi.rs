@@ -101,6 +101,16 @@ impl RemiClient {
         Ok(Self { client, base_url })
     }
 
+    /// Construct a package URL with optional version query parameter
+    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
+        let base = format!("{}/v1/{}/packages/{}", self.base_url, distro, name);
+        if let Some(v) = version {
+            format!("{base}?version={v}")
+        } else {
+            base
+        }
+    }
+
     /// Request a package from the Remi
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
@@ -111,11 +121,7 @@ impl RemiClient {
         name: &str,
         version: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = if let Some(v) = version {
-            format!("{}/v1/{}/packages/{}?version={}", self.base_url, distro, name, v)
-        } else {
-            format!("{}/v1/{}/packages/{}", self.base_url, distro, name)
-        };
+        let url = self.package_url(distro, name, version);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -390,11 +396,7 @@ impl RemiClient {
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Use the direct download endpoint
-        let url = if let Some(v) = version {
-            format!("{}/v1/{}/packages/{}/download?version={}", self.base_url, distro, name, v)
-        } else {
-            format!("{}/v1/{}/packages/{}/download", self.base_url, distro, name)
-        };
+        let url = format!("{}/download", self.package_url(distro, name, version));
 
         info!("Downloading CCS package from Remi: {}", url);
 
@@ -626,6 +628,16 @@ pub struct AsyncRemiClient {
 
 #[cfg(feature = "server")]
 impl AsyncRemiClient {
+    /// Construct a package URL with optional version query parameter
+    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
+        let base = format!("{}/v1/{}/packages/{}", self.base_url, distro, name);
+        if let Some(v) = version {
+            format!("{base}?version={v}")
+        } else {
+            base
+        }
+    }
+
     /// Create a new async Remi client
     ///
     /// # Arguments
@@ -680,11 +692,7 @@ impl AsyncRemiClient {
         name: &str,
         version: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = if let Some(v) = version {
-            format!("{}/v1/{}/packages/{}?version={}", self.base_url, distro, name, v)
-        } else {
-            format!("{}/v1/{}/packages/{}", self.base_url, distro, name)
-        };
+        let url = self.package_url(distro, name, version);
 
         info!("Requesting package from Remi: {}", url);
 

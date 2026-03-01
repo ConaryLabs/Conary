@@ -80,6 +80,26 @@ impl IntoResponse for ApiError {
 /// Result type for API handlers
 pub type ApiResult<T> = Result<T, ApiError>;
 
+/// Run a blocking database query on a background thread
+///
+/// Handles the common pattern of cloning state, spawning a blocking task,
+/// opening a database connection, and mapping errors consistently.
+async fn run_db_query<T: Send + 'static>(
+    state: &SharedState,
+    f: impl FnOnce(&rusqlite::Connection) -> crate::Result<T> + Send + 'static,
+) -> Result<T, ApiError> {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = state
+            .open_db()
+            .map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))?;
+        f(&conn).map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))
+    })
+    .await
+    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?
+    .map_err(ApiError)
+}
+
 // =============================================================================
 // Query Response Types
 // =============================================================================
@@ -197,19 +217,10 @@ pub struct TransactionSummary {
 
 impl From<&DaemonJob> for TransactionSummary {
     fn from(job: &DaemonJob) -> Self {
-        let kind = serde_json::to_string(&job.kind)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim_matches('"')
-            .to_string();
-        let status = serde_json::to_string(&job.status)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim_matches('"')
-            .to_string();
-
         Self {
             id: job.id.clone(),
-            kind,
-            status,
+            kind: job.kind.as_str().to_string(),
+            status: job.status.as_str().to_string(),
             created_at: job.created_at.clone(),
             started_at: job.started_at.clone(),
             completed_at: job.completed_at.clone(),
@@ -237,20 +248,11 @@ pub struct TransactionDetails {
 
 impl TransactionDetails {
     fn from_job(job: &DaemonJob, queue_position: Option<usize>) -> Self {
-        let kind = serde_json::to_string(&job.kind)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim_matches('"')
-            .to_string();
-        let status = serde_json::to_string(&job.status)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim_matches('"')
-            .to_string();
-
         Self {
             id: job.id.clone(),
             idempotency_key: job.idempotency_key.clone(),
-            kind,
-            status,
+            kind: job.kind.as_str().to_string(),
+            status: job.status.as_str().to_string(),
             spec: job.spec.clone(),
             result: job.result.clone(),
             error: job.error.clone(),
@@ -529,26 +531,19 @@ async fn list_transactions_handler(
     State(state): State<SharedState>,
     Query(params): Query<TransactionListQuery>,
 ) -> ApiResult<Json<Vec<TransactionSummary>>> {
-    let state = state.clone();
-
-    let result: Result<Vec<DaemonJob>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
+    let jobs = run_db_query(&state, move |conn| {
         let jobs = match params.status.as_deref() {
-            Some("queued") => DaemonJob::list_by_status(&conn, JobStatus::Queued)?,
-            Some("running") => DaemonJob::list_by_status(&conn, JobStatus::Running)?,
-            Some("completed") => DaemonJob::list_by_status(&conn, JobStatus::Completed)?,
-            Some("failed") => DaemonJob::list_by_status(&conn, JobStatus::Failed)?,
-            Some("cancelled") => DaemonJob::list_by_status(&conn, JobStatus::Cancelled)?,
-            _ => DaemonJob::list_all(&conn, params.limit)?,
+            Some("queued") => DaemonJob::list_by_status(conn, JobStatus::Queued)?,
+            Some("running") => DaemonJob::list_by_status(conn, JobStatus::Running)?,
+            Some("completed") => DaemonJob::list_by_status(conn, JobStatus::Completed)?,
+            Some("failed") => DaemonJob::list_by_status(conn, JobStatus::Failed)?,
+            Some("cancelled") => DaemonJob::list_by_status(conn, JobStatus::Cancelled)?,
+            _ => DaemonJob::list_all(conn, params.limit)?,
         };
-
         Ok(jobs)
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
-    let jobs = result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
     let summaries: Vec<TransactionSummary> = jobs.iter().map(TransactionSummary::from).collect();
     Ok(Json(summaries))
 }
@@ -581,29 +576,20 @@ async fn create_transaction_handler(
 
     // Check for existing job with same idempotency key
     if let Some(ref key) = idempotency_key {
-        let state_clone = state.clone();
         let key_clone = key.clone();
-
-        let existing: Result<Option<DaemonJob>, crate::Error> = tokio::task::spawn_blocking(move || {
-            let conn = state_clone.open_db()?;
-            DaemonJob::find_by_idempotency_key(&conn, &key_clone)
+        let existing = run_db_query(&state, move |conn| {
+            DaemonJob::find_by_idempotency_key(conn, &key_clone)
         })
-        .await
-        .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+        .await?;
 
-        if let Ok(Some(existing_job)) = existing {
+        if let Some(existing_job) = existing {
             // Return the existing job's info
             let location = format!("/v1/transactions/{}", existing_job.id);
             let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
 
-            let status = serde_json::to_string(&existing_job.status)
-                .unwrap_or_else(|_| "unknown".to_string())
-                .trim_matches('"')
-                .to_string();
-
             let response = CreateTransactionResponse {
                 job_id: existing_job.id,
-                status,
+                status: existing_job.status.as_str().to_string(),
                 queue_position,
                 location: location.clone(),
             };
@@ -631,16 +617,8 @@ async fn create_transaction_handler(
     let job_id = job.id.clone();
 
     // Insert into database
-    let state_clone = state.clone();
     let insert_job = job.clone();
-    let insert_result: Result<(), crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state_clone.open_db()?;
-        insert_job.insert(&conn)
-    })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
-
-    insert_result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
+    run_db_query(&state, move |conn| insert_job.insert(conn)).await?;
 
     // Enqueue the job
     let _cancel_token = state.queue.enqueue(job, crate::daemon::JobPriority::Normal).await;
@@ -708,28 +686,22 @@ async fn get_transaction_handler(
     State(state): State<SharedState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<Json<TransactionDetails>> {
-    let state_clone = state.clone();
-    let job_id = id.clone();
-
     // First check if it's in the queue
     let queue_position = state.queue.position(&id).await;
 
-    let result: Result<Option<DaemonJob>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state_clone.open_db()?;
-        DaemonJob::find_by_id(&conn, &job_id)
-    })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    let job_id = id.clone();
+    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &job_id))
+        .await?;
 
-    match result {
-        Ok(Some(job)) => {
+    match job {
+        Some(job) => {
             let details = TransactionDetails::from_job(&job, queue_position);
             Ok(Json(details))
         }
-        Ok(None) => {
-            Err(ApiError(DaemonError::not_found(&format!("transaction '{}'", id))))
-        }
-        Err(e) => Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
+        None => Err(ApiError(DaemonError::not_found(&format!(
+            "transaction '{}'",
+            id
+        )))),
     }
 }
 
@@ -744,40 +716,22 @@ async fn cancel_transaction_handler(
     State(state): State<SharedState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> ApiResult<StatusCode> {
-    let state_clone = state.clone();
     let job_id = id.clone();
 
     // First check if the job exists
-    let job_result: Result<Option<DaemonJob>, crate::Error> = tokio::task::spawn_blocking({
-        let state = state_clone.clone();
-        let id = job_id.clone();
-        move || {
-            let conn = state.open_db()?;
-            DaemonJob::find_by_id(&conn, &id)
-        }
-    })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
-
-    let job = match job_result {
-        Ok(Some(j)) => j,
-        Ok(None) => return Err(ApiError(DaemonError::not_found(&format!("transaction '{}'", id)))),
-        Err(e) => return Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
-    };
+    let find_id = job_id.clone();
+    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
+        .await?
+        .ok_or_else(|| ApiError(DaemonError::not_found(&format!("transaction '{}'", id))))?;
 
     // Check if already completed/cancelled/failed
     match job.status {
         JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => {
-            return Err(ApiError(DaemonError::conflict(
-                &format!("Transaction '{}' is already {}", id,
-                    match job.status {
-                        JobStatus::Completed => "completed",
-                        JobStatus::Failed => "failed",
-                        JobStatus::Cancelled => "cancelled",
-                        _ => "finished",
-                    }
-                )
-            )));
+            return Err(ApiError(DaemonError::conflict(&format!(
+                "Transaction '{}' is already {}",
+                id,
+                job.status.as_str()
+            ))));
         }
         _ => {}
     }
@@ -787,30 +741,27 @@ async fn cancel_transaction_handler(
 
     if cancelled || job.status == JobStatus::Queued {
         // Update database
-        let update_result: Result<bool, crate::Error> = tokio::task::spawn_blocking({
-            let state = state_clone.clone();
-            let id = job_id.clone();
-            move || {
-                let conn = state.open_db()?;
-                DaemonJob::update_status(&conn, &id, JobStatus::Cancelled)
-            }
+        let update_id = job_id.clone();
+        let updated = run_db_query(&state, move |conn| {
+            DaemonJob::update_status(conn, &update_id, JobStatus::Cancelled)
         })
-        .await
-        .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+        .await?;
 
-        match update_result {
-            Ok(true) => {
-                // Emit cancellation event
-                state.emit(DaemonEvent::JobCancelled { job_id });
-                Ok(StatusCode::NO_CONTENT)
-            }
-            Ok(false) => Err(ApiError(DaemonError::not_found(&format!("transaction '{}'", id)))),
-            Err(e) => Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
+        if updated {
+            // Emit cancellation event
+            state.emit(DaemonEvent::JobCancelled { job_id });
+            Ok(StatusCode::NO_CONTENT)
+        } else {
+            Err(ApiError(DaemonError::not_found(&format!(
+                "transaction '{}'",
+                id
+            ))))
         }
     } else {
-        Err(ApiError(DaemonError::conflict(
-            &format!("Cannot cancel transaction '{}' - it may already be completing", id)
-        )))
+        Err(ApiError(DaemonError::conflict(&format!(
+            "Cannot cancel transaction '{}' - it may already be completing",
+            id
+        ))))
     }
 }
 
@@ -832,19 +783,17 @@ async fn transaction_stream_handler(
     let job_id = id.clone();
 
     // First verify the job exists
-    let state_clone = state.clone();
     let check_id = job_id.clone();
-    let job_exists: Result<bool, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state_clone.open_db()?;
-        Ok(DaemonJob::find_by_id(&conn, &check_id)?.is_some())
+    let exists = run_db_query(&state, move |conn| {
+        Ok(DaemonJob::find_by_id(conn, &check_id)?.is_some())
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
-
-    let exists = job_exists.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
+    .await?;
 
     if !exists {
-        return Err(ApiError(DaemonError::not_found(&format!("transaction '{}'", id))));
+        return Err(ApiError(DaemonError::not_found(&format!(
+            "transaction '{}'",
+            id
+        ))));
     }
 
     // Track SSE connection
@@ -882,17 +831,9 @@ async fn transaction_stream_handler(
                     // Serialize the event to JSON
                     match serde_json::to_string(&event) {
                         Ok(json) => {
-                            let event_type = match &event {
-                                DaemonEvent::JobQueued { .. } => "job_queued",
-                                DaemonEvent::JobStarted { .. } => "job_started",
-                                DaemonEvent::JobPhase { .. } => "job_phase",
-                                DaemonEvent::JobProgress { .. } => "job_progress",
-                                DaemonEvent::JobCompleted { .. } => "job_completed",
-                                DaemonEvent::JobFailed { .. } => "job_failed",
-                                DaemonEvent::JobCancelled { .. } => "job_cancelled",
-                                _ => "event",
-                            };
-                            Some(Ok(Event::default().event(event_type).data(json)))
+                            Some(Ok(Event::default()
+                                .event(event.event_type_name())
+                                .data(json)))
                         }
                         Err(_) => None,
                     }
@@ -984,17 +925,7 @@ async fn dry_run_handler(
 async fn list_packages_handler(
     State(state): State<SharedState>,
 ) -> ApiResult<Json<Vec<PackageSummary>>> {
-    let state = state.clone();
-
-    let result: Result<Vec<Trove>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-        let troves = Trove::list_all(&conn)?;
-        Ok(troves)
-    })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
-
-    let troves = result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
+    let troves = run_db_query(&state, |conn| Trove::list_all(conn)).await?;
     let packages: Vec<PackageSummary> = troves.iter().map(PackageSummary::from).collect();
     Ok(Json(packages))
 }
@@ -1006,30 +937,23 @@ async fn get_package_handler(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> ApiResult<Json<PackageDetails>> {
-    let state = state.clone();
     let pkg_name = name.clone();
 
-    let result: Result<(Trove, Vec<DependencyEntry>), crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
-        // Find the package
-        let trove = Trove::find_one_by_name(&conn, &pkg_name)?
-            .ok_or_else(|| crate::Error::NotFound(format!("Package '{}' not found", pkg_name)))?;
-
-        // Get its dependencies
-        let deps = if let Some(id) = trove.id {
-            DependencyEntry::find_by_trove(&conn, id)?
-        } else {
-            vec![]
-        };
-
-        Ok((trove, deps))
+    let result = run_db_query(&state, move |conn| {
+        let trove = Trove::find_one_by_name(conn, &pkg_name)?;
+        Ok(trove.map(|t| {
+            let deps = if let Some(id) = t.id {
+                DependencyEntry::find_by_trove(conn, id).unwrap_or_default()
+            } else {
+                vec![]
+            };
+            (t, deps)
+        }))
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
     match result {
-        Ok((trove, deps)) => {
+        Some((trove, deps)) => {
             let dep_infos: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
             let details = PackageDetails {
                 name: trove.name,
@@ -1047,10 +971,7 @@ async fn get_package_handler(
             };
             Ok(Json(details))
         }
-        Err(crate::Error::NotFound(_)) => {
-            Err(ApiError(DaemonError::not_found(&format!("package '{}'", name))))
-        }
-        Err(e) => Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
+        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
     }
 }
 
@@ -1061,40 +982,31 @@ async fn get_package_files_handler(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> ApiResult<Json<Vec<String>>> {
-    let state = state.clone();
     let pkg_name = name.clone();
 
-    let result: Result<Vec<String>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
-        // Find the package
-        let trove = Trove::find_one_by_name(&conn, &pkg_name)?
-            .ok_or_else(|| crate::Error::NotFound(format!("Package '{}' not found", pkg_name)))?;
-
-        // Get its files
-        let trove_id = trove.id.ok_or_else(|| {
-            crate::Error::NotFound("Package has no ID".to_string())
-        })?;
-
-        let mut stmt = conn.prepare(
-            "SELECT path FROM files WHERE trove_id = ?1 ORDER BY path"
-        )?;
-
-        let files: Vec<String> = stmt
-            .query_map([trove_id], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        Ok(files)
+    let result = run_db_query(&state, move |conn| {
+        let trove = Trove::find_one_by_name(conn, &pkg_name)?;
+        match trove {
+            Some(t) => {
+                let trove_id = t.id.ok_or_else(|| {
+                    crate::Error::NotFound("Package has no ID".to_string())
+                })?;
+                let mut stmt = conn.prepare(
+                    "SELECT path FROM files WHERE trove_id = ?1 ORDER BY path"
+                )?;
+                let files: Vec<String> = stmt
+                    .query_map([trove_id], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(Some(files))
+            }
+            None => Ok(None),
+        }
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
     match result {
-        Ok(files) => Ok(Json(files)),
-        Err(crate::Error::NotFound(_)) => {
-            Err(ApiError(DaemonError::not_found(&format!("package '{}'", name))))
-        }
-        Err(e) => Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
+        Some(files) => Ok(Json(files)),
+        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
     }
 }
 
@@ -1193,13 +1105,9 @@ async fn search_handler(
     State(state): State<SharedState>,
     Query(params): Query<SearchQuery>,
 ) -> ApiResult<Json<Vec<PackageSummary>>> {
-    let state = state.clone();
     let query = params.q.unwrap_or_default();
 
-    let result: Result<Vec<Trove>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
-        // Search by name pattern
+    let troves = run_db_query(&state, move |conn| {
         let pattern = if query.is_empty() {
             "%".to_string()
         } else {
@@ -1219,10 +1127,8 @@ async fn search_handler(
 
         Ok(troves)
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
-    let troves = result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
     let packages: Vec<PackageSummary> = troves.iter().map(PackageSummary::from).collect();
     Ok(Json(packages))
 }
@@ -1236,37 +1142,26 @@ async fn depends_handler(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> ApiResult<Json<Vec<DependencyInfo>>> {
-    let state = state.clone();
     let pkg_name = name.clone();
 
-    let result: Result<Vec<DependencyEntry>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
-        // Find the package
-        let trove = Trove::find_one_by_name(&conn, &pkg_name)?
-            .ok_or_else(|| crate::Error::NotFound(format!("Package '{}' not found", pkg_name)))?;
-
-        // Get its dependencies
-        let deps = if let Some(id) = trove.id {
-            DependencyEntry::find_by_trove(&conn, id)?
-        } else {
-            vec![]
-        };
-
-        Ok(deps)
+    let result = run_db_query(&state, move |conn| {
+        let trove = Trove::find_one_by_name(conn, &pkg_name)?;
+        Ok(trove.map(|t| {
+            if let Some(id) = t.id {
+                DependencyEntry::find_by_trove(conn, id).unwrap_or_default()
+            } else {
+                vec![]
+            }
+        }))
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
     match result {
-        Ok(deps) => {
+        Some(deps) => {
             let dep_info: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
             Ok(Json(dep_info))
         }
-        Err(crate::Error::NotFound(_)) => {
-            Err(ApiError(DaemonError::not_found(&format!("package '{}'", name))))
-        }
-        Err(e) => Err(ApiError(DaemonError::internal(&format!("Database error: {}", e)))),
+        None => Err(ApiError(DaemonError::not_found(&format!("package '{}'", name)))),
     }
 }
 
@@ -1279,34 +1174,24 @@ async fn rdepends_handler(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> ApiResult<Json<Vec<PackageSummary>>> {
-    let state = state.clone();
     let pkg_name = name.clone();
 
-    let result: Result<Vec<Trove>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-
-        // Find all dependency entries that reference this package
-        let dep_entries = DependencyEntry::find_dependents(&conn, &pkg_name)?;
-
-        // Get the troves that have these dependencies
+    let troves = run_db_query(&state, move |conn| {
+        let dep_entries = DependencyEntry::find_dependents(conn, &pkg_name)?;
         let mut troves = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
-
         for dep in dep_entries {
             if !seen_ids.contains(&dep.trove_id) {
-                if let Some(trove) = Trove::find_by_id(&conn, dep.trove_id)? {
+                if let Some(trove) = Trove::find_by_id(conn, dep.trove_id)? {
                     seen_ids.insert(dep.trove_id);
                     troves.push(trove);
                 }
             }
         }
-
         Ok(troves)
     })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
+    .await?;
 
-    let troves = result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
     let packages: Vec<PackageSummary> = troves.iter().map(PackageSummary::from).collect();
     Ok(Json(packages))
 }
@@ -1319,17 +1204,7 @@ async fn rdepends_handler(
 async fn history_handler(
     State(state): State<SharedState>,
 ) -> ApiResult<Json<Vec<HistoryEntry>>> {
-    let state = state.clone();
-
-    let result: Result<Vec<Changeset>, crate::Error> = tokio::task::spawn_blocking(move || {
-        let conn = state.open_db()?;
-        let changesets = Changeset::list_all(&conn)?;
-        Ok(changesets)
-    })
-    .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?;
-
-    let changesets = result.map_err(|e| ApiError(DaemonError::internal(&format!("Database error: {}", e))))?;
+    let changesets = run_db_query(&state, |conn| Changeset::list_all(conn)).await?;
     let history: Vec<HistoryEntry> = changesets.iter().map(HistoryEntry::from).collect();
     Ok(Json(history))
 }
@@ -1418,25 +1293,9 @@ async fn events_handler(
                     // Serialize the event to JSON
                     match serde_json::to_string(&event) {
                         Ok(json) => {
-                            // Get the event type name for the SSE event field
-                            let event_type = match &event {
-                                DaemonEvent::JobQueued { .. } => "job_queued",
-                                DaemonEvent::JobStarted { .. } => "job_started",
-                                DaemonEvent::JobPhase { .. } => "job_phase",
-                                DaemonEvent::JobProgress { .. } => "job_progress",
-                                DaemonEvent::JobCompleted { .. } => "job_completed",
-                                DaemonEvent::JobFailed { .. } => "job_failed",
-                                DaemonEvent::JobCancelled { .. } => "job_cancelled",
-                                DaemonEvent::PackageInstalled { .. } => "package_installed",
-                                DaemonEvent::PackageRemoved { .. } => "package_removed",
-                                DaemonEvent::StateCreated { .. } => "state_created",
-                                DaemonEvent::AutomationCheckComplete { .. } => "automation_check",
-                                DaemonEvent::EnhancementStarted { .. } => "enhancement_started",
-                                DaemonEvent::EnhancementProgress { .. } => "enhancement_progress",
-                                DaemonEvent::EnhancementCompleted { .. } => "enhancement_completed",
-                                DaemonEvent::EnhancementFailed { .. } => "enhancement_failed",
-                            };
-                            Some(Ok(Event::default().event(event_type).data(json)))
+                            Some(Ok(Event::default()
+                                .event(event.event_type_name())
+                                .data(json)))
                         }
                         Err(_) => None,
                     }

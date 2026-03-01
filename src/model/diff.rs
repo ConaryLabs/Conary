@@ -329,9 +329,11 @@ pub fn compute_diff_from_resolved(
         });
     }
 
-    // Check excluded packages that are installed
+    // Check excluded packages that are installed as dependencies
+    // (explicit installs were already handled in the removal loop above)
     for package in &model_excluded {
         if state.is_installed(package)
+            && !state.is_explicit(package)
             && let Some(pkg) = state.installed.get(*package)
         {
             diff.add_action(DiffAction::Remove {
@@ -474,9 +476,11 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
         });
     }
 
-    // Check excluded packages that are installed
+    // Check excluded packages that are installed as dependencies
+    // (explicit installs were already handled in the removal loop above)
     for package in &model_excluded {
         if state.is_installed(package)
+            && !state.is_explicit(package)
             && let Some(pkg) = state.installed.get(*package)
         {
             diff.add_action(DiffAction::Remove {
@@ -734,5 +738,41 @@ mod tests {
             a,
             DiffAction::Install { package, .. } if package == "nginx"
         )));
+    }
+
+    #[test]
+    fn test_excluded_package_no_duplicate_remove() {
+        // Regression test: excluded packages that are explicit should produce
+        // exactly one Remove action, not two.
+        let mut model = SystemModel::new();
+        model.config.exclude = vec!["sendmail".to_string()];
+
+        let state = make_state_with_packages(&[("sendmail", "1.0.0", true)]);
+        let diff = compute_diff(&model, &state);
+
+        let remove_count = diff.actions.iter().filter(|a| matches!(
+            a,
+            DiffAction::Remove { package, .. } if package == "sendmail"
+        )).count();
+        assert_eq!(remove_count, 1, "Expected exactly one Remove action for excluded package");
+    }
+
+    #[test]
+    fn test_excluded_dependency_package_removed() {
+        // An excluded package that is installed as a dependency (non-explicit)
+        // should still be removed via the excluded-packages loop.
+        let mut model = SystemModel::new();
+        model.config.exclude = vec!["sendmail".to_string()];
+
+        // sendmail installed as a dependency (explicit=false)
+        let state = make_state_with_packages(&[("sendmail", "1.0.0", false)]);
+        let diff = compute_diff(&model, &state);
+
+        assert!(diff.packages_to_remove().contains(&"sendmail"));
+        let remove_count = diff.actions.iter().filter(|a| matches!(
+            a,
+            DiffAction::Remove { package, .. } if package == "sendmail"
+        )).count();
+        assert_eq!(remove_count, 1, "Expected exactly one Remove action for excluded dependency");
     }
 }

@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use indicatif::ProgressBar;
 use reqwest::blocking::Client;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -236,68 +236,13 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        info!("Downloading {} to {}", url, dest_path.display());
-
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                Error::IoError(format!("Failed to create directory {}: {e}", parent.display()))
-            })?;
-        }
-
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            match self.client.get(url).send() {
-                Ok(mut response) => {
-                    if !response.status().is_success() {
-                        return Err(Error::DownloadError(format!(
-                            "HTTP {} from {}",
-                            response.status(),
-                            url
-                        )));
-                    }
-
-                    // Write to temporary file first
-                    let temp_path = dest_path.with_extension("tmp");
-                    let mut file = File::create(&temp_path).map_err(|e| {
-                        Error::IoError(format!("Failed to create file {}: {e}", temp_path.display()))
-                    })?;
-
-                    // Copy response body to file
-                    io::copy(&mut response, &mut file).map_err(|e| {
-                        Error::IoError(format!("Failed to write downloaded data: {e}"))
-                    })?;
-
-                    // Atomic rename from temp to final destination
-                    fs::rename(&temp_path, dest_path).map_err(|e| {
-                        Error::IoError(format!(
-                            "Failed to move {} to {}: {e}",
-                            temp_path.display(),
-                            dest_path.display()
-                        ))
-                    })?;
-
-                    info!("Successfully downloaded to {}", dest_path.display());
-                    return Ok(());
-                }
-                Err(e) => {
-                    if attempt >= self.max_retries {
-                        return Err(Error::DownloadError(format!(
-                            "Failed to download after {attempt} attempts: {e}"
-                        )));
-                    }
-                    warn!("Download attempt {} failed: {}, retrying...", attempt, e);
-                    std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
-                }
-            }
-        }
+        self.download_file_with_progress(url, dest_path, "", None)
     }
 
-    /// Download a file with progress bar display
+    /// Download a file with optional progress bar display
     ///
     /// Shows a progress bar during download with the package name and download speed.
-    /// Falls back to silent download if content-length is unknown.
+    /// Falls back to silent download if content-length is unknown or no progress bar is provided.
     pub fn download_file_with_progress(
         &self,
         url: &str,

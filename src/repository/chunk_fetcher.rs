@@ -363,10 +363,6 @@ impl HttpChunkFetcher {
         use futures::stream::{self, StreamExt};
 
         let semaphore = Arc::new(Semaphore::new(self.max_concurrent));
-        let client = &self.client;
-        let base_url = &self.base_url;
-        let verify = self.verify_hashes;
-        let max_size = self.max_chunk_size;
 
         info!(
             "Fetching {} chunks individually (max {} concurrent)",
@@ -377,53 +373,10 @@ impl HttpChunkFetcher {
         let fetches = stream::iter(hashes.iter().cloned())
             .map(|hash| {
                 let permit = semaphore.clone();
-                let client = client.clone();
-                let base_url = base_url.clone();
                 async move {
                     let _permit = permit.acquire().await.unwrap();
-                    let url = format!("{}/v1/chunks/{}", base_url, hash);
-
-                    let response = client.get(&url).send().await.map_err(|e| {
-                        Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash))
-                    })?;
-
-                    if !response.status().is_success() {
-                        return Err(Error::DownloadError(format!(
-                            "Chunk {} returned HTTP {}",
-                            hash,
-                            response.status()
-                        )));
-                    }
-
-                    // Check Content-Length before downloading
-                    if let Some(content_length) = response.content_length()
-                        && content_length as usize > max_size
-                    {
-                        return Err(Error::DownloadError(format!(
-                            "Chunk {} exceeds max size ({} > {})",
-                            hash, content_length, max_size
-                        )));
-                    }
-
-                    let data = response.bytes().await.map_err(|e| {
-                        Error::DownloadError(format!("Failed to read chunk {}: {e}", hash))
-                    })?;
-
-                    // Double-check after download
-                    if data.len() > max_size {
-                        return Err(Error::DownloadError(format!(
-                            "Chunk {} exceeds max size ({} > {})",
-                            hash,
-                            data.len(),
-                            max_size
-                        )));
-                    }
-
-                    if verify {
-                        Self::verify_hash(&hash, &data)?;
-                    }
-
-                    Ok::<_, Error>((hash, data.to_vec()))
+                    let data = self.fetch(&hash).await?;
+                    Ok::<_, Error>((hash, data))
                 }
             })
             .buffer_unordered(self.max_concurrent);

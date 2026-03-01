@@ -193,6 +193,20 @@ impl DelegateContext {
     }
 }
 
+/// Create a temp directory and resolve the output directory from options.
+///
+/// Returns `(temp_dir, output_dir)` where `output_dir` is either the user-specified
+/// output directory or the temp directory path.
+fn create_output_dir(options: &ResolutionOptions) -> Result<(TempDir, PathBuf)> {
+    let temp_dir = TempDir::new()
+        .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
+    let output_dir = options
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| temp_dir.path().to_path_buf());
+    Ok((temp_dir, output_dir))
+}
+
 /// Unified package resolver
 ///
 /// Implements the two-step resolution flow with per-package routing.
@@ -485,41 +499,21 @@ impl<'a> PackageResolver<'a> {
         pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        let temp_dir = TempDir::new()
-            .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
-
-        let output_dir = options
-            .output_dir
-            .as_deref()
-            .unwrap_or(temp_dir.path());
+        let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // TODO: Try delta first if base available
         if let Some(base) = delta_base {
             debug!("Delta base available: {}, but delta fetch not yet implemented", base);
         }
 
-        // Construct a temporary RepositoryPackage for download
+        // Construct a temporary RepositoryPackage with overridden URL and checksum
         let temp_pkg = RepositoryPackage {
-            id: pkg_with_repo.package.id,
-            repository_id: pkg_with_repo.package.repository_id,
-            name: pkg_with_repo.package.name.clone(),
-            version: pkg_with_repo.package.version.clone(),
-            architecture: pkg_with_repo.package.architecture.clone(),
-            description: pkg_with_repo.package.description.clone(),
             checksum: checksum.to_string(),
-            size: pkg_with_repo.package.size,
             download_url: url.to_string(),
-            dependencies: pkg_with_repo.package.dependencies.clone(),
-            metadata: pkg_with_repo.package.metadata.clone(),
-            synced_at: pkg_with_repo.package.synced_at.clone(),
-            is_security_update: pkg_with_repo.package.is_security_update,
-            severity: pkg_with_repo.package.severity.clone(),
-            cve_ids: pkg_with_repo.package.cve_ids.clone(),
-            advisory_id: pkg_with_repo.package.advisory_id.clone(),
-            advisory_url: pkg_with_repo.package.advisory_url.clone(),
+            ..pkg_with_repo.package.clone()
         };
 
-        let path = download_package_verified(&temp_pkg, output_dir, options.gpg_options.as_ref())?;
+        let path = download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref())?;
 
         Ok(PackageSource::Binary {
             path,
@@ -535,16 +529,10 @@ impl<'a> PackageResolver<'a> {
         name: &str,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        let temp_dir = TempDir::new()
-            .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
-
-        let output_dir = options
-            .output_dir
-            .as_deref()
-            .unwrap_or(temp_dir.path());
+        let (temp_dir, output_dir) = create_output_dir(options)?;
 
         let client = RemiClient::new(endpoint)?;
-        let path = client.fetch_package(distro, name, options.version.as_deref(), output_dir)?;
+        let path = client.fetch_package(distro, name, options.version.as_deref(), &output_dir)?;
 
         Ok(PackageSource::Ccs {
             path,
@@ -560,13 +548,7 @@ impl<'a> PackageResolver<'a> {
         _patches: &[String],
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        let temp_dir = TempDir::new()
-            .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
-
-        let output_dir = options
-            .output_dir
-            .as_deref()
-            .unwrap_or(temp_dir.path());
+        let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Fetch the recipe file
         info!("Fetching recipe from: {}", recipe_url);
@@ -582,7 +564,7 @@ impl<'a> PackageResolver<'a> {
         let config = KitchenConfig::default();
         let kitchen = Kitchen::new(config);
 
-        let result = kitchen.cook(&recipe, output_dir)
+        let result = kitchen.cook(&recipe, &output_dir)
             .map_err(|e| Error::IoError(format!("Recipe cooking failed: {}", e)))?;
 
         Ok(PackageSource::Ccs {
@@ -717,18 +699,12 @@ impl<'a> PackageResolver<'a> {
         pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
-        let temp_dir = TempDir::new()
-            .map_err(|e| Error::IoError(format!("Failed to create temp dir: {e}")))?;
-
-        let output_dir = options
-            .output_dir
-            .as_deref()
-            .unwrap_or(temp_dir.path());
+        let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Use the package info we already have
         let path = download_package_verified(
             &pkg_with_repo.package,
-            output_dir,
+            &output_dir,
             options.gpg_options.as_ref(),
         )?;
 
