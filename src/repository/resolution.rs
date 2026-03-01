@@ -60,10 +60,10 @@ use crate::error::{Error, Result};
 use crate::recipe::{parse_recipe, Kitchen, KitchenConfig};
 use crate::repository::remi::RemiClient;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+use crate::repository::client::RepositoryClient;
 use crate::repository::{download_package_verified, DownloadOptions};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
@@ -72,30 +72,15 @@ const MAX_DELEGATE_DEPTH: usize = 10;
 
 /// Fetch content from a URL as a string
 ///
-/// Uses curl to download the content. Supports HTTP(S) URLs.
+/// Uses reqwest via `RepositoryClient` to download the content. Supports HTTP(S) URLs
+/// with automatic redirect following and retry support.
 fn fetch_url_content(url: &str) -> Result<String> {
     debug!("Fetching content from: {}", url);
 
-    let output = Command::new("curl")
-        .args([
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--location",  // Follow redirects
-            url,
-        ])
-        .output()
-        .map_err(|e| Error::IoError(format!("Failed to execute curl: {}", e)))?;
+    let client = RepositoryClient::new()?;
+    let bytes = client.download_to_bytes(url)?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::DownloadError(format!(
-            "Failed to fetch {}: {}",
-            url, stderr
-        )));
-    }
-
-    String::from_utf8(output.stdout)
+    String::from_utf8(bytes)
         .map_err(|e| Error::ParseError(format!("Invalid UTF-8 content from {}: {}", url, e)))
 }
 
@@ -544,10 +529,26 @@ impl<'a> PackageResolver<'a> {
     fn try_recipe(
         &self,
         recipe_url: &str,
-        _source_urls: &[String],
-        _patches: &[String],
+        source_urls: &[String],
+        patches: &[String],
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
+        // TODO: source_urls and patches are part of the resolution strategy schema
+        // but not yet wired into Kitchen. They would allow pre-fetching sources and
+        // applying patches before cooking. For now, the recipe itself specifies sources.
+        if !source_urls.is_empty() {
+            debug!(
+                "Recipe strategy includes {} source URLs (not yet implemented, recipe defines its own sources)",
+                source_urls.len()
+            );
+        }
+        if !patches.is_empty() {
+            debug!(
+                "Recipe strategy includes {} patches (not yet implemented)",
+                patches.len()
+            );
+        }
+
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Fetch the recipe file
@@ -693,6 +694,10 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try legacy strategy (existing repository_packages)
+    ///
+    /// The `repository_package_id` is part of the `ResolutionStrategy::Legacy` variant
+    /// for schema completeness, but the actual package data is already available in
+    /// `pkg_with_repo` from the earlier repository selection step.
     fn try_legacy(
         &self,
         _repository_package_id: i64,
@@ -701,7 +706,7 @@ impl<'a> PackageResolver<'a> {
     ) -> Result<PackageSource> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
-        // Use the package info we already have
+        // Use the package info we already have from repository selection
         let path = download_package_verified(
             &pkg_with_repo.package,
             &output_dir,

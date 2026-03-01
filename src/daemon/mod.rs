@@ -631,11 +631,20 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
                         // Record activity for idle tracking
                         systemd_manager.activity();
 
+                        // Extract peer credentials from Unix socket (SO_PEERCRED)
+                        let peer_creds = socket::get_peer_credentials(&stream)
+                            .map(|c| auth::PeerCredentials {
+                                pid: c.pid,
+                                uid: c.uid,
+                                gid: c.gid,
+                            });
+
                         // Increment connection counter
                         let conns = active_connections.clone();
                         conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                        let app = app.clone();
+                        // Add peer credentials as a request extension for this connection
+                        let app = app.clone().layer(axum::Extension(peer_creds));
                         tokio::spawn(async move {
                             let io = TokioIo::new(stream);
                             // Convert tower service to hyper service

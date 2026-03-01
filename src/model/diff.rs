@@ -219,11 +219,6 @@ impl ModelDiff {
         self.actions.push(action);
     }
 
-    /// Add a warning (for future use in model validation)
-    #[allow(dead_code)]
-    fn add_warning(&mut self, warning: String) {
-        self.warnings.push(warning);
-    }
 }
 
 impl Default for ModelDiff {
@@ -255,136 +250,14 @@ pub fn compute_diff_from_resolved(
     original: &SystemModel,
     state: &SystemState,
 ) -> ModelDiff {
-    let mut diff = ModelDiff::new();
-
-    // Collect all packages from resolved model
-    let model_packages: HashSet<&str> = resolved
-        .install
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    let model_optional: HashSet<&str> = resolved
-        .optionals
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    let model_excluded: HashSet<&str> = resolved
-        .exclude
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    // Check what needs to be installed
-    for package in &model_packages {
-        if !state.is_installed(package) {
-            diff.add_action(DiffAction::Install {
-                package: package.to_string(),
-                pin: resolved.pins.get(*package).cloned(),
-                optional: false,
-            });
-        } else if !state.is_explicit(package) {
-            // Package is installed but as a dependency - mark as explicit
-            diff.add_action(DiffAction::MarkExplicit {
-                package: package.to_string(),
-            });
-        }
-    }
-
-    // Check optional packages
-    for package in &model_optional {
-        if !state.is_installed(package) && !model_packages.contains(package) {
-            diff.add_action(DiffAction::Install {
-                package: package.to_string(),
-                pin: resolved.pins.get(*package).cloned(),
-                optional: true,
-            });
-        }
-    }
-
-    // Check what needs to be removed
-    // Only remove explicitly installed packages that are not in the model
-    for package in state.installed_packages() {
-        if model_packages.contains(package) || model_optional.contains(package) {
-            continue;
-        }
-
-        if !state.is_explicit(package) {
-            continue;
-        }
-
-        if model_excluded.contains(package) {
-            if let Some(pkg) = state.installed.get(package) {
-                diff.add_action(DiffAction::Remove {
-                    package: package.to_string(),
-                    current_version: pkg.version.clone(),
-                });
-            }
-            continue;
-        }
-
-        diff.add_action(DiffAction::MarkDependency {
-            package: package.to_string(),
-        });
-    }
-
-    // Check excluded packages that are installed as dependencies
-    // (explicit installs were already handled in the removal loop above)
-    for package in &model_excluded {
-        if state.is_installed(package)
-            && !state.is_explicit(package)
-            && let Some(pkg) = state.installed.get(*package)
-        {
-            diff.add_action(DiffAction::Remove {
-                package: package.to_string(),
-                current_version: pkg.version.clone(),
-            });
-        }
-    }
-
-    // Check pins from resolved model
-    for (package, pattern) in &resolved.pins {
-        if state.is_installed(package) && !state.is_pinned(package) {
-            diff.add_action(DiffAction::Pin {
-                package: package.clone(),
-                pattern: pattern.clone(),
-            });
-        }
-    }
-
-    // Check for packages that should be unpinned
-    for package in state.pinned.iter() {
-        if !resolved.pins.contains_key(package) {
-            diff.add_action(DiffAction::Unpin {
-                package: package.clone(),
-            });
-        }
-    }
-
-    // Check derived packages from original model (not resolved, as these are local definitions)
-    for derived in &original.derive {
-        let derived_installed = state.is_installed(&derived.name);
-        let parent_installed = state.is_installed(&derived.from);
-
-        if !derived_installed {
-            diff.add_action(DiffAction::BuildDerived {
-                name: derived.name.clone(),
-                parent: derived.from.clone(),
-                needs_parent: !parent_installed,
-            });
-
-            if !parent_installed && !model_packages.contains(derived.from.as_str()) {
-                diff.add_action(DiffAction::Install {
-                    package: derived.from.clone(),
-                    pin: resolved.pins.get(&derived.from).cloned(),
-                    optional: false,
-                });
-            }
-        }
-    }
-
-    diff
+    compute_diff_inner(
+        &resolved.install,
+        &resolved.optionals,
+        &resolved.exclude,
+        &resolved.pins,
+        &original.derive,
+        state,
+    )
 }
 
 /// Compute the diff between a model and current state
@@ -392,26 +265,41 @@ pub fn compute_diff_from_resolved(
 /// Note: This does not resolve includes. Use `compute_diff_with_includes`
 /// when the model may contain `[include]` directives.
 pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
+    compute_diff_inner(
+        &model.config.install,
+        &model.optional.packages,
+        &model.config.exclude,
+        &model.pin,
+        &model.derive,
+        state,
+    )
+}
+
+/// Shared implementation for computing model-vs-state diffs.
+///
+/// Both `compute_diff` and `compute_diff_from_resolved` delegate here
+/// after extracting the relevant data from their respective model types.
+fn compute_diff_inner(
+    install: &[String],
+    optionals: &[String],
+    exclude: &[String],
+    pins: &std::collections::HashMap<String, String>,
+    derive: &[super::parser::DerivedPackage],
+    state: &SystemState,
+) -> ModelDiff {
     let mut diff = ModelDiff::new();
 
-    // Collect all packages from model
-    let model_packages: HashSet<&str> = model
-        .config
-        .install
+    let model_packages: HashSet<&str> = install
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    let model_optional: HashSet<&str> = model
-        .optional
-        .packages
+    let model_optional: HashSet<&str> = optionals
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    let model_excluded: HashSet<&str> = model
-        .config
-        .exclude
+    let model_excluded: HashSet<&str> = exclude
         .iter()
         .map(|s| s.as_str())
         .collect();
@@ -421,7 +309,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
         if !state.is_installed(package) {
             diff.add_action(DiffAction::Install {
                 package: package.to_string(),
-                pin: model.get_pin(package).map(|s| s.to_string()),
+                pin: pins.get(*package).cloned(),
                 optional: false,
             });
         } else if !state.is_explicit(package) {
@@ -437,7 +325,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
         if !state.is_installed(package) && !model_packages.contains(package) {
             diff.add_action(DiffAction::Install {
                 package: package.to_string(),
-                pin: model.get_pin(package).map(|s| s.to_string()),
+                pin: pins.get(*package).cloned(),
                 optional: true,
             });
         }
@@ -445,19 +333,15 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
 
     // Check what needs to be removed
     // Only remove explicitly installed packages that are not in the model
-    // Dependencies will be handled by autoremove
     for package in state.installed_packages() {
-        // Skip if package is in the model
         if model_packages.contains(package) || model_optional.contains(package) {
             continue;
         }
 
-        // Skip if it's a dependency (not explicit)
         if !state.is_explicit(package) {
             continue;
         }
 
-        // If explicitly excluded, definitely remove
         if model_excluded.contains(package) {
             if let Some(pkg) = state.installed.get(package) {
                 diff.add_action(DiffAction::Remove {
@@ -468,8 +352,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
             continue;
         }
 
-        // Package was explicit but is not in model - remove or demote
-        // For safety, we demote to dependency rather than remove
+        // Package was explicit but is not in model - demote to dependency
         // This allows autoremove to clean up if nothing depends on it
         diff.add_action(DiffAction::MarkDependency {
             package: package.to_string(),
@@ -491,51 +374,44 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
     }
 
     // Check pins
-    for (package, pattern) in &model.pin {
+    for (package, pattern) in pins {
         if state.is_installed(package) && !state.is_pinned(package) {
             diff.add_action(DiffAction::Pin {
                 package: package.clone(),
                 pattern: pattern.clone(),
             });
-            // TODO: Check if current version matches pin pattern
-            // and add Update action if needed
         }
     }
 
     // Check for packages that should be unpinned
     for package in state.pinned.iter() {
-        if !model.pin.contains_key(package) {
+        if !pins.contains_key(package) {
             diff.add_action(DiffAction::Unpin {
                 package: package.clone(),
             });
         }
     }
 
-    // Check derived packages from model
-    for derived in &model.derive {
-        // Check if the derived package is already installed
+    // Check derived packages
+    for derived in derive {
         let derived_installed = state.is_installed(&derived.name);
         let parent_installed = state.is_installed(&derived.from);
 
         if !derived_installed {
-            // Need to build and install the derived package
             diff.add_action(DiffAction::BuildDerived {
                 name: derived.name.clone(),
                 parent: derived.from.clone(),
                 needs_parent: !parent_installed,
             });
 
-            // If parent not installed, we also need to install it
             if !parent_installed && !model_packages.contains(derived.from.as_str()) {
                 diff.add_action(DiffAction::Install {
                     package: derived.from.clone(),
-                    pin: model.get_pin(&derived.from).map(|s| s.to_string()),
+                    pin: pins.get(&derived.from).cloned(),
                     optional: false,
                 });
             }
         }
-        // Note: Stale derived packages (parent updated) are detected elsewhere
-        // by checking DerivedPackage.status in the database
     }
 
     diff

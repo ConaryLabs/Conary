@@ -207,8 +207,13 @@ impl FileDeployer {
     /// Deploy a symlink to the filesystem
     ///
     /// Creates a symbolic link at the target path pointing to the given target.
+    /// Validates that the symlink target cannot escape the install root via
+    /// path traversal.
     pub fn deploy_symlink(&self, path: &str, target: &str) -> Result<()> {
         let link_path = self.safe_target_path(path)?;
+
+        // Validate symlink target
+        self.validate_symlink_target(&link_path, target)?;
 
         // Create parent directories
         if let Some(parent) = link_path.parent() {
@@ -240,6 +245,92 @@ impl FileDeployer {
         }
 
         info!("Deployed symlink: {} -> {}", path, target);
+        Ok(())
+    }
+
+    /// Validate that a symlink target does not escape the install root
+    ///
+    /// For relative targets: resolves the target relative to the link's parent
+    /// directory and verifies the result stays within the install root.
+    /// For absolute targets: verifies the path is within the install root.
+    ///
+    /// Simple relative targets without `..` (e.g., `libfoo.so.1`) are always
+    /// allowed since they cannot escape their parent directory.
+    fn validate_symlink_target(&self, link_path: &Path, target: &str) -> Result<()> {
+        let target_path = Path::new(target);
+
+        if target_path.is_absolute() {
+            // Absolute symlink target: the OS resolves this literally, so it
+            // must start with the install root path. Normalize away any ".."
+            // components first to prevent traversal tricks.
+            let mut normalized = PathBuf::from("/");
+            for component in target_path.components() {
+                match component {
+                    Component::Normal(c) => normalized.push(c),
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        normalized.pop();
+                    }
+                    Component::RootDir | Component::Prefix(_) => {
+                        normalized = PathBuf::from("/");
+                    }
+                }
+            }
+            if !normalized.starts_with(&self.install_root) {
+                warn!(
+                    "Symlink target escapes install root: {} -> {}",
+                    link_path.display(),
+                    target
+                );
+                return Err(crate::Error::PathTraversal(format!(
+                    "Symlink target escapes install root: {}",
+                    target
+                )));
+            }
+        } else {
+            // Relative symlink target: resolve relative to the link's parent
+            // directory and verify it stays within the install root.
+            //
+            // Quick path: if the target contains no ".." components, it cannot
+            // escape upward and is always safe.
+            let has_parent_traversal = target_path
+                .components()
+                .any(|c| matches!(c, Component::ParentDir));
+
+            if has_parent_traversal {
+                // Resolve the target relative to the link's parent directory
+                let link_parent = link_path
+                    .parent()
+                    .unwrap_or(&self.install_root);
+
+                let mut resolved = link_parent.to_path_buf();
+                for component in target_path.components() {
+                    match component {
+                        Component::Normal(c) => resolved.push(c),
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            resolved.pop();
+                        }
+                        Component::Prefix(_) | Component::RootDir => {}
+                    }
+                }
+
+                if !resolved.starts_with(&self.install_root) {
+                    warn!(
+                        "Symlink target escapes install root: {} -> {}",
+                        link_path.display(),
+                        target
+                    );
+                    return Err(crate::Error::PathTraversal(format!(
+                        "Symlink target escapes install root: {}",
+                        target
+                    )));
+                }
+            }
+            // No ".." components means the symlink stays in or below the
+            // link's parent directory, which is already within the install root.
+        }
+
         Ok(())
     }
 
@@ -613,5 +704,150 @@ mod tests {
 
         let result = deployer.deploy_file("/", &hash, 0o644);
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_target_relative_same_dir_allowed() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Common case: libfoo.so -> libfoo.so.1 (same directory)
+        deployer
+            .deploy_symlink("/usr/lib/libfoo.so", "libfoo.so.1")
+            .unwrap();
+
+        let link_path = install_root.join("usr/lib/libfoo.so");
+        assert!(link_path.symlink_metadata().is_ok());
+        assert_eq!(fs::read_link(&link_path).unwrap().to_str().unwrap(), "libfoo.so.1");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_target_relative_subdir_allowed() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Relative target pointing to a subdirectory (no "..")
+        deployer
+            .deploy_symlink("/usr/share/app/config", "defaults/config.yaml")
+            .unwrap();
+
+        let link_path = install_root.join("usr/share/app/config");
+        assert!(link_path.symlink_metadata().is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_target_relative_parent_within_root_allowed() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Relative target with ".." that stays within the install root
+        // /usr/lib/pkgconfig/../lib/libfoo.so resolves to /usr/lib/libfoo.so
+        deployer
+            .deploy_symlink("/usr/lib/pkgconfig/link", "../libfoo.so")
+            .unwrap();
+
+        let link_path = install_root.join("usr/lib/pkgconfig/link");
+        assert!(link_path.symlink_metadata().is_ok());
+    }
+
+    #[test]
+    fn test_symlink_target_relative_escapes_root_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Malicious: symlink at valid path but target escapes via ".."
+        let result = deployer.deploy_symlink(
+            "/usr/lib/libevil.so",
+            "../../../../etc/shadow",
+        );
+        assert!(
+            result.is_err(),
+            "Symlink target escaping install root should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_symlink_target_relative_escapes_from_root_level_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Symlink at root-level directory: even one ".." escapes
+        let result = deployer.deploy_symlink("/link", "../etc/shadow");
+        assert!(
+            result.is_err(),
+            "Symlink target escaping from root-level path should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_symlink_target_absolute_outside_root_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Absolute target pointing outside install root
+        let result = deployer.deploy_symlink("/usr/lib/libevil.so", "/etc/shadow");
+        assert!(
+            result.is_err(),
+            "Absolute symlink target outside install root should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_symlink_target_absolute_with_traversal_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Absolute target with ".." traversal
+        let result = deployer.deploy_symlink(
+            "/usr/lib/libevil.so",
+            "/usr/lib/../../../etc/shadow",
+        );
+        assert!(
+            result.is_err(),
+            "Absolute symlink target with traversal should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_symlink_target_many_dotdots_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Many levels of ".." traversal
+        let result = deployer.deploy_symlink(
+            "/usr/lib/deep/nested/dir/link",
+            "../../../../../../../../../../etc/shadow",
+        );
+        assert!(
+            result.is_err(),
+            "Symlink target with excessive traversal should be rejected"
+        );
     }
 }

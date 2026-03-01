@@ -9,10 +9,11 @@
 //! - `/v1/packages` - Package queries and operations
 //! - `/v1/events` - SSE event stream
 
+use crate::daemon::auth::{Action, AuthChecker, PeerCredentials};
 use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus};
 use crate::db::models::{Changeset, DependencyEntry, Trove};
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -98,6 +99,44 @@ async fn run_db_query<T: Send + 'static>(
     .await
     .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?
     .map_err(ApiError)
+}
+
+/// Check authorization for a mutating action.
+///
+/// Extracts `PeerCredentials` from the request extension (injected per-connection
+/// in `run_daemon`). Unix socket connections get credentials via `SO_PEERCRED`;
+/// TCP connections have no credentials and are restricted to read-only access.
+///
+/// Returns `Ok(())` if the action is authorized, or an `ApiError` with 403 Forbidden.
+fn require_auth(creds: &Option<PeerCredentials>, action: Action) -> Result<(), ApiError> {
+    let checker = AuthChecker::new();
+
+    match creds {
+        Some(creds) => {
+            if checker.is_allowed(creds, action) {
+                Ok(())
+            } else {
+                tracing::warn!(
+                    uid = creds.uid,
+                    gid = creds.gid,
+                    pid = creds.pid,
+                    action = ?action,
+                    "Authorization denied"
+                );
+                Err(ApiError(DaemonError::forbidden(&format!(
+                    "User (uid={}) is not authorized for {:?}",
+                    creds.uid, action
+                ))))
+            }
+        }
+        None => {
+            // No peer credentials (TCP connection) - deny mutating actions
+            tracing::warn!(action = ?action, "Mutating request denied: no peer credentials (TCP connection)");
+            Err(ApiError(DaemonError::forbidden(
+                "Mutating operations require a Unix socket connection with peer credentials",
+            )))
+        }
+    }
 }
 
 // =============================================================================
@@ -563,9 +602,19 @@ async fn list_transactions_handler(
 /// - 409 Conflict if an idempotency key was provided and a job with that key already exists
 async fn create_transaction_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
+    // Check authorization based on operation types
+    let action = match determine_job_kind(&request.operations) {
+        crate::daemon::JobKind::Install => Action::Install,
+        crate::daemon::JobKind::Remove => Action::Remove,
+        crate::daemon::JobKind::Update => Action::Update,
+        _ => Action::Install, // Mixed operations require install-level access
+    };
+    require_auth(&creds, action)?;
+
     // Validate request
     if request.operations.is_empty() {
         return Err(ApiError(DaemonError::bad_request("At least one operation is required")));
@@ -684,7 +733,7 @@ fn determine_job_kind(operations: &[TransactionOperation]) -> crate::daemon::Job
 /// Returns full details of a transaction including its spec, result, and error.
 async fn get_transaction_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<TransactionDetails>> {
     // First check if it's in the queue
     let queue_position = state.queue.position(&id).await;
@@ -714,8 +763,11 @@ async fn get_transaction_handler(
 /// - If running: sets cancel token (operation will stop at next checkpoint)
 async fn cancel_transaction_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
+    Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
+    require_auth(&creds, Action::CancelJob)?;
+
     let job_id = id.clone();
 
     // First check if the job exists
@@ -778,7 +830,7 @@ async fn cancel_transaction_handler(
 /// - End when the job completes, fails, or is cancelled
 async fn transaction_stream_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let job_id = id.clone();
 
@@ -839,7 +891,7 @@ async fn transaction_stream_handler(
                     }
                 }
                 Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    log::warn!("SSE client (job {}) lagged {} events", job_id, n);
+                    tracing::warn!("SSE client (job {}) lagged {} events", job_id, n);
                     Some(Ok(Event::default()
                         .event("warning")
                         .data(format!(r#"{{"lagged": {}}}"#, n))))
@@ -935,7 +987,7 @@ async fn list_packages_handler(
 /// GET /v1/packages/:name
 async fn get_package_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
+    Path(name): Path<String>,
 ) -> ApiResult<Json<PackageDetails>> {
     let pkg_name = name.clone();
 
@@ -980,7 +1032,7 @@ async fn get_package_handler(
 /// GET /v1/packages/:name/files
 async fn get_package_files_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
+    Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<String>>> {
     let pkg_name = name.clone();
 
@@ -1018,6 +1070,7 @@ async fn get_package_files_handler(
 /// Equivalent to POST /v1/transactions with an install operation.
 async fn install_packages_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
 ) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
@@ -1035,8 +1088,8 @@ async fn install_packages_handler(
         }],
     };
 
-    // Forward to transaction handler
-    create_transaction_handler(State(state), headers, Json(tx_request)).await
+    // Forward to transaction handler (auth checked there)
+    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
 }
 
 /// Remove packages
@@ -1047,6 +1100,7 @@ async fn install_packages_handler(
 /// Equivalent to POST /v1/transactions with a remove operation.
 async fn remove_packages_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
 ) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
@@ -1064,8 +1118,8 @@ async fn remove_packages_handler(
         }],
     };
 
-    // Forward to transaction handler
-    create_transaction_handler(State(state), headers, Json(tx_request)).await
+    // Forward to transaction handler (auth checked there)
+    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
 }
 
 /// Update packages
@@ -1076,6 +1130,7 @@ async fn remove_packages_handler(
 /// Equivalent to POST /v1/transactions with an update operation.
 async fn update_packages_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
 ) -> ApiResult<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<CreateTransactionResponse>)> {
@@ -1088,8 +1143,8 @@ async fn update_packages_handler(
         }],
     };
 
-    // Forward to transaction handler
-    create_transaction_handler(State(state), headers, Json(tx_request)).await
+    // Forward to transaction handler (auth checked there)
+    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
 }
 
 // =============================================================================
@@ -1140,7 +1195,7 @@ async fn search_handler(
 /// Returns all dependencies of the specified package.
 async fn depends_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
+    Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<DependencyInfo>>> {
     let pkg_name = name.clone();
 
@@ -1172,7 +1227,7 @@ async fn depends_handler(
 /// Returns all packages that depend on the specified package.
 async fn rdepends_handler(
     State(state): State<SharedState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
+    Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<PackageSummary>>> {
     let pkg_name = name.clone();
 
@@ -1227,7 +1282,10 @@ async fn list_states_handler(
 /// POST /v1/system/rollback
 async fn rollback_handler(
     State(_state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    require_auth(&creds, Action::Rollback)?;
+
     Err(ApiError(DaemonError::new(
         "not_implemented",
         "Not Implemented",
@@ -1241,7 +1299,10 @@ async fn rollback_handler(
 /// POST /v1/system/verify
 async fn verify_handler(
     State(_state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    require_auth(&creds, Action::Verify)?;
+
     Err(ApiError(DaemonError::new(
         "not_implemented",
         "Not Implemented",
@@ -1255,7 +1316,10 @@ async fn verify_handler(
 /// POST /v1/system/gc
 async fn gc_handler(
     State(_state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    require_auth(&creds, Action::GarbageCollect)?;
+
     Err(ApiError(DaemonError::new(
         "not_implemented",
         "Not Implemented",
@@ -1302,7 +1366,7 @@ async fn events_handler(
                 }
                 Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
                     // Client fell behind, send a warning event
-                    log::warn!("SSE client lagged {} events", n);
+                    tracing::warn!("SSE client lagged {} events", n);
                     Some(Ok(Event::default()
                         .event("warning")
                         .data(format!(r#"{{"lagged": {}}}"#, n))))
@@ -1368,5 +1432,52 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("0.2.0"));
         assert!(json.contains("35"));
+    }
+
+    #[test]
+    fn test_require_auth_root_allowed() {
+        let creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        assert!(require_auth(&creds, Action::Install).is_ok());
+        assert!(require_auth(&creds, Action::Remove).is_ok());
+        assert!(require_auth(&creds, Action::Update).is_ok());
+        assert!(require_auth(&creds, Action::Rollback).is_ok());
+        assert!(require_auth(&creds, Action::GarbageCollect).is_ok());
+        assert!(require_auth(&creds, Action::CancelJob).is_ok());
+    }
+
+    #[test]
+    fn test_require_auth_admin_group_allowed() {
+        let creds = Some(PeerCredentials {
+            pid: 1000,
+            uid: 1000,
+            gid: 10, // wheel
+        });
+        assert!(require_auth(&creds, Action::Install).is_ok());
+        assert!(require_auth(&creds, Action::Remove).is_ok());
+    }
+
+    #[test]
+    fn test_require_auth_regular_user_denied() {
+        let creds = Some(PeerCredentials {
+            pid: 1000,
+            uid: 1000,
+            gid: 1000,
+        });
+        assert!(require_auth(&creds, Action::Install).is_err());
+        assert!(require_auth(&creds, Action::Remove).is_err());
+        assert!(require_auth(&creds, Action::Update).is_err());
+        assert!(require_auth(&creds, Action::Rollback).is_err());
+    }
+
+    #[test]
+    fn test_require_auth_no_creds_denied() {
+        // TCP connection with no peer credentials
+        let creds: Option<PeerCredentials> = None;
+        assert!(require_auth(&creds, Action::Install).is_err());
+        assert!(require_auth(&creds, Action::Remove).is_err());
     }
 }

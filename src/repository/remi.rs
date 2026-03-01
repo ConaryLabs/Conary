@@ -14,6 +14,7 @@
 //! 5. Assemble CCS package from chunks
 
 use crate::error::{Error, Result};
+use crate::filesystem::path::sanitize_filename;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,18 @@ pub struct ChunkRef {
     pub offset: u64,
 }
 
+/// Construct a package URL with optional version query parameter
+///
+/// Shared between sync and async clients.
+fn build_package_url(base_url: &str, distro: &str, name: &str, version: Option<&str>) -> String {
+    let base = format!("{base_url}/v1/{distro}/packages/{name}");
+    if let Some(v) = version {
+        format!("{base}?version={v}")
+    } else {
+        base
+    }
+}
+
 /// Client for interacting with a Remi server
 pub struct RemiClient {
     client: Client,
@@ -103,12 +116,7 @@ impl RemiClient {
 
     /// Construct a package URL with optional version query parameter
     fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
-        let base = format!("{}/v1/{}/packages/{}", self.base_url, distro, name);
-        if let Some(v) = version {
-            format!("{base}?version={v}")
-        } else {
-            base
-        }
+        build_package_url(&self.base_url, distro, name, version)
     }
 
     /// Request a package from the Remi
@@ -497,6 +505,10 @@ impl RemiClient {
             })
             .unwrap_or_else(|| format!("{}.ccs", name));
 
+        // Sanitize filename to prevent path traversal from malicious servers
+        let filename = sanitize_filename(&filename)
+            .unwrap_or_else(|_| format!("{}.ccs", name));
+
         let output_path = output_dir.join(&filename);
 
         // Create progress bar
@@ -563,40 +575,6 @@ impl RemiClient {
         Ok(output_path)
     }
 
-    /// Fetch package by downloading chunks and assembling (legacy method)
-    ///
-    /// This method is kept for compatibility but the direct download endpoint
-    /// is preferred as it's simpler and more reliable.
-    #[allow(dead_code)]
-    pub fn fetch_package_via_chunks(
-        &self,
-        distro: &str,
-        name: &str,
-        version: Option<&str>,
-        output_dir: &Path,
-    ) -> Result<PathBuf> {
-        // Get manifest (may poll if conversion needed)
-        let manifest = self.get_package(distro, name, version)?;
-
-        // Create progress bar for chunk download
-        let pb = ProgressBar::new(manifest.total_size);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
-                .expect("Invalid progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        // Download chunks
-        let chunks = self.download_chunks(&manifest, Some(&pb))?;
-
-        // Assemble package
-        let output_path = output_dir.join(format!("{}-{}.ccs", manifest.name, manifest.version));
-        Self::assemble_package(&manifest, &chunks, &output_path)?;
-
-        Ok(output_path)
-    }
-
     /// Check if Remi is healthy
     pub fn health_check(&self) -> Result<bool> {
         let url = format!("{}/health", self.base_url);
@@ -630,12 +608,7 @@ pub struct AsyncRemiClient {
 impl AsyncRemiClient {
     /// Construct a package URL with optional version query parameter
     fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
-        let base = format!("{}/v1/{}/packages/{}", self.base_url, distro, name);
-        if let Some(v) = version {
-            format!("{base}?version={v}")
-        } else {
-            base
-        }
+        build_package_url(&self.base_url, distro, name, version)
     }
 
     /// Create a new async Remi client
@@ -939,6 +912,35 @@ mod tests {
         let status: JobStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status.status, "ready");
         assert_eq!(status.package, "gzip");
+    }
+
+    #[test]
+    fn test_build_package_url_without_version() {
+        let url = build_package_url("http://remi:8080", "arch", "nginx", None);
+        assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx");
+    }
+
+    #[test]
+    fn test_build_package_url_with_version() {
+        let url = build_package_url("http://remi:8080", "arch", "nginx", Some("1.24.0"));
+        assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx?version=1.24.0");
+    }
+
+    #[test]
+    fn test_filename_sanitization_fallback() {
+        // Path traversal in filename should fall back to safe default
+        let malicious = "../../etc/cron.d/evil";
+        let safe = sanitize_filename(malicious)
+            .unwrap_or_else(|_| format!("{}.ccs", "nginx"));
+        assert_eq!(safe, "nginx.ccs");
+    }
+
+    #[test]
+    fn test_filename_sanitization_normal() {
+        // Normal filenames should pass through
+        let normal = "nginx-1.24.0.ccs";
+        let result = sanitize_filename(normal).unwrap();
+        assert_eq!(result, "nginx-1.24.0.ccs");
     }
 
     #[cfg(feature = "server")]

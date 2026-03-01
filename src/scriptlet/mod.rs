@@ -43,10 +43,10 @@ use wait_timeout::ChildExt;
 /// Sandbox mode for scriptlet execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SandboxMode {
-    /// No sandboxing - direct execution (default for compatibility)
-    #[default]
+    /// No sandboxing - direct execution
     None,
-    /// Automatic - sandbox based on script risk analysis
+    /// Automatic - sandbox based on script risk analysis (default)
+    #[default]
     Auto,
     /// Always sandbox all scripts
     Always,
@@ -803,5 +803,187 @@ mod tests {
         assert_eq!(phase_to_string(ScriptletPhase::PreInstall), "pre-install");
         assert_eq!(phase_from_string("pre-install"), Some(ScriptletPhase::PreInstall));
         assert_eq!(phase_from_string("invalid"), None);
+    }
+
+    #[test]
+    fn test_sandbox_mode_default_is_auto() {
+        assert_eq!(SandboxMode::default(), SandboxMode::Auto);
+    }
+
+    #[test]
+    fn test_sandbox_mode_parse() {
+        // "none" variants
+        assert_eq!(SandboxMode::parse("never"), Some(SandboxMode::None));
+        assert_eq!(SandboxMode::parse("none"), Some(SandboxMode::None));
+        assert_eq!(SandboxMode::parse("off"), Some(SandboxMode::None));
+        assert_eq!(SandboxMode::parse("false"), Some(SandboxMode::None));
+
+        // "auto"
+        assert_eq!(SandboxMode::parse("auto"), Some(SandboxMode::Auto));
+
+        // "always" variants
+        assert_eq!(SandboxMode::parse("always"), Some(SandboxMode::Always));
+        assert_eq!(SandboxMode::parse("on"), Some(SandboxMode::Always));
+        assert_eq!(SandboxMode::parse("true"), Some(SandboxMode::Always));
+
+        // Case insensitivity
+        assert_eq!(SandboxMode::parse("AUTO"), Some(SandboxMode::Auto));
+        assert_eq!(SandboxMode::parse("NEVER"), Some(SandboxMode::None));
+        assert_eq!(SandboxMode::parse("Always"), Some(SandboxMode::Always));
+
+        // Invalid
+        assert_eq!(SandboxMode::parse("invalid"), None);
+        assert_eq!(SandboxMode::parse(""), None);
+    }
+
+    #[test]
+    fn test_executor_default_sandbox_is_auto() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Rpm,
+        );
+        assert_eq!(executor.sandbox_mode, SandboxMode::Auto);
+    }
+
+    #[test]
+    fn test_execute_basic_success() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Rpm,
+        )
+        .with_sandbox_mode(SandboxMode::None);
+
+        let result = executor.execute_direct(
+            "post-install",
+            "/bin/sh",
+            "echo hello",
+            &["1".to_string()],
+            &[("CONARY_PACKAGE_NAME", "test-pkg")],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_script_failure() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Rpm,
+        )
+        .with_sandbox_mode(SandboxMode::None);
+
+        let result = executor.execute_direct(
+            "post-install",
+            "/bin/sh",
+            "exit 42",
+            &["1".to_string()],
+            &[("CONARY_PACKAGE_NAME", "test-pkg")],
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed with exit code 42"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_execute_none_sandbox_runs_directly() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Deb,
+        )
+        .with_sandbox_mode(SandboxMode::None);
+
+        // Verify it runs and can produce output without error
+        let result = executor.execute_direct(
+            "pre-install",
+            "/bin/sh",
+            "echo 'running unsandboxed'; true",
+            &["install".to_string()],
+            &[
+                ("CONARY_PACKAGE_NAME", "test-pkg"),
+                ("CONARY_PHASE", "pre-install"),
+            ],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_timeout() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Rpm,
+        )
+        .with_timeout(Duration::from_secs(1))
+        .with_sandbox_mode(SandboxMode::None);
+
+        let result = executor.execute_direct(
+            "post-install",
+            "/bin/sh",
+            "sleep 30",
+            &["1".to_string()],
+            &[("CONARY_PACKAGE_NAME", "test-pkg")],
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("timed out"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_execute_with_env_vars() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "my-package",
+            "2.5.0",
+            PackageFormat::Rpm,
+        )
+        .with_sandbox_mode(SandboxMode::None);
+
+        // Script that checks environment variables are set
+        let script = r#"
+            test "$CONARY_PACKAGE_NAME" = "my-package" || exit 1
+            test "$CONARY_PACKAGE_VERSION" = "2.5.0" || exit 2
+        "#;
+
+        let result = executor.execute_direct(
+            "post-install",
+            "/bin/sh",
+            script,
+            &["1".to_string()],
+            &[
+                ("CONARY_PACKAGE_NAME", "my-package"),
+                ("CONARY_PACKAGE_VERSION", "2.5.0"),
+            ],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_impl_missing_interpreter() {
+        let executor = ScriptletExecutor::new(
+            Path::new("/"),
+            "test-pkg",
+            "1.0.0",
+            PackageFormat::Rpm,
+        )
+        .with_sandbox_mode(SandboxMode::None);
+
+        let result = executor.execute_impl(
+            "post-install",
+            "/nonexistent/interpreter",
+            "echo hello",
+            None,
+            &ExecutionMode::Install,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Interpreter not found"), "unexpected error: {}", err);
     }
 }
