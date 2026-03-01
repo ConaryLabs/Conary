@@ -14,6 +14,7 @@
 //! - Metrics tracking for observability
 //! - Rate limiting per IP/peer
 
+pub mod analytics;
 mod bloom;
 mod cache;
 pub mod config;
@@ -23,10 +24,14 @@ mod index_gen;
 mod jobs;
 pub mod metrics;
 mod negative_cache;
+pub mod popularity;
 mod prewarm;
+pub mod r2;
 mod routes;
+pub mod search;
 pub mod security;
 
+pub use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use cache::ChunkCache;
 pub use config::RemiConfig;
@@ -36,7 +41,9 @@ pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{run_prewarm, PrewarmConfig, PrewarmResult};
+pub use r2::R2Store;
 pub use routes::{create_admin_router, create_router};
+pub use search::SearchEngine;
 pub use security::BanList;
 
 use anyhow::Result;
@@ -89,6 +96,10 @@ pub struct ServerConfig {
     pub ban_threshold: u32,
     /// Ban duration in seconds
     pub ban_duration_secs: u64,
+
+    // === Web frontend ===
+    /// Path to SvelteKit static build directory (None = disabled)
+    pub web_root: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -114,6 +125,7 @@ impl Default for ServerConfig {
             enable_audit_log: true,
             ban_threshold: 10,
             ban_duration_secs: 300, // 5 minutes
+            web_root: None,
         }
     }
 }
@@ -136,6 +148,12 @@ pub struct ServerState {
     pub negative_cache: Arc<NegativeCache>,
     /// Trusted proxy header for real IP extraction (e.g., "CF-Connecting-IP")
     pub trusted_proxy_header: Option<String>,
+    /// R2 object storage for CDN-backed chunk distribution
+    pub r2_store: Option<Arc<R2Store>>,
+    /// Full-text search engine (Tantivy)
+    pub search_engine: Option<Arc<SearchEngine>>,
+    /// Download analytics recorder (buffered writes)
+    pub analytics: Option<Arc<AnalyticsRecorder>>,
 }
 
 impl ServerState {
@@ -197,6 +215,9 @@ impl ServerState {
             ban_list,
             negative_cache,
             trusted_proxy_header,
+            r2_store: None,
+            search_engine: None,
+            analytics: None,
         }
     }
 }
@@ -245,6 +266,40 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         trusted_proxy_header,
         negative_cache_ttl,
     )));
+
+    // Initialize search engine if enabled
+    if remi_config.search.enabled {
+        let index_dir = remi_config.search_index_dir();
+        tracing::info!("  Search engine: enabled (index: {:?})", index_dir);
+        match SearchEngine::new(&index_dir) {
+            Ok(engine) => {
+                let engine = Arc::new(engine);
+                // Rebuild index from DB in background
+                let rebuild_engine = Arc::clone(&engine);
+                let rebuild_db = server_config.db_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = rebuild_engine.rebuild_from_db(&rebuild_db) {
+                        tracing::error!("Failed to rebuild search index: {}", e);
+                    }
+                });
+                state.write().await.search_engine = Some(engine);
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize search engine: {}", e);
+            }
+        }
+    }
+
+    // Initialize download analytics
+    {
+        let analytics = Arc::new(AnalyticsRecorder::new(server_config.db_path.clone()));
+        let analytics_loop = Arc::clone(&analytics);
+        tokio::spawn(async move {
+            analytics::run_analytics_loop(analytics_loop).await;
+        });
+        state.write().await.analytics = Some(analytics);
+        tracing::info!("  Download analytics: enabled");
+    }
 
     // Initialize Bloom filter from existing chunks
     if server_config.enable_bloom_filter {
@@ -314,6 +369,40 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     }
 
     let state = Arc::new(RwLock::new(ServerState::new(config.clone())));
+
+    // Initialize search engine if a search index dir is available
+    {
+        let index_dir = config.db_path.parent()
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .join("search-index");
+        match SearchEngine::new(&index_dir) {
+            Ok(engine) => {
+                let engine = Arc::new(engine);
+                let rebuild_engine = Arc::clone(&engine);
+                let rebuild_db = config.db_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = rebuild_engine.rebuild_from_db(&rebuild_db) {
+                        tracing::error!("Failed to rebuild search index: {}", e);
+                    }
+                });
+                state.write().await.search_engine = Some(engine);
+                tracing::info!("Search engine: enabled");
+            }
+            Err(e) => {
+                tracing::warn!("Search engine unavailable: {}", e);
+            }
+        }
+    }
+
+    // Initialize download analytics
+    {
+        let analytics_recorder = Arc::new(AnalyticsRecorder::new(config.db_path.clone()));
+        let analytics_loop = Arc::clone(&analytics_recorder);
+        tokio::spawn(async move {
+            analytics::run_analytics_loop(analytics_loop).await;
+        });
+        state.write().await.analytics = Some(analytics_recorder);
+    }
 
     // Initialize Bloom filter from existing chunks
     if config.enable_bloom_filter {

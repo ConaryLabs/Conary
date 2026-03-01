@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime", "dep:async-trait", "dep:futures", "dep:dashmap", "dep:parking_lot", "dep:mdns-sd", "dep:flume"]
+server = ["dep:axum", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime", "dep:async-trait", "dep:futures", "dep:dashmap", "dep:parking_lot", "dep:mdns-sd", "dep:flume", "dep:rust-s3", "dep:tantivy"]
 daemon = ["server", "dep:sd-notify", "dep:axum-extra", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-stream"]
 polkit = ["dep:zbus"]
 # Experimental features not ready for production use (AI commands, etc.)
@@ -138,6 +138,12 @@ url = { version = "2.5" }  # URL parsing for peer endpoints
 parking_lot = { version = "0.12", optional = true }  # Efficient RwLock for bloom filter
 mdns-sd = { version = "0.11", optional = true }  # mDNS service discovery for cell-local peers
 flume = { version = "0.11", optional = true }  # Channel for mDNS events (used by mdns-sd)
+
+# Object storage (S3-compatible, for Cloudflare R2)
+rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["tokio-rustls-tls"] }
+
+# Full-text search engine (embedded)
+tantivy = { version = "0.22", optional = true }
 
 # Daemon (feature-gated)
 sd-notify = { version = "0.4", optional = true }  # Systemd notification (watchdog, ready)

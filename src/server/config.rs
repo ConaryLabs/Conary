@@ -47,6 +47,22 @@ pub struct RemiConfig {
     /// Builder settings
     #[serde(default)]
     pub builder: BuilderSection,
+
+    /// Cloudflare R2 object storage
+    #[serde(default)]
+    pub r2: R2Section,
+
+    /// Search engine settings
+    #[serde(default)]
+    pub search: SearchSection,
+
+    /// Pre-warming settings
+    #[serde(default)]
+    pub prewarm: PrewarmConfigSection,
+
+    /// Web frontend settings
+    #[serde(default)]
+    pub web: WebSection,
 }
 
 impl Default for RemiConfig {
@@ -59,6 +75,10 @@ impl Default for RemiConfig {
             federation: FederationSection::default(),
             security: SecuritySection::default(),
             builder: BuilderSection::default(),
+            r2: R2Section::default(),
+            search: SearchSection::default(),
+            prewarm: PrewarmConfigSection::default(),
+            web: WebSection::default(),
         }
     }
 }
@@ -417,6 +437,132 @@ fn default_build_work_dir() -> PathBuf {
     PathBuf::from("/conary/build")
 }
 
+/// Cloudflare R2 object storage configuration
+#[derive(Debug, Deserialize)]
+pub struct R2Section {
+    /// Enable R2 write-through storage
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// R2 account ID
+    pub account_id: Option<String>,
+
+    /// S3-compatible endpoint URL
+    pub endpoint: Option<String>,
+
+    /// Bucket name
+    #[serde(default = "default_r2_bucket")]
+    pub bucket: String,
+
+    /// Key prefix for chunks in the bucket
+    #[serde(default = "default_r2_prefix")]
+    pub prefix: String,
+
+    /// Write-through: upload to R2 on every chunk store
+    #[serde(default = "default_true")]
+    pub write_through: bool,
+}
+
+impl Default for R2Section {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            endpoint: None,
+            bucket: default_r2_bucket(),
+            prefix: default_r2_prefix(),
+            write_through: true,
+        }
+    }
+}
+
+fn default_r2_bucket() -> String {
+    "conary-chunks".to_string()
+}
+
+fn default_r2_prefix() -> String {
+    "chunks/".to_string()
+}
+
+/// Search engine configuration
+#[derive(Debug, Deserialize)]
+pub struct SearchSection {
+    /// Enable search indexing
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Directory for search index (default: {storage_root}/search-index)
+    pub index_dir: Option<PathBuf>,
+}
+
+impl Default for SearchSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            index_dir: None,
+        }
+    }
+}
+
+/// Pre-warming configuration
+#[derive(Debug, Deserialize)]
+pub struct PrewarmConfigSection {
+    /// Enable pre-warming
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Metadata sync interval (e.g., "6h")
+    #[serde(default = "default_prewarm_interval")]
+    pub metadata_sync_interval: String,
+
+    /// Number of top packages to priority-convert per distro
+    #[serde(default = "default_convert_top_n")]
+    pub convert_top_n: usize,
+
+    /// Distros to pre-warm
+    #[serde(default)]
+    pub distros: Vec<String>,
+}
+
+impl Default for PrewarmConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            metadata_sync_interval: default_prewarm_interval(),
+            convert_top_n: 1000,
+            distros: Vec::new(),
+        }
+    }
+}
+
+fn default_prewarm_interval() -> String {
+    "6h".to_string()
+}
+
+fn default_convert_top_n() -> usize {
+    1000
+}
+
+/// Web frontend configuration
+#[derive(Debug, Deserialize)]
+pub struct WebSection {
+    /// Enable web frontend serving
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to the built web frontend directory
+    pub root: Option<PathBuf>,
+}
+
+impl Default for WebSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            root: None,
+        }
+    }
+}
+
 fn default_max_builds() -> usize {
     2
 }
@@ -518,6 +664,7 @@ impl RemiConfig {
             enable_audit_log: self.server.audit_log,
             ban_threshold: self.security.ban_threshold,
             ban_duration_secs,
+            web_root: self.web_root().map(Path::to_path_buf),
         })
     }
 
@@ -544,7 +691,7 @@ impl RemiConfig {
 
     /// Get all storage subdirectories that should exist
     pub fn storage_dirs(&self) -> Vec<PathBuf> {
-        vec![
+        let mut dirs = vec![
             self.storage.root.join("chunks"),
             self.storage.root.join("converted"),
             self.storage.root.join("built"),
@@ -554,7 +701,31 @@ impl RemiConfig {
             self.storage.root.join("manifests"),
             self.storage.root.join("keys"),
             self.storage.root.join("cache"),
-        ]
+        ];
+
+        // Add search index directory
+        if self.search.enabled {
+            dirs.push(self.search_index_dir());
+        }
+
+        dirs
+    }
+
+    /// Get the search index directory
+    pub fn search_index_dir(&self) -> PathBuf {
+        self.search
+            .index_dir
+            .clone()
+            .unwrap_or_else(|| self.storage.root.join("search-index"))
+    }
+
+    /// Get the web root directory (if configured)
+    pub fn web_root(&self) -> Option<&Path> {
+        if self.web.enabled {
+            self.web.root.as_deref()
+        } else {
+            None
+        }
     }
 
     /// Parse negative cache TTL to Duration

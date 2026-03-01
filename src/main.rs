@@ -278,6 +278,7 @@ fn main() -> Result<()> {
                 max_cache_gb,
                 chunk_ttl_days,
             } => {
+                use anyhow::Context;
                 use conary::server::{run_server, ServerConfig};
                 use std::path::PathBuf;
 

@@ -1960,3 +1960,46 @@ pub fn migrate_v39(conn: &Connection) -> Result<()> {
     info!("Schema version 39 applied successfully (orphan tracking)");
     Ok(())
 }
+
+/// Migration 40: Download statistics for package index
+///
+/// Adds tables for tracking package download counts per-distro,
+/// used by the public Remi package index for popularity rankings.
+pub fn migrate_v40(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 40");
+
+    conn.execute_batch(
+        "
+        -- Individual download events (write-heavy, periodically aggregated)
+        CREATE TABLE download_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            distro TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            package_version TEXT,
+            downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+            client_ip_hash TEXT,
+            user_agent TEXT
+        );
+        CREATE INDEX idx_download_stats_package
+            ON download_stats(distro, package_name);
+        CREATE INDEX idx_download_stats_time
+            ON download_stats(downloaded_at);
+
+        -- Aggregated download counts (read-heavy, periodically refreshed)
+        CREATE TABLE download_counts (
+            distro TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            total_count INTEGER NOT NULL DEFAULT 0,
+            count_30d INTEGER NOT NULL DEFAULT 0,
+            count_7d INTEGER NOT NULL DEFAULT 0,
+            last_updated TEXT,
+            PRIMARY KEY (distro, package_name)
+        );
+        CREATE INDEX idx_download_counts_popular
+            ON download_counts(distro, total_count DESC);
+        ",
+    )?;
+
+    info!("Schema version 40 applied successfully (download statistics)");
+    Ok(())
+}

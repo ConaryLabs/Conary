@@ -1,0 +1,180 @@
+# Conary Remi Server - Production Configuration
+#
+# Deploy at: /etc/conary/remi.toml
+#
+# This is a complete example showing all configuration sections
+# with recommended production values for a Hetzner CX32 deployment
+# behind Cloudflare.
+
+[server]
+# Public API address - bind to localhost when behind nginx/Cloudflare
+bind = "127.0.0.1:8080"
+
+# Admin API - always localhost only, access via SSH tunnel
+admin_bind = "127.0.0.1:8081"
+
+# Worker threads (0 = auto-detect from CPU cores)
+workers = 0
+
+# Enable Prometheus metrics at /v1/admin/metrics/prometheus
+metrics = true
+
+# Enable audit logging for admin and federation requests
+audit_log = true
+
+[storage]
+# Root directory for all Remi data
+# Recommended: dedicated ZFS pool or XFS partition
+root = "/conary"
+
+# Eviction threshold - start evicting when cache exceeds this ratio of max_cache_size
+eviction_threshold = 0.90
+
+# Minimum age before a chunk is eligible for eviction
+eviction_min_age = "1h"
+
+# TTL for negative cache entries (caches 404 responses to avoid repeated upstream lookups)
+negative_cache_ttl = "15m"
+
+# Maximum cache size
+# On Hetzner CX32 with 160GB SSD, use ~130GB; scale up for dedicated storage
+max_cache_size = "700GB"
+
+# Upstream repository definitions
+# Each [upstream.<name>] block configures a distro source for package conversion
+
+[upstream.fedora]
+metalink = "https://mirrors.fedoraproject.org/metalink"
+releases = ["43"]
+arches = ["x86_64"]
+metadata_refresh = "6h"
+priority = 100
+
+[upstream.arch]
+base_url = "https://archive.archlinux.org"
+releases = ["latest"]
+arches = ["x86_64"]
+metadata_refresh = "6h"
+priority = 100
+
+[upstream.ubuntu]
+base_url = "http://archive.ubuntu.com/ubuntu"
+releases = ["noble"]
+arches = ["amd64"]
+metadata_refresh = "6h"
+priority = 100
+
+[conversion]
+# Enable content-defined chunking for cross-package deduplication
+chunking = true
+
+# Chunk size parameters (bytes) - FastCDC boundaries
+chunk_min = 16384    # 16 KB minimum
+chunk_avg = 65536    # 64 KB average
+chunk_max = 262144   # 256 KB maximum
+
+# Strip debug symbols from ELF binaries (reduces storage ~30%)
+strip_debug = false
+
+# Maximum concurrent conversions (tune based on CPU cores and available RAM)
+max_concurrent = 4
+
+[r2]
+# Cloudflare R2 object storage for CDN-backed chunk distribution
+# See deploy/CLOUDFLARE.md for setup instructions
+enabled = true
+
+# Uncomment and fill in your Cloudflare account details:
+# account_id = "your-cloudflare-account-id"
+# endpoint = "https://your-account-id.r2.cloudflarestorage.com"
+
+# R2 bucket name
+bucket = "conary-chunks"
+
+# Key prefix within the bucket
+prefix = "chunks/"
+
+# Write-through: upload every chunk to R2 immediately after conversion
+# Disable for local-only operation
+write_through = true
+
+# Authentication is via environment variables:
+#   CONARY_R2_ACCESS_KEY - R2 API token access key
+#   CONARY_R2_SECRET_KEY - R2 API token secret key
+
+[search]
+# Full-text search engine (Tantivy)
+enabled = true
+
+# Search index directory (defaults to {storage.root}/search-index)
+# index_dir = "/conary/search-index"
+
+[prewarm]
+# Pre-warming pipeline: proactively convert popular packages
+enabled = true
+
+# How often to sync upstream metadata
+metadata_sync_interval = "6h"
+
+# Number of top packages per distro to priority-convert
+convert_top_n = 1000
+
+# Distros to pre-warm (must match [upstream.*] names)
+distros = ["fedora", "arch", "ubuntu"]
+
+[web]
+# SvelteKit web frontend for package browsing
+enabled = true
+
+# Path to the built web frontend (SvelteKit adapter-static output)
+root = "/conary/web"
+
+[federation]
+# CAS federation for peer-to-peer chunk sharing
+# Not needed for single-server deployments
+enabled = false
+
+# Federation tier: region_hub, cell_hub, or leaf
+tier = "leaf"
+
+# mTLS for inter-region traffic (required for region_hub)
+# cert_path = "/conary/keys/server.crt"
+# key_path = "/conary/keys/server.key"
+# ca_path = "/conary/keys/ca.crt"
+
+# Ed25519 signing key for manifest signatures
+# signing_key = "/conary/keys/manifest.key"
+
+# Static peer list (alternative to mDNS discovery)
+# peers = ["https://peer1.conary.dev:8080"]
+
+[security]
+# Rate limiting (per-IP, token bucket algorithm)
+rate_limit = true
+rate_limit_rps = 200
+rate_limit_burst = 400
+
+# CORS allowed origins (empty = same-origin only for chunk endpoints)
+# cors_origins = ["https://packages.conary.dev"]
+
+# Trusted proxy header for real client IP extraction
+# Required when behind Cloudflare or other reverse proxy
+trusted_proxy_header = "CF-Connecting-IP"
+
+# Cloudflare IPs file for validating the proxy header source
+# Download from: https://www.cloudflare.com/ips/
+# cloudflare_ips_file = "/etc/conary/cloudflare-ips.txt"
+
+# Auto-ban: temporarily block IPs with excessive failures
+ban_threshold = 20
+ban_duration = "10m"
+
+[builder]
+# Recipe builder service (optional, for building from source)
+enabled = false
+work_dir = "/conary/build"
+max_concurrent = 2
+isolation = true
+network_blocked = true
+bootstrap_dir = "/conary/bootstrap"
+chunk_bootstrap = true

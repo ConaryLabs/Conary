@@ -9,7 +9,7 @@ use crate::server::jobs::{JobId, JobStatus};
 use crate::server::ServerState;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -280,6 +280,7 @@ pub async fn download_package(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
     Query(query): Query<PackageQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let state_guard = state.read().await;
 
@@ -302,8 +303,15 @@ pub async fn download_package(
                     if result.ccs_path.exists() {
                         // Use the path from the job result (guaranteed to be correct)
                         let ccs_path = result.ccs_path.clone();
+                        let analytics = state_guard.analytics.clone();
+                        let ua = headers.get(header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string);
                         drop(state_guard);
-                        return stream_ccs_file(ccs_path).await;
+                        return stream_ccs_file(
+                            ccs_path, analytics, &distro, &name,
+                            query.version.as_deref(), ua.as_deref(),
+                        ).await;
                     }
                 }
                 // Result missing or file deleted - fall through to filesystem lookup
@@ -333,6 +341,10 @@ pub async fn download_package(
     // No job found - look for the CCS package file on disk
     // The conversion service stores it at: {cache_dir}/packages/{name}-{version}.ccs
     let packages_dir = state_guard.config.cache_dir.join("packages");
+    let analytics = state_guard.analytics.clone();
+    let ua = headers.get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
 
     // If version specified, look for exact match
     // Otherwise, find the latest version
@@ -368,8 +380,11 @@ pub async fn download_package(
 
     drop(state_guard);
 
-    // Use helper function to stream the file
-    stream_ccs_file(ccs_path).await
+    // Stream the file (analytics recorded inside after confirming file is readable)
+    stream_ccs_file(
+        ccs_path, analytics, &distro, &name,
+        query.version.as_deref(), ua.as_deref(),
+    ).await
 }
 
 /// Find the latest version of a package in the packages directory
@@ -388,8 +403,18 @@ fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std
         .map(|entry| entry.path())
 }
 
-/// Stream a CCS file as a response
-async fn stream_ccs_file(ccs_path: std::path::PathBuf) -> Response {
+/// Stream a CCS file as a response, recording analytics only on success.
+///
+/// Analytics are recorded after the file is confirmed readable (open + metadata),
+/// so failed streams don't inflate download counts.
+async fn stream_ccs_file(
+    ccs_path: std::path::PathBuf,
+    analytics: Option<Arc<crate::server::AnalyticsRecorder>>,
+    distro: &str,
+    name: &str,
+    version: Option<&str>,
+    ua: Option<&str>,
+) -> Response {
     use axum::body::Body;
     use axum::http::header;
     use tokio::fs::File;
@@ -418,6 +443,11 @@ async fn stream_ccs_file(ccs_path: std::path::PathBuf) -> Response {
         .unwrap_or("package.ccs");
 
     tracing::info!("Serving CCS package: {} ({} bytes)", filename, metadata.len());
+
+    // Record analytics only after confirming the file is readable
+    if let Some(recorder) = analytics {
+        recorder.record(distro, name, version, None, ua).await;
+    }
 
     // Stream the file
     let stream = ReaderStream::new(file);

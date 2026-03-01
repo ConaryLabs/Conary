@@ -16,7 +16,7 @@
 //! - Cloudflare IP header extraction
 //! - Recipe build moved to admin API
 
-use crate::server::handlers::{chunks, federation, index, jobs, packages, recipes};
+use crate::server::handlers::{chunks, detail, federation, index, jobs, packages, recipes, search, sparse};
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
 use axum::{
@@ -351,14 +351,45 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/recipes/:name/:version/download",
             get(recipes::download_recipe_package),
         )
+        // === Sparse Index (CDN-cacheable, crates.io-style) ===
+        .route("/v1/index/:distro/:name", get(sparse::get_sparse_entry))
+        .route("/v1/index/:distro", get(sparse::list_packages))
+        // === Search ===
+        .route("/v1/search", get(search::search_packages))
+        .route("/v1/suggest", get(search::suggest_packages))
+        // === Package Detail API ===
+        .route("/v1/packages/:distro/:name", get(detail::get_package_detail))
+        .route("/v1/packages/:distro/:name/versions", get(detail::get_versions))
+        .route("/v1/packages/:distro/:name/dependencies", get(detail::get_dependencies))
+        .route("/v1/packages/:distro/:name/rdepends", get(detail::get_reverse_dependencies))
+        // === Statistics ===
+        .route("/v1/stats/popular", get(detail::get_popular))
+        .route("/v1/stats/recent", get(detail::get_recent))
+        .route("/v1/stats/overview", get(detail::get_overview))
         // Prometheus metrics (public, for monitoring)
         .route("/metrics", get(prometheus_metrics))
         .layer(compression)
         .layer(public_cors)
         .with_state(state.clone());
 
+    // SPA fallback: serve web frontend if configured
+    // Must be a separate router so API routes take priority
+    let web_routes = {
+        let state_guard = state.read().await;
+        state_guard.config.web_root.as_ref().map(|web_root| {
+            Router::new().fallback_service(
+                tower_http::services::ServeDir::new(web_root)
+                    .fallback(tower_http::services::ServeFile::new(web_root.join("index.html"))),
+            )
+        })
+    };
+
     // Build final router with middleware
     let mut app = Router::new().merge(chunk_routes).merge(public_routes);
+
+    if let Some(web) = web_routes {
+        app = app.merge(web);
+    }
 
     // Add rate limiting if enabled
     if config.enable_rate_limit {
