@@ -1,7 +1,7 @@
 // src/main.rs
 //! Conary Package Manager - CLI Entry Point
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use std::io;
@@ -32,7 +32,7 @@ fn main() -> Result<()> {
         Some(Commands::Install {
             package, common, version, repo, dry_run, no_deps,
             no_scripts, sandbox, allow_downgrade, convert_to_ccs,
-            no_capture, skip_optional,
+            no_capture, skip_optional, force,
         }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
@@ -55,14 +55,15 @@ fn main() -> Result<()> {
                     allow_downgrade,
                     convert_to_ccs,
                     no_capture,
+                    force,
                 })
             }
         }
 
-        Some(Commands::Remove { package_name, common, version, no_scripts, sandbox }) => {
+        Some(Commands::Remove { package_name, common, version, no_scripts, sandbox, purge_files }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
                 .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
-            commands::cmd_remove(&package_name, &common.db.db_path, &common.root, version, no_scripts, sandbox_mode)
+            commands::cmd_remove(&package_name, &common.db.db_path, &common.root, version, no_scripts, sandbox_mode, purge_files)
         }
 
         Some(Commands::Update { package, common, security, sandbox }) => {
@@ -148,11 +149,19 @@ fn main() -> Result<()> {
                 }
             }
 
-            cli::SystemCommands::Adopt { packages, db, full, system, status, dry_run } => {
-                if status {
+            cli::SystemCommands::Adopt { packages, db, full, system, status, dry_run, pattern, exclude, explicit_only, refresh, convert, jobs, no_chunking, takeover, yes, sync_hook, remove_hook, quiet } => {
+                if sync_hook {
+                    commands::cmd_sync_hook_install(remove_hook)
+                } else if takeover {
+                    commands::cmd_adopt_takeover(&packages, &db.db_path, system, dry_run, yes)
+                } else if convert {
+                    commands::cmd_adopt_convert(&db.db_path, jobs, no_chunking, dry_run)
+                } else if status {
                     commands::cmd_adopt_status(&db.db_path)
+                } else if refresh {
+                    commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet)
                 } else if system {
-                    commands::cmd_adopt_system(&db.db_path, full, dry_run)
+                    commands::cmd_adopt_system(&db.db_path, full, dry_run, pattern.as_deref(), exclude.as_deref(), explicit_only)
                 } else {
                     commands::cmd_adopt(&packages, &db.db_path, full)
                 }

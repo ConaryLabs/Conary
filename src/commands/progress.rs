@@ -369,3 +369,132 @@ pub enum UpdatePhase {
     Complete,
     Failed(String),
 }
+
+/// Progress tracker for package adoption
+pub struct AdoptProgress {
+    multi: MultiProgress,
+    overall: ProgressBar,
+    status: ProgressBar,
+    total_packages: u64,
+    completed: u64,
+}
+
+impl AdoptProgress {
+    /// Create a new adoption progress tracker for bulk operations
+    pub fn new(total_packages: u64, operation: &str) -> Self {
+        let multi = MultiProgress::new();
+
+        let overall = ProgressBar::new(total_packages);
+        overall.set_style(
+            ProgressStyle::default_bar()
+                .template("{msg} ({pos}/{len}) [{bar:40.cyan/dim}] {percent}%")
+                .expect("Invalid progress bar template")
+                .progress_chars("##-"),
+        );
+        overall.set_message(operation.to_string());
+
+        let status = ProgressBar::new_spinner();
+        status.set_style(
+            ProgressStyle::default_spinner()
+                .template("  {spinner:.cyan} {msg}")
+                .expect("Invalid spinner template"),
+        );
+        status.enable_steady_tick(Duration::from_millis(100));
+
+        let overall = multi.add(overall);
+        let status = multi.add(status);
+
+        Self {
+            multi,
+            overall,
+            status,
+            total_packages,
+            completed: 0,
+        }
+    }
+
+    /// Create a minimal progress tracker for single-package adoption
+    pub fn single(operation: &str) -> Self {
+        let multi = MultiProgress::new();
+
+        let overall = ProgressBar::new_spinner();
+        overall.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("Invalid spinner template"),
+        );
+        overall.set_message(operation.to_string());
+        overall.enable_steady_tick(Duration::from_millis(100));
+
+        let status = ProgressBar::hidden();
+
+        let overall = multi.add(overall);
+        let status = multi.add(status);
+
+        Self {
+            multi,
+            overall,
+            status,
+            total_packages: 1,
+            completed: 0,
+        }
+    }
+
+    /// Update status with package name and phase
+    pub fn set_phase(&self, package: &str, phase: AdoptPhase) {
+        let msg = match phase {
+            AdoptPhase::Scanning => "Scanning system packages...".to_string(),
+            AdoptPhase::Querying => format!("Querying {}...", package),
+            AdoptPhase::Inserting => format!("Recording {}...", package),
+            AdoptPhase::CasStorage => format!("Storing files for {}...", package),
+            AdoptPhase::Converting => format!("Converting {} to CCS...", package),
+            AdoptPhase::Complete => format!("{} [done]", package),
+            AdoptPhase::Failed(ref err) => format!("{} [FAILED: {}]", package, err),
+        };
+        self.status.set_message(msg);
+    }
+
+    /// Mark a package as complete and advance the overall progress
+    pub fn complete_package(&mut self, package: &str) {
+        self.completed += 1;
+        self.overall.set_position(self.completed);
+        self.set_phase(package, AdoptPhase::Complete);
+    }
+
+    /// Mark a package as failed
+    pub fn fail_package(&mut self, package: &str, error: &str) {
+        self.completed += 1;
+        self.overall.set_position(self.completed);
+        self.set_phase(package, AdoptPhase::Failed(error.to_string()));
+    }
+
+    /// Mark a package as skipped (already tracked)
+    pub fn skip_package(&mut self) {
+        self.completed += 1;
+        self.overall.set_position(self.completed);
+    }
+
+    /// Finish the overall progress with a success message
+    pub fn finish(&self, message: &str) {
+        self.status.finish_and_clear();
+        self.overall.finish_with_message(message.to_string());
+    }
+
+    /// Finish the overall progress with a failure message
+    pub fn finish_with_error(&self, message: &str) {
+        self.status.finish_and_clear();
+        self.overall.abandon_with_message(message.to_string());
+    }
+}
+
+/// Phases of package adoption
+#[derive(Debug, Clone)]
+pub enum AdoptPhase {
+    Scanning,
+    Querying,
+    Inserting,
+    CasStorage,
+    Converting,
+    Complete,
+    Failed(String),
+}

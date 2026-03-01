@@ -124,10 +124,19 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
     let mut updates_available: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
     let mut pinned_skipped: Vec<String> = Vec::new();
 
+    let pkg_mgr = conary::packages::SystemPackageManager::detect();
+    let mut adopted_skipped: Vec<String> = Vec::new();
+
     for trove in &installed_troves {
         // Skip pinned packages
         if trove.pinned {
             pinned_skipped.push(trove.name.clone());
+            continue;
+        }
+
+        // Skip adopted packages -- they should be updated via the system PM
+        if trove.install_source.is_adopted() {
+            adopted_skipped.push(trove.name.clone());
             continue;
         }
 
@@ -165,6 +174,23 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
             "Skipping {} pinned package(s): {}",
             pinned_skipped.len(),
             pinned_skipped.join(", ")
+        );
+    }
+
+    // Report adopted packages that were skipped
+    if !adopted_skipped.is_empty() {
+        let sample: Vec<&str> = adopted_skipped.iter().take(5).map(|s| s.as_str()).collect();
+        let suffix = if adopted_skipped.len() > 5 {
+            format!(", ... and {} more", adopted_skipped.len() - 5)
+        } else {
+            String::new()
+        };
+        println!(
+            "Skipping {} adopted package(s) (use '{}' instead): {}{}",
+            adopted_skipped.len(),
+            pkg_mgr.update_command("<package>"),
+            sample.join(", "),
+            suffix
         );
     }
 

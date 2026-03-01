@@ -31,7 +31,7 @@ struct FileSnapshot {
 }
 
 /// Remove an installed package
-pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option<String>, no_scripts: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option<String>, no_scripts: bool, sandbox_mode: SandboxMode, purge_files: bool) -> Result<()> {
     info!("Removing package: {}", package_name);
 
     // Create progress tracker for removal
@@ -81,6 +81,45 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
             package_name,
             package_name
         ));
+    }
+
+    // Check if package is adopted from system PM
+    if trove.install_source.is_adopted() && !purge_files {
+        // Remove from Conary tracking only -- don't touch files on disk
+        info!("Package '{}' is adopted -- removing from Conary tracking only", package_name);
+
+        let remove_changeset_id = conary::db::transaction(&mut conn, |tx| {
+            let mut changeset = conary::db::models::Changeset::new(
+                format!("Remove tracking for adopted {}-{}", trove.name, trove.version),
+            );
+            let changeset_id = changeset.insert(tx)?;
+
+            // Remove DB records (files, deps, provides, trove)
+            tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
+            tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
+            tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
+            conary::db::models::Trove::delete(tx, trove_id)?;
+            changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+            Ok(changeset_id)
+        })?;
+
+        let pkg_mgr = conary::packages::SystemPackageManager::detect();
+        println!(
+            "Removed '{}' from Conary tracking. Use '{}' to fully uninstall.",
+            package_name,
+            pkg_mgr.remove_command(package_name)
+        );
+
+        create_state_snapshot(&conn, remove_changeset_id, &format!("Remove tracking for {}", trove.name))?;
+        return Ok(());
+    }
+
+    if trove.install_source.is_adopted() && purge_files {
+        println!(
+            "WARNING: --purge-files specified for adopted package '{}'. \
+             Files will be deleted from disk.",
+            package_name
+        );
     }
 
     let resolver = conary::resolver::Resolver::new(&conn)?;
@@ -350,7 +389,7 @@ pub fn cmd_autoremove(db_path: &str, root: &str, dry_run: bool, no_scripts: bool
 
     for trove in &orphans {
         println!("\nRemoving {} {}...", trove.name, trove.version);
-        match cmd_remove(&trove.name, db_path, root, Some(trove.version.clone()), no_scripts, sandbox_mode) {
+        match cmd_remove(&trove.name, db_path, root, Some(trove.version.clone()), no_scripts, sandbox_mode, false) {
             Ok(()) => {
                 removed_count += 1;
             }

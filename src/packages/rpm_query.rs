@@ -527,6 +527,83 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
     Ok(packages)
 }
 
+/// Query the set of package names explicitly installed by the user (not auto-deps).
+///
+/// Uses `rpm -qa --queryformat "%{NAME}|%{REASON}\n"`. On DNF/RPM systems the
+/// REASON tag is "user" for explicit installs and "dep" for auto-installed deps.
+/// Falls back to treating all packages as user-installed if the tag is unavailable
+/// (older RPM versions that lack the REASON tag return "(none)").
+pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
+    debug!("Querying user-installed RPM packages via REASON tag");
+
+    let output = Command::new("rpm")
+        .args(["-qa", "--queryformat", "%{NAME}|%{REASON}\n"])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "rpm -qa --queryformat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // If every reason field is "(none)" the tag is unsupported — treat all as explicit.
+    let has_reason_support = stdout
+        .lines()
+        .any(|line| line.split('|').nth(1).is_some_and(|r| r != "(none)"));
+
+    let user_installed = stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '|');
+            let name = parts.next()?.trim();
+            let reason = parts.next()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            if !has_reason_support || reason == "user" {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    debug!(
+        "Determined user-installed RPM packages (has_reason_support={})",
+        has_reason_support
+    );
+    Ok(user_installed)
+}
+
+/// Remove a package from the RPM database only (no files deleted).
+///
+/// Uses `rpm -e --justdb --nodeps` to remove the package record from
+/// the RPM database without touching any files on disk. This is used
+/// during takeover to transfer ownership from RPM to Conary.
+pub fn remove_from_db_only(name: &str) -> Result<()> {
+    debug!("Removing {} from RPM database only (--justdb)", name);
+
+    let output = Command::new("rpm")
+        .args(["-e", "--justdb", "--nodeps", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run rpm -e --justdb: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "rpm -e --justdb {} failed: {}",
+            name,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    debug!("Successfully removed {} from RPM database", name);
+    Ok(())
+}
+
 /// Check if RPM is available on this system
 pub fn is_rpm_available() -> bool {
     Command::new("rpm")

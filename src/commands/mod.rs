@@ -28,7 +28,7 @@ mod triggers;
 mod update;
 
 // Re-export all command handlers
-pub use adopt::{cmd_adopt, cmd_adopt_status, cmd_adopt_system, cmd_conflicts};
+pub use adopt::{cmd_adopt, cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_adopt_takeover, cmd_sync_hook_install, cmd_conflicts};
 pub use capability::{
     cmd_capability_show, cmd_capability_validate, cmd_capability_list,
     cmd_capability_generate, cmd_capability_audit, cmd_capability_run,

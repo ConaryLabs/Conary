@@ -55,6 +55,36 @@ impl SystemPackageManager {
     pub fn is_available(&self) -> bool {
         !matches!(self, Self::Unknown)
     }
+
+    /// Human-readable name for display
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Rpm => "RPM",
+            Self::Dpkg => "dpkg",
+            Self::Pacman => "pacman",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Build the command string to remove a package via the system PM
+    pub fn remove_command(&self, name: &str) -> String {
+        match self {
+            Self::Rpm => format!("dnf remove {}", name),
+            Self::Dpkg => format!("apt remove {}", name),
+            Self::Pacman => format!("pacman -R {}", name),
+            Self::Unknown => format!("(unknown package manager) remove {}", name),
+        }
+    }
+
+    /// Build the command string to update a package via the system PM
+    pub fn update_command(&self, name: &str) -> String {
+        match self {
+            Self::Rpm => format!("dnf update {}", name),
+            Self::Dpkg => format!("apt upgrade {}", name),
+            Self::Pacman => format!("pacman -Syu {}", name),
+            Self::Unknown => format!("(unknown package manager) update {}", name),
+        }
+    }
 }
 
 /// Result of extracting a package in parallel

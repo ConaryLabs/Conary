@@ -446,6 +446,197 @@ pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
     Ok(owners)
 }
 
+/// Query the set of package names explicitly installed by the user (not auto-deps).
+///
+/// Reads `/var/lib/apt/extended_states` which apt maintains with `Auto-Installed: 1`
+/// entries for dependency-installed packages. Any package not marked auto-installed
+/// is considered user-installed. If the file is absent (pure dpkg without apt, or
+/// insufficient permissions) all packages are treated as user-installed.
+pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
+    debug!("Querying user-installed dpkg packages via apt extended_states");
+
+    const EXTENDED_STATES: &str = "/var/lib/apt/extended_states";
+
+    let content = match std::fs::read_to_string(EXTENDED_STATES) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                "Could not read {}: {} — treating all packages as user-installed",
+                EXTENDED_STATES, e
+            );
+            // Fall back: return all installed packages as user-installed
+            return list_installed_packages().map(|pkgs| pkgs.into_iter().collect());
+        }
+    };
+
+    // The file consists of stanzas separated by blank lines:
+    //   Package: foo
+    //   Auto-Installed: 1
+    //
+    //   Package: bar
+    //   Auto-Installed: 0
+    //
+    // Collect packages whose Auto-Installed field is 1.
+    let mut auto_installed = std::collections::HashSet::new();
+    let mut current_pkg: Option<String> = None;
+
+    for line in content.lines() {
+        if line.is_empty() {
+            current_pkg = None;
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            match key.trim() {
+                "Package" => {
+                    current_pkg = Some(value.trim().to_string());
+                }
+                "Auto-Installed" if value.trim() == "1" => {
+                    if let Some(pkg) = current_pkg.take() {
+                        auto_installed.insert(pkg);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // User-installed = all installed minus auto-installed
+    let all_installed: std::collections::HashSet<String> =
+        list_installed_packages()?.into_iter().collect();
+    let user_installed = all_installed
+        .into_iter()
+        .filter(|pkg| !auto_installed.contains(pkg))
+        .collect();
+
+    debug!(
+        "Found {} auto-installed dpkg packages; remainder are user-installed",
+        auto_installed.len()
+    );
+    Ok(user_installed)
+}
+
+/// RAII guard for a dpkg fcntl lock. Lock is released on drop.
+struct DpkgLockGuard {
+    _file: std::fs::File,
+}
+
+/// Acquire a POSIX fcntl write lock on a dpkg lock file.
+///
+/// dpkg uses `fcntl(F_SETLK)` record locks (not `flock`), which is what
+/// apt and dpkg check for mutual exclusion. Using the wrong lock type
+/// would allow concurrent access.
+fn acquire_dpkg_lock(path: &str) -> Result<DpkgLockGuard> {
+    use std::os::unix::io::AsRawFd;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| Error::InitError(format!("Failed to open dpkg lock {}: {}", path, e)))?;
+
+    let mut flock = libc::flock {
+        l_type: libc::F_WRLCK as i16,
+        l_whence: libc::SEEK_SET as i16,
+        l_start: 0,
+        l_len: 0, // entire file
+        l_pid: 0,
+    };
+
+    let ret = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &mut flock) };
+    if ret == -1 {
+        return Err(Error::InitError(format!(
+            "dpkg database is locked by another process ({}). Wait for apt/dpkg to finish.",
+            path
+        )));
+    }
+
+    Ok(DpkgLockGuard { _file: file })
+}
+
+/// Remove a package from the dpkg database only (no files deleted).
+///
+/// Edits `/var/lib/dpkg/status` to remove the package stanza and also
+/// removes the `/var/lib/dpkg/info/<name>.*` files. This transfers
+/// ownership of the files from dpkg to Conary.
+///
+/// Follows the dpkg frontend locking protocol (fcntl record locks on
+/// lock-frontend then lock) per /usr/share/doc/dpkg/spec/frontend-api.txt,
+/// and uses atomic rename to prevent corruption from crashes.
+pub fn remove_from_db_only(name: &str) -> Result<()> {
+    use std::io::Write;
+
+    debug!("Removing {} from dpkg database only", name);
+
+    let status_path = "/var/lib/dpkg/status";
+
+    // Acquire dpkg locks per the frontend protocol spec:
+    // 1. lock-frontend (frontend mutex — excludes apt, aptitude, etc.)
+    // 2. lock (dpkg database lock — excludes dpkg itself)
+    // Both use POSIX fcntl F_SETLK write locks as dpkg expects.
+    let _frontend_lock = acquire_dpkg_lock("/var/lib/dpkg/lock-frontend")?;
+    let _db_lock = acquire_dpkg_lock("/var/lib/dpkg/lock")?;
+
+    // Read /var/lib/dpkg/status, filter out the target package stanza
+    let content = std::fs::read_to_string(status_path)
+        .map_err(|e| Error::InitError(format!("Failed to read {}: {}", status_path, e)))?;
+
+    let mut output_lines = Vec::new();
+    let mut in_target_stanza = false;
+
+    for line in content.lines() {
+        if line.starts_with("Package: ") {
+            let pkg = line.strip_prefix("Package: ").unwrap_or("").trim();
+            in_target_stanza = pkg == name;
+        } else if line.is_empty() {
+            if in_target_stanza {
+                in_target_stanza = false;
+                continue; // Skip the blank line after the removed stanza
+            }
+        }
+
+        if !in_target_stanza {
+            output_lines.push(line);
+        }
+    }
+
+    // Atomic write: write to temp file in same directory, then rename
+    let new_content = output_lines.join("\n") + "\n";
+    let tmp_path = format!("{}.conary-tmp", status_path);
+
+    let mut tmp_file = std::fs::File::create(&tmp_path)
+        .map_err(|e| Error::InitError(format!("Failed to create temp file {}: {}", tmp_path, e)))?;
+    tmp_file.write_all(new_content.as_bytes())
+        .map_err(|e| Error::InitError(format!("Failed to write temp file {}: {}", tmp_path, e)))?;
+    tmp_file.sync_all()
+        .map_err(|e| Error::InitError(format!("Failed to sync temp file: {}", e)))?;
+    drop(tmp_file);
+
+    std::fs::rename(&tmp_path, status_path)
+        .map_err(|e| Error::InitError(format!("Failed to rename {} -> {}: {}", tmp_path, status_path, e)))?;
+
+    // Lock is released when lock_file is dropped
+
+    // Remove /var/lib/dpkg/info/<name>.* files
+    let info_dir = "/var/lib/dpkg/info";
+    if let Ok(entries) = std::fs::read_dir(info_dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let fname_str = fname.to_string_lossy();
+            // Match <name>.* and <name>:<arch>.*
+            if fname_str.starts_with(&format!("{}.", name))
+                || fname_str.starts_with(&format!("{}:", name))
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    debug!("Successfully removed {} from dpkg database", name);
+    Ok(())
+}
+
 /// Check if dpkg is available on this system
 pub fn is_dpkg_available() -> bool {
     Command::new("dpkg-query")

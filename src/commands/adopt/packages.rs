@@ -4,6 +4,7 @@
 //!
 //! Adopts individual packages into Conary tracking.
 
+use super::super::create_state_snapshot;
 use super::system::{compute_file_hash, FileInfoTuple};
 use anyhow::Result;
 use conary::db::models::{
@@ -12,11 +13,11 @@ use conary::db::models::{
 };
 use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
 use std::path::PathBuf;
-use tracing::{debug, info};
+use super::super::progress::{AdoptPhase, AdoptProgress};
+use tracing::debug;
 
 /// Adopt specific packages
 pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
-    info!("Adopting {} specific packages (full={})", packages.len(), full);
 
     if packages.is_empty() {
         return Err(anyhow::anyhow!("No packages specified"));
@@ -51,11 +52,17 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         None
     };
 
+    let mut progress = if packages.len() > 1 {
+        AdoptProgress::new(packages.len() as u64, "Adopting")
+    } else {
+        AdoptProgress::single(&format!("Adopting {}", packages[0]))
+    };
+
     for package_name in packages {
         // Check if already tracked
         let existing = Trove::find_by_name(&conn, package_name)?;
         if !existing.is_empty() {
-            println!("Package '{}' is already tracked, skipping", package_name);
+            progress.skip_package();
             continue;
         }
 
@@ -94,7 +101,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             }
         };
 
-        println!("Adopting: {} {}", pkg_name, pkg_version);
+        progress.set_phase(&pkg_name, AdoptPhase::Querying);
 
         // Create changeset for this package
         let mut changeset = Changeset::new(format!(
@@ -104,7 +111,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             if full { "full" } else { "track" }
         ));
 
-        conary::db::transaction(&mut conn, |tx| {
+        let changeset_id = conary::db::transaction(&mut conn, |tx| {
             let changeset_id = changeset.insert(tx)?;
 
             // Create trove
@@ -142,7 +149,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 }
                 _ => Vec::new(),
             };
-            println!("  Files: {}", files.len());
+            progress.set_phase(&pkg_name, AdoptPhase::Inserting);
 
             for (file_path, file_size, file_mode, file_digest, file_user, file_group, file_link_target) in &files {
                 let hash = compute_file_hash(
@@ -177,7 +184,6 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(&pkg_name).unwrap_or_default(),
                 _ => Vec::new(),
             };
-            println!("  Dependencies: {}", deps.len());
 
             for dep in deps {
                 if dep.name.is_empty() {
@@ -203,7 +209,6 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
                 SystemPackageManager::Pacman => pacman_query::query_package_provides(&pkg_name).unwrap_or_default(),
                 _ => Vec::new(),
             };
-            println!("  Provides: {}", provides.len());
 
             for provide in provides {
                 if provide.is_empty() {
@@ -216,11 +221,16 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             }
 
             changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok(())
+            Ok(changeset_id)
         })?;
 
-        println!("  [OK] Adopted {}", pkg_name);
+        // Create state snapshot for rollback safety
+        create_state_snapshot(&conn, changeset_id, &format!("Adopt {}", pkg_name))?;
+
+        progress.complete_package(&pkg_name);
     }
+
+    progress.finish("Adoption complete");
 
     Ok(())
 }

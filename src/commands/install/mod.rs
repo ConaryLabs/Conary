@@ -72,6 +72,8 @@ pub struct InstallOptions<'a> {
     pub convert_to_ccs: bool,
     /// Skip state capture after install
     pub no_capture: bool,
+    /// Force install even for adopted packages
+    pub force: bool,
 }
 
 /// Check if missing dependencies can be satisfied by tracked packages.
@@ -138,6 +140,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         allow_downgrade,
         convert_to_ccs,
         no_capture,
+        force,
     } = opts;
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) = parse_component_spec(package) {
@@ -158,6 +161,28 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     };
 
     info!("Installing package: {} (components: {})", package_name, component_selection.display());
+
+    // Check if the package is adopted from the system PM
+    {
+        let conn = conary::db::open(db_path)
+            .context("Failed to open package database for adoption check")?;
+
+        if let Some(existing) = conary::db::models::Trove::find_one_by_name(&conn, &package_name)?
+            && existing.install_source.is_adopted()
+        {
+            if !force {
+                let pkg_mgr = conary::packages::SystemPackageManager::detect();
+                return Err(anyhow::anyhow!(
+                    "Package '{}' is adopted from {}. Use 'conary system adopt --takeover {}' \
+                     to take full ownership, or use '--force' to override.",
+                    package_name,
+                    pkg_mgr.display_name(),
+                    package_name
+                ));
+            }
+            println!("[INFO] Package '{}' is adopted -- proceeding with --force", package_name);
+        }
+    }
 
     // Check if the package is already installed as a dependency - if so, promote it
     // This must happen before we try to download, as we may not need to do anything else

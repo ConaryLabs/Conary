@@ -150,6 +150,10 @@ pub enum Commands {
         /// Skip optional packages (for collection installs)
         #[arg(long)]
         skip_optional: bool,
+
+        /// Force install even if the package is adopted from the system package manager
+        #[arg(long)]
+        force: bool,
     },
 
     /// Remove an installed package
@@ -171,6 +175,10 @@ pub enum Commands {
         /// Sandbox mode for scriptlets: auto, always, never (default: never)
         #[arg(long, default_value = "never")]
         sandbox: String,
+
+        /// Delete adopted package files from disk (default: DB-only removal)
+        #[arg(long)]
+        purge_files: bool,
     },
 
     /// Check for and apply package updates

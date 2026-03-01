@@ -460,6 +460,64 @@ pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
     Ok(owners)
 }
 
+/// Query the set of package names explicitly installed by the user (not auto-deps).
+///
+/// Uses `pacman -Qe` which lists packages installed explicitly (as opposed to
+/// `pacman -Qd` which lists packages installed as dependencies). This is the
+/// canonical pacman mechanism for distinguishing user intent.
+pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
+    debug!("Querying user-installed pacman packages via pacman -Qe");
+
+    let output = Command::new("pacman")
+        .args(["-Qe"])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "pacman -Qe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    // Output format: "package_name version\n..."
+    let user_installed = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let name = line.split_whitespace().next()?;
+            if name.is_empty() { None } else { Some(name.to_string()) }
+        })
+        .collect();
+
+    debug!("Queried explicitly-installed pacman packages");
+    Ok(user_installed)
+}
+
+/// Remove a package from the pacman database only (no files deleted).
+///
+/// Uses `pacman -Rdd --dbonly --noconfirm` to remove the package record
+/// from the pacman database without touching any files on disk. This transfers
+/// ownership of the files from pacman to Conary.
+pub fn remove_from_db_only(name: &str) -> Result<()> {
+    debug!("Removing {} from pacman database only (--dbonly)", name);
+
+    let output = Command::new("pacman")
+        .args(["-Rdd", "--dbonly", "--noconfirm", name])
+        .output()
+        .map_err(|e| Error::InitError(format!("Failed to run pacman -Rdd --dbonly: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "pacman -Rdd --dbonly {} failed: {}",
+            name,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    debug!("Successfully removed {} from pacman database", name);
+    Ok(())
+}
+
 /// Check if pacman is available on this system
 pub fn is_pacman_available() -> bool {
     Command::new("pacman")

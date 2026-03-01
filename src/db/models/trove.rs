@@ -42,6 +42,8 @@ pub enum InstallSource {
     AdoptedTrack,
     /// Adopted from system with full CAS storage
     AdoptedFull,
+    /// Taken over from system PM. Conary fully owns files.
+    Taken,
 }
 
 impl InstallSource {
@@ -52,6 +54,11 @@ impl InstallSource {
 
     pub fn is_adopted(&self) -> bool {
         matches!(self, InstallSource::AdoptedTrack | InstallSource::AdoptedFull)
+    }
+
+    /// Returns true if Conary fully owns the package files (not just tracking)
+    pub fn is_conary_owned(&self) -> bool {
+        matches!(self, InstallSource::File | InstallSource::Repository | InstallSource::Taken)
     }
 }
 
@@ -459,5 +466,27 @@ impl Trove {
     pub fn find_one_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let troves = Self::find_by_name(conn, name)?;
         Ok(troves.into_iter().next())
+    }
+
+    /// Find adopted troves that have not been converted to CCS format
+    ///
+    /// Returns troves with install_source of 'adopted-track' or 'adopted-full'
+    /// that do not have a corresponding entry in the converted_packages table.
+    pub fn find_adopted_unconverted(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, t.version, t.type, t.architecture, t.description, \
+             t.installed_at, t.installed_by_changeset_id, t.install_source, \
+             t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, \
+             t.label_id, t.orphan_since \
+             FROM troves t \
+             LEFT JOIN converted_packages cp ON cp.trove_id = t.id \
+             WHERE t.install_source IN ('adopted-track', 'adopted-full') \
+             AND cp.id IS NULL \
+             ORDER BY t.name",
+        )?;
+        let troves = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(troves)
     }
 }

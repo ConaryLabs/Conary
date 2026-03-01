@@ -64,9 +64,11 @@ pub enum SystemCommands {
     ///
     /// Use --system to adopt all packages, or specify package names.
     /// Use --status to show adoption progress.
+    /// Use --refresh to detect version drift and update adopted packages.
+    /// Use --convert to batch convert adopted packages to CCS format.
     Adopt {
-        /// Package name(s) to adopt (ignored if --system or --status)
-        #[arg(required_unless_present_any = ["system", "status"])]
+        /// Package name(s) to adopt (ignored if --system, --status, --refresh, etc.)
+        #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "takeover", "sync_hook"])]
         packages: Vec<String>,
 
         #[command(flatten)]
@@ -87,6 +89,54 @@ pub enum SystemCommands {
         /// Show what would be adopted without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Only adopt packages matching this glob pattern (e.g., "lib*")
+        #[arg(long)]
+        pattern: Option<String>,
+
+        /// Skip packages matching this glob pattern (e.g., "kernel*")
+        #[arg(long)]
+        exclude: Option<String>,
+
+        /// Only adopt explicitly installed packages (skip auto-installed deps)
+        #[arg(long)]
+        explicit_only: bool,
+
+        /// Check adopted packages for version drift and update changed ones
+        #[arg(long)]
+        refresh: bool,
+
+        /// Convert adopted packages to CCS format
+        #[arg(long)]
+        convert: bool,
+
+        /// Number of parallel conversion threads (default: CPU count), requires --convert
+        #[arg(long, requires = "convert")]
+        jobs: Option<usize>,
+
+        /// Disable CDC chunking during conversion, requires --convert
+        #[arg(long, requires = "convert")]
+        no_chunking: bool,
+
+        /// Take over adopted packages from the system PM (Conary fully owns files)
+        #[arg(long)]
+        takeover: bool,
+
+        /// Skip interactive confirmation (requires --takeover)
+        #[arg(long, requires = "takeover")]
+        yes: bool,
+
+        /// Install/remove system PM sync hooks
+        #[arg(long)]
+        sync_hook: bool,
+
+        /// Remove sync hooks instead of installing (requires --sync-hook)
+        #[arg(long, requires = "sync_hook")]
+        remove_hook: bool,
+
+        /// Suppress output (for use by PM hooks)
+        #[arg(long)]
+        quiet: bool,
     },
 
     /// Garbage collect unreferenced files from CAS storage

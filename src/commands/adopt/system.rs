@@ -4,22 +4,42 @@
 //!
 //! Adopts all installed system packages into Conary tracking.
 
+use super::super::create_state_snapshot;
 use anyhow::Result;
 use conary::db::models::{
-    Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
-    TroveType,
+    Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
+    ProvideEntry, Trove, TroveType,
 };
 use conary::packages::{dpkg_query, pacman_query, rpm_query, DependencyInfo, SystemPackageManager};
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use super::super::progress::{AdoptPhase, AdoptProgress};
+use tracing::{debug, warn};
+
+/// Match a package name against a glob pattern using the `glob` crate.
+/// Returns false on invalid patterns (treated as no match).
+fn glob_match(pattern: &str, name: &str) -> bool {
+    glob::Pattern::new(pattern)
+        .map(|p| p.matches(name))
+        .unwrap_or(false)
+}
 
 /// File info tuple: (path, size, mode, digest, user, group, link_target)
 pub type FileInfoTuple = (String, i64, i32, Option<String>, Option<String>, Option<String>, Option<String>);
 
 /// Adopt all installed system packages
-pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> {
-    info!("Adopting all system packages (full={})", full);
-
+///
+/// Optional filters:
+/// - `pattern`: only adopt packages matching this glob (e.g., "lib*")
+/// - `exclude`: skip packages matching this glob (e.g., "kernel*")
+/// - `explicit_only`: only adopt explicitly installed packages (skip auto-deps)
+pub fn cmd_adopt_system(
+    db_path: &str,
+    full: bool,
+    dry_run: bool,
+    pattern: Option<&str>,
+    exclude: Option<&str>,
+    explicit_only: bool,
+) -> Result<()> {
     // Detect system package manager
     let pkg_mgr = SystemPackageManager::detect();
     if !pkg_mgr.is_available() {
@@ -60,30 +80,83 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
         }
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
+
+    // Query which packages were explicitly installed by the user vs auto-installed as deps.
+    // Failures are non-fatal: we fall back to marking everything as Explicit.
+    let user_installed: std::collections::HashSet<String> = match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_user_installed().unwrap_or_else(|e| {
+            warn!("Could not determine RPM install reasons ({}); marking all as explicit", e);
+            std::collections::HashSet::new()
+        }),
+        SystemPackageManager::Dpkg => dpkg_query::query_user_installed().unwrap_or_else(|e| {
+            warn!("Could not determine dpkg install reasons ({}); marking all as explicit", e);
+            std::collections::HashSet::new()
+        }),
+        SystemPackageManager::Pacman => pacman_query::query_user_installed().unwrap_or_else(|e| {
+            warn!("Could not determine pacman install reasons ({}); marking all as explicit", e);
+            std::collections::HashSet::new()
+        }),
+        _ => std::collections::HashSet::new(),
+    };
+    // If the set is empty (query failed / unsupported), treat all as explicit.
+    let has_install_reason_data = !user_installed.is_empty();
+
+    // Apply selective filters
+    let pre_filter_count = installed.len();
+    let installed: Vec<_> = installed
+        .into_iter()
+        .filter(|(name, _version, _arch, _desc)| {
+            if let Some(pat) = pattern {
+                if !glob_match(pat, name) {
+                    return false;
+                }
+            }
+            if let Some(exc) = exclude {
+                if glob_match(exc, name) {
+                    return false;
+                }
+            }
+            if explicit_only && has_install_reason_data && !user_installed.contains(name) {
+                return false;
+            }
+            true
+        })
+        .collect();
     let total = installed.len();
 
+    if total < pre_filter_count {
+        println!(
+            "Filtered: {} -> {} packages",
+            pre_filter_count, total
+        );
+    }
+
     if dry_run {
-        println!("Dry run: would adopt {} packages", total);
         let mut to_adopt = 0;
         let mut already_tracked = 0;
+        let mut explicit_count = 0;
+        let mut dep_count = 0;
 
-        for (name, version, _arch, _desc) in &installed {
+        for (name, _version, _arch, _desc) in &installed {
             if tracked_packages.contains(name) {
                 already_tracked += 1;
             } else {
                 to_adopt += 1;
-                if to_adopt <= 20 {
-                    println!("  {} {}", name, version);
+                if has_install_reason_data && !user_installed.contains(name) {
+                    dep_count += 1;
+                } else {
+                    explicit_count += 1;
                 }
             }
         }
 
-        if to_adopt > 20 {
-            println!("  ... and {} more", to_adopt - 20);
-        }
-
-        println!("\nSummary:");
+        println!("Dry run: would adopt {} packages\n", to_adopt);
+        println!("Summary:");
         println!("  Would adopt: {} packages", to_adopt);
+        if has_install_reason_data {
+            println!("    Explicit: {}", explicit_count);
+            println!("    Dependency: {}", dep_count);
+        }
         println!("  Already tracked: {} packages", already_tracked);
         println!("  Mode: {}", if full { "full (CAS storage)" } else { "track (metadata only)" });
         return Ok(());
@@ -119,17 +192,21 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
     let mut skipped_count = 0;
     let mut error_count = 0;
 
-    conary::db::transaction(&mut conn, |tx| {
+    let mode_label = if full { "Adopting (full)" } else { "Adopting" };
+    let mut progress = AdoptProgress::new(total as u64, mode_label);
+
+    let changeset_id = conary::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for (name, version, arch, description) in &installed {
             // Skip already-tracked packages
             if tracked_packages.contains(name) {
                 skipped_count += 1;
+                progress.skip_package();
                 continue;
             }
 
-            debug!("Adopting package: {} {}", name, version);
+            progress.set_phase(name, AdoptPhase::Querying);
 
             // Create trove
             let mut trove = Trove::new_with_source(
@@ -141,15 +218,24 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
             trove.architecture = Some(arch.clone());
             trove.description = description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
+            if has_install_reason_data && !user_installed.contains(name) {
+                trove.install_reason = InstallReason::Dependency;
+                trove.selection_reason = Some("Auto-installed dependency (from system package manager)".to_string());
+            } else {
+                trove.selection_reason = Some("Adopted from system".to_string());
+            }
 
             let trove_id = match trove.insert(tx) {
                 Ok(id) => id,
                 Err(e) => {
                     warn!("Failed to insert trove for {}: {}", name, e);
+                    progress.fail_package(name, &e.to_string());
                     error_count += 1;
                     continue;
                 }
             };
+
+            progress.set_phase(name, AdoptPhase::Inserting);
 
             // Query and insert files based on package manager
             let files: Vec<FileInfoTuple> = match pkg_mgr {
@@ -260,31 +346,34 @@ pub fn cmd_adopt_system(db_path: &str, full: bool, dry_run: bool) -> Result<()> 
             }
 
             adopted_count += 1;
-
-            // Progress update every 100 packages
-            if adopted_count % 100 == 0 {
-                info!("Adopted {} packages so far...", adopted_count);
-            }
+            progress.complete_package(name);
         }
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
-        Ok(())
+        Ok(changeset_id)
     })?;
 
-    println!("Adoption complete:");
-    println!("  Adopted: {} packages", adopted_count);
-    println!("  Skipped (already tracked): {} packages", skipped_count);
-    if error_count > 0 {
-        println!("  Errors: {} packages", error_count);
+    // Create state snapshot for rollback safety
+    if adopted_count > 0 {
+        create_state_snapshot(
+            &conn,
+            changeset_id,
+            &format!("Adopt {} system packages", adopted_count),
+        )?;
     }
-    println!(
-        "  Mode: {}",
-        if full {
-            "full (hardlinked into CAS - zero additional disk space)"
-        } else {
-            "track (metadata only)"
-        }
-    );
+
+    let mode_desc = if full { "full" } else { "track" };
+    if error_count > 0 {
+        progress.finish_with_error(&format!(
+            "Adopted {} packages, {} skipped, {} errors ({})",
+            adopted_count, skipped_count, error_count, mode_desc
+        ));
+    } else {
+        progress.finish(&format!(
+            "Adopted {} packages, {} skipped ({})",
+            adopted_count, skipped_count, mode_desc
+        ));
+    }
 
     Ok(())
 }
@@ -354,4 +443,43 @@ pub fn compute_file_hash(
     file_digest.map(String::from).unwrap_or_else(|| {
         format!("adopted-{}", file_path.replace('/', "_"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_glob_match_star() {
+        assert!(glob_match("lib*", "libssl"));
+        assert!(glob_match("lib*", "lib"));
+        assert!(!glob_match("lib*", "openssl"));
+    }
+
+    #[test]
+    fn test_glob_match_question() {
+        assert!(glob_match("lib?", "liba"));
+        assert!(!glob_match("lib?", "lib"));
+        assert!(!glob_match("lib?", "libab"));
+    }
+
+    #[test]
+    fn test_glob_match_exact() {
+        assert!(glob_match("nginx", "nginx"));
+        assert!(!glob_match("nginx", "nginx-core"));
+    }
+
+    #[test]
+    fn test_glob_match_middle_star() {
+        assert!(glob_match("*ssl*", "libssl3"));
+        assert!(glob_match("*ssl*", "openssl"));
+        assert!(!glob_match("*ssl*", "libcurl"));
+    }
+
+    #[test]
+    fn test_glob_match_complex() {
+        assert!(glob_match("kernel*", "kernel-core"));
+        assert!(glob_match("kernel*", "kernel-modules"));
+        assert!(!glob_match("kernel*", "linux-kernel"));
+    }
 }
