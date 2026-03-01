@@ -70,6 +70,9 @@ walkdir = "2.5"                  # Directory traversal for chunk store
 # Parallel processing for concurrent downloads
 rayon = "1.8"
 
+# SAT-based dependency resolver
+resolvo = "0.10"
+
 # Progress bars for downloads
 indicatif = "0.17"
 

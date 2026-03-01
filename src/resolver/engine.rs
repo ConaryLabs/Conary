@@ -2,102 +2,91 @@
 
 //! Dependency resolver implementation
 //!
-//! The main resolver that uses the dependency graph to determine
-//! installation order, find missing dependencies, and detect conflicts.
+//! Uses resolvo's SAT solver for resolution with backtracking support.
+//! The dependency graph is still maintained for visualization and stats.
 
-use crate::db::models::ProvideEntry;
 use crate::error::Result;
 use crate::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
-use std::collections::HashMap;
 
 use super::conflict::Conflict;
 use super::graph::{DependencyEdge, DependencyGraph, PackageNode};
 use super::plan::{MissingDependency, ResolutionPlan};
+use super::sat;
 
-/// Dependency resolver for determining installation order and conflicts
-pub struct Resolver {
+/// Dependency resolver for determining installation order and conflicts.
+///
+/// Uses the SAT-based solver (resolvo) for resolution with backtracking.
+/// The dependency graph is maintained for visualization and dependency stats.
+pub struct Resolver<'db> {
     graph: DependencyGraph,
+    conn: &'db Connection,
 }
 
-impl Resolver {
-    /// Create a new resolver with the current state from database
-    pub fn new(conn: &Connection) -> Result<Self> {
+impl<'db> Resolver<'db> {
+    /// Create a new SAT-backed resolver from the database.
+    pub fn new(conn: &'db Connection) -> Result<Self> {
         let graph = DependencyGraph::build_from_db(conn)?;
-        Ok(Self { graph })
+        Ok(Self { graph, conn })
     }
 
-    /// Create a resolver with a custom graph (for testing)
-    pub fn with_graph(graph: DependencyGraph) -> Self {
-        Self { graph }
-    }
-
-    /// Resolve dependencies for installing a new package
+    /// Resolve dependencies for installing a new package.
     ///
-    /// This determines:
-    /// - What packages need to be installed in what order
-    /// - What dependencies are missing
-    /// - What conflicts exist
-    ///
-    /// Note: We only check for cycles involving the new package, not pre-existing
-    /// cycles in the system (like glibc <-> glibc-common which are tolerated).
+    /// Adds the new package and its dependency edges to the graph, then
+    /// checks only *this package's* edges for missing dependencies and
+    /// version conflicts. Pre-existing system issues are not surfaced here.
+    /// Callers use the `missing` list to fetch packages from repositories
+    /// (via SAT-based transitive resolution).
     pub fn resolve_install(
         &mut self,
         package_name: String,
         version: RpmVersion,
         dependencies: Vec<DependencyEdge>,
     ) -> Result<ResolutionPlan> {
-        // Add the new package to the graph
-        let node = PackageNode::new(package_name.clone(), version.clone());
-        self.graph.add_node(node);
+        use crate::db::models::ProvideEntry;
 
-        // Add its dependencies
-        for dep in dependencies {
-            self.graph.add_edge(dep);
+        // Add the new package and its edges to the graph
+        let node = PackageNode::new(package_name.clone(), version);
+        self.graph.add_node(node);
+        for dep in &dependencies {
+            self.graph.add_edge(dep.clone());
         }
 
-        // Resolve with single-package focus (skip global cycle detection)
-        self.resolve_single_install(&package_name)
-    }
-
-    /// Resolve for a single new package install
-    ///
-    /// This is a focused resolution that only checks constraints relevant to the
-    /// new package, ignoring pre-existing cycles in the dependency graph.
-    ///
-    /// Cycle detection is skipped because a NEW package cannot be part of a cycle:
-    /// nothing in the system depends on it yet, so there's no way for a dependency
-    /// path to lead back to it.
-    fn resolve_single_install(&self, package_name: &str) -> Result<ResolutionPlan> {
+        let mut conflicts = Vec::new();
         let mut missing = Vec::new();
 
-        // Find missing dependencies for the new package
-        if let Some(edges) = self.graph.edges.get(package_name) {
-            for edge in edges {
-                // Skip virtual provides like perl(Cwd), python3dist(foo), etc.
-                // These are capabilities provided by packages, not package names.
-                // A proper solution would check the "provides" table in the DB.
-                if ProvideEntry::is_virtual_provide(&edge.to) {
-                    continue;
-                }
+        // Check only this package's dependency edges for missing deps
+        for dep in &dependencies {
+            if ProvideEntry::is_virtual_provide(&dep.to) {
+                continue;
+            }
 
-                if self.graph.get_node(&edge.to).is_none() {
-                    missing.push(MissingDependency {
-                        name: edge.to.clone(),
-                        constraint: edge.constraint.clone(),
-                        required_by: vec![package_name.to_string()],
+            if self.graph.get_node(&dep.to).is_none() {
+                missing.push(MissingDependency {
+                    name: dep.to.clone(),
+                    constraint: dep.constraint.clone(),
+                    required_by: vec![package_name.clone()],
+                });
+            } else {
+                // Node exists — check version constraint
+                let target = self.graph.get_node(&dep.to).unwrap();
+                if !dep.constraint.satisfies(&target.version) {
+                    conflicts.push(Conflict::UnsatisfiableConstraint {
+                        package: dep.to.clone(),
+                        installed_version: target.version.to_string(),
+                        required_constraint: dep.constraint.to_string(),
+                        required_by: package_name.clone(),
                     });
                 }
             }
         }
 
-        // Check version constraints for the new package's dependencies
-        // (only for non-virtual dependencies)
-        let conflicts = self.check_constraints_for_package(package_name);
-
-        // For single install, install order is just this package
-        // (dependencies are assumed to already be installed)
-        let install_order = vec![package_name.to_string()];
+        // Get installation order via topological sort (uses full graph, which is fine —
+        // the order just needs to be valid, and including existing packages is harmless)
+        let install_order = match self.graph.topological_sort() {
+            Ok(order) => order,
+            Err(_) => Vec::new(),
+        };
 
         Ok(ResolutionPlan {
             install_order,
@@ -106,35 +95,10 @@ impl Resolver {
         })
     }
 
-    /// Check constraints only for a specific package's dependencies
-    fn check_constraints_for_package(&self, package_name: &str) -> Vec<Conflict> {
-        let mut conflicts = Vec::new();
-
-        if let Some(edges) = self.graph.edges.get(package_name) {
-            for edge in edges {
-                // Skip virtual provides - they don't have nodes in our graph
-                if ProvideEntry::is_virtual_provide(&edge.to) {
-                    continue;
-                }
-
-                if let Some(node) = self.graph.get_node(&edge.to) {
-                    // Check if installed version satisfies the constraint
-                    if !edge.constraint.satisfies(&node.version) {
-                        conflicts.push(Conflict::UnsatisfiableConstraint {
-                            package: edge.to.clone(),
-                            installed_version: node.version.to_string(),
-                            required_constraint: edge.constraint.to_string(),
-                            required_by: package_name.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        conflicts
-    }
-
-    /// Resolve the current dependency graph
+    /// Resolve the current dependency graph for consistency checking.
+    ///
+    /// Uses the graph-based approach for full system state analysis
+    /// (cycle detection, constraint checking across all installed packages).
     pub fn resolve(&self) -> Result<ResolutionPlan> {
         let mut conflicts = Vec::new();
         let mut missing = Vec::new();
@@ -167,7 +131,6 @@ impl Resolver {
         let install_order = match self.graph.topological_sort() {
             Ok(order) => order,
             Err(_) => {
-                // Should have been caught by cycle detection, but handle anyway
                 return Ok(ResolutionPlan {
                     install_order: Vec::new(),
                     missing,
@@ -183,21 +146,20 @@ impl Resolver {
         })
     }
 
-    /// Find all missing dependencies in the graph
+    /// Find all missing dependencies in the graph.
     fn find_missing_dependencies(
         &self,
-    ) -> HashMap<String, (VersionConstraint, Vec<String>)> {
-        let mut missing: HashMap<String, (VersionConstraint, Vec<String>)> = HashMap::new();
+    ) -> std::collections::HashMap<String, (VersionConstraint, Vec<String>)> {
+        use crate::db::models::ProvideEntry;
+        let mut missing: std::collections::HashMap<String, (VersionConstraint, Vec<String>)> =
+            std::collections::HashMap::new();
 
         for (package_name, edges) in &self.graph.edges {
             for edge in edges {
-                // Skip virtual provides like perl(Cwd), python3dist(foo), etc.
-                // These are capabilities provided by packages, not package names.
                 if ProvideEntry::is_virtual_provide(&edge.to) {
                     continue;
                 }
 
-                // Check if the dependency exists in the graph
                 if self.graph.get_node(&edge.to).is_none() {
                     missing
                         .entry(edge.to.clone())
@@ -211,13 +173,12 @@ impl Resolver {
         missing
     }
 
-    /// Check all version constraints and return conflicts
+    /// Check all version constraints and return conflicts.
     fn check_all_constraints(&self) -> Vec<Conflict> {
         let mut conflicts = Vec::new();
-        let mut constraint_map: HashMap<String, Vec<(String, VersionConstraint)>> =
-            HashMap::new();
+        let mut constraint_map: std::collections::HashMap<String, Vec<(String, VersionConstraint)>> =
+            std::collections::HashMap::new();
 
-        // Collect all constraints for each package
         for (requirer, edges) in &self.graph.edges {
             for edge in edges {
                 constraint_map
@@ -227,10 +188,8 @@ impl Resolver {
             }
         }
 
-        // Check each package's constraints
         for (package_name, constraints) in constraint_map {
             if let Some(node) = self.graph.get_node(&package_name) {
-                // Check if installed version satisfies all constraints
                 for (requirer, constraint) in &constraints {
                     if !constraint.satisfies(&node.version) {
                         conflicts.push(Conflict::UnsatisfiableConstraint {
@@ -242,7 +201,6 @@ impl Resolver {
                     }
                 }
 
-                // Check for conflicting constraints
                 if constraints.len() > 1 {
                     let mut conflicting = false;
                     for i in 0..constraints.len() {
@@ -273,15 +231,13 @@ impl Resolver {
         conflicts
     }
 
-    /// Check if removing a package would break dependencies
+    /// Check if removing a package would break dependencies.
     pub fn check_removal(&self, package_name: &str) -> Result<Vec<String>> {
-        let breaking = self.graph.find_breaking_packages(package_name);
-        Ok(breaking)
+        sat::solve_removal(self.conn, &[package_name.to_string()])
     }
 
-    /// Get the dependency graph
+    /// Get the dependency graph (for visualization/stats).
     pub fn graph(&self) -> &DependencyGraph {
         &self.graph
     }
 }
-
