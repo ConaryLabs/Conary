@@ -264,33 +264,40 @@ impl TransactionJournal {
                 continue;
             }
 
-            let expected_crc = u32::from_str_radix(parts[0], 16).map_err(|_| {
-                crate::Error::IoError(format!(
-                    "Invalid CRC32 at line {}: {}",
-                    line_num + 1,
-                    parts[0]
-                ))
-            })?;
+            let expected_crc = match u32::from_str_radix(parts[0], 16) {
+                Ok(crc) => crc,
+                Err(_) => {
+                    log::warn!(
+                        "Invalid CRC32 at line {}: {}, skipping record",
+                        line_num + 1,
+                        parts[0]
+                    );
+                    continue;
+                }
+            };
 
             let actual_crc = crc32fast::hash(parts[1].as_bytes());
             if expected_crc != actual_crc {
                 log::warn!(
-                    "CRC mismatch at line {}: expected {:08x}, got {:08x}",
+                    "CRC mismatch at line {}: expected {:08x}, got {:08x}, skipping record",
                     line_num + 1,
                     expected_crc,
                     actual_crc
                 );
-                // Stop reading at first corrupted record
-                break;
+                continue;
             }
 
-            let record: JournalRecord = serde_json::from_str(parts[1]).map_err(|e| {
-                crate::Error::IoError(format!(
-                    "Failed to parse journal record at line {}: {}",
-                    line_num + 1,
-                    e
-                ))
-            })?;
+            let record: JournalRecord = match serde_json::from_str(parts[1]) {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to parse journal record at line {}: {}, skipping record",
+                        line_num + 1,
+                        e
+                    );
+                    continue;
+                }
+            };
 
             records.push(record);
         }

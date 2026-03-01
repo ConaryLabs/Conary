@@ -34,6 +34,20 @@ use tokio_stream::StreamExt;
 /// Shared daemon state type
 pub type SharedState = Arc<DaemonState>;
 
+/// RAII guard that decrements the SSE connection counter on drop
+struct SseConnectionGuard {
+    metrics: Arc<DaemonState>,
+}
+
+impl Drop for SseConnectionGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .metrics
+            .sse_connections
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Health check response
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -570,6 +584,7 @@ async fn list_transactions_handler(
     State(state): State<SharedState>,
     Query(params): Query<TransactionListQuery>,
 ) -> ApiResult<Json<Vec<TransactionSummary>>> {
+    let limit = params.limit.map(|n| n.min(1000));
     let jobs = run_db_query(&state, move |conn| {
         let jobs = match params.status.as_deref() {
             Some("queued") => DaemonJob::list_by_status(conn, JobStatus::Queued)?,
@@ -577,7 +592,7 @@ async fn list_transactions_handler(
             Some("completed") => DaemonJob::list_by_status(conn, JobStatus::Completed)?,
             Some("failed") => DaemonJob::list_by_status(conn, JobStatus::Failed)?,
             Some("cancelled") => DaemonJob::list_by_status(conn, JobStatus::Cancelled)?,
-            _ => DaemonJob::list_all(conn, params.limit)?,
+            _ => DaemonJob::list_all(conn, limit)?,
         };
         Ok(jobs)
     })
@@ -848,8 +863,11 @@ async fn transaction_stream_handler(
         ))));
     }
 
-    // Track SSE connection
+    // Track SSE connection (guard decrements on drop when stream ends)
     state.metrics.sse_connections.fetch_add(1, Ordering::Relaxed);
+    let _guard = SseConnectionGuard {
+        metrics: state.clone(),
+    };
 
     // Subscribe to the event broadcast channel
     let rx = state.subscribe();
@@ -910,8 +928,17 @@ async fn transaction_stream_handler(
             .data(connected_data.to_string()))
     });
 
+    // Move guard into the stream so it lives as long as the stream does
+    let guard_stream = futures::stream::once(async move {
+        let _guard = _guard;
+        // This stream item is never yielded; it just keeps the guard alive
+        futures::future::pending::<Result<Event, Infallible>>().await
+    });
+
     // Create the final stream
-    let stream = connected_event.chain(event_stream);
+    let stream = connected_event
+        .chain(event_stream)
+        .chain(guard_stream);
 
     // Return SSE response with keepalive
     Ok(Sse::new(stream).keep_alive(
@@ -926,8 +953,17 @@ async fn transaction_stream_handler(
 /// POST /v1/transactions/dry-run
 async fn dry_run_handler(
     State(_state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<Json<DryRunResponse>> {
+    // Dry-run is a mutating-intent operation; check auth based on operation types
+    let action = match determine_job_kind(&request.operations) {
+        crate::daemon::JobKind::Install => Action::Install,
+        crate::daemon::JobKind::Remove => Action::Remove,
+        crate::daemon::JobKind::Update => Action::Update,
+        _ => Action::Install,
+    };
+    require_auth(&creds, action)?;
     // Validate request
     if request.operations.is_empty() {
         return Err(ApiError(DaemonError::bad_request("At least one operation is required")));
@@ -1342,8 +1378,11 @@ async fn gc_handler(
 async fn events_handler(
     State(state): State<SharedState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Track SSE connection
+    // Track SSE connection (guard decrements on drop when stream ends)
     state.metrics.sse_connections.fetch_add(1, Ordering::Relaxed);
+    let _guard = SseConnectionGuard {
+        metrics: state.clone(),
+    };
 
     // Subscribe to the event broadcast channel
     let rx = state.subscribe();
@@ -1381,8 +1420,16 @@ async fn events_handler(
             .data(r#"{"status": "connected"}"#))
     });
 
+    // Move guard into the stream so it lives as long as the stream does
+    let guard_stream = futures::stream::once(async move {
+        let _guard = _guard;
+        futures::future::pending::<Result<Event, Infallible>>().await
+    });
+
     // Create the final stream
-    let stream = connected_event.chain(event_stream);
+    let stream = connected_event
+        .chain(event_stream)
+        .chain(guard_stream);
 
     // Return SSE response with keepalive
     Sse::new(stream).keep_alive(

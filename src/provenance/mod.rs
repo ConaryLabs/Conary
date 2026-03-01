@@ -21,7 +21,7 @@ pub use source::{SourceProvenance, PatchInfo};
 pub use build::{BuildProvenance, BuildDependency, HostAttestation, ReproducibilityInfo};
 pub use signature::{SignatureProvenance, Signature, SignatureScope, TransparencyLog};
 pub use content::{ContentProvenance, ComponentHash};
-pub use dna::{PackageDna, DnaHash};
+pub use dna::{DnaHash, DnaHashError, PackageDna};
 pub use slsa::{build_slsa_statement, SlsaContext, SlsaError};
 
 use chrono::{DateTime, Utc};
@@ -74,7 +74,7 @@ impl Provenance {
         hasher.update(self.signatures.canonical_bytes());
         hasher.update(self.content.canonical_bytes());
 
-        DnaHash::from_bytes(&hasher.finalize())
+        DnaHash::from_bytes(&hasher.finalize()).expect("SHA-256 always produces 32 bytes")
     }
 
     /// Serialize to JSON for storage

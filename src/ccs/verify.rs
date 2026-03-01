@@ -4,6 +4,7 @@
 //! Provides signature verification and content integrity checking for CCS packages.
 //! Uses Ed25519 signatures for manifest authentication.
 
+use crate::ccs::binary_manifest::{BinaryManifest, MerkleTree};
 use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::hash;
@@ -40,6 +41,9 @@ pub enum VerifyError {
 
     #[error("Missing content blob: {0}")]
     MissingBlob(String),
+
+    #[error("Merkle root mismatch: expected {expected}, got {actual}")]
+    MerkleRootMismatch { expected: String, actual: String },
 
     #[error("Trust policy violation: {0}")]
     TrustViolation(String),
@@ -182,6 +186,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
 
     let mut manifest: Option<CcsManifest> = None;
     let mut manifest_raw: Option<Vec<u8>> = None;
+    let mut binary_manifest: Option<BinaryManifest> = None;
     let mut signature: Option<PackageSignature> = None;
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
     let mut components: HashMap<String, ComponentData> = HashMap::new();
@@ -198,8 +203,9 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
             entry.read_to_end(&mut content)?;
             manifest_raw = Some(content.clone());
             // Convert CBOR to CcsManifest for compatibility
-            if let Ok(bin_manifest) = crate::ccs::binary_manifest::BinaryManifest::from_cbor(&content) {
+            if let Ok(bin_manifest) = BinaryManifest::from_cbor(&content) {
                 manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(&bin_manifest));
+                binary_manifest = Some(bin_manifest);
             }
         } else if manifest.is_none() && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml") {
             let mut content = String::new();
@@ -252,6 +258,17 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
 
     // Verify content hashes
     let content_status = verify_content_hashes(&files, &blobs)?;
+
+    // Verify Merkle root against binary manifest's content_root
+    if let Some(ref bin_manifest) = binary_manifest
+        && !MerkleTree::verify_root(&bin_manifest.components, &bin_manifest.content_root)
+    {
+        let calculated = MerkleTree::calculate_root(&bin_manifest.components);
+        warnings.push(format!(
+            "Merkle root mismatch: expected {}, got {}",
+            bin_manifest.content_root.value, calculated.value
+        ));
+    }
 
     let valid = matches!(
         (&signature_status, &content_status),
@@ -377,6 +394,37 @@ fn verify_content_hashes(
             continue;
         }
 
+        // Chunked files: verify each chunk hash instead of the whole-file hash
+        if let Some(ref chunks) = file.chunks {
+            let mut chunk_errors = false;
+            for chunk_hash in chunks {
+                match blobs.get(chunk_hash) {
+                    Some(content) => {
+                        let actual_hash = hash::sha256(content);
+                        if actual_hash != *chunk_hash {
+                            errors.push(format!(
+                                "{}: chunk hash mismatch: expected {}, got {}",
+                                file.path, chunk_hash, actual_hash
+                            ));
+                            chunk_errors = true;
+                        }
+                    }
+                    None => {
+                        errors.push(format!(
+                            "{}: missing chunk blob {}",
+                            file.path, chunk_hash
+                        ));
+                        chunk_errors = true;
+                    }
+                }
+            }
+            if !chunk_errors {
+                checked += 1;
+            }
+            continue;
+        }
+
+        // Non-chunked files: verify whole-file hash
         match blobs.get(&file.hash) {
             Some(content) => {
                 let actual_hash = hash::sha256(content);

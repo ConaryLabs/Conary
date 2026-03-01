@@ -131,16 +131,32 @@ impl SystemState {
             crate::error::Error::InitError("Cannot set active without ID".to_string())
         })?;
 
-        // Unset all active states
-        conn.execute("UPDATE system_states SET is_active = 0 WHERE is_active = 1", [])?;
+        conn.execute("SAVEPOINT set_active", [])?;
 
-        // Set this one as active
-        conn.execute(
-            "UPDATE system_states SET is_active = 1 WHERE id = ?1",
-            [id],
-        )?;
+        let result = (|| -> Result<()> {
+            // Unset all active states
+            conn.execute("UPDATE system_states SET is_active = 0 WHERE is_active = 1", [])?;
 
-        Ok(())
+            // Set this one as active
+            conn.execute(
+                "UPDATE system_states SET is_active = 1 WHERE id = ?1",
+                [id],
+            )?;
+
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute("RELEASE SAVEPOINT set_active", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK TO SAVEPOINT set_active", []);
+                let _ = conn.execute("RELEASE SAVEPOINT set_active", []);
+                Err(e)
+            }
+        }
     }
 
     /// Delete a state by ID

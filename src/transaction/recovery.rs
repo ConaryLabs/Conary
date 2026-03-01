@@ -12,7 +12,7 @@
 //! since a crash can occur after SQLite commits but before the journal record
 //! is written.
 
-use crate::filesystem::path::safe_join;
+use crate::filesystem::path::{safe_join, sanitize_path};
 use crate::Result;
 use rusqlite::Connection;
 use std::fs;
@@ -252,6 +252,16 @@ pub fn rollback_transaction(
                     if backup_path.is_file() {
                         if let Ok(content) = fs::read_to_string(backup_path) {
                             if let Some(target) = content.strip_prefix("SYMLINK:") {
+                                // Sanitize symlink target to prevent path traversal
+                                if sanitize_path(target).is_err() {
+                                    log::warn!(
+                                        "Refusing to restore symlink with unsafe target {:?} -> {}",
+                                        final_path,
+                                        target
+                                    );
+                                    continue;
+                                }
+
                                 // Restore symlink
                                 #[cfg(unix)]
                                 {

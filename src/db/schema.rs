@@ -34,10 +34,13 @@ pub fn get_schema_version(conn: &Connection) -> Result<i32> {
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
             [],
             |row| row.get(0),
-        )
-        .unwrap_or(0);
+        );
 
-    Ok(version)
+    match version {
+        Ok(v) => Ok(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Set the schema version
@@ -59,11 +62,17 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         return Ok(());
     }
 
-    // Apply migrations in order
+    // Apply migrations in order, each wrapped in a transaction for atomicity
     for version in (current_version + 1)..=SCHEMA_VERSION {
         info!("Applying migration to version {}", version);
-        apply_migration(conn, version)?;
-        set_schema_version(conn, version)?;
+        conn.execute("BEGIN", [])?;
+        match apply_migration(conn, version).and_then(|()| set_schema_version(conn, version)) {
+            Ok(()) => conn.execute("COMMIT", [])?,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                return Err(e);
+            }
+        };
     }
 
     info!(
@@ -115,7 +124,10 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         37 => migrations::migrate_v37(conn),
         38 => migrations::migrate_v38(conn),
         39 => migrations::migrate_v39(conn),
-        _ => panic!("Unknown migration version: {}", version),
+        _ => Err(crate::error::Error::InitError(format!(
+            "Unknown migration version: {}",
+            version
+        ))),
     }
 }
 

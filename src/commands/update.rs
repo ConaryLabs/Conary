@@ -28,7 +28,9 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    Trove::pin(&conn, trove.id.unwrap())?;
+    let trove_id = trove.id
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
+    Trove::pin(&conn, trove_id)?;
     println!("Pinned package '{}' at version {}", package_name, trove.version);
     println!("This package will be skipped during updates and cannot be removed until unpinned.");
 
@@ -52,7 +54,9 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    Trove::unpin(&conn, trove.id.unwrap())?;
+    let trove_id = trove.id
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
+    Trove::unpin(&conn, trove_id)?;
     println!("Unpinned package '{}' (version {})", package_name, trove.version);
     println!("This package can now be updated or removed.");
 
@@ -87,7 +91,7 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
 /// Check for and apply package updates
 ///
 /// If `security_only` is true, only applies security updates (critical/important severity).
-pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_only: bool) -> Result<()> {
+pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_only: bool, sandbox_mode: SandboxMode) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
     } else {
@@ -353,7 +357,7 @@ pub fn cmd_update(package: Option<String>, db_path: &str, root: &str, security_o
             if let Err(e) = cmd_install(&path_str, super::InstallOptions {
                 db_path,
                 root,
-                sandbox_mode: SandboxMode::None,
+                sandbox_mode,
                 ..Default::default()
             }) {
                 progress.fail_package(&trove.name, &e.to_string());
@@ -479,7 +483,7 @@ pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
 ///
 /// This updates all installed packages that are members of the specified collection.
 /// If `security_only` is true, only applies security updates.
-pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bool) -> Result<()> {
+pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bool, sandbox_mode: SandboxMode) -> Result<()> {
     info!("Updating collection: {}", name);
     let conn = conary::db::open(db_path)?;
 
@@ -565,7 +569,7 @@ pub fn cmd_update_group(name: &str, db_path: &str, root: &str, security_only: bo
 
     for pkg_name in &updates_to_apply {
         println!("\nUpdating {}...", pkg_name);
-        match cmd_update(Some(pkg_name.clone()), db_path, root, security_only) {
+        match cmd_update(Some(pkg_name.clone()), db_path, root, security_only, sandbox_mode) {
             Ok(()) => updated_count += 1,
             Err(e) => {
                 eprintln!("  Failed to update {}: {}", pkg_name, e);

@@ -171,11 +171,14 @@ impl DaemonJob {
     /// List all jobs (most recent first)
     pub fn list_all(conn: &Connection, limit: Option<usize>) -> Result<Vec<Self>> {
         let sql = match limit {
-            Some(n) => format!(
-                "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-                 requested_by_uid, client_info, created_at, started_at, completed_at
-                 FROM daemon_jobs ORDER BY created_at DESC LIMIT {}", n
-            ),
+            Some(n) => {
+                let n = n.min(1000);
+                format!(
+                    "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
+                     requested_by_uid, client_info, created_at, started_at, completed_at
+                     FROM daemon_jobs ORDER BY created_at DESC LIMIT {}", n
+                )
+            }
             None => "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
                  requested_by_uid, client_info, created_at, started_at, completed_at
                  FROM daemon_jobs ORDER BY created_at DESC".to_string(),

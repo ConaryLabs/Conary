@@ -137,10 +137,11 @@ impl DependencyEntry {
 
     /// Find all packages that can satisfy a dependency (by name)
     pub fn find_providers(conn: &Connection, dependency_name: &str) -> Result<Vec<Trove>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id
-             FROM troves WHERE name = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM troves WHERE name = ?1",
+            super::trove::TROVE_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let troves = stmt
             .query_map([dependency_name], Trove::from_row)?

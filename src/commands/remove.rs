@@ -155,8 +155,7 @@ pub fn cmd_remove(package_name: &str, db_path: &str, root: &str, version: Option
     let snapshot_json = serde_json::to_string(&snapshot)?;
 
     // Set up file deployer for actual filesystem operations
-    let db_dir = std::env::var("CONARY_DB_DIR").unwrap_or_else(|_| "/var/lib/conary".to_string());
-    let objects_dir = PathBuf::from(&db_dir).join("objects");
+    let objects_dir = conary::db::paths::objects_dir(db_path);
     let install_root = PathBuf::from(root);
     let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 

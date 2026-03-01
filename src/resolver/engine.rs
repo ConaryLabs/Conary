@@ -191,6 +191,12 @@ impl Resolver {
 
         for (package_name, edges) in &self.graph.edges {
             for edge in edges {
+                // Skip virtual provides like perl(Cwd), python3dist(foo), etc.
+                // These are capabilities provided by packages, not package names.
+                if ProvideEntry::is_virtual_provide(&edge.to) {
+                    continue;
+                }
+
                 // Check if the dependency exists in the graph
                 if self.graph.get_node(&edge.to).is_none() {
                     missing

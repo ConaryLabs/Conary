@@ -117,10 +117,28 @@ impl RepositoryClient {
             attempt += 1;
             match self.client.get(&metadata_url).send() {
                 Ok(response) => {
-                    if !response.status().is_success() {
+                    let status = response.status();
+
+                    // Retry on transient server errors
+                    if status == reqwest::StatusCode::BAD_GATEWAY
+                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        if attempt >= self.max_retries {
+                            return Err(Error::DownloadError(format!(
+                                "HTTP {} from {} after {attempt} attempts",
+                                status, metadata_url
+                            )));
+                        }
+                        warn!("Metadata fetch attempt {} got HTTP {}, retrying...", attempt, status);
+                        std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                        continue;
+                    }
+
+                    if !status.is_success() {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
-                            response.status(),
+                            status,
                             metadata_url
                         )));
                     }
@@ -264,10 +282,28 @@ impl RepositoryClient {
             attempt += 1;
             match self.client.get(url).send() {
                 Ok(response) => {
-                    if !response.status().is_success() {
+                    let status = response.status();
+
+                    // Retry on transient server errors
+                    if status == reqwest::StatusCode::BAD_GATEWAY
+                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        if attempt >= self.max_retries {
+                            return Err(Error::DownloadError(format!(
+                                "HTTP {} from {} after {attempt} attempts",
+                                status, url
+                            )));
+                        }
+                        warn!("Download attempt {} got HTTP {}, retrying...", attempt, status);
+                        std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                        continue;
+                    }
+
+                    if !status.is_success() {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
-                            response.status(),
+                            status,
                             url
                         )));
                     }
@@ -297,13 +333,14 @@ impl RepositoryClient {
                     info!("Downloaded {} bytes", downloaded);
 
                     // Atomic rename from temp to final destination
-                    fs::rename(&temp_path, dest_path).map_err(|e| {
-                        Error::IoError(format!(
+                    if let Err(e) = fs::rename(&temp_path, dest_path) {
+                        let _ = fs::remove_file(&temp_path);
+                        return Err(Error::IoError(format!(
                             "Failed to move {} to {}: {e}",
                             temp_path.display(),
                             dest_path.display()
-                        ))
-                    })?;
+                        )));
+                    }
 
                     info!("Successfully downloaded to {}", dest_path.display());
                     return Ok(());

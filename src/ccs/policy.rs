@@ -403,25 +403,32 @@ fn strip_elf_binary(content: &[u8]) -> std::result::Result<Vec<u8>, String> {
 
     // Zero out section header references in the ELF header
     // This tells the loader there are no section headers
+    // Use the correct byte order based on ELF header endianness
     if elf.is_64 {
         // 64-bit ELF: e_shoff at offset 40 (8 bytes), e_shnum at 60 (2 bytes), e_shstrndx at 62 (2 bytes)
         if stripped.len() >= 64 {
-            // e_shoff (8 bytes at offset 40)
-            stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
-            // e_shnum (2 bytes at offset 60)
-            stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
-            // e_shstrndx (2 bytes at offset 62)
-            stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
+            if elf.little_endian {
+                stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
+                stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
+                stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
+            } else {
+                stripped[40..48].copy_from_slice(&0u64.to_be_bytes());
+                stripped[60..62].copy_from_slice(&0u16.to_be_bytes());
+                stripped[62..64].copy_from_slice(&0u16.to_be_bytes());
+            }
         }
     } else {
         // 32-bit ELF: e_shoff at offset 32 (4 bytes), e_shnum at 48 (2 bytes), e_shstrndx at 50 (2 bytes)
         if stripped.len() >= 52 {
-            // e_shoff (4 bytes at offset 32)
-            stripped[32..36].copy_from_slice(&0u32.to_le_bytes());
-            // e_shnum (2 bytes at offset 48)
-            stripped[48..50].copy_from_slice(&0u16.to_le_bytes());
-            // e_shstrndx (2 bytes at offset 50)
-            stripped[50..52].copy_from_slice(&0u16.to_le_bytes());
+            if elf.little_endian {
+                stripped[32..36].copy_from_slice(&0u32.to_le_bytes());
+                stripped[48..50].copy_from_slice(&0u16.to_le_bytes());
+                stripped[50..52].copy_from_slice(&0u16.to_le_bytes());
+            } else {
+                stripped[32..36].copy_from_slice(&0u32.to_be_bytes());
+                stripped[48..50].copy_from_slice(&0u16.to_be_bytes());
+                stripped[50..52].copy_from_slice(&0u16.to_be_bytes());
+            }
         }
     }
 

@@ -511,9 +511,15 @@ fn scan_config_files(files: &[&PackageFile]) -> InferenceResult<InferredCapabili
             // Look for port patterns
             for cap in PORT_RE.captures_iter(text) {
                 if let Some(port) = cap.get(1) {
-                    let port_str = port.as_str().to_string();
-                    if !result.network.listen_ports.contains(&port_str) {
-                        result.network.listen_ports.push(port_str);
+                    let port_str = port.as_str();
+                    // Validate port is in the valid TCP/UDP range
+                    if let Ok(port_num) = port_str.parse::<u32>() {
+                        if port_num >= 1 && port_num <= 65535 {
+                            let port_string = port_str.to_string();
+                            if !result.network.listen_ports.contains(&port_string) {
+                                result.network.listen_ports.push(port_string);
+                            }
+                        }
                     }
                 }
             }

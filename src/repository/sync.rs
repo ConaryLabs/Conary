@@ -190,8 +190,11 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
+    // Use a transaction for the delete + insert (atomic fallback sync)
+    let tx = conn.unchecked_transaction()?;
+
     // Delete old package entries for this repository
-    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
 
     // Insert new package metadata
     let mut count = 0;
@@ -223,7 +226,7 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
         repo_pkg.description = pkg_meta.description;
         repo_pkg.dependencies = deps_json;
 
-        repo_pkg.insert(conn)?;
+        repo_pkg.insert(&tx)?;
         count += 1;
 
         // Store delta metadata if available
@@ -241,7 +244,7 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
                     pkg_meta.size,
                 );
 
-                delta.insert(conn)?;
+                delta.insert(&tx)?;
                 delta_count += 1;
             }
         }
@@ -249,7 +252,9 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
     // Update last_sync timestamp
     repo.last_sync = Some(current_timestamp());
-    repo.update(conn)?;
+    repo.update(&tx)?;
+
+    tx.commit()?;
 
     info!(
         "Synchronized {} packages and {} deltas from repository {}",

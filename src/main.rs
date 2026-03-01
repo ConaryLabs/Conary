@@ -1,7 +1,7 @@
 // src/main.rs
 //! Conary Package Manager - CLI Entry Point
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use std::io;
@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             no_capture, skip_optional,
         }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
-                .expect("Invalid sandbox mode. Use: auto, always, never");
+                .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
@@ -61,19 +61,21 @@ fn main() -> Result<()> {
 
         Some(Commands::Remove { package_name, common, version, no_scripts, sandbox }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
-                .expect("Invalid sandbox mode. Use: auto, always, never");
+                .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
             commands::cmd_remove(&package_name, &common.db.db_path, &common.root, version, no_scripts, sandbox_mode)
         }
 
-        Some(Commands::Update { package, common, security }) => {
+        Some(Commands::Update { package, common, security, sandbox }) => {
+            let sandbox_mode = commands::SandboxMode::parse(&sandbox)
+                .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
             {
                 let name = pkg.trim_start_matches('@');
-                return commands::cmd_update_group(name, &common.db.db_path, &common.root, security);
+                return commands::cmd_update_group(name, &common.db.db_path, &common.root, security, sandbox_mode);
             }
-            commands::cmd_update(package, &common.db.db_path, &common.root, security)
+            commands::cmd_update(package, &common.db.db_path, &common.root, security, sandbox_mode)
         }
 
         Some(Commands::Search { pattern, db }) => {
@@ -96,7 +98,7 @@ fn main() -> Result<()> {
 
         Some(Commands::Autoremove { common, dry_run, no_scripts, sandbox }) => {
             let sandbox_mode = commands::SandboxMode::parse(&sandbox)
-                .expect("Invalid sandbox mode. Use: auto, always, never");
+                .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
             commands::cmd_autoremove(&common.db.db_path, &common.root, dry_run, no_scripts, sandbox_mode)
         }
 
@@ -271,7 +273,7 @@ fn main() -> Result<()> {
                 use std::path::PathBuf;
 
                 let config = ServerConfig {
-                    bind_addr: bind.parse().expect("Invalid bind address"),
+                    bind_addr: bind.parse().context("Invalid bind address")?,
                     db_path: PathBuf::from(db.db_path),
                     chunk_dir: PathBuf::from(chunk_dir),
                     cache_dir: PathBuf::from(cache_dir),
@@ -595,7 +597,7 @@ fn main() -> Result<()> {
 
             cli::CcsCommands::Install { package, common, dry_run, allow_unsigned, policy, components, sandbox, no_deps } => {
                 let sandbox_mode = commands::SandboxMode::parse(&sandbox)
-                    .expect("Invalid sandbox mode. Use: auto, always, never");
+                    .ok_or_else(|| anyhow::anyhow!("Invalid sandbox mode '{}'. Use: auto, always, never", sandbox))?;
                 commands::ccs::cmd_ccs_install(&package, &common.db.db_path, &common.root, dry_run, allow_unsigned, policy, components, sandbox_mode, no_deps)
             }
 

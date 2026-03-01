@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Column list for Trove SELECT queries (avoids repetition across methods)
-const TROVE_COLUMNS: &str = "id, name, version, type, architecture, description, \
+pub(crate) const TROVE_COLUMNS: &str = "id, name, version, type, architecture, description, \
     installed_at, installed_by_changeset_id, install_source, install_reason, \
     flavor_spec, pinned, selection_reason, label_id, orphan_since";
 
@@ -265,7 +265,7 @@ impl Trove {
              WHERE install_reason = 'dependency' \
              AND name NOT IN ( \
                  SELECT DISTINCT depends_on_name FROM dependencies \
-                 WHERE trove_id IN (SELECT id FROM troves) \
+                 WHERE trove_id IN (SELECT id FROM troves WHERE install_reason = 'explicit') \
              ) \
              ORDER BY name, version",
             TROVE_COLUMNS

@@ -366,6 +366,8 @@ impl TransactionEngine {
             description: description.to_string(),
             lock_file: Some(lock_file),
             options: TransactionOptions::default(),
+            changeset_id: None,
+            fs_result: None,
         };
 
         // Write begin record
@@ -452,6 +454,10 @@ pub struct Transaction<'a> {
     lock_file: Option<File>,
     /// Options for controlling execution (cancel, progress)
     options: TransactionOptions,
+    /// Changeset ID recorded after DB commit
+    changeset_id: Option<i64>,
+    /// Filesystem result recorded after apply
+    fs_result: Option<FsApplyResult>,
 }
 
 impl<'a> Transaction<'a> {
@@ -796,6 +802,7 @@ impl<'a> Transaction<'a> {
             dirs_created: result.dirs_created,
         })?;
 
+        self.fs_result = Some(result.clone());
         self.state = TransactionState::FsApplied;
         Ok(result)
     }
@@ -814,6 +821,7 @@ impl<'a> Transaction<'a> {
             changeset_id,
             trove_id,
         })?;
+        self.changeset_id = Some(changeset_id);
         self.state = TransactionState::DbApplied;
         Ok(())
     }
@@ -858,15 +866,15 @@ impl<'a> Transaction<'a> {
 
         Ok(TransactionResult {
             tx_uuid: self.uuid.clone(),
-            changeset_id: 0, // Should be set from DB commit
+            changeset_id: self.changeset_id.unwrap_or(0),
             duration_ms: duration,
-            fs_result: FsApplyResult {
+            fs_result: self.fs_result.take().unwrap_or(FsApplyResult {
                 files_added: 0,
                 files_replaced: 0,
                 files_removed: 0,
                 dirs_created: 0,
                 dirs_removed: 0,
-            },
+            }),
         })
     }
 

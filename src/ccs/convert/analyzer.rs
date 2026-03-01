@@ -346,17 +346,21 @@ impl ScriptletAnalyzer {
         let mut system = false;
         let mut name = None;
 
-        for part in &parts {
-            match *part {
+        let mut i = 0;
+        while i < parts.len() {
+            let part = parts[i];
+            match part {
                 "-r" | "--system" => system = true,
                 "-g" | "--gid" => {
-                    // Skip GID argument
+                    // Skip the next token (the GID value)
+                    i += 1;
                 }
                 _ if !part.starts_with('-') => {
                     name = Some(part.to_string());
                 }
                 _ => {}
             }
+            i += 1;
         }
 
         name.map(|n| GroupHook { name: n, system })

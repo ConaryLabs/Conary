@@ -181,10 +181,8 @@ impl ArchPackage {
 
     /// Extract a shell function body from script content
     fn extract_function(content: &str, func_name: &str) -> Option<String> {
-        // Look for function definition patterns:
-        // - "func_name() {"
-        // - "func_name ()"
-        // - "function func_name {"
+        // Look for function definition patterns anchored at the start of a line
+        // (after optional whitespace) to avoid substring matches
         let patterns = [
             format!("{}()", func_name),
             format!("{} ()", func_name),
@@ -192,9 +190,18 @@ impl ArchPackage {
         ];
 
         let mut start_idx = None;
-        for pattern in &patterns {
-            if let Some(idx) = content.find(pattern) {
-                start_idx = Some(idx);
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            for pattern in &patterns {
+                if trimmed.starts_with(pattern.as_str()) {
+                    // Find the byte offset of this match in the original content
+                    let line_start = line.as_ptr() as usize - content.as_ptr() as usize;
+                    let trim_offset = trimmed.as_ptr() as usize - line.as_ptr() as usize;
+                    start_idx = Some(line_start + trim_offset);
+                    break;
+                }
+            }
+            if start_idx.is_some() {
                 break;
             }
         }

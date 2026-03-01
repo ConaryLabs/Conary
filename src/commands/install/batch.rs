@@ -364,6 +364,11 @@ impl<'a> BatchInstaller<'a> {
                 for file in &pkg.extracted_files {
                     let hash = file.sha256.clone().unwrap_or_default();
 
+                    if hash.len() < 3 {
+                        warn!("Skipping file_contents insert for '{}': hash too short ('{}')", file.path, hash);
+                        continue;
+                    }
+
                     tx.execute(
                         "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
                         [&hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],

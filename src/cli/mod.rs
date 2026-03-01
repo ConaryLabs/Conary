@@ -184,6 +184,10 @@ pub enum Commands {
         /// Only apply security updates (critical/important severity)
         #[arg(long)]
         security: bool,
+
+        /// Scriptlet sandbox mode: auto, always, never
+        #[arg(long, default_value = "never")]
+        sandbox: String,
     },
 
     /// Search for packages in repositories

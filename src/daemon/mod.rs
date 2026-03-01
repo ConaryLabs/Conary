@@ -212,35 +212,6 @@ impl JobKind {
     }
 }
 
-/// A job in the queue
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Job {
-    /// Unique job identifier
-    pub id: JobId,
-    /// Client-provided idempotency key (for deduplication)
-    pub idempotency_key: Option<String>,
-    /// Type of operation
-    pub kind: JobKind,
-    /// Current status
-    pub status: JobStatus,
-    /// Job specification (serialized JSON)
-    pub spec: serde_json::Value,
-    /// Result (if completed)
-    pub result: Option<serde_json::Value>,
-    /// Error details (if failed)
-    pub error: Option<DaemonError>,
-    /// UID of requesting user
-    pub requested_by_uid: Option<u32>,
-    /// Client information (peer creds, socket path)
-    pub client_info: Option<String>,
-    /// Creation timestamp
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Start timestamp (when execution began)
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Completion timestamp
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
 /// Error response format (RFC 7807)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonError {

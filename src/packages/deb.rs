@@ -136,7 +136,8 @@ impl DebPackage {
 
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
 
-            if entry_name.starts_with(filename) {
+            // Match exactly, or with trailing '/' (AR format artifact)
+            if entry_name == filename || entry_name == format!("{}/", filename) {
                 let mut content = Vec::new();
                 entry
                     .read_to_end(&mut content)
