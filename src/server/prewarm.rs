@@ -91,6 +91,7 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
         config.chunk_dir.clone().into(),
         config.cache_dir.clone().into(),
         config.db_path.clone().into(),
+        None, // R2 not available in prewarm context
     );
 
     let mut result = PrewarmResult {

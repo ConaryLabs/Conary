@@ -216,6 +216,7 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
             state_guard.config.chunk_dir.clone(),
             state_guard.config.cache_dir.clone(),
             state_guard.config.db_path.clone(),
+            state_guard.r2_store.clone(),
         );
         (job, svc)
     };

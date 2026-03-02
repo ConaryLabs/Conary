@@ -13,9 +13,11 @@ use crate::packages::deb::DebPackage;
 use crate::packages::rpm::RpmPackage;
 use crate::packages::traits::PackageFormat;
 use crate::repository::download_package;
+use crate::server::R2Store;
 use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
@@ -46,14 +48,22 @@ pub struct ConversionService {
     cache_dir: PathBuf,
     /// Database path
     db_path: PathBuf,
+    /// Optional R2 store for write-through
+    r2_store: Option<Arc<R2Store>>,
 }
 
 impl ConversionService {
-    pub fn new(chunk_dir: PathBuf, cache_dir: PathBuf, db_path: PathBuf) -> Self {
+    pub fn new(
+        chunk_dir: PathBuf,
+        cache_dir: PathBuf,
+        db_path: PathBuf,
+        r2_store: Option<Arc<R2Store>>,
+    ) -> Self {
         Self {
             chunk_dir,
             cache_dir,
             db_path,
+            r2_store,
         }
     }
 
@@ -390,6 +400,15 @@ impl ConversionService {
             tokio::fs::rename(&temp_path, &chunk_path)
                 .await
                 .context("Failed to rename chunk")?;
+
+            // R2 write-through: upload to Cloudflare R2 in parallel
+            if let Some(ref r2) = self.r2_store {
+                if let Err(e) = r2.put_chunk(hash, data).await {
+                    tracing::warn!("R2 write-through failed for chunk {}: {}", hash, e);
+                } else {
+                    debug!("R2 write-through: uploaded chunk {}", hash);
+                }
+            }
 
             debug!("Stored chunk: {} ({} bytes)", hash, data.len());
             chunk_hashes.push(hash.clone());

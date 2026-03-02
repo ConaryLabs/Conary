@@ -177,6 +177,7 @@ impl ServerState {
             config.chunk_dir.clone(),
             config.cache_dir.clone(),
             config.db_path.clone(),
+            None, // R2 store set later after state initialization
         );
 
         // Initialize Bloom filter if enabled
@@ -267,11 +268,44 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         }
     }
 
+    // Initialize the database if it doesn't exist
+    if !server_config.db_path.exists() {
+        tracing::info!("Initializing database at {:?}", server_config.db_path);
+        crate::db::init(&server_config.db_path)?;
+    }
+
     let state = Arc::new(RwLock::new(ServerState::with_options(
         server_config.clone(),
         trusted_proxy_header,
         negative_cache_ttl,
     )));
+
+    // Initialize R2 storage if enabled
+    if remi_config.r2.enabled {
+        if let Some(ref endpoint) = remi_config.r2.endpoint {
+            let r2_config = r2::R2Config {
+                endpoint: endpoint.clone(),
+                bucket: remi_config.r2.bucket.clone(),
+                prefix: remi_config.r2.prefix.clone(),
+                region: "auto".to_string(),
+            };
+            match R2Store::new(&r2_config) {
+                Ok(store) => {
+                    tracing::info!(
+                        "  R2 storage: enabled (bucket: {}, write-through: {})",
+                        remi_config.r2.bucket,
+                        remi_config.r2.write_through
+                    );
+                    state.write().await.r2_store = Some(Arc::new(store));
+                }
+                Err(e) => {
+                    tracing::error!("  R2 storage: failed to initialize: {}", e);
+                }
+            }
+        } else {
+            tracing::warn!("  R2 storage: enabled but no endpoint configured");
+        }
+    }
 
     // Initialize search engine if enabled
     if remi_config.search.enabled {
@@ -378,6 +412,12 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
             config.rate_limit_rps,
             config.rate_limit_burst
         );
+    }
+
+    // Initialize the database if it doesn't exist
+    if !config.db_path.exists() {
+        tracing::info!("Initializing database at {:?}", config.db_path);
+        crate::db::init(&config.db_path)?;
     }
 
     let state = Arc::new(RwLock::new(ServerState::new(config.clone())));
