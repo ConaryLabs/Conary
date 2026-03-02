@@ -17,7 +17,7 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    chunks, detail, federation, index, jobs, packages, recipes, search, sparse,
+    chunks, detail, federation, index, jobs, models, packages, recipes, search, sparse,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -363,6 +363,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         // === Search ===
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
+        // === Model Collections (for remote include resolution) ===
+        .route("/v1/models/:name", get(models::get_model))
+        .route("/v1/models", get(models::list_models))
         // === Package Detail API ===
         .route(
             "/v1/packages/:distro/:name",

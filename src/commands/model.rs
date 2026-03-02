@@ -17,7 +17,7 @@ use conary::filesystem::CasStore;
 use conary::hash::sha256;
 use conary::model::{
     DiffAction, ModelDerivedPackage, capture_current_state, compute_diff,
-    compute_diff_with_includes, parse_model_file, snapshot_to_model,
+    compute_diff_with_includes_offline, parse_model_file, snapshot_to_model,
 };
 use rusqlite::Connection;
 use tracing::info;
@@ -145,7 +145,7 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 }
 
 /// Show what changes are needed to reach the model state
-pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
+pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     // Check if model file exists
     let model_path = Path::new(model_path);
     if !model_path.exists() {
@@ -169,11 +169,18 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
 
     // Compute diff, resolving includes if present
     let diff = if model.has_includes() {
-        println!(
-            "Resolving {} remote include(s)...",
-            model.include.models.len()
-        );
-        compute_diff_with_includes(&model, &state, &conn)?
+        if offline {
+            println!(
+                "Resolving {} remote include(s) (offline mode)...",
+                model.include.models.len()
+            );
+        } else {
+            println!(
+                "Resolving {} remote include(s)...",
+                model.include.models.len()
+            );
+        }
+        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
     } else {
         compute_diff(&model, &state)
     };
@@ -247,6 +254,7 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str) -> Result<()> {
 }
 
 /// Apply the system model to reach the desired state
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_model_apply(
     model_path: &str,
     db_path: &str,
@@ -255,6 +263,7 @@ pub fn cmd_model_apply(
     skip_optional: bool,
     strict: bool,
     autoremove: bool,
+    offline: bool,
 ) -> Result<()> {
     // Check if model file exists
     let model_path = Path::new(model_path);
@@ -272,11 +281,18 @@ pub fn cmd_model_apply(
 
     // Compute diff, resolving includes if present
     let diff = if model.has_includes() {
-        println!(
-            "Resolving {} remote include(s)...",
-            model.include.models.len()
-        );
-        compute_diff_with_includes(&model, &state, &conn)?
+        if offline {
+            println!(
+                "Resolving {} remote include(s) (offline mode)...",
+                model.include.models.len()
+            );
+        } else {
+            println!(
+                "Resolving {} remote include(s)...",
+                model.include.models.len()
+            );
+        }
+        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
     } else {
         compute_diff(&model, &state)
     };
@@ -487,7 +503,7 @@ pub fn cmd_model_apply(
 }
 
 /// Check if system state matches the model
-pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool) -> Result<()> {
+pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool, offline: bool) -> Result<()> {
     // Check if model file exists
     let model_path = Path::new(model_path);
     if !model_path.exists() {
@@ -504,7 +520,7 @@ pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool) -> Result
 
     // Compute diff, resolving includes if present
     let diff = if model.has_includes() {
-        compute_diff_with_includes(&model, &state, &conn)?
+        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
     } else {
         compute_diff(&model, &state)
     };

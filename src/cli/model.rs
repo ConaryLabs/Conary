@@ -16,6 +16,10 @@ pub enum ModelCommands {
         #[arg(short, long, default_value = "/etc/conary/system.toml")]
         model: String,
 
+        /// Use cached remote collections only (no network)
+        #[arg(long)]
+        offline: bool,
+
         #[command(flatten)]
         db: DbArgs,
     },
@@ -48,6 +52,10 @@ pub enum ModelCommands {
         /// Skip autoremove after applying
         #[arg(long)]
         no_autoremove: bool,
+
+        /// Use cached remote collections only (no network)
+        #[arg(long)]
+        offline: bool,
     },
 
     /// Check if system state matches the model
@@ -66,6 +74,10 @@ pub enum ModelCommands {
         /// Show details of differences (verbose output)
         #[arg(short, long)]
         verbose: bool,
+
+        /// Use cached remote collections only (no network)
+        #[arg(long)]
+        offline: bool,
     },
 
     /// Create a model file from current system state

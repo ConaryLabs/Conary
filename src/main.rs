@@ -995,7 +995,11 @@ fn main() -> Result<()> {
         // Model Commands
         // =====================================================================
         Some(Commands::Model(model_cmd)) => match model_cmd {
-            cli::ModelCommands::Diff { model, db } => commands::cmd_model_diff(&model, &db.db_path),
+            cli::ModelCommands::Diff {
+                model,
+                offline,
+                db,
+            } => commands::cmd_model_diff(&model, &db.db_path, offline),
 
             cli::ModelCommands::Apply {
                 model,
@@ -1004,6 +1008,7 @@ fn main() -> Result<()> {
                 skip_optional,
                 strict,
                 no_autoremove,
+                offline,
             } => commands::cmd_model_apply(
                 &model,
                 &common.db.db_path,
@@ -1012,11 +1017,15 @@ fn main() -> Result<()> {
                 skip_optional,
                 strict,
                 !no_autoremove,
+                offline,
             ),
 
-            cli::ModelCommands::Check { model, db, verbose } => {
-                commands::cmd_model_check(&model, &db.db_path, verbose)
-            }
+            cli::ModelCommands::Check {
+                model,
+                db,
+                verbose,
+                offline,
+            } => commands::cmd_model_check(&model, &db.db_path, verbose, offline),
 
             cli::ModelCommands::Snapshot {
                 output,

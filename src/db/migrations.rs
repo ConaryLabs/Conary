@@ -1997,3 +1997,33 @@ pub fn migrate_v40(conn: &Connection) -> Result<()> {
     info!("Schema version 40 applied successfully (download statistics)");
     Ok(())
 }
+
+/// Schema version 41: Remote collection cache for model includes
+///
+/// Caches collections fetched from Remi servers for remote model resolution.
+/// Entries have a TTL (expires_at) so stale data is refreshed on next fetch.
+pub fn migrate_v41(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 41");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE remote_collections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            label TEXT,
+            version TEXT,
+            content_hash TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at TEXT NOT NULL,
+            repository_id INTEGER REFERENCES repositories(id),
+            UNIQUE(name, label)
+        );
+        CREATE INDEX idx_remote_collections_expires
+            ON remote_collections(expires_at);
+        ",
+    )?;
+
+    info!("Schema version 41 applied successfully (remote collection cache)");
+    Ok(())
+}

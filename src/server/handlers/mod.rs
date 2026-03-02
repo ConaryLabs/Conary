@@ -6,6 +6,7 @@ pub mod detail;
 pub mod federation;
 pub mod index;
 pub mod jobs;
+pub mod models;
 pub mod packages;
 pub mod recipes;
 pub mod search;

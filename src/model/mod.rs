@@ -46,11 +46,12 @@
 
 mod diff;
 pub mod parser;
+pub mod remote;
 mod state;
 
 pub use diff::{
     ApplyOptions, DiffAction, ModelDiff, compute_diff, compute_diff_from_resolved,
-    compute_diff_with_includes,
+    compute_diff_with_includes, compute_diff_with_includes_offline,
 };
 pub use parser::{
     AiAssistConfig,
@@ -109,6 +110,12 @@ pub enum ModelError {
 
     #[error("Pin pattern invalid: {0}")]
     InvalidPinPattern(String),
+
+    #[error("Remote fetch failed: {0}")]
+    RemoteFetchError(String),
+
+    #[error("Remote collection not found: {0}")]
+    RemoteNotFound(String),
 }
 
 /// Result type for model operations
@@ -205,7 +212,8 @@ pub fn parse_trove_spec(spec: &str) -> ModelResult<(String, Option<String>)> {
 fn fetch_collection(
     conn: &Connection,
     name: &str,
-    _label: Option<&str>,
+    label: Option<&str>,
+    offline: bool,
 ) -> ModelResult<FetchedCollection> {
     use crate::db::models::{CollectionMember, Trove, TroveType};
 
@@ -241,10 +249,14 @@ fn fetch_collection(
         });
     }
 
-    // TODO: Fetch from remote repository using label spec
-    // For now, return an error if not found locally
+    // Remote fetch via label
+    if let Some(label_str) = label {
+        return remote::fetch_remote_collection(conn, name, label_str, offline);
+    }
+
+    // No label, no local match
     Err(ModelError::InvalidSearchPath(format!(
-        "Collection '{}' not found locally. Remote collection fetching not yet implemented.",
+        "Collection '{}' not found locally and no label specified for remote fetch",
         name
     )))
 }
@@ -257,6 +269,17 @@ fn fetch_collection(
 ///
 /// Returns a fully resolved model with all includes expanded.
 pub fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<ResolvedModel> {
+    resolve_includes_with_options(model, conn, false)
+}
+
+/// Resolve includes with offline mode support
+///
+/// When `offline` is true, only cached remote collections are used (no HTTP).
+pub fn resolve_includes_with_options(
+    model: &SystemModel,
+    conn: &Connection,
+    offline: bool,
+) -> ModelResult<ResolvedModel> {
     let mut resolved = ResolvedModel::from_model(model);
 
     if model.include.models.is_empty() {
@@ -271,6 +294,7 @@ pub fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<R
         conn,
         &mut resolved,
         &mut visited,
+        offline,
     )?;
 
     Ok(resolved)
@@ -282,6 +306,7 @@ fn resolve_includes_recursive(
     conn: &Connection,
     resolved: &mut ResolvedModel,
     visited: &mut HashSet<String>,
+    offline: bool,
 ) -> ModelResult<()> {
     for include_spec in includes {
         // Cycle detection
@@ -297,11 +322,18 @@ fn resolve_includes_recursive(
         let (name, label) = parse_trove_spec(include_spec)?;
 
         // Fetch collection from local DB or repository
-        let collection = fetch_collection(conn, &name, label.as_deref())?;
+        let collection = fetch_collection(conn, &name, label.as_deref(), offline)?;
 
         // Recursively resolve nested includes if the collection has them
         if !collection.includes.is_empty() {
-            resolve_includes_recursive(&collection.includes, on_conflict, conn, resolved, visited)?;
+            resolve_includes_recursive(
+                &collection.includes,
+                on_conflict,
+                conn,
+                resolved,
+                visited,
+                offline,
+            )?;
         }
 
         // Merge members according to conflict strategy

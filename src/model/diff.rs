@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use super::parser::SystemModel;
 use super::state::SystemState;
-use super::{ResolvedModel, resolve_includes};
+use super::{ResolvedModel, resolve_includes, resolve_includes_with_options};
 
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,6 +252,19 @@ pub fn compute_diff_with_includes(
 ) -> super::ModelResult<ModelDiff> {
     // Resolve includes if present
     let resolved = resolve_includes(model, conn)?;
+    Ok(compute_diff_from_resolved(&resolved, model, state))
+}
+
+/// Compute diff resolving includes with offline mode
+///
+/// When `offline` is true, only cached remote collections are used.
+pub fn compute_diff_with_includes_offline(
+    model: &SystemModel,
+    state: &SystemState,
+    conn: &Connection,
+    offline: bool,
+) -> super::ModelResult<ModelDiff> {
+    let resolved = resolve_includes_with_options(model, conn, offline)?;
     Ok(compute_diff_from_resolved(&resolved, model, state))
 }
 

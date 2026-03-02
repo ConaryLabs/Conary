@@ -22,6 +22,7 @@ mod label;
 mod provenance;
 mod provide_entry;
 mod redirect;
+mod remote_collection;
 mod repository;
 mod resolution;
 mod scriptlet_entry;
@@ -47,6 +48,7 @@ pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};
+pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repository::{Repository, RepositoryPackage};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
 pub use scriptlet_entry::ScriptletEntry;

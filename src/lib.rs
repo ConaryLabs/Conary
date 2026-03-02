@@ -79,7 +79,8 @@ pub use model::parser::{
 };
 pub use model::{
     ApplyOptions, DEFAULT_MODEL_PATH, DiffAction, ModelConfig, ModelDiff, ModelError, SystemModel,
-    SystemState, compute_diff, load_model, model_exists, snapshot_to_model,
+    SystemState, compute_diff, compute_diff_with_includes_offline, load_model, model_exists,
+    snapshot_to_model,
 };
 pub use progress::{
     CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
