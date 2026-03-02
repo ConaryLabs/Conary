@@ -1,0 +1,31 @@
+# tests/integration/remi/containers/Containerfile.ubuntu-noble
+# Ubuntu Noble (24.04) container for Remi integration testing
+#
+# DISABLED: Ubuntu Noble has glibc 2.39 which is older than the Fedora 43
+# build host (glibc 2.41). Binary compatibility requires either:
+#   - Building on Ubuntu (or older glibc)
+#   - Using musl target (cargo build --target x86_64-unknown-linux-musl)
+#   - Remi metadata synced for Ubuntu/Debian repos
+#
+# Enable with: ./run.sh --distro ubuntu-noble
+
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY conary /usr/local/bin/conary
+RUN chmod +x /usr/local/bin/conary
+
+COPY runner/ /opt/remi-tests/
+RUN chmod +x /opt/remi-tests/*.sh
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=ubuntu-noble
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/local/bin/conary
+
+CMD ["/opt/remi-tests/test-runner.sh"]

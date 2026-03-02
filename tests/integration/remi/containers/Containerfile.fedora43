@@ -1,0 +1,24 @@
+# tests/integration/remi/containers/Containerfile.fedora43
+# Minimal Fedora 43 container for Remi integration testing
+#
+# Build context: tests/integration/remi/
+# Binary is built on the host (Fedora 43, glibc 2.41) and copied in.
+
+FROM registry.fedoraproject.org/fedora:43
+
+RUN dnf install -y ca-certificates curl && dnf clean all
+
+COPY conary /usr/local/bin/conary
+RUN chmod +x /usr/local/bin/conary
+
+COPY runner/ /opt/remi-tests/
+RUN chmod +x /opt/remi-tests/*.sh
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=fedora43
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/local/bin/conary
+
+CMD ["/opt/remi-tests/test-runner.sh"]

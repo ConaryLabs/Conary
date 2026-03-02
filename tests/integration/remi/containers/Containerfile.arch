@@ -1,0 +1,27 @@
+# tests/integration/remi/containers/Containerfile.arch
+# Arch Linux container for Remi integration testing
+#
+# DISABLED: Remi metadata not yet synced for Arch repos.
+# Arch has rolling glibc so binary compatibility should work
+# once metadata is available.
+#
+# Enable with: ./run.sh --distro arch
+
+FROM docker.io/library/archlinux:latest
+
+RUN pacman -Syu --noconfirm ca-certificates curl && pacman -Scc --noconfirm
+
+COPY conary /usr/local/bin/conary
+RUN chmod +x /usr/local/bin/conary
+
+COPY runner/ /opt/remi-tests/
+RUN chmod +x /opt/remi-tests/*.sh
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=arch
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/local/bin/conary
+
+CMD ["/opt/remi-tests/test-runner.sh"]
