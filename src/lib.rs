@@ -57,6 +57,10 @@ pub use bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, Stage0Builder, StageManager,
     TargetArch, Toolchain, ToolchainKind,
 };
+pub use capability::enforcement::{
+    EnforcementError, EnforcementMode, EnforcementPolicy, EnforcementReport, EnforcementSupport,
+    EnforcementWarning,
+};
 pub use capability::{
     CapabilityDeclaration, CapabilityError, FilesystemCapabilities, NetworkCapabilities,
     SyscallCapabilities, SyscallProfile,

@@ -21,6 +21,7 @@
 //!
 //! Based on concepts from Aeryn OS / Serpent OS container isolation.
 
+use crate::capability::enforcement::{self, EnforcementMode, EnforcementPolicy};
 use crate::error::{Error, Result};
 use nix::mount::{MsFlags, mount};
 use nix::sched::{CloneFlags, unshare};
@@ -142,6 +143,8 @@ pub struct ContainerConfig {
     pub bind_mounts: Vec<BindMount>,
     /// Working directory inside container
     pub workdir: PathBuf,
+    /// Optional capability enforcement policy (landlock + seccomp)
+    pub capability_policy: Option<EnforcementPolicy>,
 }
 
 impl Default for ContainerConfig {
@@ -160,6 +163,7 @@ impl Default for ContainerConfig {
             hostname: "conary-sandbox".to_string(),
             bind_mounts: default_bind_mounts(),
             workdir: PathBuf::from("/"),
+            capability_policy: None,
         }
     }
 }
@@ -181,6 +185,7 @@ impl ContainerConfig {
             hostname: String::new(),
             bind_mounts: Vec::new(),
             workdir: PathBuf::from("/"),
+            capability_policy: None,
         }
     }
 
@@ -200,6 +205,7 @@ impl ContainerConfig {
             hostname: "conary-sandbox".to_string(),
             bind_mounts: default_bind_mounts(),
             workdir: PathBuf::from("/"),
+            capability_policy: None,
         }
     }
 
@@ -242,6 +248,7 @@ impl ContainerConfig {
             hostname: "conary-pristine".to_string(),
             bind_mounts: Vec::new(), // No host mounts!
             workdir: PathBuf::from("/"),
+            capability_policy: None,
         }
     }
 
@@ -652,6 +659,32 @@ impl Sandbox {
 
         // Apply resource limits
         self.apply_resource_limits()?;
+
+        // Apply capability enforcement (landlock + seccomp)
+        if let Some(ref policy) = self.config.capability_policy {
+            match enforcement::apply_enforcement(policy) {
+                Ok(report) => {
+                    for w in &report.warnings {
+                        warn!("Enforcement setup: {}", w);
+                    }
+                    if report.landlock_applied {
+                        debug!("Landlock filesystem enforcement active");
+                    }
+                    if report.seccomp_applied {
+                        debug!("Seccomp syscall enforcement active");
+                    }
+                }
+                Err(e) => {
+                    if policy.mode == EnforcementMode::Enforce {
+                        return Err(Error::ScriptletError(format!(
+                            "Capability enforcement failed: {}",
+                            e
+                        )));
+                    }
+                    warn!("Capability enforcement skipped: {}", e);
+                }
+            }
+        }
 
         // Change to working directory
         std::env::set_current_dir(&self.config.workdir)

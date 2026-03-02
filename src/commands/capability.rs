@@ -4,11 +4,17 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
+use std::time::Duration;
 
+use conary::capability::enforcement::{
+    EnforcementMode, EnforcementPolicy, check_enforcement_support,
+    landlock_enforce, seccomp_enforce,
+};
 use conary::capability::{
     CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
 };
 use conary::ccs::manifest::CcsManifest;
+use conary::container::{ContainerConfig, Sandbox};
 
 /// Show declared capabilities for a package
 pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
@@ -295,31 +301,253 @@ pub fn cmd_capability_generate(
     )
 }
 
-/// Audit a package against its declared capabilities (Phase 2 - Not yet implemented)
+/// Audit a package's capabilities by showing what enforcement would be applied
+///
+/// In audit mode, the enforcement is logged but not blocking. This lets users
+/// see what restrictions would be applied before enabling enforce mode.
 pub fn cmd_capability_audit(
-    _db_path: &str,
-    _package: &str,
+    db_path: &str,
+    package: &str,
     _command: Option<&str>,
     _timeout: u32,
 ) -> Result<()> {
-    anyhow::bail!(
-        "The 'capability audit' command is not yet implemented.\n\
-         This feature is planned for Phase 2 of the capability system."
-    )
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database: {}", db_path))?;
+
+    let capabilities = load_capabilities_by_name(&conn, package)?;
+
+    let caps = match capabilities {
+        Some(c) => c,
+        None => {
+            println!("Package '{}' has no capability declarations.", package);
+            println!("Nothing to audit.");
+            return Ok(());
+        }
+    };
+
+    // Check kernel support
+    let support = check_enforcement_support();
+
+    println!("Capability Audit for: {}", package);
+    println!();
+
+    // Kernel support status
+    println!("[Kernel Support]");
+    println!(
+        "  Landlock: {}",
+        if support.landlock {
+            "supported"
+        } else {
+            "NOT supported"
+        }
+    );
+    println!(
+        "  Seccomp:  {}",
+        if support.seccomp {
+            "supported"
+        } else {
+            "NOT supported"
+        }
+    );
+    println!();
+
+    // Filesystem enforcement report
+    if !caps.filesystem.is_empty() {
+        println!("[Filesystem Enforcement (Landlock)]");
+        let info = landlock_enforce::build_landlock_ruleset(&caps.filesystem)?;
+        println!("  Read rules:    {}", info.read_rules);
+        println!("  Write rules:   {}", info.write_rules);
+        println!("  Execute rules: {}", info.execute_rules);
+        if info.deny_conflicts > 0 {
+            println!(
+                "  [WARNING] {} deny paths conflict with allowed parents",
+                info.deny_conflicts
+            );
+        }
+        if !info.skipped_paths.is_empty() {
+            println!("  Skipped (non-existent):");
+            for path in &info.skipped_paths {
+                println!("    - {}", path);
+            }
+        }
+        println!();
+    }
+
+    // Syscall enforcement report
+    if !caps.syscalls.is_empty() {
+        println!("[Syscall Enforcement (Seccomp)]");
+        let info = seccomp_enforce::describe_seccomp_filter(
+            &caps.syscalls,
+            EnforcementMode::Audit,
+        );
+        if let Some(ref profile) = info.profile {
+            println!("  Profile:          {}", profile);
+        }
+        println!("  Allowed syscalls: {}", info.allowed_count);
+        println!("  Explicit denies:  {}", info.denied_explicit);
+        if !info.unmapped_names.is_empty() {
+            println!(
+                "  Unmapped names:   {} ({})",
+                info.unmapped_names.len(),
+                info.unmapped_names.join(", ")
+            );
+        }
+        println!();
+    }
+
+    // Network enforcement report
+    if !caps.network.is_empty() {
+        println!("[Network Enforcement]");
+        if caps.network.none {
+            println!("  Mode: Full network isolation (CLONE_NEWNET)");
+        } else {
+            println!("  Mode: Network access allowed");
+            if !caps.network.outbound.is_empty() {
+                println!("  Outbound ports: {}", caps.network.outbound.join(", "));
+            }
+            if !caps.network.listen.is_empty() {
+                println!("  Listen ports:   {}", caps.network.listen.join(", "));
+            }
+            println!(
+                "  Note: Port-level filtering requires iptables/nftables (not yet implemented)"
+            );
+        }
+        println!();
+    }
+
+    println!("[Summary]");
+    println!(
+        "  To enforce these capabilities: conary capability run {} -- <command>",
+        package
+    );
+    println!(
+        "  To run in audit mode:          conary capability run --audit {} -- <command>",
+        package
+    );
+
+    Ok(())
 }
 
-/// Run a command with capability enforcement (Phase 3 - Not yet implemented)
+/// Run a command with capability enforcement
+///
+/// Loads the package's declared capabilities, builds an enforcement policy,
+/// creates a sandboxed environment, and executes the command with restrictions.
+///
+/// `permissive` maps to audit mode (log but don't block), otherwise enforce mode.
 pub fn cmd_capability_run(
-    _db_path: &str,
-    _package: &str,
-    _command: &[String],
-    _permissive: bool,
+    db_path: &str,
+    package: &str,
+    command: &[String],
+    permissive: bool,
 ) -> Result<()> {
-    anyhow::bail!(
-        "The 'capability run' command is not yet implemented.\n\
-         This feature is planned for Phase 3 of the capability system,\n\
-         which will add enforcement via landlock and seccomp."
-    )
+    if command.is_empty() {
+        anyhow::bail!("No command specified. Usage: conary capability run <package> -- <command>");
+    }
+
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database: {}", db_path))?;
+
+    let capabilities = load_capabilities_by_name(&conn, package)?;
+
+    let caps = match capabilities {
+        Some(c) => c,
+        None => {
+            anyhow::bail!(
+                "Package '{}' has no capability declarations.\n\
+                 Add a [capabilities] section to the package's ccs.toml first.",
+                package
+            );
+        }
+    };
+
+    let mode = if permissive {
+        EnforcementMode::Audit
+    } else {
+        EnforcementMode::Enforce
+    };
+
+    // Build enforcement policy from capabilities
+    let policy = EnforcementPolicy {
+        mode,
+        filesystem: if caps.filesystem.is_empty() {
+            None
+        } else {
+            Some(caps.filesystem.clone())
+        },
+        syscalls: if caps.syscalls.is_empty() {
+            None
+        } else {
+            Some(caps.syscalls.clone())
+        },
+        network_isolation: caps.network.none,
+    };
+
+    // Build container config with enforcement
+    let mut config = ContainerConfig {
+        timeout: Duration::from_secs(3600), // generous timeout for interactive use
+        capability_policy: Some(policy),
+        ..ContainerConfig::default()
+    };
+
+    // Wire network isolation from capabilities
+    if caps.network.none {
+        config.deny_network();
+    } else if !caps.network.is_empty() {
+        // Package declares specific ports but not "none" — allow network
+        config.allow_network();
+    }
+
+    println!(
+        "Running with {} enforcement for package '{}'",
+        mode, package
+    );
+    if mode == EnforcementMode::Enforce {
+        println!("  Violations will be blocked at the kernel level.");
+    } else {
+        println!("  Violations will be logged but allowed (audit mode).");
+    }
+    println!();
+
+    // Build the script to execute: run the command directly
+    let script_content = build_exec_script(command);
+
+    let mut sandbox = Sandbox::new(config);
+    let (exit_code, stdout, stderr) =
+        sandbox.execute("/bin/sh", &script_content, &[], &[])?;
+
+    // Print output
+    if !stdout.is_empty() {
+        print!("{}", stdout);
+    }
+    if !stderr.is_empty() {
+        eprint!("{}", stderr);
+    }
+
+    if exit_code != 0 {
+        anyhow::bail!("Command exited with code {}", exit_code);
+    }
+
+    Ok(())
+}
+
+/// Build a shell script that execs the given command
+fn build_exec_script(command: &[String]) -> String {
+    let mut script = String::from("#!/bin/sh\nexec");
+    for arg in command {
+        // Shell-escape arguments
+        if arg.contains(' ')
+            || arg.contains('\'')
+            || arg.contains('"')
+            || arg.contains('\\')
+        {
+            script.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
+        } else {
+            script.push(' ');
+            script.push_str(arg);
+        }
+    }
+    script.push('\n');
+    script
 }
 
 #[cfg(test)]

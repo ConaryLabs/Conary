@@ -29,6 +29,7 @@
 //! ```
 
 mod declaration;
+pub mod enforcement;
 pub mod inference;
 pub mod resolver;
 
