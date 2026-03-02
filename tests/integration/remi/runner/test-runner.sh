@@ -14,9 +14,9 @@ DB_PATH="${DB_PATH:-/var/lib/conary/conary.db}"
 REMI_ENDPOINT="https://packages.conary.io"
 REMI_DISTRO="fedora"
 REPO_NAME="fedora-remi"
-# Metadata URL is the real Fedora 43 repo (for sync/search).
-# The Remi endpoint (set via --remi-endpoint) handles CCS conversion downloads.
-REPO_URL="https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os"
+# Remi-native sync: repo URL is the Remi endpoint itself.
+# No separate upstream URL needed - metadata comes from /v1/{distro}/metadata.
+REPO_URL="$REMI_ENDPOINT"
 TEST_PACKAGE="which"
 TEST_BINARY="/usr/bin/which"
 
@@ -73,7 +73,6 @@ test_repo_add() {
     "$CONARY" repo add "$REPO_NAME" "$REPO_URL" \
         --db-path "$DB_PATH" \
         --default-strategy remi \
-        --remi-endpoint "$REMI_ENDPOINT" \
         --remi-distro "$REMI_DISTRO" \
         --no-gpg-check \
         2>&1

@@ -172,9 +172,104 @@ fn sync_repository_native(
     Ok(count)
 }
 
+/// Response from Remi metadata API (`GET /v1/{distro}/metadata`)
+#[derive(serde::Deserialize)]
+struct RemiMetadataResponse {
+    packages: Vec<RemiPackageEntry>,
+}
+
+/// Individual package entry from Remi metadata
+#[derive(serde::Deserialize)]
+struct RemiPackageEntry {
+    name: String,
+    version: String,
+    #[allow(dead_code)]
+    converted: bool,
+}
+
+/// Synchronize repository directly from a Remi metadata API
+///
+/// For repos with `default_strategy = "remi"`, fetches the package index from
+/// the Remi server's `/v1/{distro}/metadata` endpoint instead of parsing
+/// traditional repo formats (repomd.xml, Packages, etc.).
+fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+    let distro = repo.default_strategy_distro.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "Repository '{}' has strategy 'remi' but no distro configured (use --remi-distro)",
+            repo.name
+        ))
+    })?;
+
+    // Prefer explicit endpoint, fall back to repo URL itself
+    let endpoint = repo
+        .default_strategy_endpoint
+        .as_deref()
+        .unwrap_or(&repo.url)
+        .trim_end_matches('/');
+
+    let metadata_url = format!("{endpoint}/v1/{distro}/metadata");
+    info!(
+        "Syncing repository {} from Remi metadata: {}",
+        repo.name, metadata_url
+    );
+
+    let client = RepositoryClient::new()?;
+    let bytes = client.download_to_bytes(&metadata_url)?;
+    let response: RemiMetadataResponse = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::ParseError(format!(
+            "Failed to parse Remi metadata from {}: {}",
+            metadata_url, e
+        ))
+    })?;
+
+    let repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
+    let repo_packages: Vec<RepositoryPackage> = response
+        .packages
+        .into_iter()
+        .map(|entry| {
+            let download_url =
+                format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
+            let mut pkg = RepositoryPackage::new(
+                repo_id,
+                entry.name,
+                entry.version,
+                String::new(), // Remi handles verification server-side
+                0,             // Size unknown until download
+                download_url,
+            );
+            pkg.architecture = Some("x86_64".to_string());
+            pkg
+        })
+        .collect();
+
+    let count = repo_packages.len();
+
+    let tx = conn.unchecked_transaction()?;
+    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
+    RepositoryPackage::batch_insert(&tx, &repo_packages)?;
+
+    repo.last_sync = Some(current_timestamp());
+    repo.update(&tx)?;
+    tx.commit()?;
+
+    info!(
+        "Synchronized {} packages from Remi repository {}",
+        count, repo.name
+    );
+    Ok(count)
+}
+
 /// Synchronize repository metadata with the database
 pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     info!("Synchronizing repository: {}", repo.name);
+
+    // Route to Remi-native sync if strategy is "remi"
+    if repo.default_strategy.as_deref() == Some("remi") {
+        return sync_repository_remi(conn, repo);
+    }
 
     // Detect repository format using registry
     let format = registry::detect_repository_format(&repo.name, &repo.url);
