@@ -278,6 +278,303 @@ pub fn fetch_remote_collection(
     Ok(data.to_fetched_collection())
 }
 
+/// Fetch a remote collection with optional Ed25519 signature verification
+///
+/// When `require_signatures` is true, the collection must have a valid signature
+/// from one of the `trusted_keys`. When false, signatures are verified
+/// opportunistically (warn on failure but don't block).
+pub fn fetch_and_verify_remote_collection(
+    conn: &Connection,
+    name: &str,
+    label: &str,
+    offline: bool,
+    require_signatures: bool,
+    trusted_keys: &[String],
+) -> ModelResult<FetchedCollection> {
+    // Check cache first
+    if let Some(cached) = RemoteCollection::find_cached(conn, name, Some(label))
+        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
+    {
+        debug!(name = %name, label = %label, "Using cached remote collection");
+        let data: CollectionData = serde_json::from_str(&cached.data_json)
+            .map_err(|e| ModelError::RemoteFetchError(format!("Corrupt cache entry: {e}")))?;
+        return Ok(data.to_fetched_collection());
+    }
+
+    if offline {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Collection '{name}' not in cache and --offline mode is enabled",
+        )));
+    }
+
+    // Resolve label to URL
+    let url = resolve_label_to_url(conn, name, label)?;
+    info!(name = %name, url = %url, "Fetching remote collection with signature verification");
+
+    let client = RepositoryClient::new()
+        .map_err(|e| ModelError::RemoteFetchError(format!("HTTP client error: {e}")))?;
+
+    let bytes = client
+        .download_to_bytes(&url)
+        .map_err(|e| ModelError::RemoteNotFound(format!("{name}: {e}")))?;
+
+    let data: CollectionData = serde_json::from_slice(&bytes)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;
+
+    // Verify content hash
+    let computed_hash = format!("sha256:{}", hash::sha256(&bytes));
+    if !data.content_hash.is_empty() && computed_hash != data.content_hash {
+        warn!(
+            expected = %data.content_hash,
+            computed = %computed_hash,
+            "Content hash mismatch for remote collection '{name}'",
+        );
+    }
+
+    // Attempt to fetch signature
+    let sig_url = format!(
+        "{}/signature",
+        url.trim_end_matches('/')
+    );
+    let signature_result = client.download_to_bytes(&sig_url);
+
+    let mut cached_signature: Option<Vec<u8>> = None;
+    let mut cached_key_id: Option<String> = None;
+
+    match signature_result {
+        Ok(sig_bytes) => {
+            // Parse signature JSON response
+            if let Ok(sig_json) = serde_json::from_slice::<serde_json::Value>(&sig_bytes) {
+                let sig_b64 = sig_json.get("signature").and_then(|v| v.as_str());
+                let key_id = sig_json.get("key_id").and_then(|v| v.as_str());
+
+                if let Some(sig_b64) = sig_b64 {
+                    use base64::Engine;
+                    use base64::engine::general_purpose::STANDARD as BASE64;
+
+                    match BASE64.decode(sig_b64) {
+                        Ok(sig_raw) => {
+                            // Try to verify against trusted keys
+                            let verified = verify_against_trusted_keys(
+                                &data,
+                                &sig_raw,
+                                trusted_keys,
+                            );
+
+                            match verified {
+                                Ok(true) => {
+                                    info!(name = %name, "Signature verified successfully");
+                                    cached_signature = Some(sig_raw);
+                                    cached_key_id = key_id.map(String::from);
+                                }
+                                Ok(false) => {
+                                    if require_signatures {
+                                        return Err(ModelError::RemoteFetchError(format!(
+                                            "Signature for collection '{name}' did not match any trusted key"
+                                        )));
+                                    }
+                                    warn!(name = %name, "Signature did not match any trusted key");
+                                }
+                                Err(e) => {
+                                    if require_signatures {
+                                        return Err(e);
+                                    }
+                                    warn!(name = %name, error = %e, "Signature verification error");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if require_signatures {
+                                return Err(ModelError::RemoteFetchError(format!(
+                                    "Invalid base64 signature for '{name}': {e}"
+                                )));
+                            }
+                            warn!(name = %name, "Invalid base64 signature: {e}");
+                        }
+                    }
+                } else if require_signatures {
+                    return Err(ModelError::RemoteFetchError(format!(
+                        "Signature response for '{name}' missing 'signature' field"
+                    )));
+                }
+            } else if require_signatures {
+                return Err(ModelError::RemoteFetchError(format!(
+                    "Invalid signature JSON for '{name}'"
+                )));
+            }
+        }
+        Err(_) if require_signatures => {
+            return Err(ModelError::RemoteFetchError(format!(
+                "No signature available for collection '{name}' and signatures are required"
+            )));
+        }
+        Err(_) => {
+            debug!(name = %name, "No signature available (optional)");
+        }
+    }
+
+    // Cache the result
+    let expires_at = (Utc::now() + chrono::Duration::seconds(DEFAULT_CACHE_TTL_SECS))
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string();
+
+    let data_json = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut cache_entry = RemoteCollection::new(
+        name.to_string(),
+        Some(label.to_string()),
+        computed_hash,
+        data_json,
+        expires_at,
+    );
+    cache_entry.version = Some(data.version.clone());
+    cache_entry.signature = cached_signature;
+    cache_entry.signer_key_id = cached_key_id;
+
+    if let Err(e) = cache_entry.upsert(conn) {
+        warn!("Failed to cache remote collection '{name}': {e}");
+    }
+
+    info!(
+        name = %name,
+        version = %data.version,
+        members = data.members.len(),
+        "Fetched remote collection (with signature check)"
+    );
+
+    Ok(data.to_fetched_collection())
+}
+
+/// Verify a collection against a list of trusted public key hex strings
+fn verify_against_trusted_keys(
+    data: &CollectionData,
+    signature: &[u8],
+    trusted_keys: &[String],
+) -> ModelResult<bool> {
+    use super::signing;
+
+    if trusted_keys.is_empty() {
+        return Ok(false);
+    }
+
+    for key_hex in trusted_keys {
+        let key_bytes = hex::decode(key_hex).map_err(|e| {
+            ModelError::RemoteFetchError(format!("Invalid trusted key hex '{key_hex}': {e}"))
+        })?;
+
+        match signing::verify_collection(data, signature, &key_bytes) {
+            Ok(true) => return Ok(true),
+            Ok(false) => continue,
+            Err(_) => continue, // Try next key
+        }
+    }
+
+    Ok(false)
+}
+
+/// Publish a collection to a remote Remi server via HTTP PUT
+///
+/// Sends the serialized `CollectionData` to `PUT {base_url}/v1/admin/models/{name}`.
+/// Returns Ok(()) on success (201), or an error on failure.
+pub fn publish_remote_collection(
+    base_url: &str,
+    data: &CollectionData,
+    force: bool,
+) -> ModelResult<()> {
+    let json = serde_json::to_vec(data)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {}", e)))?;
+
+    let base = base_url.trim_end_matches('/');
+    let mut url = format!("{}/v1/admin/models/{}", base, data.name);
+    if force {
+        url.push_str("?force=true");
+    }
+
+    info!(name = %data.name, url = %url, "Publishing collection to remote");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| ModelError::RemoteFetchError(format!("HTTP client error: {}", e)))?;
+
+    let response = client
+        .put(&url)
+        .header("Content-Type", "application/json")
+        .body(json)
+        .send()
+        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to PUT {}: {}", url, e)))?;
+
+    match response.status().as_u16() {
+        201 => {
+            info!(name = %data.name, "Published collection to remote");
+            Ok(())
+        }
+        409 => Err(ModelError::RemoteFetchError(format!(
+            "Collection '{}' already exists on remote (use --force to overwrite)",
+            data.name
+        ))),
+        status => {
+            let body = response.text().unwrap_or_default();
+            Err(ModelError::RemoteFetchError(format!(
+                "Remote publish failed (HTTP {}): {}",
+                status, body
+            )))
+        }
+    }
+}
+
+/// Build a `CollectionData` from a parsed model's install list and pins
+pub fn build_collection_data_from_model(
+    model: &super::SystemModel,
+    name: &str,
+    version: &str,
+) -> CollectionData {
+    let mut members: Vec<CollectionMemberData> = Vec::new();
+
+    // Add install list packages
+    for pkg_name in &model.config.install {
+        let version_constraint = model.pin.get(pkg_name).cloned();
+        let is_optional = model.optional.packages.contains(pkg_name);
+
+        members.push(CollectionMemberData {
+            name: pkg_name.clone(),
+            version_constraint,
+            is_optional,
+        });
+    }
+
+    // Add optional packages not already in the install list
+    for pkg_name in &model.optional.packages {
+        if !model.config.install.contains(pkg_name) {
+            let version_constraint = model.pin.get(pkg_name).cloned();
+            members.push(CollectionMemberData {
+                name: pkg_name.clone(),
+                version_constraint,
+                is_optional: true,
+            });
+        }
+    }
+
+    // Compute content hash over the serialized body
+    // We serialize the whole struct first, then hash
+    let mut data = CollectionData {
+        name: name.to_string(),
+        version: version.to_string(),
+        members,
+        includes: model.include.models.clone(),
+        pins: model.pin.clone(),
+        exclude: model.config.exclude.clone(),
+        content_hash: String::new(),
+        published_at: Utc::now().to_rfc3339(),
+    };
+
+    // Compute content hash over the full JSON (with empty content_hash)
+    let json_bytes = serde_json::to_vec(&data).unwrap_or_default();
+    data.content_hash = format!("sha256:{}", hash::sha256(&json_bytes));
+
+    data
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +742,63 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("offline"));
+    }
+
+    #[test]
+    fn test_model_to_collection_data() {
+        use crate::model::parser::parse_model_string;
+
+        let toml = r#"
+[model]
+version = 1
+install = ["nginx", "redis", "postgresql"]
+exclude = ["sendmail"]
+
+[pin]
+nginx = "1.24.*"
+openssl = "3.0.*"
+
+[optional]
+packages = ["nginx-module-geoip", "redis"]
+
+[include]
+models = ["group-core@upstream:stable"]
+"#;
+
+        let model = parse_model_string(toml).unwrap();
+        let data = build_collection_data_from_model(&model, "group-web", "2.0.0");
+
+        assert_eq!(data.name, "group-web");
+        assert_eq!(data.version, "2.0.0");
+        assert!(data.content_hash.starts_with("sha256:"));
+        assert!(!data.content_hash.is_empty());
+
+        // nginx is in install and has a pin
+        let nginx = data.members.iter().find(|m| m.name == "nginx").unwrap();
+        assert_eq!(nginx.version_constraint, Some("1.24.*".to_string()));
+        assert!(!nginx.is_optional);
+
+        // redis is in install AND optional
+        let redis = data.members.iter().find(|m| m.name == "redis").unwrap();
+        assert!(redis.is_optional);
+
+        // postgresql is in install, not optional, no pin
+        let pg = data.members.iter().find(|m| m.name == "postgresql").unwrap();
+        assert!(!pg.is_optional);
+        assert!(pg.version_constraint.is_none());
+
+        // nginx-module-geoip is optional-only (not in install)
+        let geoip = data.members.iter().find(|m| m.name == "nginx-module-geoip").unwrap();
+        assert!(geoip.is_optional);
+
+        // Includes are passed through
+        assert_eq!(data.includes, vec!["group-core@upstream:stable"]);
+
+        // Pins are passed through
+        assert_eq!(data.pins.get("openssl"), Some(&"3.0.*".to_string()));
+
+        // Exclude is passed through
+        assert_eq!(data.exclude, vec!["sendmail"]);
     }
 
     #[test]

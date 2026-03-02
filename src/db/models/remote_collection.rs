@@ -32,6 +32,10 @@ pub struct RemoteCollection {
     pub expires_at: String,
     /// Repository this was fetched from
     pub repository_id: Option<i64>,
+    /// Ed25519 signature bytes (if signed)
+    pub signature: Option<Vec<u8>>,
+    /// Hex-encoded signer key ID (first 8 bytes of public key)
+    pub signer_key_id: Option<String>,
 }
 
 impl RemoteCollection {
@@ -53,6 +57,8 @@ impl RemoteCollection {
             fetched_at: None,
             expires_at,
             repository_id: None,
+            signature: None,
+            signer_key_id: None,
         }
     }
 
@@ -66,7 +72,7 @@ impl RemoteCollection {
     ) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, label, version, content_hash, data_json,
-                    fetched_at, expires_at, repository_id
+                    fetched_at, expires_at, repository_id, signature, signer_key_id
              FROM remote_collections
              WHERE name = ?1 AND (label = ?2 OR (?2 IS NULL AND label IS NULL))
                AND expires_at > datetime('now')",
@@ -83,15 +89,18 @@ impl RemoteCollection {
     pub fn upsert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO remote_collections
-                (name, label, version, content_hash, data_json, fetched_at, expires_at, repository_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), ?6, ?7)
+                (name, label, version, content_hash, data_json, fetched_at, expires_at,
+                 repository_id, signature, signer_key_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), ?6, ?7, ?8, ?9)
              ON CONFLICT(name, label) DO UPDATE SET
                 version = excluded.version,
                 content_hash = excluded.content_hash,
                 data_json = excluded.data_json,
                 fetched_at = datetime('now'),
                 expires_at = excluded.expires_at,
-                repository_id = excluded.repository_id",
+                repository_id = excluded.repository_id,
+                signature = excluded.signature,
+                signer_key_id = excluded.signer_key_id",
             params![
                 &self.name,
                 &self.label,
@@ -100,6 +109,8 @@ impl RemoteCollection {
                 &self.data_json,
                 &self.expires_at,
                 &self.repository_id,
+                &self.signature,
+                &self.signer_key_id,
             ],
         )?;
 
@@ -123,6 +134,18 @@ impl RemoteCollection {
         Ok(deleted)
     }
 
+    /// Remove cache entries matching a specific name and optional label
+    ///
+    /// Used by `remote-diff --refresh` to force re-fetch of specific collections.
+    pub fn purge_by_name(conn: &Connection, name: &str, label: Option<&str>) -> Result<usize> {
+        let deleted = conn.execute(
+            "DELETE FROM remote_collections
+             WHERE name = ?1 AND (label = ?2 OR (?2 IS NULL AND label IS NULL))",
+            params![name, label],
+        )?;
+        Ok(deleted)
+    }
+
     /// Convert a database row to a RemoteCollection
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -135,6 +158,8 @@ impl RemoteCollection {
             fetched_at: row.get(6)?,
             expires_at: row.get(7)?,
             repository_id: row.get(8)?,
+            signature: row.get(9)?,
+            signer_key_id: row.get(10)?,
         })
     }
 }
@@ -284,5 +309,44 @@ mod tests {
         let found =
             RemoteCollection::find_cached(&conn, "group-local", Some("repo:tag")).unwrap();
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_purge_by_name_and_label() {
+        let (_temp, conn) = create_test_db();
+
+        // Insert two entries: same name, different labels
+        let mut entry1 = RemoteCollection::new(
+            "group-purge".to_string(),
+            Some("repo:stable".to_string()),
+            "sha256:stable".to_string(),
+            "{}".to_string(),
+            "2099-12-31T23:59:59".to_string(),
+        );
+        entry1.upsert(&conn).unwrap();
+
+        let mut entry2 = RemoteCollection::new(
+            "group-purge".to_string(),
+            Some("repo:dev".to_string()),
+            "sha256:dev".to_string(),
+            "{}".to_string(),
+            "2099-12-31T23:59:59".to_string(),
+        );
+        entry2.upsert(&conn).unwrap();
+
+        // Purge only the stable label
+        let deleted =
+            RemoteCollection::purge_by_name(&conn, "group-purge", Some("repo:stable")).unwrap();
+        assert_eq!(deleted, 1);
+
+        // Stable should be gone
+        let found =
+            RemoteCollection::find_cached(&conn, "group-purge", Some("repo:stable")).unwrap();
+        assert!(found.is_none());
+
+        // Dev should still exist
+        let found =
+            RemoteCollection::find_cached(&conn, "group-purge", Some("repo:dev")).unwrap();
+        assert!(found.is_some());
     }
 }

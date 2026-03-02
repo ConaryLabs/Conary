@@ -98,14 +98,60 @@ pub enum ModelCommands {
         description: Option<String>,
     },
 
+    /// Lock remote include hashes for reproducibility
+    ///
+    /// Resolves all remote includes and records their content hashes
+    /// in a model.lock file. This prevents silent upstream changes.
+    Lock {
+        /// Path to system model file
+        #[arg(short, long, default_value = "/etc/conary/system.toml")]
+        model: String,
+
+        /// Output lock file path (default: alongside model file)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Update locked remote includes
+    ///
+    /// Force-refreshes all remote includes, compares against the lock
+    /// file, and updates the lock with new hashes. Shows what changed.
+    Update {
+        /// Path to system model file
+        #[arg(short, long, default_value = "/etc/conary/system.toml")]
+        model: String,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Compare local state against remote model collections
+    ///
+    /// Fetches each remote include from the model, optionally forcing
+    /// a refresh, and reports differences between the remote model's
+    /// expected state and what's actually installed locally.
+    RemoteDiff {
+        /// Path to system model file
+        #[arg(short, long, default_value = "/etc/conary/system.toml")]
+        model: String,
+
+        /// Force refresh remote collections (bypass cache)
+        #[arg(long)]
+        refresh: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
     /// Publish a system model as a versioned collection to a repository
     ///
     /// Converts a system.toml into a CCS collection package and stores it
-    /// in a local repository. This allows other systems to include the
-    /// model using the [include] directive.
-    ///
-    /// Note: Currently only supports local repositories (file:// URLs).
-    /// Remote publishing requires repository authentication (not yet implemented).
+    /// in a repository. Supports both local (file://) and remote (http/https)
+    /// repositories. For remote repos, the collection is sent via HTTP PUT
+    /// to the Remi server's admin API.
     Publish {
         /// Path to system model file
         #[arg(short, long, default_value = "/etc/conary/system.toml")]
@@ -119,13 +165,21 @@ pub enum ModelCommands {
         #[arg(short, long)]
         version: String,
 
-        /// Repository to publish to (must be a local repository)
+        /// Repository to publish to
         #[arg(short, long)]
         repo: String,
 
         /// Description of the collection
         #[arg(long)]
         description: Option<String>,
+
+        /// Force overwrite existing collection on remote
+        #[arg(long)]
+        force: bool,
+
+        /// Path to Ed25519 signing key for collection signature
+        #[arg(long)]
+        sign_key: Option<String>,
 
         #[command(flatten)]
         db: DbArgs,

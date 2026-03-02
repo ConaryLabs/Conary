@@ -2027,3 +2027,21 @@ pub fn migrate_v41(conn: &Connection) -> Result<()> {
     info!("Schema version 41 applied successfully (remote collection cache)");
     Ok(())
 }
+
+/// Version 42: Add signature columns to remote_collections
+///
+/// Stores Ed25519 signatures and signer key IDs for remote collections,
+/// enabling cryptographic verification of remote model includes.
+pub fn migrate_v42(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 42");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE remote_collections ADD COLUMN signature BLOB;
+        ALTER TABLE remote_collections ADD COLUMN signer_key_id TEXT;
+        ",
+    )?;
+
+    info!("Schema version 42 applied successfully (collection signatures)");
+    Ok(())
+}

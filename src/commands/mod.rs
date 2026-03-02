@@ -68,7 +68,8 @@ pub use label::{
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
 };
 pub use model::{
-    cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_publish, cmd_model_snapshot,
+    cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock, cmd_model_publish,
+    cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
 };
 pub use provenance::{
     cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,

@@ -506,6 +506,14 @@ pub struct IncludeConfig {
     /// Conflict resolution strategy when local and remote define same package
     #[serde(default)]
     pub on_conflict: ConflictStrategy,
+
+    /// Require Ed25519 signatures on remote collections
+    #[serde(default)]
+    pub require_signatures: bool,
+
+    /// Trusted public key IDs (hex-encoded)
+    #[serde(default)]
+    pub trusted_keys: Vec<String>,
 }
 
 /// Strategy for resolving conflicts between local and remote model definitions

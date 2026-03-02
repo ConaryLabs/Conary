@@ -10,12 +10,12 @@ use crate::db::models::{CollectionMember, Trove, TroveType};
 use crate::model::remote::{CollectionData, CollectionMemberData};
 use crate::server::ServerState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use rusqlite::Connection;
-use serde::Serialize;
+use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -101,6 +101,231 @@ pub async fn list_models(
                 .into_response()
         }
     }
+}
+
+/// Response body for signature endpoint
+#[derive(Serialize)]
+struct SignatureResponse {
+    signature: String,
+    key_id: String,
+}
+
+/// GET /v1/models/:name/signature
+///
+/// Returns the Ed25519 signature and signer key ID for a published collection.
+/// Signature is base64-encoded; key_id is hex-encoded (first 8 bytes of public key).
+pub async fn get_model_signature(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(name): Path<String>,
+) -> Response {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let state = state.read().await;
+    let db_path = &state.config.db_path;
+
+    let conn = match Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to open database: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+    };
+
+    // Query for signature in remote_collections
+    let result: Result<Option<(Vec<u8>, String)>, _> = conn
+        .query_row(
+            "SELECT rc.signature, rc.signer_key_id
+             FROM remote_collections rc
+             WHERE rc.name = ?1 AND rc.signature IS NOT NULL
+             ORDER BY rc.fetched_at DESC LIMIT 1",
+            [&name],
+            |row| {
+                let sig: Vec<u8> = row.get(0)?;
+                let key_id: String = row.get(1)?;
+                Ok((sig, key_id))
+            },
+        )
+        .optional();
+
+    match result {
+        Ok(Some((signature, key_id))) => {
+            let response = SignatureResponse {
+                signature: BASE64.encode(&signature),
+                key_id,
+            };
+            let json = serde_json::to_string(&response).unwrap();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CACHE_CONTROL, "public, max-age=300")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "No signature found for collection").into_response(),
+        Err(e) => {
+            tracing::error!("Failed to query signature for '{}': {}", name, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+    }
+}
+
+/// Query parameters for PUT model endpoint
+#[derive(Deserialize)]
+pub struct PutModelParams {
+    /// If true, overwrite existing collection
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Response body for successful model creation
+#[derive(Serialize)]
+struct PutModelResponse {
+    name: String,
+    version: String,
+    members: usize,
+}
+
+/// PUT /v1/admin/models/:name
+///
+/// Creates a new collection from a published model. Returns 409 Conflict
+/// if the collection already exists (unless `?force=true` is set).
+pub async fn put_model(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(name): Path<String>,
+    Query(params): Query<PutModelParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let state = state.read().await;
+    let db_path = &state.config.db_path;
+
+    match store_collection(db_path, &name, &body, params.force) {
+        Ok(response) => {
+            let json = serde_json::to_string(&response).unwrap();
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(StoreError::NameMismatch { url_name, body_name }) => {
+            let msg = format!(
+                "Name mismatch: URL has '{}' but body has '{}'",
+                url_name, body_name
+            );
+            (StatusCode::BAD_REQUEST, msg).into_response()
+        }
+        Err(StoreError::HashMismatch { expected, computed }) => {
+            let msg = format!(
+                "Content hash mismatch: body claims '{}' but computed '{}'",
+                expected, computed
+            );
+            (StatusCode::BAD_REQUEST, msg).into_response()
+        }
+        Err(StoreError::AlreadyExists(name)) => {
+            let msg = format!("Collection '{}' already exists (use ?force=true to overwrite)", name);
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(StoreError::InvalidJson(e)) => {
+            let msg = format!("Invalid JSON: {}", e);
+            (StatusCode::BAD_REQUEST, msg).into_response()
+        }
+        Err(StoreError::Database(e)) => {
+            tracing::error!("Failed to store collection '{}': {}", name, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+    }
+}
+
+/// Errors from store_collection
+#[derive(Debug)]
+enum StoreError {
+    NameMismatch { url_name: String, body_name: String },
+    HashMismatch { expected: String, computed: String },
+    AlreadyExists(String),
+    InvalidJson(String),
+    Database(String),
+}
+
+/// Store a collection in the database from PUT body bytes
+fn store_collection(
+    db_path: &std::path::Path,
+    url_name: &str,
+    body: &[u8],
+    force: bool,
+) -> Result<PutModelResponse, StoreError> {
+    // Deserialize body as CollectionData
+    let data: CollectionData = serde_json::from_slice(body)
+        .map_err(|e| StoreError::InvalidJson(e.to_string()))?;
+
+    // Validate: name in URL must match name in body
+    if data.name != url_name {
+        return Err(StoreError::NameMismatch {
+            url_name: url_name.to_string(),
+            body_name: data.name.clone(),
+        });
+    }
+
+    // Verify content hash if present
+    if !data.content_hash.is_empty() {
+        let computed = format!("sha256:{}", crate::hash::sha256(body));
+        if computed != data.content_hash {
+            return Err(StoreError::HashMismatch {
+                expected: data.content_hash.clone(),
+                computed,
+            });
+        }
+    }
+
+    let conn = Connection::open(db_path)
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+    // Check if collection already exists
+    let existing = Trove::find_by_name(&conn, url_name)
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+    let existing_collection = existing.iter().find(|t| t.trove_type == TroveType::Collection);
+
+    if let Some(coll) = existing_collection {
+        if !force {
+            return Err(StoreError::AlreadyExists(url_name.to_string()));
+        }
+
+        // Force mode: delete old collection and its members
+        let coll_id = coll.id.ok_or_else(|| StoreError::Database("Collection has no ID".into()))?;
+        CollectionMember::delete_all_for_collection(&conn, coll_id)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Trove::delete(&conn, coll_id)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+    }
+
+    // Create collection trove
+    let mut trove = Trove::new(
+        data.name.clone(),
+        data.version.clone(),
+        TroveType::Collection,
+    );
+    let collection_id = trove.insert(&conn)
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+    // Add members
+    let member_count = data.members.len();
+    for m in &data.members {
+        let mut member = CollectionMember::new(collection_id, m.name.clone());
+        if let Some(ref v) = m.version_constraint {
+            member = member.with_version(v.clone());
+        }
+        if m.is_optional {
+            member = member.optional();
+        }
+        member.insert(&conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+    }
+
+    Ok(PutModelResponse {
+        name: data.name,
+        version: data.version,
+        members: member_count,
+    })
 }
 
 /// Build CollectionData for a named collection from the database
@@ -256,6 +481,112 @@ mod tests {
 
         let result = build_collection_data(temp_file.path(), "nonexistent").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_put_model_creates_collection() {
+        let (temp_file, _conn) = create_test_db();
+
+        let data = CollectionData {
+            name: "group-web".to_string(),
+            version: "1.0.0".to_string(),
+            members: vec![
+                CollectionMemberData {
+                    name: "nginx".to_string(),
+                    version_constraint: Some("1.24.*".to_string()),
+                    is_optional: false,
+                },
+                CollectionMemberData {
+                    name: "redis".to_string(),
+                    version_constraint: None,
+                    is_optional: true,
+                },
+            ],
+            includes: vec![],
+            pins: HashMap::new(),
+            exclude: vec![],
+            content_hash: String::new(),
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let body = serde_json::to_vec(&data).unwrap();
+
+        // PUT should create the collection
+        let result = store_collection(temp_file.path(), "group-web", &body, false).unwrap();
+        assert_eq!(result.name, "group-web");
+        assert_eq!(result.version, "1.0.0");
+        assert_eq!(result.members, 2);
+
+        // Verify it can be retrieved via build_collection_data
+        let fetched = build_collection_data(temp_file.path(), "group-web")
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.name, "group-web");
+        assert_eq!(fetched.members.len(), 2);
+
+        let nginx = fetched.members.iter().find(|m| m.name == "nginx").unwrap();
+        assert_eq!(nginx.version_constraint, Some("1.24.*".to_string()));
+        assert!(!nginx.is_optional);
+
+        let redis = fetched.members.iter().find(|m| m.name == "redis").unwrap();
+        assert!(redis.is_optional);
+    }
+
+    #[test]
+    fn test_put_model_conflict() {
+        let (temp_file, conn) = create_test_db();
+
+        // Pre-create a collection
+        let mut trove = Trove::new(
+            "group-existing".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Collection,
+        );
+        trove.insert(&conn).unwrap();
+
+        let data = CollectionData {
+            name: "group-existing".to_string(),
+            version: "2.0.0".to_string(),
+            members: vec![],
+            includes: vec![],
+            pins: HashMap::new(),
+            exclude: vec![],
+            content_hash: String::new(),
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let body = serde_json::to_vec(&data).unwrap();
+
+        // PUT without force should return AlreadyExists
+        let result = store_collection(temp_file.path(), "group-existing", &body, false);
+        assert!(matches!(result, Err(StoreError::AlreadyExists(_))));
+
+        // PUT with force should succeed
+        let result = store_collection(temp_file.path(), "group-existing", &body, true).unwrap();
+        assert_eq!(result.name, "group-existing");
+        assert_eq!(result.version, "2.0.0");
+    }
+
+    #[test]
+    fn test_put_model_name_mismatch() {
+        let (temp_file, _conn) = create_test_db();
+
+        let data = CollectionData {
+            name: "group-a".to_string(),
+            version: "1.0.0".to_string(),
+            members: vec![],
+            includes: vec![],
+            pins: HashMap::new(),
+            exclude: vec![],
+            content_hash: String::new(),
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let body = serde_json::to_vec(&data).unwrap();
+
+        // URL name doesn't match body name
+        let result = store_collection(temp_file.path(), "group-b", &body, false);
+        assert!(matches!(result, Err(StoreError::NameMismatch { .. })));
     }
 
     #[test]

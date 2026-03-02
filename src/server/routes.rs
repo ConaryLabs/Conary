@@ -28,7 +28,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, head, post},
+    routing::{get, head, post, put},
 };
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
@@ -365,6 +365,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/suggest", get(search::suggest_packages))
         // === Model Collections (for remote include resolution) ===
         .route("/v1/models/:name", get(models::get_model))
+        .route("/v1/models/:name/signature", get(models::get_model_signature))
         .route("/v1/models", get(models::list_models))
         // === Package Detail API ===
         .route(
@@ -470,6 +471,8 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/info", get(server_info))
         // Upstream metadata refresh
         .route("/v1/admin/refresh", post(refresh_upstream))
+        // Model collection publishing
+        .route("/v1/admin/models/:name", put(models::put_model))
         .with_state(state)
 }
 

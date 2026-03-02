@@ -1027,11 +1027,28 @@ fn main() -> Result<()> {
                 offline,
             } => commands::cmd_model_check(&model, &db.db_path, verbose, offline),
 
+            cli::ModelCommands::RemoteDiff {
+                model,
+                refresh,
+                db,
+            } => commands::cmd_model_remote_diff(&model, &db.db_path, refresh),
+
             cli::ModelCommands::Snapshot {
                 output,
                 db,
                 description,
             } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()),
+
+            cli::ModelCommands::Lock {
+                model,
+                output,
+                db,
+            } => commands::cmd_model_lock(&model, output.as_deref(), &db.db_path),
+
+            cli::ModelCommands::Update {
+                model,
+                db,
+            } => commands::cmd_model_update(&model, &db.db_path),
 
             cli::ModelCommands::Publish {
                 model,
@@ -1039,6 +1056,8 @@ fn main() -> Result<()> {
                 version,
                 repo,
                 description,
+                force,
+                sign_key,
                 db,
             } => commands::cmd_model_publish(
                 &model,
@@ -1047,6 +1066,8 @@ fn main() -> Result<()> {
                 &repo,
                 description.as_deref(),
                 &db.db_path,
+                force,
+                sign_key.as_deref(),
             ),
         },
 

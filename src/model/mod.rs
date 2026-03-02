@@ -45,8 +45,10 @@
 //! ```
 
 mod diff;
+pub mod lockfile;
 pub mod parser;
 pub mod remote;
+pub mod signing;
 mod state;
 
 pub use diff::{
@@ -133,6 +135,17 @@ pub fn model_exists(path: Option<&Path>) -> bool {
     path.exists()
 }
 
+/// A composition layer in the resolved model
+#[derive(Debug, Clone)]
+pub struct ModelLayer {
+    /// Layer name (e.g. "local", "group-base@repo:stable")
+    pub name: String,
+    /// Packages contributed by this layer
+    pub packages: Vec<String>,
+    /// Whether this is the local model layer
+    pub is_local: bool,
+}
+
 /// A resolved model with all includes expanded
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
@@ -153,6 +166,9 @@ pub struct ResolvedModel {
 
     /// Source of each package (for debugging/display)
     pub sources: HashMap<String, String>,
+
+    /// Ordered layers showing composition precedence (first = lowest priority)
+    pub layers: Vec<ModelLayer>,
 }
 
 impl ResolvedModel {
@@ -173,6 +189,11 @@ impl ResolvedModel {
             exclude: model.config.exclude.clone(),
             search: model.config.search.clone(),
             sources,
+            layers: vec![ModelLayer {
+                name: "local".to_string(),
+                packages: model.config.install.clone(),
+                is_local: true,
+            }],
         }
     }
 }
@@ -336,6 +357,9 @@ fn resolve_includes_recursive(
             )?;
         }
 
+        // Track packages contributed by this include for layer info
+        let mut layer_packages = Vec::new();
+
         // Merge members according to conflict strategy
         for member in &collection.members {
             let already_defined = resolved.install.contains(&member.name)
@@ -358,6 +382,7 @@ fn resolve_includes_recursive(
                             member.name.clone(),
                             format!("included from {}", include_spec),
                         );
+                        layer_packages.push(member.name.clone());
                     }
                     parser::ConflictStrategy::Error => {
                         return Err(ModelError::ConflictingSpecs(format!(
@@ -384,8 +409,16 @@ fn resolve_includes_recursive(
                     member.name.clone(),
                     format!("included from {}", include_spec),
                 );
+                layer_packages.push(member.name.clone());
             }
         }
+
+        // Record this include as a composition layer
+        resolved.layers.push(ModelLayer {
+            name: include_spec.clone(),
+            packages: layer_packages,
+            is_local: false,
+        });
     }
 
     Ok(())
