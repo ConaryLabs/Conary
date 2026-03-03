@@ -177,6 +177,33 @@ pub async fn get_chunk(
         return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
     }
 
+    // R2 redirect: if enabled and not a Range request, redirect to presigned R2 URL
+    let is_range_request = headers.contains_key(header::RANGE);
+    if !is_range_request
+        && state_guard.r2_redirect
+        && let Some(ref r2_store) = state_guard.r2_store
+    {
+        match r2_store.presign_get(&hash, 3600).await {
+            Ok(presigned_url) => {
+                state_guard.metrics.record_hit();
+                // Record approximate file size from metadata
+                if let Ok(meta) = tokio::fs::metadata(&chunk_path).await {
+                    state_guard.metrics.record_bytes_served(meta.len());
+                }
+                return Response::builder()
+                    .status(StatusCode::TEMPORARY_REDIRECT)
+                    .header(header::LOCATION, &presigned_url)
+                    .header(header::CACHE_CONTROL, "public, max-age=3600")
+                    .body(Body::empty())
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+            Err(e) => {
+                tracing::warn!("R2 presign failed for {}, serving locally: {}", hash, e);
+                // Fall through to normal local serving
+            }
+        }
+    }
+
     // Open file for streaming
     let mut file = match File::open(&chunk_path).await {
         Ok(f) => f,
@@ -376,11 +403,9 @@ async fn pull_through_fetch(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Compute SHA-256 hash of data
+/// Compute SHA-256 hash of data (delegates to crate::hash::sha256)
 fn sha2_hash(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(data);
-    hex::encode(hash)
+    crate::hash::sha256(data)
 }
 
 // === Batch Endpoints ===

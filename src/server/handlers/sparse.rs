@@ -5,11 +5,11 @@
 //! available versions, conversion status, and metadata. This enables
 //! efficient incremental client sync without downloading full indices.
 
-use crate::db::models::{Repository, RepositoryPackage};
+use crate::db::models::RepositoryPackage;
 use crate::server::ServerState;
 use axum::{
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use rusqlite::Connection;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// A sparse index entry for a single package across all versions
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseIndexEntry {
     pub name: String,
     pub distro: String,
@@ -26,7 +26,7 @@ pub struct SparseIndexEntry {
 }
 
 /// Version-level metadata within a sparse index entry
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseVersionEntry {
     pub version: String,
     pub dependencies: Option<String>,
@@ -58,26 +58,59 @@ pub struct PackageListResponse {
 ///
 /// Returns a sparse index entry for a single package, including all versions
 /// and their conversion status. Designed to be CDN-cacheable.
+///
+/// When federation is enabled, merges entries from upstream Remi peers.
 pub async fn get_sparse_entry(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let fed_config = state_guard.federated_config.clone();
+    let fed_cache = state_guard.federated_cache.clone();
+    let http_client = state_guard.http_client.clone();
     drop(state_guard);
 
+    // Use federated builder if federation is enabled
+    if let (Some(config), Some(cache)) = (fed_config, fed_cache) {
+        let result = crate::server::federated_index::build_federated_sparse_entry(
+            &db_path,
+            &distro,
+            &name,
+            &config,
+            &cache,
+            &http_client,
+        )
+        .await;
+
+        return match result {
+            Ok(Some(entry)) => {
+                let json = match super::serialize_json(&entry, "federated sparse entry") {
+                    Ok(j) => j,
+                    Err(e) => return e,
+                };
+                super::json_response(json, 60)
+            }
+            Ok(None) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
+            Err(e) => {
+                tracing::error!("Failed to build federated sparse entry: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+            }
+        };
+    }
+
+    // Non-federated path: local only
     let result =
         tokio::task::spawn_blocking(move || build_sparse_entry(&db_path, &distro, &name)).await;
 
     match result {
-        Ok(Ok(Some(entry))) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::CACHE_CONTROL, "public, max-age=60")
-            .body(axum::body::Body::from(
-                serde_json::to_string(&entry).unwrap(),
-            ))
-            .unwrap(),
+        Ok(Ok(Some(entry))) => {
+            let json = match super::serialize_json(&entry, "sparse index entry") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 60)
+        }
         Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
         Ok(Err(e)) => {
             tracing::error!("Failed to build sparse entry: {}", e);
@@ -110,14 +143,13 @@ pub async fn list_packages(
             .await;
 
     match result {
-        Ok(Ok(list)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::CACHE_CONTROL, "public, max-age=60")
-            .body(axum::body::Body::from(
-                serde_json::to_string(&list).unwrap(),
-            ))
-            .unwrap(),
+        Ok(Ok(list)) => {
+            let json = match super::serialize_json(&list, "package list") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 60)
+        }
         Ok(Err(e)) => {
             tracing::error!("Failed to list packages: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -276,37 +308,13 @@ fn build_package_list(
     })
 }
 
-/// Find a repository configured for the given distro
-///
-/// Same logic as `src/server/handlers/index.rs::find_repository_for_distro`:
-/// tries `default_strategy_distro` first, then falls back to name matching.
-fn find_repository_for_distro(
-    conn: &Connection,
-    distro: &str,
-) -> Result<Option<Repository>, anyhow::Error> {
-    let repos = Repository::list_enabled(conn)?;
-
-    // Prefer exact match on default_strategy_distro
-    for repo in &repos {
-        if repo.default_strategy_distro.as_deref() == Some(distro) {
-            return Ok(Some(repo.clone()));
-        }
-    }
-
-    // Fall back to name-based matching
-    for repo in &repos {
-        if repo.name.starts_with(distro) || repo.name.contains(distro) {
-            return Ok(Some(repo.clone()));
-        }
-    }
-
-    Ok(None)
-}
+/// Alias to shared implementation in handlers/mod.rs
+use super::find_repository_for_distro;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::ConvertedPackage;
+    use crate::db::models::{ConvertedPackage, Repository};
     use crate::db::schema;
     use tempfile::NamedTempFile;
 

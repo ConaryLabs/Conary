@@ -2124,3 +2124,53 @@ pub fn migrate_v43(conn: &Connection) -> Result<()> {
     info!("Schema version 43 applied successfully (TUF trust metadata)");
     Ok(())
 }
+
+/// Version 44 - Mirror health tracking and delta manifests
+///
+/// Adds tables for:
+/// - mirror_health: Per-mirror latency, throughput, failure tracking, and composite health scores
+/// - delta_manifests: Pre-computed delta information between package versions
+pub fn migrate_v44(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 44");
+
+    conn.execute_batch(
+        "
+        -- Mirror health tracking for ranked mirror selection
+        CREATE TABLE mirror_health (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            mirror_url TEXT NOT NULL,
+            latency_avg_ms INTEGER NOT NULL DEFAULT 0,
+            throughput_bps INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            health_score REAL NOT NULL DEFAULT 1.0,
+            disabled INTEGER NOT NULL DEFAULT 0,
+            geo_hint TEXT,
+            last_probed TEXT,
+            last_success TEXT,
+            UNIQUE(repository_id, mirror_url)
+        );
+        CREATE INDEX idx_mirror_health_repo ON mirror_health(repository_id);
+
+        -- Pre-computed delta manifests between package versions
+        CREATE TABLE delta_manifests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            distro TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            from_version TEXT NOT NULL,
+            to_version TEXT NOT NULL,
+            new_chunks TEXT NOT NULL,
+            removed_chunks TEXT NOT NULL,
+            download_size INTEGER NOT NULL DEFAULT 0,
+            full_size INTEGER NOT NULL DEFAULT 0,
+            computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(distro, package_name, from_version, to_version)
+        );
+        ",
+    )?;
+
+    info!("Schema version 44 applied successfully (mirror health, delta manifests)");
+    Ok(())
+}

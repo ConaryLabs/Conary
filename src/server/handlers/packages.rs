@@ -75,7 +75,7 @@ pub async fn get_package(
     let state_guard = state.read().await;
 
     // Validate distro
-    if !["arch", "fedora", "ubuntu", "debian"].contains(&distro.as_str()) {
+    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
@@ -321,7 +321,7 @@ pub async fn download_package(
     let state_guard = state.read().await;
 
     // Validate distro
-    if !["arch", "fedora", "ubuntu", "debian"].contains(&distro.as_str()) {
+    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
@@ -549,4 +549,74 @@ pub async fn trigger_conversion(
         version: req.version,
     };
     get_package(State(state), Path((req.distro, req.package)), Query(query)).await
+}
+
+/// Query parameters for delta requests
+#[derive(Debug, Deserialize)]
+pub struct DeltaQuery {
+    /// Version to upgrade from
+    pub from: String,
+    /// Version to upgrade to
+    pub to: String,
+}
+
+/// GET /v1/{distro}/packages/{name}/delta?from=V1&to=V2
+///
+/// Returns the pre-computed delta manifest between two versions of a package.
+/// If no cached delta exists, computes one on the fly.
+pub async fn get_delta(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path((distro, name)): Path<(String, String)>,
+    Query(query): Query<DeltaQuery>,
+) -> Response {
+    // Validate path parameters
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
+    let state_guard = state.read().await;
+    let db_path = state_guard.config.db_path.clone();
+    drop(state_guard);
+
+    let from = query.from;
+    let to = query.to;
+    let distro_c = distro.clone();
+    let name_c = name.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&db_path)?;
+
+        // Try cached delta first
+        if let Some(cached) =
+            crate::server::delta_manifests::get_delta(&conn, &distro_c, &name_c, &from, &to)?
+        {
+            return Ok(cached);
+        }
+
+        // Compute on the fly
+        crate::server::delta_manifests::compute_delta(&conn, &distro_c, &name_c, &from, &to)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(delta)) => {
+            let response = delta.to_response();
+            let json = match super::serialize_json(&response, "delta response") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 300)
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Failed to compute delta for {}/{}: {}", distro, name, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to compute delta").into_response()
+        }
+        Err(e) => {
+            tracing::error!("Blocking task failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+        }
+    }
 }

@@ -134,6 +134,16 @@ impl R2Store {
         Ok(response.status_code() < 300)
     }
 
+    /// Generate a presigned GET URL for a chunk
+    ///
+    /// The URL allows direct download from R2/Cloudflare CDN without authentication.
+    /// Expires after `expiry_secs` seconds.
+    pub async fn presign_get(&self, hash: &str, expiry_secs: u32) -> Result<String> {
+        let key = self.chunk_key(hash);
+        let presigned = self.bucket.presign_get(&key, expiry_secs, None).await?;
+        Ok(presigned)
+    }
+
     /// Build the full object key for a chunk hash.
     fn chunk_key(&self, hash: &str) -> String {
         format!("{}{}", self.prefix, hash)

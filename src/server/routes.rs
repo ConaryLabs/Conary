@@ -17,7 +17,7 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    chunks, detail, federation, index, jobs, models, packages, recipes, search, sparse, tuf,
+    chunks, detail, federation, index, jobs, models, oci, packages, recipes, search, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -173,6 +173,17 @@ fn create_cors_layer(config: &ServerConfig, restricted: bool) -> CorsLayer {
     }
 }
 
+/// Extract client IP by reading the trusted_proxy_header from state once
+async fn resolve_client_ip(
+    state: &Arc<RwLock<ServerState>>,
+    headers: &HeaderMap,
+    conn_ip: &IpAddr,
+) -> IpAddr {
+    let state_guard = state.read().await;
+    let trusted_header = state_guard.trusted_proxy_header.as_deref();
+    extract_client_ip(headers, conn_ip, trusted_header)
+}
+
 /// Audit logging middleware with Cloudflare IP extraction
 async fn audit_log_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -184,12 +195,7 @@ async fn audit_log_middleware(
     let uri = request.uri().clone();
     let path = uri.path();
     let headers = request.headers().clone();
-
-    // Extract real client IP
-    let state_guard = state.read().await;
-    let trusted_header = state_guard.trusted_proxy_header.as_deref();
-    let client_ip = extract_client_ip(&headers, &addr.ip(), trusted_header);
-    drop(state_guard);
+    let client_ip = resolve_client_ip(&state, &headers, &addr.ip()).await;
 
     // Only log federation and admin endpoints
     let should_log = path.starts_with("/v1/chunks")
@@ -228,12 +234,7 @@ async fn rate_limit_middleware(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let headers = request.headers().clone();
-
-    // Extract real client IP
-    let state_guard = state.read().await;
-    let trusted_header = state_guard.trusted_proxy_header.as_deref();
-    let client_ip = extract_client_ip(&headers, &addr.ip(), trusted_header);
-    drop(state_guard);
+    let client_ip = resolve_client_ip(&state, &headers, &addr.ip()).await;
 
     let ip = client_ip.to_string();
 
@@ -255,14 +256,9 @@ async fn ban_middleware(
     let path = request.uri().path().to_string();
     let headers = request.headers().clone();
 
-    // Get trusted header and ban list from state
-    let state_guard = state.read().await;
-    let trusted_header = state_guard.trusted_proxy_header.clone();
-    let ban_list = state_guard.ban_list.clone();
-    drop(state_guard);
-
-    // Extract real client IP
-    let client_ip = extract_client_ip(&headers, &addr.ip(), trusted_header.as_deref());
+    // Get ban list from state
+    let ban_list = state.read().await.ban_list.clone();
+    let client_ip = resolve_client_ip(&state, &headers, &addr.ip()).await;
     let ip = client_ip.to_string();
 
     // Check if banned
@@ -350,6 +346,11 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/:distro/packages/:name/download",
             get(packages::download_package),
         )
+        // Delta manifest between two versions
+        .route(
+            "/v1/:distro/packages/:name/delta",
+            get(packages::get_delta),
+        )
         // Conversion job status (for 202 Accepted polling)
         .route("/v1/jobs/:job_id", get(jobs::get_job_status))
         // Recipe package download (read-only, after build complete)
@@ -396,6 +397,12 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/stats/overview", get(detail::get_overview))
         // Prometheus metrics (public, for monitoring)
         .route("/metrics", get(prometheus_metrics))
+        // === OCI Distribution API v2 ===
+        .route("/v2/", get(oci::version_check))
+        .route("/v2/_catalog", get(oci::catalog))
+        // Catch-all for /v2/{name}/manifests/{ref}, /v2/{name}/blobs/{digest},
+        // /v2/{name}/tags/list. Name can contain slashes so we use a wildcard.
+        .route("/v2/*path", get(oci::oci_catchall).head(oci::oci_catchall_head))
         .layer(compression)
         .layer(public_cors)
         .with_state(state.clone());

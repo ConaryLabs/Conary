@@ -14,10 +14,14 @@ mod client;
 mod dependencies;
 mod download;
 mod management;
+pub mod metalink;
 mod metadata;
+pub mod mirror_health;
+pub mod mirror_selector;
 pub mod registry;
 pub mod remi;
 pub mod resolution;
+pub mod substituter;
 mod sync;
 
 pub mod gpg;
@@ -28,7 +32,11 @@ pub mod selector;
 pub mod chunk_fetcher;
 
 // Re-export main types and functions
-pub use client::RepositoryClient;
+pub use client::{RepositoryClient, RetryPolicy};
+pub use metalink::{MetalinkFile, MetalinkMirror, extract_base_urls, parse_metalink_headers, parse_metalink_xml};
+pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
+pub use mirror_selector::{MirrorSelector, MirrorStrategy};
+pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
 };

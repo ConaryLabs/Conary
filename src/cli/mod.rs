@@ -442,6 +442,35 @@ pub enum Commands {
         foreground: bool,
     },
 
+    /// Run a zero-config Remi LAN proxy
+    ///
+    /// Starts a lightweight pull-through caching proxy for CCS chunks and
+    /// index data. Automatically discovers upstream Remi instances via mDNS
+    /// and advertises itself on the LAN for other Conary clients to find.
+    ///
+    /// Designed for CI pipelines, air-gapped networks, and fleet deployment.
+    #[cfg(feature = "server")]
+    RemiProxy {
+        /// Port to listen on
+        #[arg(long, default_value = "7891")]
+        port: u16,
+        /// Explicit upstream Remi URL (skips mDNS discovery)
+        #[arg(long)]
+        upstream: Option<String>,
+        /// Disable mDNS auto-discovery
+        #[arg(long)]
+        no_mdns: bool,
+        /// Local cache directory
+        #[arg(long, default_value = "/var/cache/conary/proxy")]
+        cache_dir: String,
+        /// Serve only from cache (no upstream)
+        #[arg(long)]
+        offline: bool,
+        /// Don't advertise via mDNS
+        #[arg(long)]
+        no_advertise: bool,
+    },
+
     /// Run the Remi server (CCS conversion proxy)
     ///
     /// Remi is a server that proxies upstream package repositories and converts

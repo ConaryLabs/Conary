@@ -1439,6 +1439,44 @@ fn main() -> Result<()> {
         }
 
         // =====================================================================
+        // Remi Lite Proxy Command
+        // =====================================================================
+        #[cfg(feature = "server")]
+        Some(cli::Commands::RemiProxy {
+            port,
+            upstream,
+            no_mdns,
+            cache_dir,
+            offline,
+            no_advertise,
+        }) => {
+            use conary::server::{ProxyConfig, run_proxy};
+            use std::path::PathBuf;
+
+            let config = ProxyConfig {
+                port,
+                upstream_url: upstream,
+                cache_dir: PathBuf::from(cache_dir),
+                mdns_enabled: !no_mdns,
+                mdns_scan_secs: 3,
+                offline,
+                advertise: !no_advertise,
+            };
+
+            // Ensure cache directory exists
+            if let Some(parent) = config.cache_dir.parent()
+                && !parent.exists()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::create_dir_all(&config.cache_dir)?;
+
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(run_proxy(config))
+        }
+
+        // =====================================================================
         // Remi Server Command
         // =====================================================================
         #[cfg(feature = "server")]

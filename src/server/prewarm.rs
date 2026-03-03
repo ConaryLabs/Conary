@@ -157,17 +157,70 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
     Ok(result)
 }
 
-/// Get packages to convert, ordered by popularity
+/// Merge upstream popularity data (from JSON file) with local download statistics.
+///
+/// Packages that appear in both sources receive a boosted combined score.
+/// The final list is sorted by combined score descending.
+pub fn merge_popularity(
+    conn: &rusqlite::Connection,
+    popularity_file: Option<&str>,
+) -> Vec<PackagePopularity> {
+    // Load upstream popularity from file
+    let upstream = if let Some(path) = popularity_file {
+        load_popularity_data(path).unwrap_or_else(|e| {
+            warn!("Failed to load popularity file: {}", e);
+            vec![]
+        })
+    } else {
+        vec![]
+    };
+
+    // Build a map from upstream data
+    let mut combined: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for entry in &upstream {
+        combined.insert(entry.name.clone(), entry.score);
+    }
+
+    // Query local download statistics (use 30-day counts for recency)
+    let local_counts = conn
+        .prepare(
+            "SELECT package_name, count_30d FROM download_counts ORDER BY count_30d DESC",
+        )
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap_or_else(|e| {
+            debug!("No local download stats available: {}", e);
+            vec![]
+        });
+
+    // Merge: packages popular both upstream AND locally get highest scores.
+    // Local score is weighted 10x to boost packages actually requested on this instance.
+    for (name, local_count) in &local_counts {
+        let local_score = (*local_count as u64) * 10;
+        let entry = combined.entry(name.clone()).or_insert(0);
+        *entry += local_score;
+    }
+
+    let mut result: Vec<PackagePopularity> = combined
+        .into_iter()
+        .map(|(name, score)| PackagePopularity { name, score })
+        .collect();
+
+    result.sort_by(|a, b| b.score.cmp(&a.score));
+    result
+}
+
+/// Get packages to convert, ordered by merged popularity (upstream + local)
 fn get_packages_to_convert(
     conn: &rusqlite::Connection,
     config: &PrewarmConfig,
 ) -> Result<Vec<RepositoryPackage>> {
-    // If popularity file provided, use it for ordering
-    let popularity = if let Some(path) = &config.popularity_file {
-        load_popularity_data(path)?
-    } else {
-        vec![]
-    };
+    // Merge upstream + local popularity
+    let popularity = merge_popularity(conn, config.popularity_file.as_deref());
 
     // Query repository packages for this distro
     let distro_pattern = format!("%{}%", config.distro);
@@ -210,7 +263,7 @@ fn get_packages_to_convert(
         packages.retain(|p| re.is_match(&p.name));
     }
 
-    // Sort by popularity if we have data
+    // Sort by merged popularity
     if !popularity.is_empty() {
         let pop_map: std::collections::HashMap<&str, u64> = popularity
             .iter()
@@ -254,7 +307,7 @@ fn is_already_converted(conn: &rusqlite::Connection, name: &str, version: &str) 
 /// Background pre-warming task
 ///
 /// Runs periodically to convert popular packages that haven't been requested yet.
-#[allow(dead_code)] // Will be used when background pre-warming is enabled
+/// Uses merged popularity from both upstream data and local download statistics.
 pub async fn run_prewarm_background(
     db_path: String,
     chunk_dir: String,
@@ -262,6 +315,7 @@ pub async fn run_prewarm_background(
     distro: String,
     interval_hours: u64,
     max_packages_per_run: usize,
+    popularity_file: Option<String>,
 ) {
     use std::time::Duration;
 
@@ -270,13 +324,14 @@ pub async fn run_prewarm_background(
     loop {
         tokio::time::sleep(interval).await;
 
+        let pop_file = popularity_file.clone();
         let config = PrewarmConfig {
             db_path: db_path.clone(),
             chunk_dir: chunk_dir.clone(),
             cache_dir: cache_dir.clone(),
             distro: distro.clone(),
             max_packages: max_packages_per_run,
-            popularity_file: None,
+            popularity_file: pop_file,
             pattern: None,
             dry_run: false,
         };
@@ -335,5 +390,119 @@ mod tests {
         assert_eq!(data.len(), 3);
         assert_eq!(data[0].name, "nginx");
         assert_eq!(data[0].score, 1000);
+    }
+
+    #[test]
+    fn test_merge_popularity_upstream_only() {
+        use crate::db::schema;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        // Write a temporary popularity file
+        let pop_file = NamedTempFile::new().unwrap();
+        let pop_data = r#"[
+            {"name": "nginx", "score": 1000},
+            {"name": "curl", "score": 800}
+        ]"#;
+        std::fs::write(pop_file.path(), pop_data).unwrap();
+
+        let result = merge_popularity(&conn, Some(pop_file.path().to_str().unwrap()));
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "nginx");
+        assert_eq!(result[0].score, 1000);
+        assert_eq!(result[1].name, "curl");
+        assert_eq!(result[1].score, 800);
+    }
+
+    #[test]
+    fn test_merge_popularity_local_only() {
+        use crate::db::models::{DownloadCount, DownloadStat};
+        use crate::db::schema;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        // Insert some download stats
+        let events = vec![
+            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora".into(), "git".into()),
+        ];
+        DownloadStat::insert_batch(&conn, &events).unwrap();
+        DownloadCount::refresh_aggregates(&conn).unwrap();
+
+        let result = merge_popularity(&conn, None);
+        assert_eq!(result.len(), 2);
+        // vim has 3 downloads * 10 = 30 score, git has 1 * 10 = 10
+        assert_eq!(result[0].name, "vim");
+        assert_eq!(result[0].score, 30);
+        assert_eq!(result[1].name, "git");
+        assert_eq!(result[1].score, 10);
+    }
+
+    #[test]
+    fn test_merge_popularity_combined() {
+        use crate::db::models::{DownloadCount, DownloadStat};
+        use crate::db::schema;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        // Upstream: nginx=1000, curl=800
+        let pop_file = NamedTempFile::new().unwrap();
+        let pop_data = r#"[
+            {"name": "nginx", "score": 1000},
+            {"name": "curl", "score": 800}
+        ]"#;
+        std::fs::write(pop_file.path(), pop_data).unwrap();
+
+        // Local: curl downloaded 5 times (5*10=50 boost), vim 2 times (2*10=20)
+        let events = vec![
+            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora".into(), "vim".into()),
+        ];
+        DownloadStat::insert_batch(&conn, &events).unwrap();
+        DownloadCount::refresh_aggregates(&conn).unwrap();
+
+        let result = merge_popularity(&conn, Some(pop_file.path().to_str().unwrap()));
+
+        // Expected: nginx=1000, curl=800+50=850, vim=20
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].name, "nginx");
+        assert_eq!(result[0].score, 1000);
+        assert_eq!(result[1].name, "curl");
+        assert_eq!(result[1].score, 850);
+        assert_eq!(result[2].name, "vim");
+        assert_eq!(result[2].score, 20);
+    }
+
+    #[test]
+    fn test_merge_popularity_no_data() {
+        use crate::db::schema;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        let result = merge_popularity(&conn, None);
+        assert!(result.is_empty());
     }
 }

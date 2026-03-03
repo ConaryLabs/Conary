@@ -443,6 +443,11 @@ pub struct R2Section {
     /// Write-through: upload to R2 on every chunk store
     #[serde(default = "default_true")]
     pub write_through: bool,
+
+    /// Enable redirect to R2 presigned URLs for chunk GET requests
+    /// When true, GET /v1/chunks/:hash returns 307 redirect to R2 instead of streaming data
+    #[serde(default)]
+    pub r2_redirect: bool,
 }
 
 impl Default for R2Section {
@@ -454,6 +459,7 @@ impl Default for R2Section {
             bucket: default_r2_bucket(),
             prefix: default_r2_prefix(),
             write_through: true,
+            r2_redirect: false,
         }
     }
 }

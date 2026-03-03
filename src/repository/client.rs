@@ -8,8 +8,10 @@
 use crate::compression::{CompressionFormat, decompress_auto};
 use crate::error::{Error, Result};
 use indicatif::ProgressBar;
+use rand::Rng;
 use reqwest::blocking::Client;
-use std::fs::{self, File};
+use reqwest::header;
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -20,23 +22,74 @@ use super::metadata::RepositoryMetadata;
 /// Default timeout for HTTP requests (30 seconds)
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Maximum retry attempts for failed downloads
-const MAX_RETRIES: u32 = 3;
-
-/// Retry delay in milliseconds
-const RETRY_DELAY_MS: u64 = 1000;
-
 /// Buffer size for streaming downloads (8 KB)
 const STREAM_BUFFER_SIZE: usize = 8192;
+
+/// Retry policy with exponential backoff and jitter
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts
+    pub max_retries: u32,
+    /// Base delay between retries
+    pub base_delay: Duration,
+    /// Maximum delay cap
+    pub max_delay: Duration,
+    /// Jitter factor (0.0 to 1.0) - adds random delay up to this fraction of computed delay
+    pub jitter_factor: f64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(30),
+            jitter_factor: 0.25,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Calculate the delay for a given attempt number (1-based).
+    ///
+    /// Uses exponential backoff: `min(base * 2^(n-1), max_delay) + random_jitter`
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        let exp = attempt.saturating_sub(1);
+        let base_ms = self.base_delay.as_millis() as u64;
+        // 2^exp, capped to avoid overflow
+        let multiplier = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
+        let delay_ms = base_ms.saturating_mul(multiplier);
+        let max_ms = self.max_delay.as_millis() as u64;
+        let capped_ms = delay_ms.min(max_ms);
+
+        let jitter_ms = if self.jitter_factor > 0.0 {
+            let max_jitter = (capped_ms as f64 * self.jitter_factor) as u64;
+            if max_jitter > 0 {
+                rand::thread_rng().gen_range(0..=max_jitter)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        Duration::from_millis(capped_ms + jitter_ms)
+    }
+}
 
 /// Stream HTTP response to file with optional progress tracking
 ///
 /// Always streams data in chunks, never buffering the entire response in memory.
 /// This is safe for files of any size.
+///
+/// The `offset` parameter indicates how many bytes were already written (for resumed
+/// downloads). The progress bar position starts from `offset` so the user sees
+/// correct overall progress.
 fn stream_response_to_file(
     mut response: reqwest::blocking::Response,
     file: &mut File,
     total_size: u64,
+    offset: u64,
     progress_bar: Option<&ProgressBar>,
     display_name: &str,
 ) -> Result<u64> {
@@ -44,6 +97,7 @@ fn stream_response_to_file(
     if let Some(pb) = progress_bar {
         if total_size > 0 {
             pb.set_length(total_size);
+            pb.set_position(offset);
             pb.set_message(display_name.to_string());
         } else {
             // Unknown size - show bytes downloaded without percentage
@@ -51,7 +105,7 @@ fn stream_response_to_file(
         }
     }
 
-    let mut downloaded: u64 = 0;
+    let mut downloaded: u64 = offset;
     let mut buffer = [0u8; STREAM_BUFFER_SIZE];
 
     loop {
@@ -79,7 +133,7 @@ fn stream_response_to_file(
 /// HTTP client wrapper with retry support
 pub struct RepositoryClient {
     client: Client,
-    max_retries: u32,
+    retry_policy: RetryPolicy,
 }
 
 impl RepositoryClient {
@@ -92,8 +146,15 @@ impl RepositoryClient {
 
         Ok(Self {
             client,
-            max_retries: MAX_RETRIES,
+            retry_policy: RetryPolicy::default(),
         })
+    }
+
+    /// Set a custom retry policy (builder pattern)
+    #[must_use]
+    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
     }
 
     /// Get a reference to the inner HTTP client
@@ -123,7 +184,7 @@ impl RepositoryClient {
                         || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
                         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     {
-                        if attempt >= self.max_retries {
+                        if attempt >= self.retry_policy.max_retries {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",
                                 status, metadata_url
@@ -133,7 +194,7 @@ impl RepositoryClient {
                             "Metadata fetch attempt {} got HTTP {}, retrying...",
                             attempt, status
                         );
-                        std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                        std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
                         continue;
                     }
 
@@ -155,7 +216,7 @@ impl RepositoryClient {
                     return Ok(metadata);
                 }
                 Err(e) => {
-                    if attempt >= self.max_retries {
+                    if attempt >= self.retry_policy.max_retries {
                         return Err(Error::DownloadError(format!(
                             "Failed to fetch metadata after {attempt} attempts: {e}"
                         )));
@@ -164,7 +225,7 @@ impl RepositoryClient {
                         "Metadata fetch attempt {} failed: {}, retrying...",
                         attempt, e
                     );
-                    std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                    std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
                 }
             }
         }
@@ -269,6 +330,9 @@ impl RepositoryClient {
     ///
     /// Shows a progress bar during download with the package name and download speed.
     /// Falls back to silent download if content-length is unknown or no progress bar is provided.
+    ///
+    /// Supports resumable downloads: if a `.tmp` file already exists from a previous
+    /// interrupted download, sends a `Range` header to resume from where it left off.
     pub fn download_file_with_progress(
         &self,
         url: &str,
@@ -288,10 +352,27 @@ impl RepositoryClient {
             })?;
         }
 
+        let temp_path = dest_path.with_extension("tmp");
+
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.client.get(url).send() {
+
+            // Check for existing partial download
+            let existing_len = fs::metadata(&temp_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+
+            let mut request = self.client.get(url);
+            if existing_len > 0 {
+                debug!(
+                    "Found partial download ({} bytes), requesting resume",
+                    existing_len
+                );
+                request = request.header(header::RANGE, format!("bytes={}-", existing_len));
+            }
+
+            match request.send() {
                 Ok(response) => {
                     let status = response.status();
 
@@ -300,7 +381,7 @@ impl RepositoryClient {
                         || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
                         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     {
-                        if attempt >= self.max_retries {
+                        if attempt >= self.retry_policy.max_retries {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",
                                 status, url
@@ -310,34 +391,89 @@ impl RepositoryClient {
                             "Download attempt {} got HTTP {}, retrying...",
                             attempt, status
                         );
-                        std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                        std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
                         continue;
                     }
 
-                    if !status.is_success() {
+                    // HTTP 416 Range Not Satisfiable - file is already complete
+                    if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+                        if existing_len > 0 {
+                            debug!(
+                                "Server returned 416, partial file ({} bytes) is already complete",
+                                existing_len
+                            );
+                            if let Err(e) = fs::rename(&temp_path, dest_path) {
+                                let _ = fs::remove_file(&temp_path);
+                                return Err(Error::IoError(format!(
+                                    "Failed to move {} to {}: {e}",
+                                    temp_path.display(),
+                                    dest_path.display()
+                                )));
+                            }
+                            info!("Successfully downloaded to {}", dest_path.display());
+                            return Ok(());
+                        }
+                        return Err(Error::DownloadError(format!(
+                            "HTTP 416 from {} with no partial file",
+                            url
+                        )));
+                    }
+
+                    if !status.is_success()
+                        && status != reqwest::StatusCode::PARTIAL_CONTENT
+                    {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
                             status, url
                         )));
                     }
 
-                    // Get content length for progress tracking
-                    let total_size = response.content_length().unwrap_or(0);
-
-                    // Write to temporary file first
-                    let temp_path = dest_path.with_extension("tmp");
-                    let mut file = File::create(&temp_path).map_err(|e| {
-                        Error::IoError(format!(
-                            "Failed to create file {}: {e}",
-                            temp_path.display()
-                        ))
-                    })?;
+                    // Determine resume vs fresh download
+                    let (mut file, offset, total_size) =
+                        if status == reqwest::StatusCode::PARTIAL_CONTENT && existing_len > 0 {
+                            // Server supports range requests - append to existing file
+                            let content_range_total = response
+                                .headers()
+                                .get(header::CONTENT_RANGE)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|s| {
+                                    // Parse "bytes START-END/TOTAL"
+                                    s.rsplit('/').next().and_then(|t| t.parse::<u64>().ok())
+                                })
+                                .unwrap_or(0);
+                            debug!(
+                                "Resuming download from byte {}, total size {}",
+                                existing_len, content_range_total
+                            );
+                            let file = OpenOptions::new()
+                                .append(true)
+                                .open(&temp_path)
+                                .map_err(|e| {
+                                    Error::IoError(format!(
+                                        "Failed to open {} for append: {e}",
+                                        temp_path.display()
+                                    ))
+                                })?;
+                            (file, existing_len, content_range_total)
+                        } else {
+                            // HTTP 200 - server does not support range, or fresh download.
+                            // Truncate any existing partial file.
+                            let total = response.content_length().unwrap_or(0);
+                            let file = File::create(&temp_path).map_err(|e| {
+                                Error::IoError(format!(
+                                    "Failed to create file {}: {e}",
+                                    temp_path.display()
+                                ))
+                            })?;
+                            (file, 0, total)
+                        };
 
                     // Stream response to file, optionally updating progress bar
                     let downloaded = stream_response_to_file(
                         response,
                         &mut file,
                         total_size,
+                        offset,
                         progress_bar,
                         display_name,
                     )?;
@@ -362,15 +498,144 @@ impl RepositoryClient {
                     return Ok(());
                 }
                 Err(e) => {
-                    if attempt >= self.max_retries {
+                    if attempt >= self.retry_policy.max_retries {
                         return Err(Error::DownloadError(format!(
                             "Failed to download after {attempt} attempts: {e}"
                         )));
                     }
                     warn!("Download attempt {} failed: {}, retrying...", attempt, e);
-                    std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64));
+                    std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retry_policy_default() {
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.max_retries, 3);
+        assert_eq!(policy.base_delay, Duration::from_secs(1));
+        assert_eq!(policy.max_delay, Duration::from_secs(30));
+        assert!((policy.jitter_factor - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_retry_policy_exponential_backoff_no_jitter() {
+        let policy = RetryPolicy {
+            max_retries: 5,
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(10),
+            jitter_factor: 0.0,
+        };
+
+        // attempt 1: 100ms * 2^0 = 100ms
+        assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(100));
+        // attempt 2: 100ms * 2^1 = 200ms
+        assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(200));
+        // attempt 3: 100ms * 2^2 = 400ms
+        assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(400));
+        // attempt 4: 100ms * 2^3 = 800ms
+        assert_eq!(policy.delay_for_attempt(4), Duration::from_millis(800));
+        // attempt 5: 100ms * 2^4 = 1600ms
+        assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(1600));
+    }
+
+    #[test]
+    fn test_retry_policy_max_delay_cap() {
+        let policy = RetryPolicy {
+            max_retries: 10,
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(5),
+            jitter_factor: 0.0,
+        };
+
+        // attempt 1: 1s
+        assert_eq!(policy.delay_for_attempt(1), Duration::from_secs(1));
+        // attempt 2: 2s
+        assert_eq!(policy.delay_for_attempt(2), Duration::from_secs(2));
+        // attempt 3: 4s
+        assert_eq!(policy.delay_for_attempt(3), Duration::from_secs(4));
+        // attempt 4: would be 8s, but capped at 5s
+        assert_eq!(policy.delay_for_attempt(4), Duration::from_secs(5));
+        // attempt 10: still capped at 5s
+        assert_eq!(policy.delay_for_attempt(10), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_retry_policy_jitter_within_bounds() {
+        let policy = RetryPolicy {
+            max_retries: 5,
+            base_delay: Duration::from_millis(1000),
+            max_delay: Duration::from_secs(60),
+            jitter_factor: 0.5,
+        };
+
+        // Run multiple times to check jitter stays within bounds
+        for _ in 0..100 {
+            let delay = policy.delay_for_attempt(1);
+            // Base is 1000ms, jitter up to 50% = 500ms, so range is [1000, 1500]
+            assert!(delay >= Duration::from_millis(1000));
+            assert!(delay <= Duration::from_millis(1500));
+        }
+
+        for _ in 0..100 {
+            let delay = policy.delay_for_attempt(3);
+            // Base is 4000ms, jitter up to 50% = 2000ms, so range is [4000, 6000]
+            assert!(delay >= Duration::from_millis(4000));
+            assert!(delay <= Duration::from_millis(6000));
+        }
+    }
+
+    #[test]
+    fn test_retry_policy_attempt_zero_saturates() {
+        let policy = RetryPolicy {
+            max_retries: 3,
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(10),
+            jitter_factor: 0.0,
+        };
+
+        // attempt 0 should not panic (saturating_sub handles it)
+        let delay = policy.delay_for_attempt(0);
+        assert_eq!(delay, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_retry_policy_large_attempt_no_overflow() {
+        let policy = RetryPolicy {
+            max_retries: 100,
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            jitter_factor: 0.0,
+        };
+
+        // Very large attempt should not panic, just cap at max_delay
+        let delay = policy.delay_for_attempt(64);
+        assert_eq!(delay, Duration::from_secs(60));
+
+        let delay = policy.delay_for_attempt(100);
+        assert_eq!(delay, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_repository_client_with_retry_policy() {
+        let policy = RetryPolicy {
+            max_retries: 5,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(15),
+            jitter_factor: 0.1,
+        };
+
+        let client = RepositoryClient::new()
+            .unwrap()
+            .with_retry_policy(policy.clone());
+
+        assert_eq!(client.retry_policy.max_retries, 5);
+        assert_eq!(client.retry_policy.base_delay, Duration::from_millis(500));
     }
 }

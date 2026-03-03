@@ -19,9 +19,12 @@ mod bloom;
 mod cache;
 pub mod config;
 mod conversion;
+pub mod delta_manifests;
+pub mod federated_index;
 mod handlers;
 mod index_gen;
 mod jobs;
+pub mod lite;
 pub mod metrics;
 mod negative_cache;
 pub mod popularity;
@@ -43,6 +46,7 @@ pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmResult, run_prewarm};
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_router};
+pub use lite::{ProxyConfig, run_proxy};
 pub use search::SearchEngine;
 pub use security::BanList;
 
@@ -150,10 +154,16 @@ pub struct ServerState {
     pub trusted_proxy_header: Option<String>,
     /// R2 object storage for CDN-backed chunk distribution
     pub r2_store: Option<Arc<R2Store>>,
+    /// Redirect chunk GET requests to R2 presigned URLs instead of streaming locally
+    pub r2_redirect: bool,
     /// Full-text search engine (Tantivy)
     pub search_engine: Option<Arc<SearchEngine>>,
     /// Download analytics recorder (buffered writes)
     pub analytics: Option<Arc<AnalyticsRecorder>>,
+    /// Federated sparse index configuration (from federation peers)
+    pub federated_config: Option<federated_index::FederatedIndexConfig>,
+    /// Federated sparse index cache (TTL-based in-memory cache)
+    pub federated_cache: Option<Arc<federated_index::FederatedIndexCache>>,
 }
 
 impl ServerState {
@@ -217,8 +227,11 @@ impl ServerState {
             negative_cache,
             trusted_proxy_header,
             r2_store: None,
+            r2_redirect: false,
             search_engine: None,
             analytics: None,
+            federated_config: None,
+            federated_cache: None,
         }
     }
 }
@@ -292,11 +305,15 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             match R2Store::new(&r2_config) {
                 Ok(store) => {
                     tracing::info!(
-                        "  R2 storage: enabled (bucket: {}, write-through: {})",
+                        "  R2 storage: enabled (bucket: {}, write-through: {}, redirect: {})",
                         remi_config.r2.bucket,
-                        remi_config.r2.write_through
+                        remi_config.r2.write_through,
+                        remi_config.r2.r2_redirect
                     );
-                    state.write().await.r2_store = Some(Arc::new(store));
+                    let mut state_w = state.write().await;
+                    state_w.r2_store = Some(Arc::new(store));
+                    state_w.r2_redirect = remi_config.r2.r2_redirect;
+                    drop(state_w);
                 }
                 Err(e) => {
                     tracing::error!("  R2 storage: failed to initialize: {}", e);
@@ -351,6 +368,26 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         });
     }
 
+    // Initialize federated sparse index if federation peers are configured
+    if remi_config.federation.enabled && !remi_config.federation.peers.is_empty() {
+        let fed_config = federated_index::FederatedIndexConfig {
+            upstream_urls: remi_config.federation.peers.clone(),
+            timeout: Duration::from_secs(10),
+            cache_ttl: Duration::from_secs(300),
+        };
+        let fed_cache = Arc::new(federated_index::FederatedIndexCache::new());
+
+        tracing::info!(
+            "  Federated index: enabled ({} upstream peers)",
+            fed_config.upstream_urls.len()
+        );
+
+        let mut state_w = state.write().await;
+        state_w.federated_config = Some(fed_config);
+        state_w.federated_cache = Some(fed_cache);
+        drop(state_w);
+    }
+
     // Create routers
     let public_app = create_router(state.clone()).await;
     let admin_app = create_admin_router(state.clone());
@@ -366,6 +403,43 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     tokio::spawn(async move {
         negative_cache::run_cleanup_loop(neg_cache_state).await;
     });
+
+    // Start background pre-warming if enabled
+    if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
+        let prewarm_interval = crate::server::config::parse_duration(
+            &remi_config.prewarm.metadata_sync_interval,
+        )
+        .map(|d| d.as_secs() / 3600)
+        .unwrap_or(6);
+        let max_per_run = remi_config.prewarm.convert_top_n;
+
+        for distro in &remi_config.prewarm.distros {
+            let db = server_config.db_path.display().to_string();
+            let chunks = server_config.chunk_dir.display().to_string();
+            let cache = server_config.cache_dir.display().to_string();
+            let d = distro.clone();
+
+            tracing::info!(
+                "  Pre-warm: enabled for {} (every {}h, top {} packages)",
+                d,
+                prewarm_interval,
+                max_per_run
+            );
+
+            tokio::spawn(async move {
+                prewarm::run_prewarm_background(
+                    db,
+                    chunks,
+                    cache,
+                    d,
+                    prewarm_interval,
+                    max_per_run,
+                    None,
+                )
+                .await;
+            });
+        }
+    }
 
     // Bind listeners
     let public_listener = tokio::net::TcpListener::bind(server_config.bind_addr).await?;
