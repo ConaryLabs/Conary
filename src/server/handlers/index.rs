@@ -1,7 +1,7 @@
 // src/server/handlers/index.rs
 //! Repository index endpoints - metadata serving
 
-use crate::db::models::{Repository, RepositoryPackage};
+use crate::db::models::RepositoryPackage;
 use crate::server::ServerState;
 use axum::{
     extract::{Path, State},
@@ -47,7 +47,7 @@ pub async fn get_metadata(
     Path(distro): Path<String>,
 ) -> Response {
     // Validate distro
-    if !["arch", "fedora", "ubuntu", "debian"].contains(&distro.as_str()) {
+    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
@@ -57,15 +57,11 @@ pub async fn get_metadata(
     // Query repository metadata
     match build_metadata(db_path, &distro) {
         Ok(metadata) => {
-            // Cache for 5 minutes (Cloudflare will cache this)
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, "public, max-age=300")
-                .body(axum::body::Body::from(
-                    serde_json::to_string(&metadata).unwrap(),
-                ))
-                .unwrap()
+            let json = match super::serialize_json(&metadata, "repository metadata") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 300)
         }
         Err(e) => {
             tracing::error!("Failed to build metadata for {}: {}", distro, e);
@@ -142,29 +138,8 @@ fn build_metadata(
     })
 }
 
-/// Find a repository configured for the given distro
-fn find_repository_for_distro(
-    conn: &Connection,
-    distro: &str,
-) -> Result<Option<Repository>, anyhow::Error> {
-    // First, try to find by default_strategy_distro
-    let repos = Repository::list_enabled(conn)?;
-
-    for repo in &repos {
-        if repo.default_strategy_distro.as_deref() == Some(distro) {
-            return Ok(Some(repo.clone()));
-        }
-    }
-
-    // Fall back to name-based matching (e.g., "fedora", "fedora-updates")
-    for repo in &repos {
-        if repo.name.starts_with(distro) || repo.name.contains(distro) {
-            return Ok(Some(repo.clone()));
-        }
-    }
-
-    Ok(None)
-}
+/// Alias to shared implementation in handlers/mod.rs
+use super::find_repository_for_distro;
 
 /// Build a set of "name:version" keys for converted packages
 fn build_converted_set(conn: &Connection, distro: &str) -> Result<HashSet<String>, anyhow::Error> {
@@ -194,7 +169,7 @@ pub async fn get_metadata_sig(
     Path(distro): Path<String>,
 ) -> Response {
     // Validate distro
-    if !["arch", "fedora", "ubuntu", "debian"].contains(&distro.as_str()) {
+    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
@@ -218,7 +193,7 @@ pub async fn get_metadata_sig(
             .header(header::CONTENT_TYPE, "application/pgp-signature")
             .header(header::CACHE_CONTROL, "public, max-age=300")
             .body(axum::body::Body::from(sig))
-            .unwrap(),
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         Err(e) => {
             tracing::error!("Failed to read signature: {}", e);
             (
@@ -233,7 +208,7 @@ pub async fn get_metadata_sig(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::ConvertedPackage;
+    use crate::db::models::{ConvertedPackage, Repository};
     use crate::db::schema;
     use tempfile::NamedTempFile;
 

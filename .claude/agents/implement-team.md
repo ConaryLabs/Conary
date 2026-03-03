@@ -24,7 +24,7 @@ Parallel implementation of a list of known fixes/improvements. Takes a set of fi
 - Agents are grouped by file ownership to prevent conflicts
 - Each agent gets a specific list of fixes (max 3-5 per agent)
 - Each agent gets explicit file ownership (which files they can edit)
-- Each agent runs `cargo build --features daemon` after their changes
+- Each agent runs `cargo build --features server,daemon` after their changes (covers all feature-gated code)
 - Agents ignore compilation errors in files owned by other agents
 - Use worktree isolation when available for maximum parallelism
 
@@ -34,9 +34,9 @@ Parallel implementation of a list of known fixes/improvements. Takes a set of fi
 **Weakness:** Can only verify what the tools catch. If a behavioral regression isn't covered by tests, Rio won't catch it. Should flag untested changes.
 
 **Focus:** After all implementation agents complete:
-1. Run `cargo build --features daemon`
-2. Run `cargo clippy --features daemon -- -D warnings` (ignore pre-existing errors in unchanged files)
-3. Run `cargo test --features daemon`
+1. Run `cargo build --features server,daemon`
+2. Run `cargo clippy --features server -- -D warnings` and `cargo clippy --features daemon -- -D warnings`
+3. Run `cargo test --features daemon` (covers server tests too since server is not feature-gated for tests)
 4. Fix any issues: unused imports, missing imports, type mismatches from parallel edits
 5. Report final status
 

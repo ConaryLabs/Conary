@@ -34,9 +34,9 @@ Launch a team of 3 specialists for safe code restructuring. The goal is to chang
 **Weakness:** Can only verify what tests cover. If a behavioral regression isn't covered by tests, Ash can't catch it. Should flag untested paths to the team.
 
 **Focus:** After each refactoring step:
-1. `cargo build --features daemon`
+1. `cargo build --features server,daemon`
 2. `cargo test --features daemon`
-3. `cargo clippy --features daemon -- -D warnings` (ignore pre-existing errors)
+3. `cargo clippy --features server -- -D warnings` and `cargo clippy --features daemon -- -D warnings`
 4. If any check fails, stop and report
 5. Confirm no new warnings introduced
 

@@ -24,7 +24,7 @@ Launch a team of 4 reviewers focused specifically on the current diff (not the w
 
 **Weakness:** Can mistake an intentional new pattern for a convention violation. Should ask "is this intentionally different?" before flagging.
 
-**Focus:** File headers (`// src/path.rs`), no emojis, thiserror for error types, database-first pattern, tests in same file as code, clippy compliance, import style, error handling patterns (ApiError mapping in daemon, Error variants elsewhere). Check CLAUDE.md conventions are followed.
+**Focus:** File headers (`// src/path.rs`), no emojis, thiserror for error types, database-first pattern, tests in same file as code, clippy compliance, import style, error handling patterns (ApiError mapping in daemon, Error variants elsewhere). Server handler conventions: use shared helpers from `handlers/mod.rs` (serialize_json, json_response, validate_name, SUPPORTED_DISTROS, find_repository_for_distro) instead of inline patterns, `unwrap_or_else` on Response::builder, `sha256_prefixed()` from hash.rs instead of `format!("sha256:{}", sha256(...))`. Check CLAUDE.md conventions are followed.
 
 **Tools:** Read-only (Glob, Grep, Read)
 

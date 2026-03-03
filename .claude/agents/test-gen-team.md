@@ -15,7 +15,7 @@ Launch a team of 3 specialists to improve test coverage. Finn analyzes what's mi
 
 **Weakness:** Can spend too long analyzing when the gaps are obvious. If a module has zero tests, just start writing -- no analysis needed.
 
-**Focus:** Inventory existing tests (`cargo test --features daemon -- --list`). Map coverage by module: which handlers, operations, and state machines have tests? Identify the highest-risk untested paths. Produce a prioritized gap report that Sage and Zeno can divide between them.
+**Focus:** Inventory existing tests (`cargo test --features daemon -- --list`). Map coverage by module: which handlers, operations, and state machines have tests? Identify the highest-risk untested paths. Key modules to check: `src/server/handlers/` (Remi HTTP handlers), `src/trust/` (TUF verification), `src/capability/enforcement/` (landlock/seccomp), `src/model/remote.rs` (remote includes), `src/daemon/` (REST API). Produce a prioritized gap report that Sage and Zeno can divide between them.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for test discovery)
 
@@ -50,6 +50,8 @@ Tell Claude: "Run the test-gen-team" or "Generate tests for [module]"
 - Run `cargo test --features daemon` to verify
 
 ## Project Context
-- 1130+ existing tests
-- Key gaps: daemon handlers, scriptlet execution, crash recovery, full filesystem lifecycle
+- 1150+ existing tests (lib), 1400+ total with integration tests
+- Key gaps: daemon REST handlers, server/Remi async handlers, TUF verification flows, capability enforcement (landlock/seccomp), scriptlet execution, crash recovery, full filesystem lifecycle, remote model include resolution
+- Build: `cargo test --features daemon` (full suite)
 - Test conventions: in-file tests, tempfile for filesystem, thiserror for assertions
+- Server handler tests use `build_*` helper functions for unit testing without HTTP (see `src/server/handlers/models.rs` tests for pattern)

@@ -15,7 +15,7 @@ Launch a team of 4 QA specialists to audit production readiness. All agents star
 
 **Weakness:** May recommend more tests than are practical to write. Should prioritize by blast radius (what breaks the most systems if wrong).
 
-**Focus:** Run `cargo test --features daemon`. Map test coverage by module. Identify untested critical paths: transaction crash recovery, daemon handlers, scriptlet execution, dependency resolution. Check for test quality (do assertions verify meaningful behavior?). Flag flaky tests.
+**Focus:** Run `cargo test --features daemon`. Map test coverage by module. Identify untested critical paths: transaction crash recovery, daemon handlers, server/Remi handlers (chunks, packages, models, TUF), scriptlet execution, dependency resolution, TUF verification, capability enforcement (landlock/seccomp). Check for test quality (do assertions verify meaningful behavior?). Flag flaky tests.
 
 **Tools:** Read-only + test execution (Glob, Grep, Read, Bash for running tests and clippy)
 
@@ -33,7 +33,7 @@ Launch a team of 4 QA specialists to audit production readiness. All agents star
 
 **Weakness:** May miss business logic vulnerabilities while focused on technical ones. Should check authorization logic as well as input validation.
 
-**Focus:** Path traversal (filesystem/CAS, download paths, symlink targets), command injection (scriptlet execution, recipe builds), daemon auth enforcement (are all mutating endpoints checking credentials?), privilege escalation (daemon runs as root), signature verification (are packages verified before installation?), TOCTOU races in file deployment, federation peer trust validation.
+**Focus:** Path traversal (filesystem/CAS, download paths, symlink targets), command injection (scriptlet execution, recipe builds), daemon auth enforcement (are all mutating endpoints checking credentials?), privilege escalation (daemon runs as root), signature verification (are packages verified before installation? TUF metadata before repo sync?), TOCTOU races in file deployment, federation peer trust validation, Remi server input validation (PUT body limits, hash format checks, distro allowlists in handlers/mod.rs), Ed25519 key management in trust/ and model/signing.rs, landlock/seccomp policy bypass in capability/enforcement/.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for endpoint inspection)
 
@@ -42,7 +42,7 @@ Launch a team of 4 QA specialists to audit production readiness. All agents star
 
 **Weakness:** Can generate an exhausting list of unlikely scenarios. Should rank by probability and impact.
 
-**Focus:** Empty database states, maximum package counts, concurrent daemon requests, partial transaction failures (crash between filesystem apply and DB commit), disk full during CAS storage, network timeout during federation chunk fetch, dependency resolution with circular deps, empty/missing repository metadata, cross-filesystem atomic operations.
+**Focus:** Empty database states, maximum package counts, concurrent daemon requests, partial transaction failures (crash between filesystem apply and DB commit), disk full during CAS storage, network timeout during federation chunk fetch, dependency resolution with circular deps, empty/missing repository metadata, cross-filesystem atomic operations, Remi server under load (conversion queue full, chunk cache eviction during serve, concurrent PUT/GET on same model), remote model includes with network failures or expired caches, TUF metadata rollback and freeze attacks.
 
 **Tools:** Read-only (Glob, Grep, Read)
 
@@ -64,7 +64,10 @@ The team will:
 
 ## Project Context
 
-- Build: `cargo build --features daemon`
-- Test: `cargo test --features daemon` (1130+ tests)
-- Lint: `cargo clippy --features daemon -- -D warnings`
+- Build: `cargo build --features server,daemon`
+- Test: `cargo test --features daemon` (1150+ tests)
+- Lint: `cargo clippy --features server -- -D warnings` and `cargo clippy --features daemon -- -D warnings`
 - Conventions: database-first, thiserror, no emojis, tests in same file
+- Server: `src/server/` (Remi), handlers in `src/server/handlers/`, shared helpers in `handlers/mod.rs`
+- Trust: `src/trust/` (TUF supply chain), `src/model/signing.rs` (Ed25519)
+- Capabilities: `src/capability/enforcement/` (landlock, seccomp-bpf)

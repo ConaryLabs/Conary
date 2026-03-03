@@ -42,24 +42,11 @@ pub async fn get_model(
 
     match build_collection_data(db_path, &name) {
         Ok(Some(data)) => {
-            let json = match serde_json::to_string(&data) {
+            let json = match super::serialize_json(&data, &format!("collection '{name}'")) {
                 Ok(j) => j,
-                Err(e) => {
-                    tracing::error!("Failed to serialize collection '{}': {}", name, e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Serialization error",
-                    )
-                        .into_response();
-                }
+                Err(e) => return e,
             };
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, "public, max-age=300")
-                .body(axum::body::Body::from(json))
-                .unwrap()
+            super::json_response(json, 300)
         }
         Ok(None) => (StatusCode::NOT_FOUND, "Collection not found").into_response(),
         Err(e) => {
@@ -84,13 +71,11 @@ pub async fn list_models(
 
     match build_collection_list(db_path) {
         Ok(entries) => {
-            let json = serde_json::to_string(&entries).unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, "public, max-age=300")
-                .body(axum::body::Body::from(json))
-                .unwrap()
+            let json = match super::serialize_json(&entries, "collection list") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 300)
         }
         Err(e) => {
             tracing::error!("Failed to list collections: {}", e);
@@ -154,13 +139,11 @@ pub async fn get_model_signature(
                 signature: BASE64.encode(&signature),
                 key_id,
             };
-            let json = serde_json::to_string(&response).unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, "public, max-age=300")
-                .body(axum::body::Body::from(json))
-                .unwrap()
+            let json = match super::serialize_json(&response, "signature") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
+            super::json_response(json, 300)
         }
         Ok(None) => (StatusCode::NOT_FOUND, "No signature found for collection").into_response(),
         Err(e) => {
@@ -186,6 +169,9 @@ struct PutModelResponse {
     members: usize,
 }
 
+/// Maximum body size for PUT model endpoint (1 MB)
+const MAX_MODEL_BODY_SIZE: usize = 1_048_576;
+
 /// PUT /v1/admin/models/:name
 ///
 /// Creates a new collection from a published model. Returns 409 Conflict
@@ -196,17 +182,32 @@ pub async fn put_model(
     Query(params): Query<PutModelParams>,
     body: axum::body::Bytes,
 ) -> Response {
+    if body.len() > MAX_MODEL_BODY_SIZE {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Request body too large ({} bytes, max {} bytes)",
+                body.len(),
+                MAX_MODEL_BODY_SIZE
+            ),
+        )
+            .into_response();
+    }
+
     let state = state.read().await;
     let db_path = &state.config.db_path;
 
     match store_collection(db_path, &name, &body, params.force) {
         Ok(response) => {
-            let json = serde_json::to_string(&response).unwrap();
+            let json = match super::serialize_json(&response, "put model response") {
+                Ok(j) => j,
+                Err(e) => return e,
+            };
             Response::builder()
                 .status(StatusCode::CREATED)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(json))
-                .unwrap()
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(StoreError::NameMismatch { url_name, body_name }) => {
             let msg = format!(
@@ -268,7 +269,7 @@ fn store_collection(
 
     // Verify content hash if present
     if !data.content_hash.is_empty() {
-        let computed = format!("sha256:{}", crate::hash::sha256(body));
+        let computed = crate::hash::sha256_prefixed(body);
         if computed != data.content_hash {
             return Err(StoreError::HashMismatch {
                 expected: data.content_hash.clone(),
@@ -364,7 +365,7 @@ fn build_collection_data(
 
     // Compute content hash over the serialized member data
     let members_json = serde_json::to_string(&member_data)?;
-    let content_hash = format!("sha256:{}", crate::hash::sha256(members_json.as_bytes()));
+    let content_hash = crate::hash::sha256_prefixed(members_json.as_bytes());
 
     let now = chrono::Utc::now().to_rfc3339();
 

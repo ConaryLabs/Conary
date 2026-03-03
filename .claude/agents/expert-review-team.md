@@ -15,7 +15,7 @@ Launch a team of 4 domain experts to review code. All agents are strictly read-o
 
 **Weakness:** Can be overly focused on theoretical purity. Needs to weigh "architecturally ideal" against "pragmatically sufficient."
 
-**Focus:** Module boundaries (db/, repository/, resolver/, filesystem/, ccs/, daemon/, federation/), dependency flow between modules, leaky abstractions, coupling patterns, database schema fitness (SQLite v36), state machine correctness in transaction engine, feature-gate isolation (server, daemon).
+**Focus:** Module boundaries (db/, repository/, resolver/, filesystem/, ccs/, daemon/, federation/, server/, trust/, model/, capability/), dependency flow between modules, leaky abstractions, coupling patterns, database schema fitness (SQLite v36), state machine correctness in transaction engine, feature-gate isolation (server, daemon). Server handler patterns: shared helpers in `handlers/mod.rs` (json_response, serialize_json, SUPPORTED_DISTROS, find_repository_for_distro), response consistency, middleware layering in `routes.rs`.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for git/structure inspection)
 
@@ -33,7 +33,7 @@ Launch a team of 4 domain experts to review code. All agents are strictly read-o
 
 **Weakness:** May flag low-risk theoretical attacks. Should focus on realistic threat models for a system package manager running as root.
 
-**Focus:** Path traversal in filesystem/CAS operations, symlink attacks, command injection in scriptlet/container execution, daemon auth enforcement (Unix socket SO_PEERCRED), SQL injection (parameterized queries), privilege escalation, signature verification in provenance/federation, TOCTOU races in file deployment, unsafe download handling, Content-Disposition sanitization.
+**Focus:** Path traversal in filesystem/CAS operations, symlink attacks, command injection in scriptlet/container execution, daemon auth enforcement (Unix socket SO_PEERCRED), SQL injection (parameterized queries), privilege escalation, signature verification in provenance/federation/trust (TUF supply chain), TOCTOU races in file deployment, unsafe download handling, Content-Disposition sanitization, server endpoint input validation (PUT body size limits, distro allowlists), landlock/seccomp capability enforcement in `capability/enforcement/`, Ed25519 signature verification in `model/signing.rs` and `trust/verify.rs`.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for endpoint enumeration)
 
@@ -42,7 +42,7 @@ Launch a team of 4 domain experts to review code. All agents are strictly read-o
 
 **Weakness:** Can generate an overwhelming list of edge cases, most of which are rare. Should prioritize by real-world likelihood.
 
-**Focus:** Missing requirements, unhandled states in transaction engine, incomplete error paths, crash recovery gaps, dependency resolution edge cases (circular deps, version conflicts), concurrent package operations, partial failure behavior during installs, empty database states, federation peer failure scenarios.
+**Focus:** Missing requirements, unhandled states in transaction engine, incomplete error paths, crash recovery gaps, dependency resolution edge cases (circular deps, version conflicts), concurrent package operations, partial failure behavior during installs, empty database states, federation peer failure scenarios, remote model include resolution failure modes (network, cache expiry, signature mismatch), TUF metadata expiration and rollback attacks, server on-demand conversion queue saturation.
 
 **Tools:** Read-only (Glob, Grep, Read)
 
@@ -70,6 +70,8 @@ By default, agents review the entire codebase. You can scope the review:
 ## Project Context
 
 - Rust 2024 edition, 1.92+, SQLite database-first
-- Build: `cargo build` (default), `--features server`, `--features daemon`
-- Test: `cargo test --features daemon` (1130+ tests)
+- Build: `cargo build` (default), `--features server` (Remi), `--features daemon` (conaryd)
+- Test: `cargo test --features daemon` (1150+ tests total)
+- Lint: `cargo clippy --features server -- -D warnings` (also check with `--features daemon`)
 - Conventions: file headers (`// src/path.rs`), thiserror, no emojis, clippy-clean
+- Server handlers: shared helpers in `src/server/handlers/mod.rs`, axum extractors, `spawn_blocking` for DB queries

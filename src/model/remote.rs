@@ -248,7 +248,7 @@ pub fn fetch_remote_collection(
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {}: {}", url, e)))?;
 
     // Verify content hash
-    let computed_hash = format!("sha256:{}", hash::sha256(&bytes));
+    let computed_hash = hash::sha256_prefixed(&bytes);
     if !data.content_hash.is_empty() && computed_hash != data.content_hash {
         warn!(
             expected = %data.content_hash,
@@ -344,7 +344,7 @@ pub fn fetch_and_verify_remote_collection(
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;
 
     // Verify content hash
-    let computed_hash = format!("sha256:{}", hash::sha256(&bytes));
+    let computed_hash = hash::sha256_prefixed(&bytes);
     if !data.content_hash.is_empty() && computed_hash != data.content_hash {
         warn!(
             expected = %data.content_hash,
@@ -592,7 +592,7 @@ pub fn build_collection_data_from_model(
 
     // Compute content hash over the full JSON (with empty content_hash)
     let json_bytes = serde_json::to_vec(&data).unwrap_or_default();
-    data.content_hash = format!("sha256:{}", hash::sha256(&json_bytes));
+    data.content_hash = hash::sha256_prefixed(&json_bytes);
 
     data
 }

@@ -50,7 +50,13 @@ The team will:
 
 ## Key Paths
 
-- `src/cli/` -- CLI definitions (clap structs)
-- `src/commands/` -- Command implementations
+- `src/cli/` -- CLI definitions (clap structs, including `model.rs`, `trust.rs`)
+- `src/commands/` -- Command implementations (including `model.rs`, `trust.rs`, `capability.rs`)
 - `src/progress.rs` -- Progress bar handling
 - `man/` -- Man page generation
+
+## Recent CLI Additions
+- `conary trust {init,enable,disable,status,key-gen,sign}` -- TUF supply chain trust management
+- `conary model {diff,apply,lock,update,publish,sign}` -- System model with remote includes
+- `conary capability {audit,enforce,infer}` -- Capability enforcement (landlock/seccomp)
+- `conary federation {status,peers,add-peer,test,scan,stats}` -- CAS federation

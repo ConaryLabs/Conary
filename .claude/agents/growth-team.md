@@ -75,6 +75,8 @@ The team will:
 - Remi server (on-demand conversion proxy -- use any distro's packages without a separate repo)
 - CAS federation (peer-to-peer chunk sharing for bandwidth savings)
 - Hermetic builds (BuildStream-grade reproducibility)
-- Capability system (declare what a package can access: network, filesystem, syscalls)
-- System Model (declarative OS state, like NixOS but for any distro)
+- Capability system (declare what a package can access: network, filesystem, syscalls) with landlock + seccomp-bpf enforcement
+- System Model (declarative OS state, like NixOS but for any distro) with remote includes, lockfiles, and model signing
 - Provenance tracking (full package DNA -- source, build, signatures, content)
+- TUF supply chain trust (The Update Framework for repository metadata verification -- key rotation, threshold signatures, rollback protection)
+- conaryd daemon (REST API + SSE for IDE/CI integration, systemd socket activation)

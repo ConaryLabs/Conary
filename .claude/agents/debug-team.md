@@ -15,7 +15,7 @@ Launch a team of 3 specialists to investigate and fix a bug. Each has a distinct
 
 **Weakness:** Can over-document and spend too long on reproduction when the symptom is already clear. Remind them to time-box.
 
-**Focus:** Locate the bug -- find the exact file:line where the symptom manifests. Build a clear reproduction path. Check `cargo test --features daemon` for failing tests. Identify what works vs. what doesn't. Check git log for recent changes to affected files. Trace error paths through thiserror variants.
+**Focus:** Locate the bug -- find the exact file:line where the symptom manifests. Build a clear reproduction path. Check `cargo test --features daemon` for failing tests (also `cargo build --features server` if server-related). Identify what works vs. what doesn't. Check git log for recent changes to affected files. Trace error paths through thiserror variants. For server bugs: check handler chain in `src/server/handlers/`, middleware in `src/server/routes.rs`, shared validation in `handlers/mod.rs`.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for git log/status and running tests)
 
@@ -33,7 +33,7 @@ Launch a team of 3 specialists to investigate and fix a bug. Each has a distinct
 
 **Weakness:** May fix the immediate symptom without addressing a systemic pattern. If Ravi flags a deeper issue, Kit should note it for follow-up rather than expanding scope.
 
-**Focus:** Implement the fix Ravi proposed. Write a regression test (in-file `#[cfg(test)] mod tests`). Run `cargo build --features daemon` and `cargo test --features daemon` to verify. Follow conventions: file headers, thiserror, no emojis.
+**Focus:** Implement the fix Ravi proposed. Write a regression test (in-file `#[cfg(test)] mod tests`). Run `cargo build --features server,daemon` and `cargo test --features daemon` to verify. Follow conventions: file headers, thiserror, no emojis. For server handlers: use shared helpers from `handlers/mod.rs` (serialize_json, json_response, validate_name, SUPPORTED_DISTROS).
 
 **Tools:** Full (Edit, Write, Bash, Glob, Grep, Read)
 

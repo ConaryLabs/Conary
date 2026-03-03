@@ -270,6 +270,12 @@ pub fn sha256(data: &[u8]) -> String {
     hash_bytes(HashAlgorithm::Sha256, data).value
 }
 
+/// Compute SHA-256 hash with "sha256:" prefix
+#[inline]
+pub fn sha256_prefixed(data: &[u8]) -> String {
+    format!("sha256:{}", sha256(data))
+}
+
 /// Compute XXH128 hash (convenience function)
 #[inline]
 pub fn xxh128(data: &[u8]) -> String {

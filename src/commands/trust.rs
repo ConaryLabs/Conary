@@ -10,8 +10,18 @@ use conary::db::models::Repository;
 use conary::trust::client::TufClient;
 use conary::trust::ceremony;
 use conary::trust::metadata::Role;
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use std::path::Path;
+
+/// Look up a repository by name and extract its ID
+fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i64)> {
+    let repo = Repository::find_by_name(conn, repo_name)?
+        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
+    let repo_id = repo
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    Ok((repo, repo_id))
+}
 
 /// Generate a new Ed25519 key pair for a TUF role
 pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
@@ -40,13 +50,7 @@ pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
 /// Bootstrap TUF for a repository with initial root metadata
 pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     // Read root.json
     let root_json = std::fs::read(root_path)
@@ -71,13 +75,7 @@ pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result
 /// Enable TUF verification for a repository
 pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     // Check that TUF has been bootstrapped
     let has_root: bool = conn
@@ -113,13 +111,7 @@ pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<
     }
 
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     conn.execute(
         "UPDATE repositories SET tuf_enabled = 0 WHERE id = ?1",
@@ -135,13 +127,7 @@ pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<
 /// Show TUF metadata status for a repository
 pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     println!("Repository: {repo_name}");
     println!("TUF enabled: {}", if repo.tuf_enabled { "yes" } else { "no" });

@@ -97,19 +97,25 @@ impl ModelLock {
     /// Takes a vec of (name, label, current_content_hash) tuples and returns
     /// a list of drifts where the hash has changed.
     pub fn check_drift(&self, current: &[(String, String, String)]) -> Vec<LockDrift> {
+        use std::collections::HashMap;
+
+        // Build lookup map for O(1) per-item checks instead of O(N*M) linear scan
+        let locked_map: HashMap<(&str, &str), &str> = self
+            .collections
+            .iter()
+            .map(|c| ((c.name.as_str(), c.label.as_str()), c.content_hash.as_str()))
+            .collect();
+
         let mut drifts = Vec::new();
 
         for (name, label, current_hash) in current {
-            if let Some(locked) = self
-                .collections
-                .iter()
-                .find(|c| c.name == *name && c.label == *label)
-                && locked.content_hash != *current_hash
+            if let Some(&locked_hash) = locked_map.get(&(name.as_str(), label.as_str()))
+                && locked_hash != current_hash
             {
                 drifts.push(LockDrift {
                     name: name.clone(),
                     label: label.clone(),
-                    locked_hash: locked.content_hash.clone(),
+                    locked_hash: locked_hash.to_string(),
                     current_hash: current_hash.clone(),
                 });
             }
