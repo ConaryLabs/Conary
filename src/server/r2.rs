@@ -140,8 +140,7 @@ impl R2Store {
     /// Expires after `expiry_secs` seconds.
     pub async fn presign_get(&self, hash: &str, expiry_secs: u32) -> Result<String> {
         let key = self.chunk_key(hash);
-        let presigned = self.bucket.presign_get(&key, expiry_secs, None).await?;
-        Ok(presigned)
+        Ok(self.bucket.presign_get(&key, expiry_secs, None).await?)
     }
 
     /// Build the full object key for a chunk hash.

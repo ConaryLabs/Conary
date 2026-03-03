@@ -166,14 +166,9 @@ impl AutomationScheduler {
 
 /// Parse a time window string like "02:00-06:00" into start/end times
 fn parse_time_window(window: &str) -> Option<(NaiveTime, NaiveTime)> {
-    let parts: Vec<&str> = window.split('-').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let start = NaiveTime::parse_from_str(parts[0].trim(), "%H:%M").ok()?;
-    let end = NaiveTime::parse_from_str(parts[1].trim(), "%H:%M").ok()?;
-
+    let (start_str, end_str) = window.split_once('-')?;
+    let start = NaiveTime::parse_from_str(start_str.trim(), "%H:%M").ok()?;
+    let end = NaiveTime::parse_from_str(end_str.trim(), "%H:%M").ok()?;
     Some((start, end))
 }
 

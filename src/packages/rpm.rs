@@ -42,14 +42,10 @@ impl RpmPackage {
                 if let Ok(s) = result {
                     let content = s.script; // Accessing field directly
                     if !content.is_empty() {
-                        let interpreter = if let Some(progs) = s.program {
-                            progs
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "/bin/sh".to_string())
-                        } else {
-                            "/bin/sh".to_string()
-                        };
+                        let interpreter = s
+                            .program
+                            .and_then(|progs| progs.into_iter().next())
+                            .unwrap_or_else(|| "/bin/sh".to_string());
 
                         scriptlets.push(Scriptlet {
                             phase,

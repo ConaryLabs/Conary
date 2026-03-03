@@ -6,7 +6,6 @@
 
 use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use tracing::{debug, info};
@@ -52,11 +51,7 @@ impl DeltaApplier {
         debug!("Old version retrieved: {} bytes", old_content.len());
 
         // Read delta file
-        let mut delta_file = File::open(delta_path)
-            .map_err(|e| Error::IoError(format!("Failed to open delta file: {}", e)))?;
-        let mut delta = Vec::new();
-        delta_file
-            .read_to_end(&mut delta)
+        let delta = std::fs::read(delta_path)
             .map_err(|e| Error::IoError(format!("Failed to read delta file: {}", e)))?;
 
         debug!("Delta loaded: {} bytes", delta.len());

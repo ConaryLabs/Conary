@@ -32,6 +32,9 @@ pub struct ArchPackage {
     build_date: Option<String>,
 }
 
+/// Arch package metadata files that should be skipped during extraction
+const ARCH_METADATA_FILES: &[&str] = &[".PKGINFO", ".MTREE", ".BUILDINFO", ".INSTALL"];
+
 impl ArchPackage {
     /// Detect compression format from file extension
     fn detect_compression(path: &str) -> Result<CompressionFormat> {
@@ -115,12 +118,7 @@ impl ArchPackage {
                 .to_string_lossy()
                 .to_string();
 
-            // Skip .PKGINFO, .MTREE, .BUILDINFO, and .INSTALL files
-            if entry_path == ".PKGINFO"
-                || entry_path == ".MTREE"
-                || entry_path == ".BUILDINFO"
-                || entry_path == ".INSTALL"
-            {
+            if ARCH_METADATA_FILES.contains(&entry_path.as_str()) {
                 continue;
             }
 
@@ -496,12 +494,7 @@ impl PackageFormat for ArchPackage {
                 .to_string_lossy()
                 .to_string();
 
-            // Skip metadata files
-            if entry_path == ".PKGINFO"
-                || entry_path == ".MTREE"
-                || entry_path == ".BUILDINFO"
-                || entry_path == ".INSTALL"
-            {
+            if ARCH_METADATA_FILES.contains(&entry_path.as_str()) {
                 continue;
             }
 

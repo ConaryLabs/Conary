@@ -241,7 +241,7 @@ fn build_sparse_entry(
                 architecture: pkg.architecture,
                 size: pkg.size,
                 converted: converted_info.is_some(),
-                content_hash: converted_info.and_then(|h| h.clone()),
+                content_hash: converted_info.and_then(Clone::clone),
             }
         })
         .collect();

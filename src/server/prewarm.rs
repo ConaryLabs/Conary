@@ -8,6 +8,7 @@ use crate::db::models::RepositoryPackage;
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 /// Pre-warming configuration
@@ -166,20 +167,20 @@ pub fn merge_popularity(
     popularity_file: Option<&str>,
 ) -> Vec<PackagePopularity> {
     // Load upstream popularity from file
-    let upstream = if let Some(path) = popularity_file {
-        load_popularity_data(path).unwrap_or_else(|e| {
-            warn!("Failed to load popularity file: {}", e);
-            vec![]
+    let upstream = popularity_file
+        .map(|path| {
+            load_popularity_data(path).unwrap_or_else(|e| {
+                warn!("Failed to load popularity file: {}", e);
+                vec![]
+            })
         })
-    } else {
-        vec![]
-    };
+        .unwrap_or_default();
 
     // Build a map from upstream data
-    let mut combined: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for entry in &upstream {
-        combined.insert(entry.name.clone(), entry.score);
-    }
+    let mut combined: HashMap<String, u64> = upstream
+        .into_iter()
+        .map(|entry| (entry.name, entry.score))
+        .collect();
 
     // Query local download statistics (use 30-day counts for recency)
     let local_counts = conn
@@ -265,7 +266,7 @@ fn get_packages_to_convert(
 
     // Sort by merged popularity
     if !popularity.is_empty() {
-        let pop_map: std::collections::HashMap<&str, u64> = popularity
+        let pop_map: HashMap<&str, u64> = popularity
             .iter()
             .map(|p| (p.name.as_str(), p.score))
             .collect();
@@ -324,14 +325,13 @@ pub async fn run_prewarm_background(
     loop {
         tokio::time::sleep(interval).await;
 
-        let pop_file = popularity_file.clone();
         let config = PrewarmConfig {
             db_path: db_path.clone(),
             chunk_dir: chunk_dir.clone(),
             cache_dir: cache_dir.clone(),
             distro: distro.clone(),
             max_packages: max_packages_per_run,
-            popularity_file: pop_file,
+            popularity_file: popularity_file.clone(),
             pattern: None,
             dry_run: false,
         };

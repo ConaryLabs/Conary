@@ -33,6 +33,24 @@ pub struct MirrorHealth {
     pub last_success: Option<String>,
 }
 
+fn row_to_mirror_health(row: &rusqlite::Row) -> rusqlite::Result<MirrorHealth> {
+    Ok(MirrorHealth {
+        id: row.get(0)?,
+        repository_id: row.get(1)?,
+        mirror_url: row.get(2)?,
+        latency_avg_ms: row.get(3)?,
+        throughput_bps: row.get(4)?,
+        success_count: row.get(5)?,
+        failure_count: row.get(6)?,
+        consecutive_failures: row.get(7)?,
+        health_score: row.get(8)?,
+        disabled: row.get::<_, i64>(9)? != 0,
+        geo_hint: row.get(10)?,
+        last_probed: row.get(11)?,
+        last_success: row.get(12)?,
+    })
+}
+
 /// Database-backed mirror health tracker
 ///
 /// All operations go directly to SQLite. No in-memory caching.
@@ -152,23 +170,7 @@ impl MirrorHealthTracker {
              WHERE repository_id = ?1 AND mirror_url = ?2",
         )?;
 
-        let result = stmt.query_row(rusqlite::params![repo_id, mirror_url], |row| {
-            Ok(MirrorHealth {
-                id: row.get(0)?,
-                repository_id: row.get(1)?,
-                mirror_url: row.get(2)?,
-                latency_avg_ms: row.get(3)?,
-                throughput_bps: row.get(4)?,
-                success_count: row.get(5)?,
-                failure_count: row.get(6)?,
-                consecutive_failures: row.get(7)?,
-                health_score: row.get(8)?,
-                disabled: row.get::<_, i64>(9)? != 0,
-                geo_hint: row.get(10)?,
-                last_probed: row.get(11)?,
-                last_success: row.get(12)?,
-            })
-        });
+        let result = stmt.query_row(rusqlite::params![repo_id, mirror_url], row_to_mirror_health);
 
         match result {
             Ok(health) => Ok(Some(health)),
@@ -189,23 +191,7 @@ impl MirrorHealthTracker {
         )?;
 
         let mirrors = stmt
-            .query_map(rusqlite::params![repo_id], |row| {
-                Ok(MirrorHealth {
-                    id: row.get(0)?,
-                    repository_id: row.get(1)?,
-                    mirror_url: row.get(2)?,
-                    latency_avg_ms: row.get(3)?,
-                    throughput_bps: row.get(4)?,
-                    success_count: row.get(5)?,
-                    failure_count: row.get(6)?,
-                    consecutive_failures: row.get(7)?,
-                    health_score: row.get(8)?,
-                    disabled: row.get::<_, i64>(9)? != 0,
-                    geo_hint: row.get(10)?,
-                    last_probed: row.get(11)?,
-                    last_success: row.get(12)?,
-                })
-            })?
+            .query_map(rusqlite::params![repo_id], row_to_mirror_health)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(mirrors)
@@ -286,14 +272,9 @@ impl MirrorHealthTracker {
             1.0 // No latency data, assume good
         };
 
-        // Recency bonus based on last_success
         let recency_bonus = match &health.last_success {
-            Some(ts) => {
-                // Simple heuristic: if there's a timestamp, give full bonus.
-                // A production system would parse the timestamp and decay.
-                if ts.is_empty() { 0.0 } else { 1.0 }
-            }
-            None => 0.0,
+            Some(ts) if !ts.is_empty() => 1.0,
+            _ => 0.0,
         };
 
         let score = 0.4 * success_rate

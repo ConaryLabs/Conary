@@ -186,13 +186,7 @@ pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
 /// Verify all TUF metadata for a repository
 pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     if !repo.tuf_enabled {
         println!("TUF is not enabled for repository: {repo_name}");

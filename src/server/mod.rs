@@ -313,7 +313,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                     let mut state_w = state.write().await;
                     state_w.r2_store = Some(Arc::new(store));
                     state_w.r2_redirect = remi_config.r2.r2_redirect;
-                    drop(state_w);
                 }
                 Err(e) => {
                     tracing::error!("  R2 storage: failed to initialize: {}", e);
@@ -350,10 +349,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     // Initialize download analytics
     {
         let analytics = Arc::new(AnalyticsRecorder::new(server_config.db_path.clone()));
-        let analytics_loop = Arc::clone(&analytics);
-        tokio::spawn(async move {
-            analytics::run_analytics_loop(analytics_loop).await;
-        });
+        tokio::spawn(analytics::run_analytics_loop(Arc::clone(&analytics)));
         state.write().await.analytics = Some(analytics);
         tracing::info!("  Download analytics: enabled");
     }
@@ -385,7 +381,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         let mut state_w = state.write().await;
         state_w.federated_config = Some(fed_config);
         state_w.federated_cache = Some(fed_cache);
-        drop(state_w);
     }
 
     // Create routers
@@ -393,16 +388,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let admin_app = create_admin_router(state.clone());
 
     // Start background LRU eviction task
-    let eviction_state = state.clone();
-    tokio::spawn(async move {
-        cache::run_eviction_loop(eviction_state).await;
-    });
+    tokio::spawn(cache::run_eviction_loop(state.clone()));
 
     // Start negative cache cleanup task
-    let neg_cache_state = state.clone();
-    tokio::spawn(async move {
-        negative_cache::run_cleanup_loop(neg_cache_state).await;
-    });
+    tokio::spawn(negative_cache::run_cleanup_loop(state.clone()));
 
     // Start background pre-warming if enabled
     if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
@@ -525,10 +514,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     // Initialize download analytics
     {
         let analytics_recorder = Arc::new(AnalyticsRecorder::new(config.db_path.clone()));
-        let analytics_loop = Arc::clone(&analytics_recorder);
-        tokio::spawn(async move {
-            analytics::run_analytics_loop(analytics_loop).await;
-        });
+        tokio::spawn(analytics::run_analytics_loop(Arc::clone(&analytics_recorder)));
         state.write().await.analytics = Some(analytics_recorder);
     }
 
@@ -545,10 +531,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     let app = create_router(state.clone()).await;
 
     // Start background LRU eviction task
-    let eviction_state = state.clone();
-    tokio::spawn(async move {
-        cache::run_eviction_loop(eviction_state).await;
-    });
+    tokio::spawn(cache::run_eviction_loop(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!("Remi is ready to serve");

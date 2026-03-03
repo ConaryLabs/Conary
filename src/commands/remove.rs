@@ -3,34 +3,14 @@
 
 use super::create_state_snapshot;
 use super::progress::{RemovePhase, RemoveProgress};
+use super::{FileSnapshot, TroveSnapshot};
 use anyhow::{Context, Result};
 use conary::db::models::ScriptletEntry;
 use conary::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
-
-/// Serializable trove metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TroveSnapshot {
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    description: Option<String>,
-    install_source: String,
-    files: Vec<FileSnapshot>,
-}
-
-/// Serializable file metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileSnapshot {
-    path: String,
-    sha256_hash: String,
-    size: i64,
-    permissions: i32,
-}
 
 /// Remove an installed package
 pub fn cmd_remove(
@@ -167,7 +147,6 @@ pub fn cmd_remove(
 
     // Get files BEFORE deleting the trove (cascade delete will remove file records)
     let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
-    let _file_count = files.len(); // Used for snapshot, not display
 
     // Get stored scriptlets BEFORE deleting the trove
     let stored_scriptlets = ScriptletEntry::find_by_trove(&conn, trove_id)?;

@@ -74,23 +74,11 @@ impl CompressionFormat {
     /// - XZ: `fd 37 7a 58 5a 00` (FD + "7zXZ" + NUL)
     /// - Zstd: `28 b5 2f fd`
     pub fn from_magic_bytes(data: &[u8]) -> Self {
-        if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+        if data.starts_with(&[0x1f, 0x8b]) {
             Self::Gzip
-        } else if data.len() >= 6
-            && data[0] == 0xfd
-            && data[1] == 0x37
-            && data[2] == 0x7a
-            && data[3] == 0x58
-            && data[4] == 0x5a
-            && data[5] == 0x00
-        {
+        } else if data.starts_with(&[0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]) {
             Self::Xz
-        } else if data.len() >= 4
-            && data[0] == 0x28
-            && data[1] == 0xb5
-            && data[2] == 0x2f
-            && data[3] == 0xfd
-        {
+        } else if data.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
             Self::Zstd
         } else {
             Self::None

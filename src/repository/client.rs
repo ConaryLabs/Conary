@@ -130,6 +130,17 @@ fn stream_response_to_file(
     Ok(downloaded)
 }
 
+/// Check if an HTTP status code represents a transient server error
+/// that should be retried.
+fn is_transient_error(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::TOO_MANY_REQUESTS
+    )
+}
+
 /// HTTP client wrapper with retry support
 pub struct RepositoryClient {
     client: Client,
@@ -179,11 +190,7 @@ impl RepositoryClient {
                 Ok(response) => {
                     let status = response.status();
 
-                    // Retry on transient server errors
-                    if status == reqwest::StatusCode::BAD_GATEWAY
-                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    {
+                    if is_transient_error(status) {
                         if attempt >= self.retry_policy.max_retries {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",
@@ -376,11 +383,7 @@ impl RepositoryClient {
                 Ok(response) => {
                     let status = response.status();
 
-                    // Retry on transient server errors
-                    if status == reqwest::StatusCode::BAD_GATEWAY
-                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    {
+                    if is_transient_error(status) {
                         if attempt >= self.retry_policy.max_retries {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",

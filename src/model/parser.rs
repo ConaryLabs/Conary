@@ -729,17 +729,17 @@ impl SystemModel {
 
     /// Check if a package is excluded
     pub fn is_excluded(&self, package: &str) -> bool {
-        self.config.exclude.contains(&package.to_string())
+        self.config.exclude.iter().any(|p| p == package)
     }
 
     /// Check if a package is explicitly installed (not just a dependency)
     pub fn is_explicit(&self, package: &str) -> bool {
-        self.config.install.contains(&package.to_string())
+        self.config.install.iter().any(|p| p == package)
     }
 
     /// Check if a package is optional
     pub fn is_optional(&self, package: &str) -> bool {
-        self.optional.packages.contains(&package.to_string())
+        self.optional.packages.iter().any(|p| p == package)
     }
 
     /// Get all packages that should be installed (explicit + optional)

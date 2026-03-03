@@ -381,11 +381,7 @@ impl AuditLogger {
 
     /// Get recent audit entries
     pub fn recent_entries(&self, count: usize) -> &[AuditEntry] {
-        let start = if self.entries.len() > count {
-            self.entries.len() - count
-        } else {
-            0
-        };
+        let start = self.entries.len().saturating_sub(count);
         &self.entries[start..]
     }
 

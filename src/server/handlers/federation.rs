@@ -37,12 +37,7 @@ pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> impl In
                 })
             })?;
 
-            let mut peers = Vec::new();
-            for row in rows {
-                peers.push(row?);
-            }
-
-            Ok(peers)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await;
 

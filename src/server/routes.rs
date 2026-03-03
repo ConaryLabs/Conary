@@ -64,25 +64,18 @@ fn is_cloudflare_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
             let ip_u32 = u32::from(*ipv4);
-            for range in CLOUDFLARE_IPV4_RANGES {
-                if let Some((network, prefix_len)) = parse_cidr(range) {
+            CLOUDFLARE_IPV4_RANGES.iter().any(|range| {
+                parse_cidr(range).is_some_and(|(network, prefix_len)| {
                     let mask = if prefix_len == 0 {
                         0
                     } else {
                         !0u32 << (32 - prefix_len)
                     };
-                    if (ip_u32 & mask) == (network & mask) {
-                        return true;
-                    }
-                }
-            }
-            false
+                    (ip_u32 & mask) == (network & mask)
+                })
+            })
         }
-        IpAddr::V6(_) => {
-            // For now, skip IPv6 Cloudflare ranges
-            // In production, add https://www.cloudflare.com/ips-v6
-            false
-        }
+        IpAddr::V6(_) => false,
     }
 }
 

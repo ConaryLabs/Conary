@@ -232,9 +232,9 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
         } else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
         {
             // Extract blob hash from path: objects/{prefix}/{suffix} -> {prefix}{suffix}
-            let parts: Vec<&str> = entry_path_str.split('/').collect();
-            if parts.len() >= 3 {
-                let hash_str = format!("{}{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+            let mut segments = entry_path_str.rsplit('/');
+            if let (Some(suffix), Some(prefix)) = (segments.next(), segments.next()) {
+                let hash_str = format!("{}{}", prefix, suffix);
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
                 blobs.insert(hash_str, content);

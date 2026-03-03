@@ -322,7 +322,7 @@ impl Lockfile {
 
     /// Check if the lockfile needs updating based on manifest changes
     pub fn needs_update(&self, manifest_hash: &str) -> bool {
-        self.manifest_hash.as_ref() != Some(&manifest_hash.to_string())
+        self.manifest_hash.as_deref() != Some(manifest_hash)
     }
 
     /// Set the manifest hash

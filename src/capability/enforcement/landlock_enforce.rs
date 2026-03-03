@@ -45,44 +45,9 @@ pub fn apply_landlock_rules(
     let abi = ABI::V3;
 
     // Pre-filter paths to only existing ones (skip non-existent gracefully)
-    let read_paths: Vec<&str> = caps
-        .read
-        .iter()
-        .filter(|p| {
-            let exists = std::path::Path::new(p.as_str()).exists();
-            if !exists {
-                debug!("Skipping non-existent read path: {}", p);
-            }
-            exists
-        })
-        .map(String::as_str)
-        .collect();
-
-    let write_paths: Vec<&str> = caps
-        .write
-        .iter()
-        .filter(|p| {
-            let exists = std::path::Path::new(p.as_str()).exists();
-            if !exists {
-                debug!("Skipping non-existent write path: {}", p);
-            }
-            exists
-        })
-        .map(String::as_str)
-        .collect();
-
-    let execute_paths: Vec<&str> = caps
-        .execute
-        .iter()
-        .filter(|p| {
-            let exists = std::path::Path::new(p.as_str()).exists();
-            if !exists {
-                debug!("Skipping non-existent execute path: {}", p);
-            }
-            exists
-        })
-        .map(String::as_str)
-        .collect();
+    let read_paths = filter_existing_paths(&caps.read, "read");
+    let write_paths = filter_existing_paths(&caps.write, "write");
+    let execute_paths = filter_existing_paths(&caps.execute, "execute");
 
     // Warn about deny paths that overlap with allowed parents
     check_deny_conflicts(caps);
@@ -132,6 +97,34 @@ pub fn apply_landlock_rules(
     Ok(())
 }
 
+/// Filter a list of paths down to only those that exist on the filesystem
+fn filter_existing_paths<'a>(paths: &'a [String], context: &str) -> Vec<&'a str> {
+    paths
+        .iter()
+        .filter(|p| {
+            let exists = std::path::Path::new(p.as_str()).exists();
+            if !exists {
+                debug!("Skipping non-existent {} path: {}", context, p);
+            }
+            exists
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// Count paths that exist, collecting non-existent ones into `skipped`
+fn count_existing_paths(paths: &[String], skipped: &mut Vec<String>) -> usize {
+    let mut count = 0;
+    for path in paths {
+        if std::path::Path::new(path).exists() {
+            count += 1;
+        } else {
+            skipped.push(path.clone());
+        }
+    }
+    count
+}
+
 /// Warn about deny paths that cannot be enforced due to overlapping allow rules
 fn check_deny_conflicts(caps: &FilesystemCapabilities) {
     for deny_path in &caps.deny {
@@ -174,32 +167,10 @@ pub fn check_landlock_support() -> bool {
 pub fn build_landlock_ruleset(
     caps: &FilesystemCapabilities,
 ) -> Result<LandlockRulesetInfo, EnforcementError> {
-    let mut read_count = 0usize;
-    let mut write_count = 0usize;
-    let mut execute_count = 0usize;
     let mut skipped = Vec::new();
-
-    for path in &caps.read {
-        if std::path::Path::new(path).exists() {
-            read_count += 1;
-        } else {
-            skipped.push(path.clone());
-        }
-    }
-    for path in &caps.write {
-        if std::path::Path::new(path).exists() {
-            write_count += 1;
-        } else {
-            skipped.push(path.clone());
-        }
-    }
-    for path in &caps.execute {
-        if std::path::Path::new(path).exists() {
-            execute_count += 1;
-        } else {
-            skipped.push(path.clone());
-        }
-    }
+    let read_count = count_existing_paths(&caps.read, &mut skipped);
+    let write_count = count_existing_paths(&caps.write, &mut skipped);
+    let execute_count = count_existing_paths(&caps.execute, &mut skipped);
 
     Ok(LandlockRulesetInfo {
         read_rules: read_count,

@@ -67,7 +67,7 @@ impl ChunkAccess {
                 self.size_bytes,
                 self.access_count,
                 &self.referenced_by,
-                if self.protected { 1 } else { 0 },
+                i32::from(self.protected),
             ],
         )?;
         Ok(())
@@ -133,7 +133,7 @@ impl ChunkAccess {
     pub fn set_protected(conn: &Connection, hash: &str, protected: bool) -> Result<()> {
         conn.execute(
             "UPDATE chunk_access SET protected = ?1 WHERE hash = ?2",
-            params![if protected { 1 } else { 0 }, hash],
+            params![i32::from(protected), hash],
         )?;
         Ok(())
     }

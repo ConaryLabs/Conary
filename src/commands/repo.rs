@@ -277,17 +277,15 @@ fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<S
             .bytes()
             .map_err(|e| anyhow::anyhow!("Failed to read GPG key data: {}", e))?;
 
-        let fingerprint = verifier.import_key(&key_data, repository)?;
-        Ok(fingerprint)
+        Ok(verifier.import_key(&key_data, repository)?)
     } else {
         // It's a local file path
         info!("Importing GPG key from file: {}", key_source);
         let key_path = Path::new(key_source);
         if !key_path.exists() {
-            return Err(anyhow::anyhow!("GPG key file not found: {}", key_source));
+            anyhow::bail!("GPG key file not found: {}", key_source);
         }
-        let fingerprint = verifier.import_key_from_file(key_path, repository)?;
-        Ok(fingerprint)
+        Ok(verifier.import_key_from_file(key_path, repository)?)
     }
 }
 

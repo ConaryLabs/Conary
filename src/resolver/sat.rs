@@ -200,27 +200,25 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     }
 
     // Expand transitively: packages that depend on breaking packages also break
+    let mut breaking_set: std::collections::HashSet<String> =
+        breaking.iter().cloned().collect();
     let mut changed = true;
-    let breaking_set = |breaking: &[String]| -> std::collections::HashSet<String> {
-        breaking.iter().cloned().collect()
-    };
     while changed {
         changed = false;
-        let current_breaking = breaking_set(&breaking);
         for i in 0..solvable_count {
             let sid = resolvo::SolvableId(i as u32);
             let pkg = provider.get_solvable(sid);
             if pkg.trove_id.is_none()
                 || remove_set.contains(pkg.name.as_str())
-                || current_breaking.contains(&pkg.name)
+                || breaking_set.contains(&pkg.name)
             {
                 continue;
             }
 
             if let Some(deps) = provider.get_dependency_list(sid) {
                 for (dep_name, _) in deps {
-                    if current_breaking.contains(dep_name) {
-                        breaking.push(pkg.name.clone());
+                    if breaking_set.contains(dep_name) {
+                        breaking_set.insert(pkg.name.clone());
                         changed = true;
                         break;
                     }
@@ -229,9 +227,8 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
         }
     }
 
-    // Deduplicate
+    let mut breaking: Vec<String> = breaking_set.into_iter().collect();
     breaking.sort();
-    breaking.dedup();
 
     Ok(breaking)
 }

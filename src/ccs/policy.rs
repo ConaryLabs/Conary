@@ -505,29 +505,20 @@ impl CompressManpagesPolicy {
 
     /// Check if path looks like a man page
     fn is_manpage(path: &str) -> bool {
-        // Man pages are typically in /usr/share/man/manN/ with extensions like .1, .2, etc.
-        if !path.contains("/man/")
-            && !path.contains("/man1/")
-            && !path.contains("/man2/")
-            && !path.contains("/man3/")
-            && !path.contains("/man4/")
-            && !path.contains("/man5/")
-            && !path.contains("/man6/")
-            && !path.contains("/man7/")
-            && !path.contains("/man8/")
-        {
+        const MAN_DIRS: &[&str] = &[
+            "/man/", "/man1/", "/man2/", "/man3/", "/man4/",
+            "/man5/", "/man6/", "/man7/", "/man8/",
+        ];
+        const MAN_EXTS: &[&str] = &[
+            ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".n", ".l",
+        ];
+
+        if !MAN_DIRS.iter().any(|d| path.contains(d)) {
             return false;
         }
 
-        // Check for man page extensions
         let filename = path.rsplit('/').next().unwrap_or("");
-        for ext in ["1", "2", "3", "4", "5", "6", "7", "8", "n", "l"] {
-            if filename.ends_with(&format!(".{}", ext)) {
-                return true;
-            }
-        }
-
-        false
+        MAN_EXTS.iter().any(|ext| filename.ends_with(ext))
     }
 
     /// Check if content is already gzipped

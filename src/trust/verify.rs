@@ -15,6 +15,7 @@ use crate::trust::metadata::{
 use crate::trust::{TrustError, TrustResult};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use sha2::Digest;
 use std::collections::BTreeMap;
 
 /// Verify that a signed metadata document has enough valid signatures
@@ -166,8 +167,6 @@ pub fn verify_metadata_hash(
     }
     Ok(())
 }
-
-use sha2::Digest;
 
 /// Extract keys and threshold for a specific role from root metadata
 pub fn extract_role_keys(

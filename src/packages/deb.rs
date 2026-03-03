@@ -20,6 +20,15 @@ use std::path::PathBuf;
 use tar::Archive;
 use tracing::{debug, warn};
 
+const CONTROL_TAR_NAMES: &[&str] = &[
+    "control.tar.gz",
+    "control.tar.xz",
+    "control.tar.zst",
+    "control.tar",
+];
+
+const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
+
 /// Debian package representation
 pub struct DebPackage {
     /// Common package metadata
@@ -33,9 +42,8 @@ pub struct DebPackage {
 }
 
 impl DebPackage {
-    /// Create a decompressor for tar data based on file extension
-    fn create_tar_decoder<'a>(tar_data: &'a [u8], _ext: &str) -> Result<Box<dyn Read + 'a>> {
-        // Detect format from magic bytes for reliability
+    /// Create a decompressor for tar data using magic byte detection
+    fn create_tar_decoder<'a>(tar_data: &'a [u8]) -> Result<Box<dyn Read + 'a>> {
         let format = CompressionFormat::from_magic_bytes(tar_data);
         compression::create_decoder(tar_data, format)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))
@@ -154,15 +162,9 @@ impl DebPackage {
 
     /// Decompress and extract control.tar.* to get control file
     fn extract_control_file(path: &str) -> Result<String> {
-        // Try different compression formats
-        for ext in &[
-            "control.tar.gz",
-            "control.tar.xz",
-            "control.tar.zst",
-            "control.tar",
-        ] {
-            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                let reader = Self::create_tar_decoder(&tar_data, ext)?;
+        for name in CONTROL_TAR_NAMES {
+            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
+                let reader = Self::create_tar_decoder(&tar_data)?;
                 let mut archive = Archive::new(reader);
 
                 // Find control file in tar
@@ -199,15 +201,9 @@ impl DebPackage {
     fn extract_maintainer_scripts(path: &str) -> Vec<Scriptlet> {
         let mut scriptlets = Vec::new();
 
-        // Try different compression formats
-        for ext in &[
-            "control.tar.gz",
-            "control.tar.xz",
-            "control.tar.zst",
-            "control.tar",
-        ] {
-            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                let reader = match Self::create_tar_decoder(&tar_data, ext) {
+        for name in CONTROL_TAR_NAMES {
+            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
+                let reader = match Self::create_tar_decoder(&tar_data) {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -275,15 +271,9 @@ impl DebPackage {
     /// Each line is a path to a config file. All Debian conffiles preserve user changes
     /// (like RPM's noreplace behavior).
     fn extract_conffiles(path: &str) -> Vec<ConfigFileInfo> {
-        // Try different compression formats
-        for ext in &[
-            "control.tar.gz",
-            "control.tar.xz",
-            "control.tar.zst",
-            "control.tar",
-        ] {
-            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                let reader = match Self::create_tar_decoder(&tar_data, ext) {
+        for name in CONTROL_TAR_NAMES {
+            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
+                let reader = match Self::create_tar_decoder(&tar_data) {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -336,10 +326,9 @@ impl DebPackage {
 
     /// Extract file list from data.tar.*
     fn extract_file_list(path: &str) -> Result<Vec<PackageFile>> {
-        // Try different compression formats
-        for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
-            if let Ok(tar_data) = Self::extract_ar_file(path, ext) {
-                let reader = Self::create_tar_decoder(&tar_data, ext)?;
+        for name in DATA_TAR_NAMES {
+            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
+                let reader = Self::create_tar_decoder(&tar_data)?;
                 let mut archive = Archive::new(reader);
                 let mut files = Vec::new();
 
@@ -528,18 +517,12 @@ impl PackageFormat for DebPackage {
             self.meta.package_path()
         );
 
-        // Try different compression formats
-        for ext in &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"] {
-            let path_str = match self.meta.package_path().to_str() {
-                Some(s) => s,
-                None => {
-                    return Err(Error::InitError(
-                        "Package path contains invalid UTF-8".to_string(),
-                    ));
-                }
-            };
-            if let Ok(tar_data) = Self::extract_ar_file(path_str, ext) {
-                let reader = Self::create_tar_decoder(&tar_data, ext)?;
+        let path_str = self.meta.package_path().to_str().ok_or_else(|| {
+            Error::InitError("Package path contains invalid UTF-8".to_string())
+        })?;
+        for name in DATA_TAR_NAMES {
+            if let Ok(tar_data) = Self::extract_ar_file(path_str, name) {
+                let reader = Self::create_tar_decoder(&tar_data)?;
                 let mut archive = Archive::new(reader);
                 let mut extracted_files = Vec::new();
 

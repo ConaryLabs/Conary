@@ -5,7 +5,7 @@
 //! package metadata, version history, dependency graphs, and statistics.
 //! All database queries run via `spawn_blocking` for async compatibility.
 
-use crate::db::models::{DownloadCount, Repository};
+use crate::db::models::DownloadCount;
 use crate::server::ServerState;
 use axum::{
     Json,
@@ -15,7 +15,6 @@ use axum::{
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -75,11 +74,6 @@ pub struct OverviewStats {
     pub total_converted: i64,
 }
 
-/// Helper to open the database from server state
-fn get_db_path(state: &ServerState) -> PathBuf {
-    state.config.db_path.clone()
-}
-
 /// GET /v1/packages/:distro/:name
 ///
 /// Full package detail including versions, download counts, and metadata.
@@ -87,10 +81,7 @@ pub async fn get_package_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let result =
         tokio::task::spawn_blocking(move || query_package_detail(&db_path, &distro, &name)).await;
@@ -121,10 +112,7 @@ pub async fn get_versions(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let result =
         tokio::task::spawn_blocking(move || query_versions(&db_path, &distro, &name)).await;
@@ -154,10 +142,7 @@ pub async fn get_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let result =
         tokio::task::spawn_blocking(move || query_dependencies(&db_path, &distro, &name)).await;
@@ -187,10 +172,7 @@ pub async fn get_reverse_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let result =
         tokio::task::spawn_blocking(move || query_reverse_dependencies(&db_path, &distro, &name))
@@ -221,10 +203,7 @@ pub async fn get_popular(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
@@ -258,10 +237,7 @@ pub async fn get_recent(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
@@ -291,10 +267,7 @@ pub async fn get_recent(
 ///
 /// Global statistics: total packages, downloads, distros, conversions.
 pub async fn get_overview(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        get_db_path(&guard)
-    };
+    let db_path = state.read().await.config.db_path.clone();
 
     let result = tokio::task::spawn_blocking(move || query_overview(&db_path)).await;
 
@@ -747,26 +720,6 @@ fn parse_dependencies(deps_str: Option<&str>) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-/// Resolve a distro name to a repository ID.
-///
-/// Same logic as sparse handler: tries `default_strategy_distro` first,
-/// then falls back to name-based matching.
 fn resolve_repo_id(conn: &Connection, distro: &str) -> anyhow::Result<Option<i64>> {
-    let repos = Repository::list_enabled(conn)?;
-
-    // Prefer exact match on default_strategy_distro
-    for repo in &repos {
-        if repo.default_strategy_distro.as_deref() == Some(distro) {
-            return Ok(repo.id);
-        }
-    }
-
-    // Fall back to name-based matching
-    for repo in &repos {
-        if repo.name.starts_with(distro) || repo.name.contains(distro) {
-            return Ok(repo.id);
-        }
-    }
-
-    Ok(None)
+    Ok(super::find_repository_for_distro(conn, distro)?.and_then(|r| r.id))
 }

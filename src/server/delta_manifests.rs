@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
 /// A pre-computed delta between two versions of a package
@@ -106,8 +106,8 @@ fn get_version_chunks(
 fn get_chunk_sizes(
     conn: &Connection,
     hashes: &[String],
-) -> Result<std::collections::HashMap<String, u64>> {
-    let mut sizes = std::collections::HashMap::new();
+) -> Result<HashMap<String, u64>> {
+    let mut sizes = HashMap::new();
     if hashes.is_empty() {
         return Ok(sizes);
     }

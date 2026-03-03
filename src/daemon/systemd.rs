@@ -339,7 +339,7 @@ impl SystemdManager {
 
     /// Check if idle timeout has expired
     pub fn is_idle_expired(&self) -> bool {
-        self.idle.as_ref().map(|i| i.is_expired()).unwrap_or(false)
+        self.idle.as_ref().is_some_and(|i| i.is_expired())
     }
 
     /// Get time until idle timeout

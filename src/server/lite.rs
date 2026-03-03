@@ -457,6 +457,22 @@ async fn proxy_package_detail(
     proxy_pass_through(state, &path).await
 }
 
+fn json_response(data: Vec<u8>, cache_control: &str, x_cache: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, cache_control)
+        .header("X-Cache", x_cache)
+        .body(Body::from(data))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn serve_stale_cache(cache_file: &std::path::Path, path: &str) -> Option<Response> {
+    let cached = read_cached_response(cache_file).await?;
+    debug!("[remi-lite] Serving stale cache: {}", path);
+    Some(json_response(cached.data, "public, max-age=0", "STALE"))
+}
+
 /// Generic pass-through proxy with file-based caching
 ///
 /// Checks local file cache first (with TTL), then proxies to upstream.
@@ -469,7 +485,6 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
     let offline = state_guard.config.offline;
     drop(state_guard);
 
-    // Build cache file path: {cache_dir}/{path_hash}
     let cache_key = crate::hash::sha256(path.as_bytes());
     let cache_file = cache_dir.join(&cache_key);
 
@@ -485,30 +500,16 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
                 path,
                 age.as_secs()
             );
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, format!("public, max-age={INDEX_CACHE_TTL_SECS}"))
-                .header("X-Cache", "HIT")
-                .body(Body::from(cached.data))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            let max_age = format!("public, max-age={INDEX_CACHE_TTL_SECS}");
+            return json_response(cached.data, &max_age, "HIT");
         }
     }
 
     // Offline mode: cannot proxy
     if offline || upstream_url.is_none() {
-        // Try returning stale cache if we have one
-        if let Some(cached) = read_cached_response(&cache_file).await {
-            debug!("[remi-lite] Serving stale cache (offline): {}", path);
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CACHE_CONTROL, "public, max-age=0")
-                .header("X-Cache", "STALE")
-                .body(Body::from(cached.data))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        if let Some(response) = serve_stale_cache(&cache_file, path).await {
+            return response;
         }
-
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "No upstream configured (offline mode)",
@@ -526,15 +527,8 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
         Ok(r) => r,
         Err(e) => {
             warn!("[remi-lite] Upstream fetch failed: {} ({})", fetch_url, e);
-            // Try returning stale cache on upstream failure
-            if let Some(cached) = read_cached_response(&cache_file).await {
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .header(header::CACHE_CONTROL, "public, max-age=0")
-                    .header("X-Cache", "STALE")
-                    .body(Body::from(cached.data))
-                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            if let Some(response) = serve_stale_cache(&cache_file, path).await {
+                return response;
             }
             return (StatusCode::BAD_GATEWAY, "Upstream fetch failed").into_response();
         }
@@ -564,7 +558,6 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
         }
     };
 
-    // Cache the response
     if let Err(e) = write_cached_response(&cache_file, &data).await {
         warn!("[remi-lite] Failed to cache index response: {}", e);
     }
@@ -575,13 +568,8 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
         data.len()
     );
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, format!("public, max-age={INDEX_CACHE_TTL_SECS}"))
-        .header("X-Cache", "MISS")
-        .body(Body::from(data))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    let max_age = format!("public, max-age={INDEX_CACHE_TTL_SECS}");
+    json_response(data, &max_age, "MISS")
 }
 
 // =============================================================================

@@ -193,7 +193,7 @@ pub async fn execute_enhance_job(
             Ok(enhancement_result) => {
                 result.processed += 1;
 
-                if enhancement_result.is_success() {
+                let error_msg = if enhancement_result.is_success() {
                     result.succeeded += 1;
                     state.emit(DaemonEvent::EnhancementCompleted {
                         trove_id: *trove_id,
@@ -202,9 +202,10 @@ pub async fn execute_enhance_job(
                             .applied
                             .contains(&EnhancementType::Capabilities),
                     });
+                    None
                 } else {
                     result.failed += 1;
-                    let error_msg = enhancement_result
+                    let msg = enhancement_result
                         .failed
                         .iter()
                         .map(|(t, e)| format!("{}: {}", t, e))
@@ -213,26 +214,16 @@ pub async fn execute_enhance_job(
                     state.emit(DaemonEvent::EnhancementFailed {
                         trove_id: *trove_id,
                         package_name: package_name.clone(),
-                        error: error_msg.clone(),
+                        error: msg.clone(),
                     });
-                }
+                    Some(msg)
+                };
 
                 result.packages.push(EnhancedPackageResult {
                     trove_id: *trove_id,
                     name: package_name,
                     success: enhancement_result.is_success(),
-                    error: if enhancement_result.is_success() {
-                        None
-                    } else {
-                        Some(
-                            enhancement_result
-                                .failed
-                                .iter()
-                                .map(|(t, e)| format!("{}: {}", t, e))
-                                .collect::<Vec<_>>()
-                                .join("; "),
-                        )
-                    },
+                    error: error_msg,
                     applied: enhancement_result
                         .applied
                         .iter()

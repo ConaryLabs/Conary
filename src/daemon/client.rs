@@ -346,7 +346,7 @@ impl DaemonClient {
         stream.set_write_timeout(Some(self.timeout))?;
 
         // Build HTTP request
-        let content_length = body.map(|b| b.len()).unwrap_or(0);
+        let content_length = body.map_or(0, str::len);
         let mut request = format!(
             "{} {} HTTP/1.1\r\n\
              Host: localhost\r\n\

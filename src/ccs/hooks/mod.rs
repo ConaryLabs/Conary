@@ -88,6 +88,35 @@ impl std::fmt::Display for HookType {
     }
 }
 
+impl HookResult {
+    fn from_outcome(
+        hook_type: HookType,
+        name: String,
+        result: Result<()>,
+        duration: std::time::Duration,
+    ) -> Self {
+        let duration_ms = duration.as_millis() as u64;
+        match result {
+            Ok(()) => Self {
+                hook_type,
+                name,
+                success: true,
+                exit_code: None,
+                error: None,
+                duration_ms,
+            },
+            Err(e) => Self {
+                hook_type,
+                name,
+                success: false,
+                exit_code: None,
+                error: Some(e.to_string()),
+                duration_ms,
+            },
+        }
+    }
+}
+
 /// Aggregate results from hook execution phase
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HookExecutionResults {
@@ -261,33 +290,16 @@ impl HookExecutor {
         for group in &hooks.groups {
             let hook_start = Instant::now();
             let result = self.create_group(&group.name, group.system);
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(created) => {
-                    if created {
-                        self.applied_hooks
-                            .push(AppliedHook::Group(group.name.clone()));
-                    }
-                    HookResult {
-                        hook_type: HookType::Group,
-                        name: group.name.clone(),
-                        success: true,
-                        exit_code: None,
-                        error: None,
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-                Err(e) => HookResult {
-                    hook_type: HookType::Group,
-                    name: group.name.clone(),
-                    success: false,
-                    exit_code: None,
-                    error: Some(e.to_string()),
-                    duration_ms: duration.as_millis() as u64,
-                },
-            };
-            results.add(hook_result);
+            if let Ok(true) = &result {
+                self.applied_hooks
+                    .push(AppliedHook::Group(group.name.clone()));
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Group,
+                group.name.clone(),
+                result.map(|_| ()),
+                hook_start.elapsed(),
+            ));
         }
 
         // Then users
@@ -300,33 +312,16 @@ impl HookExecutor {
                 user.shell.as_deref(),
                 user.group.as_deref(),
             );
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(created) => {
-                    if created {
-                        self.applied_hooks
-                            .push(AppliedHook::User(user.name.clone()));
-                    }
-                    HookResult {
-                        hook_type: HookType::User,
-                        name: user.name.clone(),
-                        success: true,
-                        exit_code: None,
-                        error: None,
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-                Err(e) => HookResult {
-                    hook_type: HookType::User,
-                    name: user.name.clone(),
-                    success: false,
-                    exit_code: None,
-                    error: Some(e.to_string()),
-                    duration_ms: duration.as_millis() as u64,
-                },
-            };
-            results.add(hook_result);
+            if let Ok(true) = &result {
+                self.applied_hooks
+                    .push(AppliedHook::User(user.name.clone()));
+            }
+            results.add(HookResult::from_outcome(
+                HookType::User,
+                user.name.clone(),
+                result.map(|_| ()),
+                hook_start.elapsed(),
+            ));
         }
 
         // Then directories
@@ -334,31 +329,16 @@ impl HookExecutor {
             let path = self.root.join(dir.path.trim_start_matches('/'));
             let hook_start = Instant::now();
             let result = self.create_directory(&path, &dir.mode, &dir.owner, &dir.group);
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(created) => {
-                    self.applied_hooks
-                        .push(AppliedHook::Directory(path, created));
-                    HookResult {
-                        hook_type: HookType::Directory,
-                        name: dir.path.clone(),
-                        success: true,
-                        exit_code: None,
-                        error: None,
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-                Err(e) => HookResult {
-                    hook_type: HookType::Directory,
-                    name: dir.path.clone(),
-                    success: false,
-                    exit_code: None,
-                    error: Some(e.to_string()),
-                    duration_ms: duration.as_millis() as u64,
-                },
-            };
-            results.add(hook_result);
+            if let Ok(created) = &result {
+                self.applied_hooks
+                    .push(AppliedHook::Directory(path, *created));
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Directory,
+                dir.path.clone(),
+                result.map(|_| ()),
+                hook_start.elapsed(),
+            ));
         }
 
         results.total_duration_ms = start.elapsed().as_millis() as u64;
@@ -380,46 +360,30 @@ impl HookExecutor {
             if unit.enable {
                 let hook_start = Instant::now();
                 let result = self.systemd_enable(&unit.unit);
-                let duration = hook_start.elapsed();
-
-                let hook_result = match result {
-                    Ok(()) => HookResult {
-                        hook_type: HookType::Systemd,
-                        name: unit.unit.clone(),
-                        success: true,
-                        exit_code: Some(0),
-                        error: None,
-                        duration_ms: duration.as_millis() as u64,
-                    },
-                    Err(e) => {
-                        warn!("Failed to enable systemd unit '{}': {}", unit.unit, e);
-                        HookResult {
-                            hook_type: HookType::Systemd,
-                            name: unit.unit.clone(),
-                            success: false,
-                            exit_code: None,
-                            error: Some(e.to_string()),
-                            duration_ms: duration.as_millis() as u64,
-                        }
-                    }
-                };
-                results.add(hook_result);
+                if let Err(ref e) = result {
+                    warn!("Failed to enable systemd unit '{}': {}", unit.unit, e);
+                }
+                results.add(HookResult::from_outcome(
+                    HookType::Systemd,
+                    unit.unit.clone(),
+                    result,
+                    hook_start.elapsed(),
+                ));
             }
         }
 
         // Daemon reload if we touched any units
         if had_systemd_hooks {
             let hook_start = Instant::now();
-            if let Err(e) = self.systemd_daemon_reload() {
+            let result = self.systemd_daemon_reload();
+            if let Err(ref e) = result {
                 warn!("Failed to reload systemd daemon: {}", e);
-                results.add(HookResult {
-                    hook_type: HookType::Systemd,
-                    name: "daemon-reload".to_string(),
-                    success: false,
-                    exit_code: None,
-                    error: Some(e.to_string()),
-                    duration_ms: hook_start.elapsed().as_millis() as u64,
-                });
+                results.add(HookResult::from_outcome(
+                    HookType::Systemd,
+                    "daemon-reload".to_string(),
+                    result,
+                    hook_start.elapsed(),
+                ));
             }
         }
 
@@ -427,93 +391,48 @@ impl HookExecutor {
         for tmpfile in &hooks.tmpfiles {
             let hook_start = Instant::now();
             let result = self.apply_tmpfile(tmpfile);
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(()) => HookResult {
-                    hook_type: HookType::Tmpfiles,
-                    name: tmpfile.path.clone(),
-                    success: true,
-                    exit_code: Some(0),
-                    error: None,
-                    duration_ms: duration.as_millis() as u64,
-                },
-                Err(e) => {
-                    warn!("Failed to apply tmpfiles entry '{}': {}", tmpfile.path, e);
-                    HookResult {
-                        hook_type: HookType::Tmpfiles,
-                        name: tmpfile.path.clone(),
-                        success: false,
-                        exit_code: None,
-                        error: Some(e.to_string()),
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-            };
-            results.add(hook_result);
+            if let Err(ref e) = result {
+                warn!("Failed to apply tmpfiles entry '{}': {}", tmpfile.path, e);
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Tmpfiles,
+                tmpfile.path.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
         }
 
         // Sysctl
         for sysctl in &hooks.sysctl {
             let hook_start = Instant::now();
             let result = self.apply_sysctl(&sysctl.key, &sysctl.value, sysctl.only_if_lower);
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(()) => HookResult {
-                    hook_type: HookType::Sysctl,
-                    name: sysctl.key.clone(),
-                    success: true,
-                    exit_code: None,
-                    error: None,
-                    duration_ms: duration.as_millis() as u64,
-                },
-                Err(e) => {
-                    warn!("Failed to apply sysctl '{}': {}", sysctl.key, e);
-                    HookResult {
-                        hook_type: HookType::Sysctl,
-                        name: sysctl.key.clone(),
-                        success: false,
-                        exit_code: None,
-                        error: Some(e.to_string()),
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-            };
-            results.add(hook_result);
+            if let Err(ref e) = result {
+                warn!("Failed to apply sysctl '{}': {}", sysctl.key, e);
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Sysctl,
+                sysctl.key.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
         }
 
         // Alternatives
         for alt in &hooks.alternatives {
             let hook_start = Instant::now();
             let result = self.update_alternatives(&alt.name, &alt.path, alt.priority);
-            let duration = hook_start.elapsed();
-
-            let hook_result = match result {
-                Ok(()) => HookResult {
-                    hook_type: HookType::Alternatives,
-                    name: alt.name.clone(),
-                    success: true,
-                    exit_code: Some(0),
-                    error: None,
-                    duration_ms: duration.as_millis() as u64,
-                },
-                Err(e) => {
-                    warn!(
-                        "Failed to update alternative '{}' -> '{}': {}",
-                        alt.name, alt.path, e
-                    );
-                    HookResult {
-                        hook_type: HookType::Alternatives,
-                        name: alt.name.clone(),
-                        success: false,
-                        exit_code: None,
-                        error: Some(e.to_string()),
-                        duration_ms: duration.as_millis() as u64,
-                    }
-                }
-            };
-            results.add(hook_result);
+            if let Err(ref e) = result {
+                warn!(
+                    "Failed to update alternative '{}' -> '{}': {}",
+                    alt.name, alt.path, e
+                );
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Alternatives,
+                alt.name.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
         }
 
         results.total_duration_ms = start.elapsed().as_millis() as u64;

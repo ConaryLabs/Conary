@@ -116,13 +116,9 @@ pub async fn catalog(State(state): State<Arc<RwLock<ServerState>>>) -> Response 
 
     match result {
         Ok(Ok(catalog)) => {
-            let json = match serde_json::to_string(&catalog) {
+            let json = match super::serialize_json(&catalog, "OCI catalog") {
                 Ok(j) => j,
-                Err(e) => {
-                    tracing::error!("Failed to serialize OCI catalog: {}", e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error")
-                        .into_response();
-                }
+                Err(e) => return e,
             };
             Response::builder()
                 .status(StatusCode::OK)
@@ -248,6 +244,24 @@ async fn get_manifest_inner(
     name: &str,
     reference: &str,
 ) -> Response {
+    manifest_inner(state, name, reference, false).await
+}
+
+/// HEAD /v2/{name}/manifests/{reference}
+async fn head_manifest_inner(
+    state: Arc<RwLock<ServerState>>,
+    name: &str,
+    reference: &str,
+) -> Response {
+    manifest_inner(state, name, reference, true).await
+}
+
+async fn manifest_inner(
+    state: Arc<RwLock<ServerState>>,
+    name: &str,
+    reference: &str,
+    head_only: bool,
+) -> Response {
     let (distro, package) = match parse_oci_name(name) {
         Some(p) => p,
         None => {
@@ -274,16 +288,20 @@ async fn get_manifest_inner(
     .await;
 
     match result {
-        Ok(Ok(Some((manifest_json, manifest_digest)))) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, OCI_MANIFEST_MEDIA_TYPE)
-            .header(
-                header::CONTENT_LENGTH,
-                manifest_json.len().to_string(),
-            )
-            .header("Docker-Content-Digest", &manifest_digest)
-            .body(Body::from(manifest_json))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Ok(Ok(Some((manifest_json, manifest_digest)))) => {
+            let body = if head_only {
+                Body::empty()
+            } else {
+                Body::from(manifest_json.clone())
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, OCI_MANIFEST_MEDIA_TYPE)
+                .header(header::CONTENT_LENGTH, manifest_json.len().to_string())
+                .header("Docker-Content-Digest", &manifest_digest)
+                .body(body)
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
         Ok(Ok(None)) => oci_error_response(
             StatusCode::NOT_FOUND,
             "MANIFEST_UNKNOWN",
@@ -291,64 +309,6 @@ async fn get_manifest_inner(
         ),
         Ok(Err(e)) => {
             tracing::error!("Failed to build OCI manifest: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Blocking task failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
-}
-
-/// HEAD /v2/{name}/manifests/{reference}
-async fn head_manifest_inner(
-    state: Arc<RwLock<ServerState>>,
-    name: &str,
-    reference: &str,
-) -> Response {
-    let (distro, package) = match parse_oci_name(name) {
-        Some(p) => p,
-        None => {
-            return oci_error_response(
-                StatusCode::NOT_FOUND,
-                "NAME_UNKNOWN",
-                "Invalid repository name",
-            );
-        }
-    };
-
-    let state_guard = state.read().await;
-    let db_path = state_guard.config.db_path.clone();
-    let chunk_cache = state_guard.chunk_cache.clone();
-    drop(state_guard);
-
-    let distro = distro.to_string();
-    let package = package.to_string();
-    let reference = reference.to_string();
-
-    let result = tokio::task::spawn_blocking(move || {
-        build_manifest(&db_path, &distro, &package, &reference, &chunk_cache)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some((manifest_json, manifest_digest)))) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, OCI_MANIFEST_MEDIA_TYPE)
-            .header(
-                header::CONTENT_LENGTH,
-                manifest_json.len().to_string(),
-            )
-            .header("Docker-Content-Digest", &manifest_digest)
-            .body(Body::empty())
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        Ok(Ok(None)) => oci_error_response(
-            StatusCode::NOT_FOUND,
-            "MANIFEST_UNKNOWN",
-            "Manifest not found",
-        ),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to check OCI manifest: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
         Err(e) => {
@@ -475,13 +435,9 @@ async fn list_tags_inner(state: Arc<RwLock<ServerState>>, name: &str) -> Respons
                 name: oci_name,
                 tags,
             };
-            let json = match serde_json::to_string(&tags_list) {
+            let json = match super::serialize_json(&tags_list, "OCI tags list") {
                 Ok(j) => j,
-                Err(e) => {
-                    tracing::error!("Failed to serialize tags list: {}", e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error")
-                        .into_response();
-                }
+                Err(e) => return e,
             };
             Response::builder()
                 .status(StatusCode::OK)

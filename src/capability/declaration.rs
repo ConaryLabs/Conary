@@ -172,43 +172,10 @@ impl FilesystemCapabilities {
 
     /// Validate filesystem capability configuration
     pub fn validate(&self) -> Result<(), CapabilityValidationError> {
-        // All paths should be absolute
-        for path in &self.read {
-            if !path.starts_with('/') {
-                return Err(CapabilityValidationError::RelativePath {
-                    path: path.clone(),
-                    context: "filesystem.read".to_string(),
-                });
-            }
-        }
-
-        for path in &self.write {
-            if !path.starts_with('/') {
-                return Err(CapabilityValidationError::RelativePath {
-                    path: path.clone(),
-                    context: "filesystem.write".to_string(),
-                });
-            }
-        }
-
-        for path in &self.execute {
-            if !path.starts_with('/') {
-                return Err(CapabilityValidationError::RelativePath {
-                    path: path.clone(),
-                    context: "filesystem.execute".to_string(),
-                });
-            }
-        }
-
-        for path in &self.deny {
-            if !path.starts_with('/') {
-                return Err(CapabilityValidationError::RelativePath {
-                    path: path.clone(),
-                    context: "filesystem.deny".to_string(),
-                });
-            }
-        }
-
+        validate_absolute_paths(&self.read, "filesystem.read")?;
+        validate_absolute_paths(&self.write, "filesystem.write")?;
+        validate_absolute_paths(&self.execute, "filesystem.execute")?;
+        validate_absolute_paths(&self.deny, "filesystem.deny")?;
         Ok(())
     }
 }
@@ -316,6 +283,22 @@ impl SyscallProfile {
 /// Check if a syscall profile name is valid
 fn is_valid_syscall_profile(profile: &str) -> bool {
     SyscallProfile::parse(profile).is_some()
+}
+
+/// Validate that all paths in a list are absolute
+fn validate_absolute_paths(
+    paths: &[String],
+    context: &str,
+) -> Result<(), CapabilityValidationError> {
+    for path in paths {
+        if !path.starts_with('/') {
+            return Err(CapabilityValidationError::RelativePath {
+                path: path.clone(),
+                context: context.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Validate a port specification

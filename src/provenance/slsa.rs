@@ -209,10 +209,8 @@ fn strip_sha256_prefix(value: &str) -> &str {
 }
 
 fn split_hash(hash: &str) -> Option<(String, String)> {
-    let mut parts = hash.splitn(2, ':');
-    let algorithm = parts.next()?.to_string();
-    let value = parts.next()?.to_string();
-    Some((algorithm, value))
+    let (algorithm, value) = hash.split_once(':')?;
+    Some((algorithm.to_string(), value.to_string()))
 }
 
 #[cfg(test)]

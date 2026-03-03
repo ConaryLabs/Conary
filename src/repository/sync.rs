@@ -392,24 +392,20 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
 /// Check if repository metadata needs refresh
 pub fn needs_sync(repo: &Repository) -> bool {
-    match &repo.last_sync {
-        None => true, // Never synced
-        Some(last_sync) => {
-            // Parse timestamp and check if expired
-            match parse_timestamp(last_sync) {
-                Ok(last_sync_time) => {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
+    let Some(last_sync) = &repo.last_sync else {
+        return true;
+    };
 
-                    let age_seconds = now.saturating_sub(last_sync_time);
-                    age_seconds > repo.metadata_expire as u64
-                }
-                Err(_) => true, // If we can't parse timestamp, force sync
-            }
-        }
-    }
+    let Ok(last_sync_time) = parse_timestamp(last_sync) else {
+        return true;
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    now.saturating_sub(last_sync_time) > repo.metadata_expire as u64
 }
 
 /// Attempt to fetch and import GPG key if configured for the repository
@@ -429,13 +425,9 @@ pub fn needs_sync(repo: &Repository) -> bool {
 /// * `Ok(None)` - No key URL configured, or key already exists
 /// * `Err(_)` - Failed to fetch or import key
 pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Option<String>> {
-    // Skip if no key URL configured
-    let key_url = match &repo.gpg_key_url {
-        Some(url) => url,
-        None => {
-            debug!("No gpg_key_url configured for repository '{}'", repo.name);
-            return Ok(None);
-        }
+    let Some(key_url) = &repo.gpg_key_url else {
+        debug!("No gpg_key_url configured for repository '{}'", repo.name);
+        return Ok(None);
     };
 
     // Create verifier

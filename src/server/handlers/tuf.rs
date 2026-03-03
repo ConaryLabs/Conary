@@ -17,10 +17,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rusqlite::params;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// GET /v1/{distro}/tuf/timestamp.json
 pub async fn get_timestamp(
@@ -163,7 +162,6 @@ async fn get_tuf_metadata(
         guard.config.db_path.clone()
     };
 
-    let role_clone = role.clone();
     let result =
         tokio::task::spawn_blocking(move || query_tuf_role_metadata(&db_path, &distro, &role))
             .await;
@@ -175,12 +173,9 @@ async fn get_tuf_metadata(
             json,
         )
             .into_response(),
-        Ok(Ok(None)) => {
-            debug!("No TUF {role_clone} metadata found");
-            StatusCode::NOT_FOUND.into_response()
-        }
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => {
-            warn!("Failed to fetch TUF {role_clone} metadata: {e}");
+            warn!("Failed to fetch TUF metadata: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
         Err(e) => {
@@ -193,69 +188,60 @@ async fn get_tuf_metadata(
 // --- Database query functions (run on blocking threads) ---
 
 fn query_latest_root(
-    db_path: &PathBuf,
+    db_path: &std::path::Path,
     distro: &str,
 ) -> anyhow::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
     let conn = crate::db::open(db_path)?;
-    let result: Result<String, _> = conn.query_row(
-        "SELECT tr.signed_metadata FROM tuf_roots tr
-         JOIN repositories r ON tr.repository_id = r.id
-         WHERE r.name = ?1
-         ORDER BY tr.version DESC LIMIT 1",
-        params![distro],
-        |row| row.get(0),
-    );
-
-    match result {
-        Ok(json) => Ok(Some(json)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    Ok(conn
+        .query_row(
+            "SELECT tr.signed_metadata FROM tuf_roots tr
+             JOIN repositories r ON tr.repository_id = r.id
+             WHERE r.name = ?1
+             ORDER BY tr.version DESC LIMIT 1",
+            params![distro],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn query_versioned_root(
-    db_path: &PathBuf,
+    db_path: &std::path::Path,
     distro: &str,
     version: i64,
 ) -> anyhow::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
     let conn = crate::db::open(db_path)?;
-    let result: Result<String, _> = conn.query_row(
-        "SELECT tr.signed_metadata FROM tuf_roots tr
-         JOIN repositories r ON tr.repository_id = r.id
-         WHERE r.name = ?1 AND tr.version = ?2",
-        params![distro, version],
-        |row| row.get(0),
-    );
-
-    match result {
-        Ok(json) => Ok(Some(json)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    Ok(conn
+        .query_row(
+            "SELECT tr.signed_metadata FROM tuf_roots tr
+             JOIN repositories r ON tr.repository_id = r.id
+             WHERE r.name = ?1 AND tr.version = ?2",
+            params![distro, version],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn query_tuf_role_metadata(
-    db_path: &PathBuf,
+    db_path: &std::path::Path,
     distro: &str,
     role: &str,
 ) -> anyhow::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
     let conn = crate::db::open(db_path)?;
-    let result: Result<String, _> = conn.query_row(
-        "SELECT tm.signed_metadata FROM tuf_metadata tm
-         JOIN repositories r ON tm.repository_id = r.id
-         WHERE r.name = ?1 AND tm.role = ?2",
-        params![distro, role],
-        |row| row.get(0),
-    );
-
-    match result {
-        Ok(json) => Ok(Some(json)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    Ok(conn
+        .query_row(
+            "SELECT tm.signed_metadata FROM tuf_metadata tm
+             JOIN repositories r ON tm.repository_id = r.id
+             WHERE r.name = ?1 AND tm.role = ?2",
+            params![distro, role],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
-fn query_tuf_repos(db_path: &PathBuf) -> anyhow::Result<Vec<String>> {
+fn query_tuf_repos(db_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
     let conn = crate::db::open(db_path)?;
     let mut stmt = conn.prepare(
         "SELECT name FROM repositories WHERE tuf_enabled = 1",

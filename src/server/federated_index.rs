@@ -13,6 +13,7 @@
 
 use crate::server::handlers::sparse::{SparseIndexEntry, SparseVersionEntry};
 use anyhow::{Context, Result};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -170,15 +171,14 @@ pub fn merge_sparse_entries(entries: Vec<SparseIndexEntry>) -> SparseIndexEntry 
     for entry in entries {
         for version in entry.versions {
             let key = version.version.clone();
-            match version_map.get(&key) {
-                Some(existing) => {
-                    // Prefer converted=true over converted=false
-                    if version.converted && !existing.converted {
-                        version_map.insert(key, version);
+            match version_map.entry(key) {
+                Entry::Occupied(mut existing) => {
+                    if version.converted && !existing.get().converted {
+                        existing.insert(version);
                     }
                 }
-                None => {
-                    version_map.insert(key, version);
+                Entry::Vacant(vacant) => {
+                    vacant.insert(version);
                 }
             }
         }
@@ -345,7 +345,7 @@ fn build_local_sparse_entry(
          AND package_version IS NOT NULL",
     )?;
 
-    let mut converted_map = std::collections::HashMap::new();
+    let mut converted_map = HashMap::new();
     let mut rows = converted_stmt.query(rusqlite::params![distro, name])?;
     while let Some(row) = rows.next()? {
         let version: String = row.get(0)?;
@@ -364,7 +364,7 @@ fn build_local_sparse_entry(
                 architecture: pkg.architecture,
                 size: pkg.size,
                 converted: converted_info.is_some(),
-                content_hash: converted_info.and_then(|h| h.clone()),
+                content_hash: converted_info.and_then(Option::clone),
             }
         })
         .collect();

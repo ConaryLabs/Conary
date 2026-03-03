@@ -132,32 +132,19 @@ impl PackageSelector {
     /// 1. Repository priority (higher is better)
     /// 2. Version (latest version)
     /// 3. First match (stable tie-breaker)
-    pub fn select_best(candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
+    pub fn select_best(mut candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
         if candidates.is_empty() {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        if candidates.len() == 1 {
-            // Safe: we just verified len() == 1
-            return candidates
-                .into_iter()
-                .next()
-                .ok_or_else(|| Error::NotFound("Unexpected empty candidates".to_string()));
-        }
-
-        // Sort by priority (descending) and version (descending)
-        let mut sorted = candidates;
-        sorted.sort_by(|a, b| {
-            // First compare repository priority (higher is better)
+        candidates.sort_by(|a, b| {
             match b.repository.priority.cmp(&a.repository.priority) {
                 std::cmp::Ordering::Equal => {
-                    // Then compare versions (newer is better)
                     match (
                         RpmVersion::parse(&a.package.version),
                         RpmVersion::parse(&b.package.version),
                     ) {
                         (Ok(v_a), Ok(v_b)) => v_b.cmp(&v_a),
-                        // If version parsing fails, fall back to string comparison
                         _ => b.package.version.cmp(&a.package.version),
                     }
                 }
@@ -166,10 +153,7 @@ impl PackageSelector {
         });
 
         // Safe: we verified candidates is non-empty above
-        let selected = sorted
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::NotFound("Unexpected empty sorted candidates".to_string()))?;
+        let selected = candidates.into_iter().next().unwrap();
         info!(
             "Selected package {} {} from repository {} (priority {})",
             selected.package.name,

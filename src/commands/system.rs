@@ -1,31 +1,11 @@
 // src/commands/system.rs
 //! System management commands (init, verify, rollback)
 
+use super::TroveSnapshot;
 use anyhow::Result;
 use conary::db::paths::objects_dir;
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::info;
-
-/// Serializable trove metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TroveSnapshot {
-    name: String,
-    version: String,
-    architecture: Option<String>,
-    description: Option<String>,
-    install_source: String,
-    files: Vec<FileSnapshot>,
-}
-
-/// Serializable file metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileSnapshot {
-    path: String,
-    sha256_hash: String,
-    size: i64,
-    permissions: i32,
-}
 
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {

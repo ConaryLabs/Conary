@@ -66,6 +66,5 @@ pub fn set_repository_enabled(conn: &Connection, name: &str, enabled: bool) -> R
 
 /// Search for packages across all enabled repositories
 pub fn search_packages(conn: &Connection, pattern: &str) -> Result<Vec<RepositoryPackage>> {
-    let packages = RepositoryPackage::search(conn, pattern)?;
-    Ok(packages)
+    RepositoryPackage::search(conn, pattern)
 }

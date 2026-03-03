@@ -361,7 +361,7 @@ async fn pull_through_fetch(
     };
 
     // Verify hash before storing
-    let computed_hash = sha2_hash(&data);
+    let computed_hash = crate::hash::sha256(&data);
     if computed_hash != hash {
         tracing::error!(
             "Hash mismatch for chunk from upstream: expected {}, got {}",
@@ -403,10 +403,6 @@ async fn pull_through_fetch(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Compute SHA-256 hash of data (delegates to crate::hash::sha256)
-fn sha2_hash(data: &[u8]) -> String {
-    crate::hash::sha256(data)
-}
 
 // === Batch Endpoints ===
 

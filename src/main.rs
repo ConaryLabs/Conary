@@ -44,12 +44,7 @@ fn main() -> Result<()> {
             skip_optional,
             force,
         }) => {
-            let sandbox_mode = commands::SandboxMode::parse(&sandbox).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid sandbox mode '{}'. Use: auto, always, never",
-                    sandbox
-                )
-            })?;
+            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
@@ -92,12 +87,7 @@ fn main() -> Result<()> {
             sandbox,
             purge_files,
         }) => {
-            let sandbox_mode = commands::SandboxMode::parse(&sandbox).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid sandbox mode '{}'. Use: auto, always, never",
-                    sandbox
-                )
-            })?;
+            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
             commands::cmd_remove(
                 &package_name,
                 &common.db.db_path,
@@ -115,12 +105,7 @@ fn main() -> Result<()> {
             security,
             sandbox,
         }) => {
-            let sandbox_mode = commands::SandboxMode::parse(&sandbox).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid sandbox mode '{}'. Use: auto, always, never",
-                    sandbox
-                )
-            })?;
+            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
@@ -173,12 +158,7 @@ fn main() -> Result<()> {
             no_scripts,
             sandbox,
         }) => {
-            let sandbox_mode = commands::SandboxMode::parse(&sandbox).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid sandbox mode '{}'. Use: auto, always, never",
-                    sandbox
-                )
-            })?;
+            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
             commands::cmd_autoremove(
                 &common.db.db_path,
                 &common.root,
@@ -875,12 +855,7 @@ fn main() -> Result<()> {
                 sandbox,
                 no_deps,
             } => {
-                let sandbox_mode = commands::SandboxMode::parse(&sandbox).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Invalid sandbox mode '{}'. Use: auto, always, never",
-                        sandbox
-                    )
-                })?;
+                let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
                 commands::ccs::cmd_ccs_install(
                     &package,
                     &common.db.db_path,

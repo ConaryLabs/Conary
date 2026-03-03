@@ -7,7 +7,7 @@
 //! but operates at a higher level with package-aware sources.
 
 use crate::error::{Error, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -40,14 +40,21 @@ pub struct SubstituterResult {
     pub source_index: usize,
 }
 
+impl SubstituterSource {
+    /// Returns a human-readable name for this source
+    pub fn name(&self) -> &str {
+        match self {
+            Self::LocalCache { .. } => "local-cache",
+            Self::Federation { .. } => "federation",
+            Self::Remi { .. } => "remi",
+            Self::Binary { .. } => "binary",
+        }
+    }
+}
+
 /// Returns a human-readable name for a substituter source
 pub fn source_name(source: &SubstituterSource) -> &str {
-    match source {
-        SubstituterSource::LocalCache { .. } => "local-cache",
-        SubstituterSource::Federation { .. } => "federation",
-        SubstituterSource::Remi { .. } => "remi",
-        SubstituterSource::Binary { .. } => "binary",
-    }
+    source.name()
 }
 
 impl SubstituterChain {
@@ -89,7 +96,7 @@ impl SubstituterChain {
         }
 
         for (idx, source) in self.sources.iter().enumerate() {
-            let name = source_name(source);
+            let name = source.name();
             debug!("Trying source {} ({}) for chunk {}", idx, name, hash);
 
             match Self::fetch_from_source(source, hash) {
@@ -141,13 +148,13 @@ impl SubstituterChain {
                 break;
             }
 
-            let name = source_name(source);
+            let name = source.name();
             debug!(
                 "Trying source {} ({}) for {} remaining chunks",
                 idx, name, remaining.len()
             );
 
-            let mut newly_resolved = Vec::new();
+            let mut newly_resolved = HashSet::new();
 
             for hash in &remaining {
                 match Self::fetch_from_source(source, hash) {
@@ -157,7 +164,7 @@ impl SubstituterChain {
                             name, hash, data.len()
                         );
                         resolved.insert((*hash).clone(), data);
-                        newly_resolved.push((*hash).clone());
+                        newly_resolved.insert((*hash).as_str());
                     }
                     Err(e) => {
                         debug!("Source {} could not provide chunk {}: {}", name, hash, e);
@@ -165,7 +172,7 @@ impl SubstituterChain {
                 }
             }
 
-            remaining.retain(|h| !newly_resolved.contains(h));
+            remaining.retain(|h| !newly_resolved.contains(h.as_str()));
         }
 
         if resolved.is_empty() && !hashes.is_empty() {
@@ -238,20 +245,19 @@ impl SubstituterChain {
         let (prefix, rest) = hash.split_at(2);
         let chunk_path = cache_dir.join("objects").join(prefix).join(rest);
 
-        if chunk_path.exists() {
-            let data = fs::read(&chunk_path).map_err(|e| {
-                Error::IoError(format!(
-                    "Failed to read cached chunk {}: {}",
-                    chunk_path.display(),
-                    e
-                ))
-            })?;
-            Ok(data)
-        } else {
-            Err(Error::NotFound(format!(
-                "Chunk {} not in local cache",
-                hash
-            )))
+        match fs::read(&chunk_path) {
+            Ok(data) => Ok(data),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(Error::NotFound(format!(
+                    "Chunk {} not in local cache",
+                    hash
+                )))
+            }
+            Err(e) => Err(Error::IoError(format!(
+                "Failed to read cached chunk {}: {}",
+                chunk_path.display(),
+                e
+            ))),
         }
     }
 }

@@ -82,14 +82,8 @@ impl DaemonJob {
 
     /// Insert this job into the database
     pub fn insert(&self, conn: &Connection) -> Result<()> {
-        let kind_str =
-            serde_json::to_string(&self.kind).map_err(|e| crate::Error::IoError(e.to_string()))?;
-        // Remove quotes from serialized enum
-        let kind_str = kind_str.trim_matches('"');
-
-        let status_str = serde_json::to_string(&self.status)
-            .map_err(|e| crate::Error::IoError(e.to_string()))?;
-        let status_str = status_str.trim_matches('"');
+        let kind_str = self.kind.as_str();
+        let status_str = self.status.as_str();
 
         let spec_json =
             serde_json::to_string(&self.spec).map_err(|e| crate::Error::IoError(e.to_string()))?;
@@ -153,9 +147,7 @@ impl DaemonJob {
 
     /// List jobs by status
     pub fn list_by_status(conn: &Connection, status: JobStatus) -> Result<Vec<Self>> {
-        let status_str =
-            serde_json::to_string(&status).map_err(|e| crate::Error::IoError(e.to_string()))?;
-        let status_str = status_str.trim_matches('"');
+        let status_str = status.as_str();
 
         let mut stmt = conn.prepare(
             "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
@@ -198,34 +190,22 @@ impl DaemonJob {
 
     /// Update job status
     pub fn update_status(conn: &Connection, id: &str, status: JobStatus) -> Result<bool> {
-        let status_str =
-            serde_json::to_string(&status).map_err(|e| crate::Error::IoError(e.to_string()))?;
-        let status_str = status_str.trim_matches('"');
-
+        let status_str = status.as_str();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let (_timestamp_field, rows) = match status {
-            JobStatus::Running => {
-                let rows = conn.execute(
-                    "UPDATE daemon_jobs SET status = ?1, started_at = ?2 WHERE id = ?3",
-                    params![status_str, &timestamp, id],
-                )?;
-                ("started_at", rows)
-            }
-            JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => {
-                let rows = conn.execute(
-                    "UPDATE daemon_jobs SET status = ?1, completed_at = ?2 WHERE id = ?3",
-                    params![status_str, &timestamp, id],
-                )?;
-                ("completed_at", rows)
-            }
-            JobStatus::Queued => {
-                let rows = conn.execute(
-                    "UPDATE daemon_jobs SET status = ?1 WHERE id = ?2",
-                    params![status_str, id],
-                )?;
-                ("", rows)
-            }
+        let rows = match status {
+            JobStatus::Running => conn.execute(
+                "UPDATE daemon_jobs SET status = ?1, started_at = ?2 WHERE id = ?3",
+                params![status_str, &timestamp, id],
+            )?,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => conn.execute(
+                "UPDATE daemon_jobs SET status = ?1, completed_at = ?2 WHERE id = ?3",
+                params![status_str, &timestamp, id],
+            )?,
+            JobStatus::Queued => conn.execute(
+                "UPDATE daemon_jobs SET status = ?1 WHERE id = ?2",
+                params![status_str, id],
+            )?,
         };
 
         Ok(rows > 0)

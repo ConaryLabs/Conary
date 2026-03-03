@@ -83,38 +83,42 @@ impl CasStore {
         self.algorithm
     }
 
+    /// Atomically write content to a CAS path (write to temp, fsync, rename).
+    ///
+    /// Returns `true` if content was written, `false` if it already existed.
+    fn atomic_store(&self, hash: &str, content: &[u8]) -> Result<bool> {
+        let path = self.hash_to_path(hash);
+
+        if path.exists() {
+            return Ok(false);
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let temp_path = path.with_extension("tmp");
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        fs::rename(&temp_path, &path)?;
+
+        Ok(true)
+    }
+
     /// Store file content in CAS and return its hash
     ///
     /// The content is stored at: objects/{first2}/{rest_of_hash}
     /// If the content already exists (same hash), this is a no-op (deduplication).
     pub fn store(&self, content: &[u8]) -> Result<String> {
-        // Compute hash using configured algorithm
         let hash = self.compute_hash(content);
 
-        // Get storage path
-        let path = self.hash_to_path(&hash);
-
-        // If already exists, skip (deduplication)
-        if path.exists() {
+        if self.atomic_store(&hash, content)? {
+            debug!("Stored content in CAS: {} ({} bytes)", hash, content.len());
+        } else {
             debug!("Content already in CAS: {}", hash);
-            return Ok(hash);
         }
 
-        // Create parent directory
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Write content atomically (write to temp, then rename)
-        let temp_path = path.with_extension("tmp");
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(content)?;
-        file.sync_all()?;
-
-        // Atomic rename
-        fs::rename(&temp_path, &path)?;
-
-        debug!("Stored content in CAS: {} ({} bytes)", hash, content.len());
         Ok(hash)
     }
 
@@ -227,36 +231,17 @@ impl CasStore {
     /// regardless of the CAS's configured algorithm. This ensures symlink identity
     /// is consistent across systems.
     pub fn store_symlink(&self, target: &str) -> Result<String> {
-        // Use the same format as compute_symlink_hash for consistency
         let content = format!("symlink:{}", target);
         // Always use SHA-256 for symlinks to match compute_symlink_hash()
         // This is critical: symlink hashes are used as identities across systems
         let hash = hash::sha256(content.as_bytes());
 
-        // Get storage path
-        let path = self.hash_to_path(&hash);
-
-        // If already exists, skip (deduplication)
-        if path.exists() {
+        if self.atomic_store(&hash, content.as_bytes())? {
+            debug!("Stored symlink in CAS: {} -> {}", target, hash);
+        } else {
             debug!("Symlink already in CAS: {}", hash);
-            return Ok(hash);
         }
 
-        // Create parent directory
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Write content atomically (write to temp, then rename)
-        let temp_path = path.with_extension("tmp");
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-
-        // Atomic rename
-        fs::rename(&temp_path, &path)?;
-
-        debug!("Stored symlink in CAS: {} -> {}", target, hash);
         Ok(hash)
     }
 
