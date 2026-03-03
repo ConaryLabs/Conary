@@ -39,6 +39,7 @@ pub mod resolver;
 pub mod scriptlet;
 pub mod transaction;
 pub mod trigger;
+pub mod trust;
 pub mod version;
 
 #[cfg(feature = "server")]
@@ -100,3 +101,4 @@ pub use transaction::{
     RecoveryOutcome, Transaction, TransactionConfig, TransactionEngine, TransactionPlan,
     TransactionState,
 };
+pub use trust::TrustError;

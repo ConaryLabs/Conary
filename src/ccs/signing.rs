@@ -58,6 +58,13 @@ impl SigningKeyPair {
         self.key_id.as_deref()
     }
 
+    /// Get a reference to the underlying signing key
+    ///
+    /// Used by TUF key utilities for raw Ed25519 signing operations.
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
+
     /// Sign content and return a PackageSignature
     pub fn sign(&self, content: &[u8]) -> PackageSignature {
         let signature = self.signing_key.sign(content);

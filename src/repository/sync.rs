@@ -266,6 +266,31 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
 pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     info!("Synchronizing repository: {}", repo.name);
 
+    // TUF verification phase (before any metadata processing)
+    if repo.tuf_enabled {
+        let repo_id = repo
+            .id
+            .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
+        let tuf_client = crate::trust::client::TufClient::new(
+            repo_id,
+            &repo.url,
+            repo.tuf_root_url.as_deref(),
+        )
+        .map_err(|e| Error::TrustError(e.to_string()))?;
+
+        let verified = tuf_client
+            .update(conn)
+            .map_err(|e| Error::TrustError(e.to_string()))?;
+
+        info!(
+            "TUF verified: root v{}, targets v{}, {} targets",
+            verified.root_version,
+            verified.targets_version,
+            verified.targets.len()
+        );
+    }
+
     // Route to Remi-native sync if strategy is "remi"
     if repo.default_strategy.as_deref() == Some("remi") {
         return sync_repository_remi(conn, repo);

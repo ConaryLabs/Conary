@@ -8,7 +8,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 /// Column list for Repository SELECT queries (avoids repetition across methods)
 const REPOSITORY_COLUMNS: &str = "id, name, url, content_url, enabled, priority, gpg_check, \
     gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, default_strategy, \
-    default_strategy_endpoint, default_strategy_distro";
+    default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, \
+    tuf_root_url";
 
 /// Repository represents a remote package source
 #[derive(Debug, Clone)]
@@ -36,6 +37,12 @@ pub struct Repository {
     pub default_strategy_endpoint: Option<String>,
     /// For "remi" strategy: the distribution name (fedora, arch, debian, etc.)
     pub default_strategy_distro: Option<String>,
+    /// Whether TUF trust verification is enabled for this repository
+    pub tuf_enabled: bool,
+    /// Current verified TUF root metadata version
+    pub tuf_root_version: Option<i64>,
+    /// URL for fetching TUF root metadata (if different from repo URL)
+    pub tuf_root_url: Option<String>,
 }
 
 impl Repository {
@@ -57,6 +64,9 @@ impl Repository {
             default_strategy: None,
             default_strategy_endpoint: None,
             default_strategy_distro: None,
+            tuf_enabled: false,
+            tuf_root_version: None,
+            tuf_root_url: None,
         }
     }
 
@@ -78,6 +88,9 @@ impl Repository {
             default_strategy: None,
             default_strategy_endpoint: None,
             default_strategy_distro: None,
+            tuf_enabled: false,
+            tuf_root_version: None,
+            tuf_root_url: None,
         }
     }
 
@@ -90,8 +103,8 @@ impl Repository {
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &self.name,
                 &self.url,
@@ -105,6 +118,9 @@ impl Repository {
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
                 &self.default_strategy_distro,
+                self.tuf_enabled as i32,
+                &self.tuf_root_version,
+                &self.tuf_root_url,
             ],
         )?;
 
@@ -170,8 +186,9 @@ impl Repository {
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
              gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10,
-             default_strategy = ?11, default_strategy_endpoint = ?12, default_strategy_distro = ?13
-             WHERE id = ?14",
+             default_strategy = ?11, default_strategy_endpoint = ?12, default_strategy_distro = ?13,
+             tuf_enabled = ?14, tuf_root_version = ?15, tuf_root_url = ?16
+             WHERE id = ?17",
             params![
                 &self.name,
                 &self.url,
@@ -186,6 +203,9 @@ impl Repository {
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
                 &self.default_strategy_distro,
+                self.tuf_enabled as i32,
+                &self.tuf_root_version,
+                &self.tuf_root_url,
                 id,
             ],
         )?;
@@ -217,6 +237,9 @@ impl Repository {
             default_strategy: row.get(12)?,
             default_strategy_endpoint: row.get(13)?,
             default_strategy_distro: row.get(14)?,
+            tuf_enabled: row.get::<_, i32>(15)? != 0,
+            tuf_root_version: row.get(16)?,
+            tuf_root_url: row.get(17)?,
         })
     }
 }

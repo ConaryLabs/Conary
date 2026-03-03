@@ -1335,6 +1335,45 @@ fn main() -> Result<()> {
         // =====================================================================
         // Federation Commands
         // =====================================================================
+        // =====================================================================
+        // Trust Commands
+        // =====================================================================
+        Some(cli::Commands::Trust(cmd)) => match cmd {
+            cli::TrustCommands::KeyGen { role, output } => {
+                commands::cmd_trust_key_gen(&role, &output)
+            }
+            cli::TrustCommands::Init { repo, root, db } => {
+                commands::cmd_trust_init(&repo, &root, &db.db_path)
+            }
+            cli::TrustCommands::Enable { repo, tuf_url, db } => {
+                commands::cmd_trust_enable(&repo, tuf_url.as_deref(), &db.db_path)
+            }
+            cli::TrustCommands::Disable { repo, force, db } => {
+                commands::cmd_trust_disable(&repo, force, &db.db_path)
+            }
+            cli::TrustCommands::Status { repo, db } => {
+                commands::cmd_trust_status(&repo, &db.db_path)
+            }
+            cli::TrustCommands::Verify { repo, db } => {
+                commands::cmd_trust_verify(&repo, &db.db_path)
+            }
+            #[cfg(feature = "server")]
+            cli::TrustCommands::SignTargets { repo, key, db } => {
+                commands::cmd_trust_sign_targets(&repo, &key, &db.db_path)
+            }
+            #[cfg(feature = "server")]
+            cli::TrustCommands::RotateKey {
+                role,
+                old_key,
+                new_key,
+                root_key,
+                repo,
+                db,
+            } => commands::cmd_trust_rotate_key(
+                &role, &old_key, &new_key, &root_key, &repo, &db.db_path,
+            ),
+        },
+
         Some(cli::Commands::Federation(cmd)) => match cmd {
             cli::FederationCommands::Status { db, verbose } => {
                 commands::cmd_federation_status(&db.db_path, verbose)

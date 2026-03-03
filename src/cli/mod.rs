@@ -45,6 +45,7 @@ mod repo;
 mod state;
 mod system;
 mod trigger;
+mod trust;
 
 #[cfg(feature = "experimental")]
 pub use automation::AiCommands;
@@ -65,6 +66,7 @@ pub use repo::RepoCommands;
 pub use state::StateCommands;
 pub use system::SystemCommands;
 pub use trigger::TriggerCommands;
+pub use trust::TrustCommands;
 
 /// Database path arguments
 #[derive(Args, Clone, Debug)]
@@ -401,6 +403,13 @@ pub enum Commands {
     /// resources a package needs (network, filesystem, syscalls).
     #[command(subcommand)]
     Capability(CapabilityCommands),
+
+    /// TUF trust management
+    ///
+    /// Manage TUF (The Update Framework) supply chain trust for repositories.
+    /// Protects against rollback, freeze, replay, and mix-and-match attacks.
+    #[command(subcommand)]
+    Trust(TrustCommands),
 
     /// Federation management
     ///

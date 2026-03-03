@@ -11,3 +11,4 @@ pub mod packages;
 pub mod recipes;
 pub mod search;
 pub mod sparse;
+pub mod tuf;

@@ -25,6 +25,7 @@ mod restore;
 mod state;
 mod system;
 mod triggers;
+pub mod trust;
 mod update;
 
 // Re-export all command handlers
@@ -106,6 +107,12 @@ pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list, cmd_trigger_remove,
     cmd_trigger_run, cmd_trigger_show,
 };
+pub use trust::{
+    cmd_trust_disable, cmd_trust_enable, cmd_trust_init, cmd_trust_key_gen, cmd_trust_status,
+    cmd_trust_verify,
+};
+#[cfg(feature = "server")]
+pub use trust::{cmd_trust_rotate_key, cmd_trust_sign_targets};
 pub use update::{
     cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
 };

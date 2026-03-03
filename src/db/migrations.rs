@@ -2045,3 +2045,82 @@ pub fn migrate_v42(conn: &Connection) -> Result<()> {
     info!("Schema version 42 applied successfully (collection signatures)");
     Ok(())
 }
+
+/// Version 43: TUF (The Update Framework) trust metadata
+///
+/// Adds tables for TUF supply chain trust:
+/// - tuf_roots: Signed root metadata with key/threshold history
+/// - tuf_keys: Known TUF keys per repository
+/// - tuf_metadata: Current signed metadata for each role
+/// - tuf_targets: Target (package) hashes from targets metadata
+///
+/// Also adds TUF-related columns to repositories table.
+pub fn migrate_v43(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 43");
+
+    conn.execute_batch(
+        "
+        -- TUF root metadata history
+        -- Stores every root version for key rotation auditing
+        CREATE TABLE tuf_roots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            signed_metadata TEXT NOT NULL,
+            spec_version TEXT NOT NULL DEFAULT '1.0.31',
+            expires_at TEXT NOT NULL,
+            thresholds_json TEXT NOT NULL,
+            role_keys_json TEXT NOT NULL,
+            verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(repository_id, version)
+        );
+        CREATE INDEX idx_tuf_roots_repo ON tuf_roots(repository_id, version DESC);
+
+        -- TUF keys per repository
+        -- Extracted from root metadata for efficient lookup
+        CREATE TABLE tuf_keys (
+            id TEXT NOT NULL,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            key_type TEXT NOT NULL,
+            public_key TEXT NOT NULL,
+            roles_json TEXT NOT NULL,
+            from_root_version INTEGER NOT NULL,
+            PRIMARY KEY (id, repository_id)
+        );
+        CREATE INDEX idx_tuf_keys_repo ON tuf_keys(repository_id);
+
+        -- Current TUF metadata per role per repository
+        -- Only stores the latest verified version of each role
+        CREATE TABLE tuf_metadata (
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            metadata_hash TEXT NOT NULL,
+            signed_metadata TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (repository_id, role)
+        );
+
+        -- TUF targets (package hashes from targets metadata)
+        CREATE TABLE tuf_targets (
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            target_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            length INTEGER NOT NULL,
+            custom_json TEXT,
+            targets_version INTEGER NOT NULL,
+            PRIMARY KEY (repository_id, target_path)
+        );
+        CREATE INDEX idx_tuf_targets_repo ON tuf_targets(repository_id);
+
+        -- Add TUF columns to repositories
+        ALTER TABLE repositories ADD COLUMN tuf_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repositories ADD COLUMN tuf_root_version INTEGER;
+        ALTER TABLE repositories ADD COLUMN tuf_root_url TEXT;
+        ",
+    )?;
+
+    info!("Schema version 43 applied successfully (TUF trust metadata)");
+    Ok(())
+}

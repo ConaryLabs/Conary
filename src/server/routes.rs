@@ -17,7 +17,7 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    chunks, detail, federation, index, jobs, models, packages, recipes, search, sparse,
+    chunks, detail, federation, index, jobs, models, packages, recipes, search, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -384,6 +384,12 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/packages/:distro/:name/rdepends",
             get(detail::get_reverse_dependencies),
         )
+        // === TUF Trust Metadata ===
+        .route("/v1/:distro/tuf/timestamp.json", get(tuf::get_timestamp))
+        .route("/v1/:distro/tuf/snapshot.json", get(tuf::get_snapshot))
+        .route("/v1/:distro/tuf/targets.json", get(tuf::get_targets))
+        .route("/v1/:distro/tuf/root.json", get(tuf::get_root))
+        .route("/v1/:distro/tuf/:version", get(tuf::get_versioned_root))
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))
         .route("/v1/stats/recent", get(detail::get_recent))
@@ -473,6 +479,8 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/refresh", post(refresh_upstream))
         // Model collection publishing
         .route("/v1/admin/models/:name", put(models::put_model))
+        // TUF timestamp refresh
+        .route("/v1/admin/tuf/refresh-timestamp", post(tuf::refresh_timestamp))
         .with_state(state)
 }
 

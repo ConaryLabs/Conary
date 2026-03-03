@@ -132,6 +132,10 @@ pub enum Error {
     /// Internal error (invariant violation, corrupted state)
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    /// TUF trust verification error
+    #[error("Trust error: {0}")]
+    TrustError(String),
 }
 
 /// Result type alias using Conary's Error type
