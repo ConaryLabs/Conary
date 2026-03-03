@@ -123,34 +123,25 @@ impl ToolchainInfo {
         }
     }
 
-    /// Compute hash of toolchain info
     fn hash(&self) -> String {
-        let mut data = String::new();
+        let sysroot_str = self.sysroot.as_ref().map(|s| s.to_string_lossy().into_owned());
 
-        if let Some(ref v) = self.compiler_version {
-            data.push_str("cc:");
-            data.push_str(v);
-            data.push('\n');
-        }
-        if let Some(ref v) = self.linker_version {
-            data.push_str("ld:");
-            data.push_str(v);
-            data.push('\n');
-        }
-        if let Some(ref t) = self.target {
-            data.push_str("target:");
-            data.push_str(t);
-            data.push('\n');
-        }
-        if let Some(ref s) = self.sysroot {
-            data.push_str("sysroot:");
-            data.push_str(&s.to_string_lossy());
-            data.push('\n');
-        }
-        if let Some(stage) = self.stage {
-            data.push_str("stage:");
-            data.push_str(stage.as_str());
-            data.push('\n');
+        let mut data = String::new();
+        let fields: &[(&str, Option<&str>)] = &[
+            ("cc", self.compiler_version.as_deref()),
+            ("ld", self.linker_version.as_deref()),
+            ("target", self.target.as_deref()),
+            ("sysroot", sysroot_str.as_deref()),
+            ("stage", self.stage.map(|s| s.as_str())),
+        ];
+
+        for (label, value) in fields {
+            if let Some(v) = value {
+                data.push_str(label);
+                data.push(':');
+                data.push_str(v);
+                data.push('\n');
+            }
         }
 
         hash_bytes(HashAlgorithm::Sha256, data.as_bytes())
@@ -228,37 +219,30 @@ impl BuildCache {
         let toolchain_hash = toolchain.hash();
         let deps_hash = dep_hashes.map(|d| d.hash()).unwrap_or_default();
 
-        // Combine hashes for final key
-        let combined = if deps_hash.is_empty() {
-            format!("{}\n{}", recipe_hash, toolchain_hash)
-        } else {
-            format!("{}\n{}\n{}", recipe_hash, toolchain_hash, deps_hash)
-        };
+        let mut combined = format!("{}\n{}", recipe_hash, toolchain_hash);
+        if !deps_hash.is_empty() {
+            combined.push('\n');
+            combined.push_str(&deps_hash);
+        }
 
         let key = hash_bytes(HashAlgorithm::Sha256, combined.as_bytes())
             .as_str()
             .to_string();
 
-        if deps_hash.is_empty() {
-            debug!(
-                "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8})",
-                recipe.package.name,
-                recipe.package.version,
-                &key[..16],
-                recipe_hash,
-                toolchain_hash
-            );
+        let deps_suffix = if deps_hash.is_empty() {
+            String::new()
         } else {
-            debug!(
-                "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8}, deps: {:.8})",
-                recipe.package.name,
-                recipe.package.version,
-                &key[..16],
-                recipe_hash,
-                toolchain_hash,
-                deps_hash
-            );
-        }
+            format!(", deps: {:.8}", deps_hash)
+        };
+        debug!(
+            "Cache key for {}-{}: {} (recipe: {:.8}, toolchain: {:.8}{})",
+            recipe.package.name,
+            recipe.package.version,
+            &key[..16],
+            recipe_hash,
+            toolchain_hash,
+            deps_suffix
+        );
 
         key
     }
@@ -306,23 +290,18 @@ impl BuildCache {
         }
 
         // Build configuration
-        if let Some(ref configure) = recipe.build.configure {
-            data.push_str(&format!("configure:{}\n", configure));
-        }
-        if let Some(ref make) = recipe.build.make {
-            data.push_str(&format!("make:{}\n", make));
-        }
-        if let Some(ref install) = recipe.build.install {
-            data.push_str(&format!("install:{}\n", install));
-        }
-        if let Some(ref setup) = recipe.build.setup {
-            data.push_str(&format!("setup:{}\n", setup));
-        }
-        if let Some(ref check) = recipe.build.check {
-            data.push_str(&format!("check:{}\n", check));
-        }
-        if let Some(ref post_install) = recipe.build.post_install {
-            data.push_str(&format!("post_install:{}\n", post_install));
+        let build_fields: &[(&str, &Option<String>)] = &[
+            ("configure", &recipe.build.configure),
+            ("make", &recipe.build.make),
+            ("install", &recipe.build.install),
+            ("setup", &recipe.build.setup),
+            ("check", &recipe.build.check),
+            ("post_install", &recipe.build.post_install),
+        ];
+        for (label, value) in build_fields {
+            if let Some(v) = value {
+                data.push_str(&format!("{}:{}\n", label, v));
+            }
         }
 
         // Environment (sorted for determinism)
@@ -332,28 +311,26 @@ impl BuildCache {
         }
 
         // Dependencies (sorted)
-        let mut requires: Vec<_> = recipe.build.requires.to_vec();
-        requires.sort();
-        for req in requires {
-            data.push_str(&format!("requires:{}\n", req));
-        }
-
-        let mut makedepends: Vec<_> = recipe.build.makedepends.to_vec();
-        makedepends.sort();
-        for dep in makedepends {
-            data.push_str(&format!("makedepends:{}\n", dep));
+        for (label, deps) in [("requires", &recipe.build.requires), ("makedepends", &recipe.build.makedepends)] {
+            let mut sorted: Vec<_> = deps.to_vec();
+            sorted.sort();
+            for dep in sorted {
+                data.push_str(&format!("{}:{}\n", label, dep));
+            }
         }
 
         // Cross-compilation settings
         if let Some(ref cross) = recipe.cross {
-            if let Some(ref target) = cross.target {
-                data.push_str(&format!("cross.target:{}\n", target));
-            }
-            if let Some(ref sysroot) = cross.sysroot {
-                data.push_str(&format!("cross.sysroot:{}\n", sysroot));
-            }
-            if let Some(stage) = cross.stage {
-                data.push_str(&format!("cross.stage:{}\n", stage.as_str()));
+            let stage_str = cross.stage.map(|s| s.as_str().to_string());
+            let cross_fields: &[(&str, Option<&str>)] = &[
+                ("cross.target", cross.target.as_deref()),
+                ("cross.sysroot", cross.sysroot.as_deref()),
+                ("cross.stage", stage_str.as_deref()),
+            ];
+            for (label, value) in cross_fields {
+                if let Some(v) = value {
+                    data.push_str(&format!("{}:{}\n", label, v));
+                }
             }
         }
 
@@ -362,23 +339,20 @@ impl BuildCache {
             .to_string()
     }
 
-    /// Get the cache path for a given key
-    fn cache_path(&self, key: &str) -> PathBuf {
-        // Use first 2 chars as subdirectory for sharding
+    fn shard_path(&self, key: &str, ext: &str) -> PathBuf {
         let shard = &key[..2];
         self.config
             .cache_dir
             .join(shard)
-            .join(format!("{}.ccs", key))
+            .join(format!("{}.{}", key, ext))
     }
 
-    /// Get the metadata path for a cache entry
+    fn cache_path(&self, key: &str) -> PathBuf {
+        self.shard_path(key, "ccs")
+    }
+
     fn metadata_path(&self, key: &str) -> PathBuf {
-        let shard = &key[..2];
-        self.config
-            .cache_dir
-            .join(shard)
-            .join(format!("{}.meta", key))
+        self.shard_path(key, "meta")
     }
 
     /// Check if a cached build exists for the given recipe and toolchain

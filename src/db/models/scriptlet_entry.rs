@@ -3,7 +3,7 @@
 //! ScriptletEntry model - package install/remove hooks
 
 use crate::error::Result;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// A ScriptletEntry represents a package scriptlet (install/remove hook)
 #[derive(Debug, Clone)]
@@ -103,13 +103,10 @@ impl ScriptletEntry {
              FROM scriptlets WHERE trove_id = ?1 AND phase = ?2",
         )?;
 
-        let mut rows = stmt.query(params![trove_id, phase])?;
-
-        if let Some(row) = rows.next()? {
-            Ok(Some(Self::from_row(row)?))
-        } else {
-            Ok(None)
-        }
+        let scriptlet = stmt
+            .query_row(params![trove_id, phase], Self::from_row)
+            .optional()?;
+        Ok(scriptlet)
     }
 
     /// Delete all scriptlets for a trove

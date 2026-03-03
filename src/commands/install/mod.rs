@@ -35,7 +35,6 @@ use conary::components::{
 use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
 use conary::db::paths::keyring_dir;
 use conary::dependencies::LanguageDepDetector;
-use conary::packages::traits::DependencyType;
 use conary::repository;
 use conary::resolver::Resolver;
 use conary::scriptlet::SandboxMode;
@@ -77,6 +76,42 @@ pub struct InstallOptions<'a> {
     pub no_capture: bool,
     /// Force install even for adopted packages
     pub force: bool,
+}
+
+pub(super) fn run_triggers(
+    conn: &rusqlite::Connection,
+    root: &Path,
+    changeset_id: i64,
+    file_paths: &[String],
+) {
+    let trigger_executor = conary::trigger::TriggerExecutor::new(conn, root);
+
+    let triggered = trigger_executor
+        .record_triggers(changeset_id, file_paths)
+        .unwrap_or_else(|e| {
+            warn!("Failed to record triggers: {}", e);
+            Vec::new()
+        });
+
+    if !triggered.is_empty() {
+        info!("Recorded {} trigger(s) for execution", triggered.len());
+        match trigger_executor.execute_pending(changeset_id) {
+            Ok(results) => {
+                if results.total() > 0 {
+                    info!(
+                        "Triggers: {} succeeded, {} failed, {} skipped",
+                        results.succeeded, results.failed, results.skipped
+                    );
+                    for error in &results.errors {
+                        warn!("Trigger error: {}", error);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Trigger execution failed: {}", e);
+            }
+        }
+    }
 }
 
 /// Check if missing dependencies can be satisfied by tracked packages.
@@ -877,27 +912,17 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
 
         for dep in pkg.dependencies() {
-            let dep_type_str = match dep.dep_type {
-                DependencyType::Runtime => "runtime",
-                DependencyType::Build => "build",
-                DependencyType::Optional => "optional",
-            };
             let mut dep_entry = conary::db::models::DependencyEntry::new(
                 trove_id,
                 dep.name.clone(),
                 None, // depends_on_version is for resolved version, not constraint
-                dep_type_str.to_string(),
+                dep.dep_type.as_str().to_string(),
                 dep.version.clone(), // Store the version constraint
             );
             dep_entry.insert(tx)?;
         }
 
         // Store scriptlets for later removal (always, even if --no-scripts)
-        let format_str = match format {
-            PackageFormatType::Rpm => "rpm",
-            PackageFormatType::Deb => "deb",
-            PackageFormatType::Arch => "arch",
-        };
         for scriptlet in &scriptlets {
             let mut entry = ScriptletEntry::with_flags(
                 trove_id,
@@ -905,7 +930,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 scriptlet.interpreter.clone(),
                 scriptlet.content.clone(),
                 scriptlet.flags.clone(),
-                format_str,
+                format.as_str(),
             );
             entry.insert(tx)?;
         }
@@ -986,41 +1011,9 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     txn.mark_post_scripts_complete()
         .context("Failed to mark post-scripts complete")?;
 
-    // Execute triggers based on installed files
     progress.set_phase(pkg.name(), InstallPhase::Triggers);
     let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
-    let trigger_executor = conary::trigger::TriggerExecutor::new(&conn, Path::new(root));
-
-    // Record which triggers need to run
-    let triggered = trigger_executor
-        .record_triggers(changeset_id, &file_paths)
-        .unwrap_or_else(|e| {
-            warn!("Failed to record triggers: {}", e);
-            Vec::new()
-        });
-
-    if !triggered.is_empty() {
-        info!("Recorded {} trigger(s) for execution", triggered.len());
-        // Execute triggers
-        match trigger_executor.execute_pending(changeset_id) {
-            Ok(results) => {
-                if results.total() > 0 {
-                    info!(
-                        "Triggers: {} succeeded, {} failed, {} skipped",
-                        results.succeeded, results.failed, results.skipped
-                    );
-                    if !results.all_succeeded() {
-                        for error in &results.errors {
-                            warn!("Trigger error: {}", error);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Trigger execution failed: {}", e);
-            }
-        }
-    }
+    run_triggers(&conn, Path::new(root), changeset_id, &file_paths);
 
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 

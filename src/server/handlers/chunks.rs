@@ -31,6 +31,25 @@ fn is_valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Build a chunk response with standard immutable-cache headers.
+///
+/// Every chunk response shares the same CONTENT_TYPE, CACHE_CONTROL, ETAG,
+/// and ACCEPT_RANGES headers. Callers only need to add status-specific
+/// headers (Content-Length, Content-Range) and the body.
+fn chunk_response_builder(hash: &str, status: StatusCode) -> axum::http::response::Builder {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(header::ETAG, format!("\"{}\"", hash))
+        .header(header::ACCEPT_RANGES, "bytes")
+}
+
+/// Shorthand for a 404 "Chunk not found" response.
+fn chunk_not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Chunk not found").into_response()
+}
+
 /// HEAD /v1/chunks/:hash
 ///
 /// Check if a chunk exists without transferring data.
@@ -54,7 +73,7 @@ pub async fn head_chunk(
         && !bloom.might_contain(&hash)
     {
         state.metrics.record_bloom_reject();
-        return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
+        return chunk_not_found();
     }
 
     // Bloom says "maybe" - check disk
@@ -63,19 +82,14 @@ pub async fn head_chunk(
     match tokio::fs::metadata(&chunk_path).await {
         Ok(metadata) => {
             state.metrics.record_hit();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
+            chunk_response_builder(&hash, StatusCode::OK)
                 .header(header::CONTENT_LENGTH, metadata.len())
-                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-                .header(header::ETAG, format!("\"{}\"", hash))
-                .header(header::ACCEPT_RANGES, "bytes")
                 .body(Body::empty())
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(_) => {
             state.metrics.record_miss();
-            (StatusCode::NOT_FOUND, "Chunk not found").into_response()
+            chunk_not_found()
         }
     }
 }
@@ -84,48 +98,37 @@ pub async fn head_chunk(
 /// Returns (start, end) if valid, None otherwise
 /// Only supports single byte ranges like "bytes=0-1023"
 fn parse_range_header(range_header: &str, file_size: u64) -> Option<(u64, u64)> {
-    // Must start with "bytes="
     let range = range_header.strip_prefix("bytes=")?;
 
-    // We only support a single range (not multiple ranges)
     if range.contains(',') {
         return None;
     }
 
-    let parts: Vec<&str> = range.split('-').collect();
-    if parts.len() != 2 {
-        return None;
-    }
+    let (left, right) = range.split_once('-')?;
 
-    let start: u64;
-    let end: u64;
-
-    if parts[0].is_empty() {
+    let (start, end) = if left.is_empty() {
         // Suffix range: "-500" means last 500 bytes
-        let suffix_len: u64 = parts[1].parse().ok()?;
+        let suffix_len: u64 = right.parse().ok()?;
         if suffix_len == 0 || suffix_len > file_size {
             return None;
         }
-        start = file_size - suffix_len;
-        end = file_size - 1;
-    } else if parts[1].is_empty() {
+        (file_size - suffix_len, file_size - 1)
+    } else if right.is_empty() {
         // Open-ended range: "500-" means from byte 500 to end
-        start = parts[0].parse().ok()?;
+        let start: u64 = left.parse().ok()?;
         if start >= file_size {
             return None;
         }
-        end = file_size - 1;
+        (start, file_size - 1)
     } else {
         // Closed range: "0-499"
-        start = parts[0].parse().ok()?;
-        end = parts[1].parse().ok()?;
+        let start: u64 = left.parse().ok()?;
+        let end: u64 = right.parse().ok()?;
         if start > end || start >= file_size {
             return None;
         }
-        // Clamp end to file size
-        let end = end.min(file_size - 1);
-        return Some((start, end));
-    }
+        (start, end.min(file_size - 1))
+    };
 
     Some((start, end))
 }
@@ -155,26 +158,24 @@ pub async fn get_chunk(
     {
         state_guard.metrics.record_bloom_reject();
 
-        // Try pull-through if configured
         if state_guard.config.upstream_url.is_some() {
             drop(state_guard);
             return pull_through_fetch(state, &hash, None).await;
         }
 
-        return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
+        return chunk_not_found();
     }
 
     let chunk_path = state_guard.chunk_cache.chunk_path(&hash);
 
     // Check if chunk exists locally
     if !chunk_path.exists() {
-        // Try pull-through if configured
         if state_guard.config.upstream_url.is_some() {
             drop(state_guard);
             return pull_through_fetch(state, &hash, None).await;
         }
         state_guard.metrics.record_miss();
-        return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
+        return chunk_not_found();
     }
 
     // R2 redirect: if enabled and not a Range request, redirect to presigned R2 URL
@@ -277,17 +278,12 @@ pub async fn get_chunk(
             file_size
         );
 
-        return Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
+        return chunk_response_builder(&hash, StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_LENGTH, content_length)
             .header(
                 header::CONTENT_RANGE,
                 format!("bytes {}-{}/{}", start, end, file_size),
             )
-            .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-            .header(header::ETAG, format!("\"{}\"", hash))
-            .header(header::ACCEPT_RANGES, "bytes")
             .body(Body::from(buffer))
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
@@ -296,18 +292,11 @@ pub async fn get_chunk(
     state_guard.metrics.record_hit();
     state_guard.metrics.record_bytes_served(file_size);
 
-    // Stream the file
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/octet-stream")
+    chunk_response_builder(&hash, StatusCode::OK)
         .header(header::CONTENT_LENGTH, file_size)
-        // Immutable cache - chunks never change (content-addressed)
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .header(header::ETAG, format!("\"{}\"", hash))
-        .header(header::ACCEPT_RANGES, "bytes")
         .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
@@ -323,7 +312,7 @@ async fn pull_through_fetch(
 
     let upstream_url = match &state_guard.config.upstream_url {
         Some(url) => url.clone(),
-        None => return (StatusCode::NOT_FOUND, "Chunk not found").into_response(),
+        None => return chunk_not_found(),
     };
 
     tracing::debug!(
@@ -342,13 +331,13 @@ async fn pull_through_fetch(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Failed to fetch chunk {} from upstream: {}", hash, e);
-            return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
+            return chunk_not_found();
         }
     };
 
     if !response.status().is_success() {
         state_guard.metrics.record_miss();
-        return (StatusCode::NOT_FOUND, "Chunk not found").into_response();
+        return chunk_not_found();
     }
 
     // Get the data
@@ -391,14 +380,8 @@ async fn pull_through_fetch(
     state_guard.metrics.record_hit();
     state_guard.metrics.record_bytes_served(data.len() as u64);
 
-    // Return the data
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/octet-stream")
+    chunk_response_builder(hash, StatusCode::OK)
         .header(header::CONTENT_LENGTH, data.len())
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .header(header::ETAG, format!("\"{}\"", hash))
-        .header(header::ACCEPT_RANGES, "bytes")
         .body(Body::from(data))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

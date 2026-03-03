@@ -29,8 +29,10 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
     fs::create_dir_all(root.join("var/log"))?;
     fs::write(root.join("var/log/conary-mock.log"), "")?;
 
-    // List of tools to mock
-    let tools = [
+    // Mock only utility commands, not shells. Mocking sh/bash would break
+    // the scriptlet itself when it calls `sh -c`. The sandbox uses real
+    // shells from the host.
+    let utils = [
         // User/Group management
         "useradd",
         "userdel",
@@ -43,41 +45,6 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
         "service",
         "chkconfig",
         // System updates
-        "ldconfig",
-        "update-alternatives",
-        "update-desktop-database",
-        "gtk-update-icon-cache",
-        "glib-compile-schemas",
-        // Shells (often invoked directly)
-        "sh",
-        "bash",
-    ];
-
-    for tool in tools {
-        create_mock_tool(&bin_dir, tool, log_file)?;
-        // Symlink to other locations
-        symlink_force(&bin_dir.join(tool), &sbin_dir.join(tool))?;
-        symlink_force(&bin_dir.join(tool), &usr_bin_dir.join(tool))?;
-        symlink_force(&bin_dir.join(tool), &usr_sbin_dir.join(tool))?;
-    }
-
-    // Special handling for sh/bash: they need to execute the script if passed via -c or file
-    // For now, we rely on the Sandbox using the *real* sh from the host/container mock-up
-    // and only mocking the *tools* called by the script.
-    // Wait, if we mock 'sh', we break the scriptlet itself if it calls `sh -c`.
-    // We should NOT mock shells, only utilities.
-
-    // Removing shells from the loop above...
-    let utils = [
-        "useradd",
-        "userdel",
-        "groupadd",
-        "groupdel",
-        "usermod",
-        "groupmod",
-        "systemctl",
-        "service",
-        "chkconfig",
         "ldconfig",
         "update-alternatives",
         "update-desktop-database",

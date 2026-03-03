@@ -5,8 +5,8 @@
 //! - `download_stats`: Individual download events (write-heavy, buffered)
 //! - `download_counts`: Aggregated counts per package (read-heavy, periodically refreshed)
 
-use anyhow::Result;
-use rusqlite::Connection;
+use crate::error::Result;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 /// Individual download event
@@ -102,28 +102,25 @@ impl DownloadCount {
 
     /// Get download counts for a specific package
     pub fn find_by_package(conn: &Connection, distro: &str, name: &str) -> Result<Option<Self>> {
-        let result = conn.query_row(
-            "SELECT distro, package_name, total_count, count_30d, count_7d, last_updated
-             FROM download_counts
-             WHERE distro = ?1 AND package_name = ?2",
-            [distro, name],
-            |row| {
-                Ok(DownloadCount {
-                    distro: row.get(0)?,
-                    package_name: row.get(1)?,
-                    total_count: row.get(2)?,
-                    count_30d: row.get(3)?,
-                    count_7d: row.get(4)?,
-                    last_updated: row.get(5)?,
-                })
-            },
-        );
-
-        match result {
-            Ok(count) => Ok(Some(count)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        let result = conn
+            .query_row(
+                "SELECT distro, package_name, total_count, count_30d, count_7d, last_updated
+                 FROM download_counts
+                 WHERE distro = ?1 AND package_name = ?2",
+                [distro, name],
+                |row| {
+                    Ok(DownloadCount {
+                        distro: row.get(0)?,
+                        package_name: row.get(1)?,
+                        total_count: row.get(2)?,
+                        count_30d: row.get(3)?,
+                        count_7d: row.get(4)?,
+                        last_updated: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(result)
     }
 
     /// Get most popular packages for a distro
@@ -136,18 +133,19 @@ impl DownloadCount {
              LIMIT ?2",
         )?;
 
-        let rows = stmt.query_map(rusqlite::params![distro, limit as i64], |row| {
-            Ok(DownloadCount {
-                distro: row.get(0)?,
-                package_name: row.get(1)?,
-                total_count: row.get(2)?,
-                count_30d: row.get(3)?,
-                count_7d: row.get(4)?,
-                last_updated: row.get(5)?,
-            })
-        })?;
-
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let counts = stmt
+            .query_map(rusqlite::params![distro, limit as i64], |row| {
+                Ok(DownloadCount {
+                    distro: row.get(0)?,
+                    package_name: row.get(1)?,
+                    total_count: row.get(2)?,
+                    count_30d: row.get(3)?,
+                    count_7d: row.get(4)?,
+                    last_updated: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(counts)
     }
 
     /// Get overall stats across all distros

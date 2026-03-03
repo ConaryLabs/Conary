@@ -449,62 +449,41 @@ impl Stage1Builder {
         Ok(())
     }
 
-    /// Extract a source archive, stripping the top-level directory
-    ///
-    /// This is used for in-tree dependencies like GMP, MPFR, MPC for GCC builds.
-    fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
+    /// Extract a tar archive to a destination directory
+    fn extract_tar(
+        &self,
+        archive: &Path,
+        dest: &Path,
+        strip_components: bool,
+    ) -> Result<(), Stage1Error> {
         fs::create_dir_all(dest)?;
 
+        let archive_str = archive.to_str().expect("archive path must be valid utf-8");
+        let dest_str = dest.to_str().expect("dest path must be valid utf-8");
         let filename = archive
             .file_name()
             .expect("archive path must have a filename")
             .to_string_lossy();
 
-        let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            Command::new("tar")
-                .args([
-                    "xJf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                    "--strip-components=1",
-                ])
-                .output()
+        let flag = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
+            "xJf"
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            Command::new("tar")
-                .args([
-                    "xzf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                    "--strip-components=1",
-                ])
-                .output()
+            "xzf"
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            Command::new("tar")
-                .args([
-                    "xjf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                    "--strip-components=1",
-                ])
-                .output()
+            "xjf"
         } else {
-            // Try generic tar
-            Command::new("tar")
-                .args([
-                    "xf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                    "--strip-components=1",
-                ])
-                .output()
+            "xf"
         };
 
-        let output =
-            output.map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
+        let mut cmd = Command::new("tar");
+        cmd.args([flag, archive_str, "-C", dest_str]);
+        if strip_components {
+            cmd.arg("--strip-components=1");
+        }
+
+        let output = cmd
+            .output()
+            .map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -517,66 +496,16 @@ impl Stage1Builder {
         Ok(())
     }
 
+    /// Extract a source archive, stripping the top-level directory
+    ///
+    /// This is used for in-tree dependencies like GMP, MPFR, MPC for GCC builds.
+    fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
+        self.extract_tar(archive, dest, true)
+    }
+
     /// Extract a source archive
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
-        fs::create_dir_all(dest)?;
-
-        let filename = archive
-            .file_name()
-            .expect("archive path must have a filename")
-            .to_string_lossy();
-
-        let output = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            Command::new("tar")
-                .args([
-                    "xJf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                ])
-                .output()
-        } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            Command::new("tar")
-                .args([
-                    "xzf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                ])
-                .output()
-        } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            Command::new("tar")
-                .args([
-                    "xjf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                ])
-                .output()
-        } else {
-            // Try generic tar
-            Command::new("tar")
-                .args([
-                    "xf",
-                    archive.to_str().expect("archive path must be valid utf-8"),
-                    "-C",
-                    dest.to_str().expect("dest path must be valid utf-8"),
-                ])
-                .output()
-        };
-
-        let output =
-            output.map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Stage1Error::BuildFailed(
-                "extract".to_string(),
-                stderr.to_string(),
-            ));
-        }
-
-        Ok(())
+        self.extract_tar(archive, dest, false)
     }
 
     /// Find the actual source directory after extraction
@@ -593,6 +522,38 @@ impl Stage1Builder {
         }
     }
 
+    /// Run a recipe build phase (configure, make, or install)
+    fn run_recipe_phase(
+        &mut self,
+        idx: usize,
+        workdir: &Path,
+        phase_name: &str,
+        label: &str,
+        status: PackageBuildStatus,
+        get_cmd: fn(&Recipe) -> Option<&String>,
+    ) -> Result<(), Stage1Error> {
+        self.packages[idx].status = status;
+
+        let raw_cmd = match get_cmd(&self.packages[idx].recipe) {
+            Some(cmd) if !cmd.is_empty() => cmd.clone(),
+            _ => {
+                info!("  No {} step", phase_name);
+                return Ok(());
+            }
+        };
+
+        let destdir = self.sysroot.to_string_lossy().to_string();
+        let mut cmd = self.packages[idx].recipe.substitute(&raw_cmd, &destdir);
+        cmd = self.substitute_cross_vars(&cmd, idx);
+
+        info!("  {}...", label);
+        self.packages[idx]
+            .log
+            .push_str(&format!("=== {} ===\n{}\n", label, cmd));
+
+        self.run_shell_command(idx, &cmd, workdir, phase_name)
+    }
+
     /// Run the configure phase
     fn run_configure(
         &mut self,
@@ -600,92 +561,25 @@ impl Stage1Builder {
         src_dir: &Path,
         build_dir: &Path,
     ) -> Result<(), Stage1Error> {
-        self.packages[idx].status = PackageBuildStatus::Configuring;
-
-        // Clone data upfront to avoid borrow conflicts
-        let configure_cmd = match &self.packages[idx].recipe.build.configure {
-            Some(cmd) if !cmd.is_empty() => cmd.clone(),
-            _ => {
-                info!("  No configure step");
-                return Ok(());
-            }
-        };
         let has_workdir = self.packages[idx].recipe.build.workdir.is_some();
-
-        // Substitute variables
-        let destdir = self.sysroot.to_string_lossy().to_string();
-        let mut cmd = self.packages[idx]
-            .recipe
-            .substitute(&configure_cmd, &destdir);
-
-        // Substitute cross-compilation variables
-        cmd = self.substitute_cross_vars(&cmd, idx);
-
-        info!("  Configuring...");
-        self.packages[idx]
-            .log
-            .push_str(&format!("=== Configure ===\n{}\n", cmd));
-
-        // Determine working directory - some packages build out-of-tree
-        let workdir = if has_workdir {
-            build_dir.to_path_buf()
-        } else {
-            src_dir.to_path_buf()
-        };
-
-        self.run_shell_command(idx, &cmd, &workdir, "configure")
+        let workdir = if has_workdir { build_dir } else { src_dir };
+        self.run_recipe_phase(idx, workdir, "configure", "Configuring", PackageBuildStatus::Configuring, |r| {
+            r.build.configure.as_ref()
+        })
     }
 
     /// Run the make phase
     fn run_make(&mut self, idx: usize, build_dir: &Path) -> Result<(), Stage1Error> {
-        self.packages[idx].status = PackageBuildStatus::Building;
-
-        // Clone data upfront
-        let make_cmd = match &self.packages[idx].recipe.build.make {
-            Some(cmd) => cmd.clone(),
-            None => {
-                info!("  No make step");
-                return Ok(());
-            }
-        };
-
-        // Substitute variables
-        let destdir = self.sysroot.to_string_lossy().to_string();
-        let mut cmd = self.packages[idx].recipe.substitute(&make_cmd, &destdir);
-        cmd = self.substitute_cross_vars(&cmd, idx);
-
-        info!("  Building...");
-        self.packages[idx]
-            .log
-            .push_str(&format!("=== Make ===\n{}\n", cmd));
-
-        self.run_shell_command(idx, &cmd, build_dir, "make")
+        self.run_recipe_phase(idx, build_dir, "make", "Building", PackageBuildStatus::Building, |r| {
+            r.build.make.as_ref()
+        })
     }
 
     /// Run the install phase
     fn run_install(&mut self, idx: usize, build_dir: &Path) -> Result<(), Stage1Error> {
-        self.packages[idx].status = PackageBuildStatus::Installing;
-
-        // Clone data upfront
-        let install_cmd = match &self.packages[idx].recipe.build.install {
-            Some(cmd) => cmd.clone(),
-            None => {
-                info!("  No install step");
-                return Ok(());
-            }
-        };
-
-        // Substitute variables - for Stage 1, DESTDIR is the sysroot
-        let destdir = self.sysroot.to_string_lossy().to_string();
-        let mut cmd = self.packages[idx].recipe.substitute(&install_cmd, &destdir);
-        cmd = self.substitute_cross_vars(&cmd, idx);
-
-        info!("  Installing...");
-        self.packages[idx]
-            .log
-            .push_str(&format!("=== Install ===\n{}\n", cmd));
-
-        self.run_shell_command(idx, &cmd, build_dir, "install")
+        self.run_recipe_phase(idx, build_dir, "install", "Installing", PackageBuildStatus::Installing, |r| {
+            r.build.install.as_ref()
+        })
     }
 
     /// Substitute cross-compilation variables in a command

@@ -74,111 +74,115 @@ fn strip_version_suffix(name: &str) -> &str {
     name
 }
 
-/// Create a profile for a network server
+fn to_strings(strs: &[&str]) -> Vec<String> {
+    strs.iter().map(|s| (*s).to_string()).collect()
+}
+
+enum ProfileKind {
+    NetworkServer,
+    NetworkClient,
+    Daemon,
+    Cli,
+}
+
+fn build_profile(
+    kind: ProfileKind,
+    name: &str,
+    listen_ports: &[&str],
+    outbound_ports: &[&str],
+    read_paths: &[&str],
+    write_paths: &[&str],
+) -> InferredCapabilities {
+    let (syscall_profile, no_network, fs_confidence, overall_confidence) = match kind {
+        ProfileKind::NetworkServer => ("network-server", false, Confidence::High, Confidence::High),
+        ProfileKind::NetworkClient => ("network-client", false, Confidence::High, Confidence::High),
+        ProfileKind::Daemon => (
+            "system-daemon",
+            listen_ports.is_empty(),
+            Confidence::High,
+            Confidence::High,
+        ),
+        ProfileKind::Cli => ("minimal", true, Confidence::Medium, Confidence::Medium),
+    };
+
+    InferredCapabilities {
+        network: InferredNetwork {
+            listen_ports: to_strings(listen_ports),
+            outbound_ports: to_strings(outbound_ports),
+            no_network,
+            confidence: Confidence::High,
+        },
+        filesystem: InferredFilesystem {
+            read_paths: to_strings(read_paths),
+            write_paths: to_strings(write_paths),
+            execute_paths: Vec::new(),
+            confidence: fs_confidence,
+        },
+        syscall_profile: Some(syscall_profile.to_string()),
+        confidence: ConfidenceScore::new(overall_confidence),
+        tier_used: 1,
+        rationale: format!("Well-known profile for {}", name),
+        source: InferenceSource::WellKnown,
+    }
+}
+
 fn network_server_profile(
     name: &str,
     listen_ports: &[&str],
     read_paths: &[&str],
     write_paths: &[&str],
 ) -> InferredCapabilities {
-    InferredCapabilities {
-        network: InferredNetwork {
-            listen_ports: listen_ports.iter().map(|s| (*s).to_string()).collect(),
-            outbound_ports: Vec::new(),
-            no_network: false,
-            confidence: Confidence::High,
-        },
-        filesystem: InferredFilesystem {
-            read_paths: read_paths.iter().map(|s| (*s).to_string()).collect(),
-            write_paths: write_paths.iter().map(|s| (*s).to_string()).collect(),
-            execute_paths: Vec::new(),
-            confidence: Confidence::High,
-        },
-        syscall_profile: Some("network-server".to_string()),
-        confidence: ConfidenceScore::new(Confidence::High),
-        tier_used: 1,
-        rationale: format!("Well-known profile for {}", name),
-        source: InferenceSource::WellKnown,
-    }
+    build_profile(
+        ProfileKind::NetworkServer,
+        name,
+        listen_ports,
+        &[],
+        read_paths,
+        write_paths,
+    )
 }
 
-/// Create a profile for a network client
 fn network_client_profile(
     name: &str,
     outbound: &[&str],
     read_paths: &[&str],
     write_paths: &[&str],
 ) -> InferredCapabilities {
-    InferredCapabilities {
-        network: InferredNetwork {
-            listen_ports: Vec::new(),
-            outbound_ports: outbound.iter().map(|s| (*s).to_string()).collect(),
-            no_network: false,
-            confidence: Confidence::High,
-        },
-        filesystem: InferredFilesystem {
-            read_paths: read_paths.iter().map(|s| (*s).to_string()).collect(),
-            write_paths: write_paths.iter().map(|s| (*s).to_string()).collect(),
-            execute_paths: Vec::new(),
-            confidence: Confidence::High,
-        },
-        syscall_profile: Some("network-client".to_string()),
-        confidence: ConfidenceScore::new(Confidence::High),
-        tier_used: 1,
-        rationale: format!("Well-known profile for {}", name),
-        source: InferenceSource::WellKnown,
-    }
+    build_profile(
+        ProfileKind::NetworkClient,
+        name,
+        &[],
+        outbound,
+        read_paths,
+        write_paths,
+    )
 }
 
-/// Create a profile for a system daemon
 fn daemon_profile(
     name: &str,
     listen_ports: &[&str],
     read_paths: &[&str],
     write_paths: &[&str],
 ) -> InferredCapabilities {
-    InferredCapabilities {
-        network: InferredNetwork {
-            listen_ports: listen_ports.iter().map(|s| (*s).to_string()).collect(),
-            outbound_ports: Vec::new(),
-            no_network: listen_ports.is_empty(),
-            confidence: Confidence::High,
-        },
-        filesystem: InferredFilesystem {
-            read_paths: read_paths.iter().map(|s| (*s).to_string()).collect(),
-            write_paths: write_paths.iter().map(|s| (*s).to_string()).collect(),
-            execute_paths: Vec::new(),
-            confidence: Confidence::High,
-        },
-        syscall_profile: Some("system-daemon".to_string()),
-        confidence: ConfidenceScore::new(Confidence::High),
-        tier_used: 1,
-        rationale: format!("Well-known profile for {}", name),
-        source: InferenceSource::WellKnown,
-    }
+    build_profile(
+        ProfileKind::Daemon,
+        name,
+        listen_ports,
+        &[],
+        read_paths,
+        write_paths,
+    )
 }
 
-/// Create a profile for a CLI tool (minimal capabilities)
 fn cli_profile(name: &str, read_paths: &[&str], write_paths: &[&str]) -> InferredCapabilities {
-    InferredCapabilities {
-        network: InferredNetwork {
-            listen_ports: Vec::new(),
-            outbound_ports: Vec::new(),
-            no_network: true,
-            confidence: Confidence::High,
-        },
-        filesystem: InferredFilesystem {
-            read_paths: read_paths.iter().map(|s| (*s).to_string()).collect(),
-            write_paths: write_paths.iter().map(|s| (*s).to_string()).collect(),
-            execute_paths: Vec::new(),
-            confidence: Confidence::Medium,
-        },
-        syscall_profile: Some("minimal".to_string()),
-        confidence: ConfidenceScore::new(Confidence::Medium),
-        tier_used: 1,
-        rationale: format!("Well-known profile for {}", name),
-        source: InferenceSource::WellKnown,
-    }
+    build_profile(
+        ProfileKind::Cli,
+        name,
+        &[],
+        &[],
+        read_paths,
+        write_paths,
+    )
 }
 
 // Static registry of well-known profiles
@@ -227,33 +231,18 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     );
 
     // Databases
-    m.insert(
+    let postgresql_profile = network_server_profile(
         "postgresql",
-        network_server_profile(
-            "postgresql",
-            &["5432"],
-            &["/etc/postgresql"],
-            &[
-                "/var/lib/postgresql",
-                "/var/log/postgresql",
-                "/run/postgresql",
-            ],
-        ),
+        &["5432"],
+        &["/etc/postgresql"],
+        &[
+            "/var/lib/postgresql",
+            "/var/log/postgresql",
+            "/run/postgresql",
+        ],
     );
-
-    m.insert(
-        "postgres",
-        network_server_profile(
-            "postgres",
-            &["5432"],
-            &["/etc/postgresql"],
-            &[
-                "/var/lib/postgresql",
-                "/var/log/postgresql",
-                "/run/postgresql",
-            ],
-        ),
-    );
+    m.insert("postgres", postgresql_profile.clone());
+    m.insert("postgresql", postgresql_profile);
 
     m.insert(
         "mysql-server",
@@ -275,25 +264,14 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         ),
     );
 
-    m.insert(
+    let redis_profile = network_server_profile(
         "redis",
-        network_server_profile(
-            "redis",
-            &["6379"],
-            &["/etc/redis"],
-            &["/var/lib/redis", "/var/log/redis", "/run/redis"],
-        ),
+        &["6379"],
+        &["/etc/redis"],
+        &["/var/lib/redis", "/var/log/redis", "/run/redis"],
     );
-
-    m.insert(
-        "redis-server",
-        network_server_profile(
-            "redis-server",
-            &["6379"],
-            &["/etc/redis"],
-            &["/var/lib/redis", "/var/log/redis", "/run/redis"],
-        ),
-    );
+    m.insert("redis-server", redis_profile.clone());
+    m.insert("redis", redis_profile);
 
     m.insert(
         "mongodb",
@@ -317,25 +295,14 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
     );
 
     // System services
-    m.insert(
+    let sshd_profile = network_server_profile(
         "openssh-server",
-        network_server_profile(
-            "openssh-server",
-            &["22"],
-            &["/etc/ssh", "/etc/ssl/certs"],
-            &["/var/log/auth.log", "/run/sshd.pid"],
-        ),
+        &["22"],
+        &["/etc/ssh", "/etc/ssl/certs"],
+        &["/var/log/auth.log", "/run/sshd.pid"],
     );
-
-    m.insert(
-        "sshd",
-        network_server_profile(
-            "sshd",
-            &["22"],
-            &["/etc/ssh", "/etc/ssl/certs"],
-            &["/var/log/auth.log", "/run/sshd.pid"],
-        ),
-    );
+    m.insert("sshd", sshd_profile.clone());
+    m.insert("openssh-server", sshd_profile);
 
     m.insert(
         "systemd",
@@ -948,23 +915,13 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         cli_profile("ruby", &["/usr/lib/ruby", "$HOME/.gem"], &["$HOME/.gem"]),
     );
 
-    m.insert(
+    let node_profile = cli_profile(
         "node",
-        cli_profile(
-            "node",
-            &["/usr/lib/node_modules", "$HOME/.npm"],
-            &["$HOME/.npm"],
-        ),
+        &["/usr/lib/node_modules", "$HOME/.npm"],
+        &["$HOME/.npm"],
     );
-
-    m.insert(
-        "nodejs",
-        cli_profile(
-            "nodejs",
-            &["/usr/lib/node_modules", "$HOME/.npm"],
-            &["$HOME/.npm"],
-        ),
-    );
+    m.insert("nodejs", node_profile.clone());
+    m.insert("node", node_profile);
 
     m.insert(
         "php",
@@ -1122,25 +1079,14 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         network_client_profile("rsync", &["22", "873"], &["/"], &["/"]),
     );
 
-    m.insert(
+    let ssh_client_profile = network_client_profile(
         "openssh-client",
-        network_client_profile(
-            "openssh-client",
-            &["22"],
-            &["/etc/ssh", "$HOME/.ssh"],
-            &["$HOME/.ssh/known_hosts"],
-        ),
+        &["22"],
+        &["/etc/ssh", "$HOME/.ssh"],
+        &["$HOME/.ssh/known_hosts"],
     );
-
-    m.insert(
-        "ssh",
-        network_client_profile(
-            "ssh",
-            &["22"],
-            &["/etc/ssh", "$HOME/.ssh"],
-            &["$HOME/.ssh/known_hosts"],
-        ),
-    );
+    m.insert("ssh", ssh_client_profile.clone());
+    m.insert("openssh-client", ssh_client_profile);
 
     m.insert(
         "scp",
@@ -1176,23 +1122,13 @@ static PROFILES: LazyLock<HashMap<&'static str, InferredCapabilities>> = LazyLoc
         cli_profile("emacs", &["/", "$HOME/.emacs.d"], &["$HOME/.emacs.d"]),
     );
 
-    m.insert(
+    let nvim_profile = cli_profile(
         "neovim",
-        cli_profile(
-            "neovim",
-            &["/", "$HOME/.config/nvim"],
-            &["$HOME/.local/share/nvim"],
-        ),
+        &["/", "$HOME/.config/nvim"],
+        &["$HOME/.local/share/nvim"],
     );
-
-    m.insert(
-        "nvim",
-        cli_profile(
-            "nvim",
-            &["/", "$HOME/.config/nvim"],
-            &["$HOME/.local/share/nvim"],
-        ),
-    );
+    m.insert("nvim", nvim_profile.clone());
+    m.insert("neovim", nvim_profile);
 
     // =========================================================================
     // Build tools

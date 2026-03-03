@@ -244,6 +244,17 @@ impl Repository {
     }
 }
 
+/// Column list for RepositoryPackage SELECT queries (single-table, no alias)
+const REPO_PKG_COLUMNS: &str = "id, repository_id, name, version, architecture, description, \
+    checksum, size, download_url, dependencies, metadata, synced_at, \
+    is_security_update, severity, cve_ids, advisory_id, advisory_url";
+
+/// Column list for RepositoryPackage SELECT queries (with rp. alias for JOIN queries)
+const REPO_PKG_COLUMNS_PREFIXED: &str = "rp.id, rp.repository_id, rp.name, rp.version, \
+    rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies, \
+    rp.metadata, rp.synced_at, rp.is_security_update, rp.severity, rp.cve_ids, \
+    rp.advisory_id, rp.advisory_url";
+
 /// RepositoryPackage represents a package available from a repository
 #[derive(Debug, Clone)]
 pub struct RepositoryPackage {
@@ -335,52 +346,40 @@ impl RepositoryPackage {
 
     /// Find repository packages by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at,
-                    is_security_update, severity, cve_ids, advisory_id, advisory_url
-             FROM repository_packages WHERE name = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE name = ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(packages)
     }
 
     /// Find repository packages by repository ID
     pub fn find_by_repository(conn: &Connection, repository_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at,
-                    is_security_update, severity, cve_ids, advisory_id, advisory_url
-             FROM repository_packages WHERE repository_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE repository_id = ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([repository_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(packages)
     }
 
     /// Search repository packages by pattern (name or description)
     pub fn search(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         let search_pattern = format!("%{pattern}%");
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, architecture, description, checksum, size,
-                    download_url, dependencies, metadata, synced_at,
-                    is_security_update, severity, cve_ids, advisory_id, advisory_url
-             FROM repository_packages
-             WHERE name LIKE ?1 OR description LIKE ?1
-             ORDER BY name, version",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS} FROM repository_packages \
+             WHERE name LIKE ?1 OR description LIKE ?1 \
+             ORDER BY name, version"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([&search_pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(packages)
     }
 
@@ -421,20 +420,17 @@ impl RepositoryPackage {
 
     /// List all packages in all enabled repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
-                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
-                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             WHERE r.enabled = 1
-             ORDER BY rp.name, rp.version",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS_PREFIXED} \
+             FROM repository_packages rp \
+             JOIN repositories r ON rp.repository_id = r.id \
+             WHERE r.enabled = 1 \
+             ORDER BY rp.name, rp.version"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(packages)
     }
 
@@ -444,15 +440,13 @@ impl RepositoryPackage {
         name: &str,
         version: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
-                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
-                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             WHERE r.enabled = 1 AND rp.name = ?1 AND rp.version = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS_PREFIXED} \
+             FROM repository_packages rp \
+             JOIN repositories r ON rp.repository_id = r.id \
+             WHERE r.enabled = 1 AND rp.name = ?1 AND rp.version = ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let pkg = stmt.query_row([name, version], Self::from_row).optional()?;
         Ok(pkg)
     }
@@ -508,26 +502,23 @@ impl RepositoryPackage {
 
     /// Find all security updates available
     pub fn find_security_updates(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture, rp.description,
-                    rp.checksum, rp.size, rp.download_url, rp.dependencies, rp.metadata, rp.synced_at,
-                    rp.is_security_update, rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             WHERE r.enabled = 1 AND rp.is_security_update = 1
-             ORDER BY CASE rp.severity
-                 WHEN 'critical' THEN 1
-                 WHEN 'important' THEN 2
-                 WHEN 'moderate' THEN 3
-                 WHEN 'low' THEN 4
-                 ELSE 5
-             END, rp.name",
-        )?;
-
+        let sql = format!(
+            "SELECT {REPO_PKG_COLUMNS_PREFIXED} \
+             FROM repository_packages rp \
+             JOIN repositories r ON rp.repository_id = r.id \
+             WHERE r.enabled = 1 AND rp.is_security_update = 1 \
+             ORDER BY CASE rp.severity \
+                 WHEN 'critical' THEN 1 \
+                 WHEN 'important' THEN 2 \
+                 WHEN 'moderate' THEN 3 \
+                 WHEN 'low' THEN 4 \
+                 ELSE 5 \
+             END, rp.name"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(packages)
     }
 

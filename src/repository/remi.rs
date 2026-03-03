@@ -82,6 +82,22 @@ pub struct ChunkRef {
     pub offset: u64,
 }
 
+/// Map non-success HTTP status codes to domain errors.
+///
+/// Shared between sync and async clients for 404, 503, and unexpected statuses.
+fn map_http_error(status: u16, body: String, name: &str, distro: &str) -> Error {
+    match status {
+        404 => Error::NotFound(format!(
+            "Package '{}' not found in {} repositories",
+            name, distro
+        )),
+        503 => Error::DownloadError(
+            "Remi conversion queue is full, try again later".to_string(),
+        ),
+        _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
+    }
+}
+
 /// Construct a package URL with optional version query parameter
 ///
 /// Shared between sync and async clients.
@@ -153,7 +169,6 @@ impl RemiClient {
                 Ok(manifest)
             }
             202 => {
-                // Conversion in progress - need to poll
                 let accepted: ConversionAccepted = response.json().map_err(|e| {
                     Error::DownloadError(format!("Failed to parse 202 response: {e}"))
                 })?;
@@ -163,19 +178,9 @@ impl RemiClient {
                 );
                 self.poll_for_completion(&accepted.job_id)
             }
-            404 => Err(Error::NotFound(format!(
-                "Package '{}' not found in {} repositories",
-                name, distro
-            ))),
-            503 => Err(Error::DownloadError(
-                "Remi conversion queue is full, try again later".to_string(),
-            )),
             status => {
                 let body = response.text().unwrap_or_default();
-                Err(Error::DownloadError(format!(
-                    "Remi returned HTTP {}: {}",
-                    status, body
-                )))
+                Err(map_http_error(status, body, name, distro))
             }
         }
     }
@@ -479,19 +484,9 @@ impl RemiClient {
                     last_status, max_retries
                 )))
             }
-            404 => Err(Error::NotFound(format!(
-                "Package '{}' not found in {} repositories",
-                name, distro
-            ))),
-            503 => Err(Error::DownloadError(
-                "Remi conversion queue is full, try again later".to_string(),
-            )),
             status => {
                 let body = response.text().unwrap_or_default();
-                Err(Error::DownloadError(format!(
-                    "Remi returned HTTP {}: {}",
-                    status, body
-                )))
+                Err(map_http_error(status, body, name, distro))
             }
         }
     }
@@ -706,19 +701,9 @@ impl AsyncRemiClient {
                 );
                 self.poll_for_completion_async(&accepted.job_id).await
             }
-            404 => Err(Error::NotFound(format!(
-                "Package '{}' not found in {} repositories",
-                name, distro
-            ))),
-            503 => Err(Error::DownloadError(
-                "Remi conversion queue is full, try again later".to_string(),
-            )),
             status => {
                 let body = response.text().await.unwrap_or_default();
-                Err(Error::DownloadError(format!(
-                    "Remi returned HTTP {}: {}",
-                    status, body
-                )))
+                Err(map_http_error(status, body, name, distro))
             }
         }
     }

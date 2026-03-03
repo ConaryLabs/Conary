@@ -356,6 +356,19 @@ pub enum DaemonEvent {
 }
 
 impl DaemonEvent {
+    pub fn job_id(&self) -> Option<&str> {
+        match self {
+            Self::JobQueued { job_id, .. }
+            | Self::JobStarted { job_id, .. }
+            | Self::JobPhase { job_id, .. }
+            | Self::JobProgress { job_id, .. }
+            | Self::JobCompleted { job_id, .. }
+            | Self::JobFailed { job_id, .. }
+            | Self::JobCancelled { job_id, .. } => Some(job_id),
+            _ => None,
+        }
+    }
+
     /// Return the SSE event type name for this event
     pub fn event_type_name(&self) -> &'static str {
         match self {

@@ -90,6 +90,35 @@ impl IntoResponse for ApiError {
 /// Result type for API handlers
 pub type ApiResult<T> = Result<T, ApiError>;
 
+fn not_found_error(resource: &str, identifier: &str) -> ApiError {
+    ApiError(Box::new(DaemonError::not_found(&format!(
+        "{} '{}'",
+        resource, identifier
+    ))))
+}
+
+fn bad_request_error(message: &str) -> ApiError {
+    ApiError(Box::new(DaemonError::bad_request(message)))
+}
+
+fn not_implemented_error(detail: &str) -> ApiError {
+    ApiError(Box::new(DaemonError::new(
+        "not_implemented",
+        "Not Implemented",
+        501,
+        detail,
+    )))
+}
+
+fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
+    match kind {
+        crate::daemon::JobKind::Install => Action::Install,
+        crate::daemon::JobKind::Remove => Action::Remove,
+        crate::daemon::JobKind::Update => Action::Update,
+        _ => Action::Install,
+    }
+}
+
 /// Run a blocking database query on a background thread
 ///
 /// Handles the common pattern of cloning state, spawning a blocking task,
@@ -581,15 +610,19 @@ async fn list_transactions_handler(
 ) -> ApiResult<Json<Vec<TransactionSummary>>> {
     let limit = params.limit.map(|n| n.min(1000));
     let jobs = run_db_query(&state, move |conn| {
-        let jobs = match params.status.as_deref() {
-            Some("queued") => DaemonJob::list_by_status(conn, JobStatus::Queued)?,
-            Some("running") => DaemonJob::list_by_status(conn, JobStatus::Running)?,
-            Some("completed") => DaemonJob::list_by_status(conn, JobStatus::Completed)?,
-            Some("failed") => DaemonJob::list_by_status(conn, JobStatus::Failed)?,
-            Some("cancelled") => DaemonJob::list_by_status(conn, JobStatus::Cancelled)?,
-            _ => DaemonJob::list_all(conn, limit)?,
-        };
-        Ok(jobs)
+        let status_filter = params.status.as_deref().and_then(|s| match s {
+            "queued" => Some(JobStatus::Queued),
+            "running" => Some(JobStatus::Running),
+            "completed" => Some(JobStatus::Completed),
+            "failed" => Some(JobStatus::Failed),
+            "cancelled" => Some(JobStatus::Cancelled),
+            _ => None,
+        });
+
+        match status_filter {
+            Some(status) => DaemonJob::list_by_status(conn, status),
+            None => DaemonJob::list_all(conn, limit),
+        }
     })
     .await?;
 
@@ -620,20 +653,10 @@ async fn create_transaction_handler(
     [(axum::http::header::HeaderName, String); 1],
     Json<CreateTransactionResponse>,
 )> {
-    // Check authorization based on operation types
-    let action = match determine_job_kind(&request.operations) {
-        crate::daemon::JobKind::Install => Action::Install,
-        crate::daemon::JobKind::Remove => Action::Remove,
-        crate::daemon::JobKind::Update => Action::Update,
-        _ => Action::Install, // Mixed operations require install-level access
-    };
-    require_auth(&creds, action)?;
+    require_auth(&creds, action_for_job_kind(determine_job_kind(&request.operations)))?;
 
-    // Validate request
     if request.operations.is_empty() {
-        return Err(ApiError(Box::new(DaemonError::bad_request(
-            "At least one operation is required",
-        ))));
+        return Err(bad_request_error("At least one operation is required"));
     }
 
     // Get idempotency key from headers
@@ -671,12 +694,8 @@ async fn create_transaction_handler(
     let job_kind = determine_job_kind(&request.operations);
 
     // Create the job
-    let spec = serde_json::to_value(&request.operations).map_err(|e| {
-        ApiError(Box::new(DaemonError::internal(&format!(
-            "Serialization error: {}",
-            e
-        ))))
-    })?;
+    let spec = serde_json::to_value(&request.operations)
+        .map_err(|e| ApiError(Box::new(DaemonError::internal(&format!("Serialization error: {}", e)))))?;
 
     let mut job = DaemonJob::new(job_kind, spec);
     if let Some(key) = idempotency_key {
@@ -764,16 +783,8 @@ async fn get_transaction_handler(
     let job_id = id.clone();
     let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &job_id)).await?;
 
-    match job {
-        Some(job) => {
-            let details = TransactionDetails::from_job(&job, queue_position);
-            Ok(Json(details))
-        }
-        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
-            "transaction '{}'",
-            id
-        ))))),
-    }
+    let job = job.ok_or_else(|| not_found_error("transaction", &id))?;
+    Ok(Json(TransactionDetails::from_job(&job, queue_position)))
 }
 
 /// Cancel a transaction
@@ -796,7 +807,7 @@ async fn cancel_transaction_handler(
     let find_id = job_id.clone();
     let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
         .await?
-        .ok_or_else(|| ApiError(Box::new(DaemonError::not_found(&format!("transaction '{}'", id)))))?;
+        .ok_or_else(|| not_found_error("transaction", &id))?;
 
     // Check if already completed/cancelled/failed
     match job.status {
@@ -822,14 +833,10 @@ async fn cancel_transaction_handler(
         .await?;
 
         if updated {
-            // Emit cancellation event
             state.emit(DaemonEvent::JobCancelled { job_id });
             Ok(StatusCode::NO_CONTENT)
         } else {
-            Err(ApiError(Box::new(DaemonError::not_found(&format!(
-                "transaction '{}'",
-                id
-            )))))
+            Err(not_found_error("transaction", &id))
         }
     } else {
         Err(ApiError(Box::new(DaemonError::conflict(&format!(
@@ -864,10 +871,7 @@ async fn transaction_stream_handler(
     .await?;
 
     if !exists {
-        return Err(ApiError(Box::new(DaemonError::not_found(&format!(
-            "transaction '{}'",
-            id
-        )))));
+        return Err(not_found_error("transaction", &id));
     }
 
     // Track SSE connection (guard decrements on drop when stream ends)
@@ -886,28 +890,11 @@ async fn transaction_stream_handler(
     // Create a stream that filters to only this job's events
     let event_stream = BroadcastStream::new(rx).filter_map(move |result| {
         let job_id = filter_job_id.clone();
-        // Filter out lagged messages and non-matching job events
         match result {
             Ok(event) => {
-                // Check if this event is for our job
-                let event_job_id = match &event {
-                    DaemonEvent::JobQueued { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobStarted { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobPhase { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobProgress { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobCompleted { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobFailed { job_id, .. } => Some(job_id.as_str()),
-                    DaemonEvent::JobCancelled { job_id, .. } => Some(job_id.as_str()),
-                    // Package and system events are not job-specific
-                    _ => None,
-                };
-
-                // Only include events for this job
-                if event_job_id != Some(job_id.as_str()) {
+                if event.job_id() != Some(job_id.as_str()) {
                     return None;
                 }
-
-                // Serialize the event to JSON
                 match serde_json::to_string(&event) {
                     Ok(json) => Some(Ok(Event::default()
                         .event(event.event_type_name())
@@ -961,19 +948,10 @@ async fn dry_run_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<Json<DryRunResponse>> {
-    // Dry-run is a mutating-intent operation; check auth based on operation types
-    let action = match determine_job_kind(&request.operations) {
-        crate::daemon::JobKind::Install => Action::Install,
-        crate::daemon::JobKind::Remove => Action::Remove,
-        crate::daemon::JobKind::Update => Action::Update,
-        _ => Action::Install,
-    };
-    require_auth(&creds, action)?;
-    // Validate request
+    require_auth(&creds, action_for_job_kind(determine_job_kind(&request.operations)))?;
+
     if request.operations.is_empty() {
-        return Err(ApiError(Box::new(DaemonError::bad_request(
-            "At least one operation is required",
-        ))));
+        return Err(bad_request_error("At least one operation is required"));
     }
 
     // Extract package names from operations (placeholder implementation)
@@ -1047,30 +1025,22 @@ async fn get_package_handler(
     })
     .await?;
 
-    match result {
-        Some((trove, deps)) => {
-            let dep_infos: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
-            let details = PackageDetails {
-                name: trove.name,
-                version: trove.version,
-                package_type: trove.trove_type.as_str().to_string(),
-                architecture: trove.architecture,
-                description: trove.description,
-                installed_at: trove.installed_at,
-                install_source: trove.install_source.as_str().to_string(),
-                install_reason: trove.install_reason.as_str().to_string(),
-                selection_reason: trove.selection_reason,
-                flavor: trove.flavor_spec,
-                pinned: trove.pinned,
-                dependencies: dep_infos,
-            };
-            Ok(Json(details))
-        }
-        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
-            "package '{}'",
-            name
-        ))))),
-    }
+    let (trove, deps) = result.ok_or_else(|| not_found_error("package", &name))?;
+    let details = PackageDetails {
+        name: trove.name,
+        version: trove.version,
+        package_type: trove.trove_type.as_str().to_string(),
+        architecture: trove.architecture,
+        description: trove.description,
+        installed_at: trove.installed_at,
+        install_source: trove.install_source.as_str().to_string(),
+        install_reason: trove.install_reason.as_str().to_string(),
+        selection_reason: trove.selection_reason,
+        flavor: trove.flavor_spec,
+        pinned: trove.pinned,
+        dependencies: deps.iter().map(DependencyInfo::from).collect(),
+    };
+    Ok(Json(details))
 }
 
 /// Get package files
@@ -1100,114 +1070,82 @@ async fn get_package_files_handler(
     })
     .await?;
 
-    match result {
-        Some(files) => Ok(Json(files)),
-        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
-            "package '{}'",
-            name
-        ))))),
-    }
+    result.map(Json).ok_or_else(|| not_found_error("package", &name))
 }
 
-/// Install packages
-///
+type TransactionResult = ApiResult<(
+    StatusCode,
+    [(axum::http::header::HeaderName, String); 1],
+    Json<CreateTransactionResponse>,
+)>;
+
+async fn forward_package_operation(
+    state: State<SharedState>,
+    creds: Extension<Option<PeerCredentials>>,
+    headers: axum::http::HeaderMap,
+    request: PackageOperationRequest,
+    require_packages: bool,
+    to_operation: impl FnOnce(PackageOperationRequest) -> TransactionOperation,
+) -> TransactionResult {
+    if require_packages && request.packages.is_empty() {
+        return Err(bad_request_error("At least one package name is required"));
+    }
+
+    let tx_request = CreateTransactionRequest {
+        operations: vec![to_operation(request)],
+    };
+
+    create_transaction_handler(state, creds, headers, Json(tx_request)).await
+}
+
 /// POST /v1/packages/install
-///
-/// Convenience endpoint that creates an install transaction.
-/// Equivalent to POST /v1/transactions with an install operation.
 async fn install_packages_handler(
-    State(state): State<SharedState>,
-    Extension(creds): Extension<Option<PeerCredentials>>,
+    state: State<SharedState>,
+    creds: Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(
-    StatusCode,
-    [(axum::http::header::HeaderName, String); 1],
-    Json<CreateTransactionResponse>,
-)> {
-    // Validate request
-    if request.packages.is_empty() {
-        return Err(ApiError(Box::new(DaemonError::bad_request(
-            "At least one package name is required",
-        ))));
-    }
-
-    // Convert to transaction request
-    let tx_request = CreateTransactionRequest {
-        operations: vec![TransactionOperation::Install {
-            packages: request.packages,
-            allow_downgrade: request.options.allow_downgrade,
-            skip_deps: request.options.skip_deps,
-        }],
-    };
-
-    // Forward to transaction handler (auth checked there)
-    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
+) -> TransactionResult {
+    forward_package_operation(state, creds, headers, request, true, |r| {
+        TransactionOperation::Install {
+            packages: r.packages,
+            allow_downgrade: r.options.allow_downgrade,
+            skip_deps: r.options.skip_deps,
+        }
+    })
+    .await
 }
 
-/// Remove packages
-///
 /// POST /v1/packages/remove
-///
-/// Convenience endpoint that creates a remove transaction.
-/// Equivalent to POST /v1/transactions with a remove operation.
 async fn remove_packages_handler(
-    State(state): State<SharedState>,
-    Extension(creds): Extension<Option<PeerCredentials>>,
+    state: State<SharedState>,
+    creds: Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(
-    StatusCode,
-    [(axum::http::header::HeaderName, String); 1],
-    Json<CreateTransactionResponse>,
-)> {
-    // Validate request
-    if request.packages.is_empty() {
-        return Err(ApiError(Box::new(DaemonError::bad_request(
-            "At least one package name is required",
-        ))));
-    }
-
-    // Convert to transaction request
-    let tx_request = CreateTransactionRequest {
-        operations: vec![TransactionOperation::Remove {
-            packages: request.packages,
-            cascade: request.options.cascade,
-            remove_orphans: request.options.remove_orphans,
-        }],
-    };
-
-    // Forward to transaction handler (auth checked there)
-    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
+) -> TransactionResult {
+    forward_package_operation(state, creds, headers, request, true, |r| {
+        TransactionOperation::Remove {
+            packages: r.packages,
+            cascade: r.options.cascade,
+            remove_orphans: r.options.remove_orphans,
+        }
+    })
+    .await
 }
 
-/// Update packages
-///
-/// POST /v1/packages/update
-///
-/// Convenience endpoint that creates an update transaction.
-/// Equivalent to POST /v1/transactions with an update operation.
+/// POST /v1/packages/update (empty packages = update all)
 async fn update_packages_handler(
-    State(state): State<SharedState>,
-    Extension(creds): Extension<Option<PeerCredentials>>,
+    state: State<SharedState>,
+    creds: Extension<Option<PeerCredentials>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PackageOperationRequest>,
-) -> ApiResult<(
-    StatusCode,
-    [(axum::http::header::HeaderName, String); 1],
-    Json<CreateTransactionResponse>,
-)> {
-    // Convert to transaction request
-    // Note: empty packages list means "update all"
-    let tx_request = CreateTransactionRequest {
-        operations: vec![TransactionOperation::Update {
-            packages: request.packages,
-            security_only: request.options.security_only,
-        }],
-    };
-
-    // Forward to transaction handler (auth checked there)
-    create_transaction_handler(State(state), Extension(creds), headers, Json(tx_request)).await
+) -> TransactionResult {
+    forward_package_operation(state, creds, headers, request, false, |r| {
+        TransactionOperation::Update {
+            packages: r.packages,
+            security_only: r.options.security_only,
+        }
+    })
+    .await
 }
 
 // =============================================================================
@@ -1274,16 +1212,8 @@ async fn depends_handler(
     })
     .await?;
 
-    match result {
-        Some(deps) => {
-            let dep_info: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
-            Ok(Json(dep_info))
-        }
-        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
-            "package '{}'",
-            name
-        ))))),
-    }
+    let deps = result.ok_or_else(|| not_found_error("package", &name))?;
+    Ok(Json(deps.iter().map(DependencyInfo::from).collect()))
 }
 
 /// Get reverse dependencies
@@ -1339,55 +1269,31 @@ async fn list_states_handler(State(_state): State<SharedState>) -> ApiResult<Jso
     Ok(Json(vec![]))
 }
 
-/// Rollback to a previous state
-///
 /// POST /v1/system/rollback
 async fn rollback_handler(
     State(_state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     require_auth(&creds, Action::Rollback)?;
-
-    Err(ApiError(Box::new(DaemonError::new(
-        "not_implemented",
-        "Not Implemented",
-        501,
-        "Rollback not yet implemented",
-    ))))
+    Err(not_implemented_error("Rollback not yet implemented"))
 }
 
-/// Verify system integrity
-///
 /// POST /v1/system/verify
 async fn verify_handler(
     State(_state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::Verify)?;
-
-    Err(ApiError(Box::new(DaemonError::new(
-        "not_implemented",
-        "Not Implemented",
-        501,
-        "System verification not yet implemented",
-    ))))
+    Err(not_implemented_error("System verification not yet implemented"))
 }
 
-/// Garbage collect unused data
-///
 /// POST /v1/system/gc
 async fn gc_handler(
     State(_state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::GarbageCollect)?;
-
-    Err(ApiError(Box::new(DaemonError::new(
-        "not_implemented",
-        "Not Implemented",
-        501,
-        "Garbage collection not yet implemented",
-    ))))
+    Err(not_implemented_error("Garbage collection not yet implemented"))
 }
 
 /// Global event stream (SSE)

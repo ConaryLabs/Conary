@@ -218,13 +218,7 @@ pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
 #[cfg(feature = "server")]
 pub fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let _repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (_repo, _repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     let _key = SigningKeyPair::load_from_file(Path::new(key_path))
         .with_context(|| format!("Failed to load signing key: {key_path}"))?;
@@ -246,13 +240,7 @@ pub fn cmd_trust_rotate_key(
     db_path: &str,
 ) -> Result<()> {
     let conn = db::open(db_path)?;
-
-    let repo = Repository::find_by_name(&conn, repo_name)?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_name}"))?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Repository has no ID"))?;
+    let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     let old_key = SigningKeyPair::load_from_file(Path::new(old_key_path))
         .with_context(|| format!("Failed to load old key: {old_key_path}"))?;

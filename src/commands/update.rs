@@ -13,29 +13,32 @@ use conary::repository::{
 use std::path::Path;
 use tracing::{info, warn};
 
+fn find_installed_trove(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+) -> Result<(Trove, i64)> {
+    let troves = Trove::find_by_name(conn, package_name)?;
+    let trove = troves
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' is not installed", package_name))?;
+    let trove_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
+    Ok((trove, trove_id))
+}
+
 /// Pin a package to prevent updates and removal
 pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", package_name);
-
     let conn = conary::db::open(db_path)?;
+    let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
-    let troves = Trove::find_by_name(&conn, package_name)?;
-    if troves.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Package '{}' is not installed",
-            package_name
-        ));
-    }
-
-    let trove = &troves[0];
     if trove.pinned {
         println!("Package '{}' is already pinned", package_name);
         return Ok(());
     }
 
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
     Trove::pin(&conn, trove_id)?;
     println!(
         "Pinned package '{}' at version {}",
@@ -49,26 +52,14 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 /// Unpin a package to allow updates and removal
 pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", package_name);
-
     let conn = conary::db::open(db_path)?;
+    let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
-    let troves = Trove::find_by_name(&conn, package_name)?;
-    if troves.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Package '{}' is not installed",
-            package_name
-        ));
-    }
-
-    let trove = &troves[0];
     if !trove.pinned {
         println!("Package '{}' is not pinned", package_name);
         return Ok(());
     }
 
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
     Trove::unpin(&conn, trove_id)?;
     println!(
         "Unpinned package '{}' (version {})",

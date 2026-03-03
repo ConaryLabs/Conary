@@ -134,19 +134,21 @@ pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
 
 /// Enable a repository
 pub fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
-    info!("Enabling repository: {}", name);
-    let conn = conary::db::open(db_path)?;
-    conary::repository::set_repository_enabled(&conn, name, true)?;
-    println!("Enabled repository: {}", name);
-    Ok(())
+    set_repo_enabled(name, db_path, true)
 }
 
 /// Disable a repository
 pub fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
-    info!("Disabling repository: {}", name);
+    set_repo_enabled(name, db_path, false)
+}
+
+fn set_repo_enabled(name: &str, db_path: &str, enabled: bool) -> Result<()> {
+    let action = if enabled { "Enabling" } else { "Disabling" };
+    info!("{} repository: {}", action, name);
     let conn = conary::db::open(db_path)?;
-    conary::repository::set_repository_enabled(&conn, name, false)?;
-    println!("Disabled repository: {}", name);
+    conary::repository::set_repository_enabled(&conn, name, enabled)?;
+    let past = if enabled { "Enabled" } else { "Disabled" };
+    println!("{} repository: {}", past, name);
     Ok(())
 }
 

@@ -16,12 +16,94 @@ use conary::derived::build_from_definition;
 use conary::filesystem::CasStore;
 use conary::hash::sha256;
 use conary::model::{
-    DiffAction, ModelDerivedPackage, capture_current_state, compute_diff,
+    DiffAction, ModelDiff, ModelDerivedPackage, SystemState, capture_current_state, compute_diff,
     compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
 };
+use conary::model::parser::SystemModel;
 use conary::model::remote::fetch_remote_collection;
 use rusqlite::Connection;
 use tracing::{debug, info};
+
+fn load_model(model_path: &Path) -> Result<SystemModel> {
+    if !model_path.exists() {
+        return Err(anyhow!("Model file not found: {}", model_path.display()));
+    }
+    Ok(parse_model_file(model_path)?)
+}
+
+fn load_model_and_diff(
+    model_path: &Path,
+    db_path: &str,
+    offline: bool,
+    announce_includes: bool,
+) -> Result<(SystemModel, Connection, ModelDiff)> {
+    let model = load_model(model_path)?;
+    let conn = db::open(db_path)?;
+    let state = capture_current_state(&conn)?;
+    let diff = compute_model_diff(&model, &state, &conn, offline, announce_includes)?;
+    Ok((model, conn, diff))
+}
+
+fn compute_model_diff(
+    model: &SystemModel,
+    state: &SystemState,
+    conn: &Connection,
+    offline: bool,
+    announce: bool,
+) -> Result<ModelDiff> {
+    if model.has_includes() {
+        if announce {
+            let mode = if offline { " (offline mode)" } else { "" };
+            println!(
+                "Resolving {} remote include(s){}...",
+                model.include.models.len(),
+                mode
+            );
+        }
+        Ok(compute_diff_with_includes_offline(model, state, conn, offline)?)
+    } else {
+        Ok(compute_diff(model, state))
+    }
+}
+
+fn collect_lock_data(
+    model: &SystemModel,
+    conn: &Connection,
+) -> Result<Vec<(String, String, conary::model::remote::CollectionData)>> {
+    let mut lock_data = Vec::new();
+    for spec in &model.include.models {
+        let (name, label) = parse_trove_spec(spec)?;
+        let label_str = label.as_deref().unwrap_or("");
+        if let Some(cached) = RemoteCollection::find_cached(conn, &name, Some(label_str))
+            .map_err(|e| anyhow!("Database error: {}", e))?
+        {
+            let data: conary::model::remote::CollectionData =
+                serde_json::from_str(&cached.data_json)
+                    .map_err(|e| anyhow!("Corrupt cache entry for '{}': {}", name, e))?;
+            lock_data.push((name, label_str.to_string(), data));
+        } else {
+            return Err(anyhow!(
+                "No cached data for '{}' after resolution -- this should not happen",
+                spec
+            ));
+        }
+    }
+    Ok(lock_data)
+}
+
+fn build_lock_from_data(
+    lock_data: &[(String, String, conary::model::remote::CollectionData)],
+    model_path: &Path,
+) -> Result<conary::model::lockfile::ModelLock> {
+    let refs: Vec<(String, String, &conary::model::remote::CollectionData)> = lock_data
+        .iter()
+        .map(|(n, l, d)| (n.clone(), l.clone(), d))
+        .collect();
+    let mut lock = conary::model::lockfile::ModelLock::from_resolved(&refs);
+    let model_bytes = std::fs::read(model_path)?;
+    lock.metadata.model_hash = format!("sha256:{}", conary::hash::sha256(&model_bytes));
+    Ok(lock)
+}
 
 /// Create a derived package definition from a model specification
 fn create_derived_from_model(
@@ -147,44 +229,8 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 
 /// Show what changes are needed to reach the model state
 pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
-    // Check if model file exists
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        eprintln!("Error: Model file not found: {}", model_path.display());
-        eprintln!("Create a model file or use 'conary model-snapshot' to capture current state");
-        return Err(anyhow!("Model file not found"));
-    }
-
-    // Load the model
-    let model = match parse_model_file(model_path) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Error parsing model file: {}", e);
-            return Err(e.into());
-        }
-    };
-
-    // Open database and capture current state
-    let conn = db::open(db_path)?;
-    let state = capture_current_state(&conn)?;
-
-    // Compute diff, resolving includes if present
-    let diff = if model.has_includes() {
-        if offline {
-            println!(
-                "Resolving {} remote include(s) (offline mode)...",
-                model.include.models.len()
-            );
-        } else {
-            println!(
-                "Resolving {} remote include(s)...",
-                model.include.models.len()
-            );
-        }
-        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
-    } else {
-        compute_diff(&model, &state)
-    };
+    let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
 
     if diff.is_empty() {
         println!("System is in sync with model - no changes needed");
@@ -266,37 +312,8 @@ pub fn cmd_model_apply(
     autoremove: bool,
     offline: bool,
 ) -> Result<()> {
-    // Check if model file exists
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        eprintln!("Error: Model file not found: {}", model_path.display());
-        return Err(anyhow!("Model file not found"));
-    }
-
-    // Load the model
-    let model = parse_model_file(model_path)?;
-
-    // Open database and capture current state
-    let conn = db::open(db_path)?;
-    let state = capture_current_state(&conn)?;
-
-    // Compute diff, resolving includes if present
-    let diff = if model.has_includes() {
-        if offline {
-            println!(
-                "Resolving {} remote include(s) (offline mode)...",
-                model.include.models.len()
-            );
-        } else {
-            println!(
-                "Resolving {} remote include(s)...",
-                model.include.models.len()
-            );
-        }
-        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
-    } else {
-        compute_diff(&model, &state)
-    };
+    let (model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
 
     if diff.is_empty() {
         println!("System is already in sync with model - no changes needed");
@@ -505,26 +522,8 @@ pub fn cmd_model_apply(
 
 /// Check if system state matches the model
 pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool, offline: bool) -> Result<()> {
-    // Check if model file exists
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        eprintln!("Error: Model file not found: {}", model_path.display());
-        return Err(anyhow!("Model file not found"));
-    }
-
-    // Load the model
-    let model = parse_model_file(model_path)?;
-
-    // Open database and capture current state
-    let conn = db::open(db_path)?;
-    let state = capture_current_state(&conn)?;
-
-    // Compute diff, resolving includes if present
-    let diff = if model.has_includes() {
-        compute_diff_with_includes_offline(&model, &state, &conn, offline)?
-    } else {
-        compute_diff(&model, &state)
-    };
+    let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, false)?;
 
     if diff.is_empty() {
         println!("OK: System matches model");
@@ -606,12 +605,7 @@ pub fn cmd_model_snapshot(
 /// detect drift.
 pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> Result<()> {
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        eprintln!("Error: Model file not found: {}", model_path.display());
-        return Err(anyhow!("Model file not found"));
-    }
-
-    let model = parse_model_file(model_path)?;
+    let model = load_model(model_path)?;
     let conn = db::open(db_path)?;
     let state = capture_current_state(&conn)?;
 
@@ -762,11 +756,7 @@ fn format_version_info(conn: &Connection, name: &str, label: &str) -> String {
 /// in a model.lock file, preventing silent upstream changes.
 pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        return Err(anyhow!("Model file not found: {}", model_path.display()));
-    }
-
-    let model = parse_model_file(model_path)?;
+    let model = load_model(model_path)?;
     let conn = db::open(db_path)?;
 
     if !model.has_includes() {
@@ -774,43 +764,11 @@ pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> 
         return Ok(());
     }
 
-    // Resolve all includes (this fetches and caches remote collections)
     let _resolved = conary::model::resolve_includes(&model, &conn)?;
 
-    // For each include, get the cached RemoteCollection to build the lock
-    let mut lock_data: Vec<(String, String, conary::model::remote::CollectionData)> = Vec::new();
+    let lock_data = collect_lock_data(&model, &conn)?;
+    let lock = build_lock_from_data(&lock_data, model_path)?;
 
-    for spec in &model.include.models {
-        let (name, label) = parse_trove_spec(spec)?;
-        let label_str = label.as_deref().unwrap_or("");
-
-        if let Some(cached) = RemoteCollection::find_cached(&conn, &name, Some(label_str))
-            .map_err(|e| anyhow!("Database error: {}", e))?
-        {
-            let data: conary::model::remote::CollectionData =
-                serde_json::from_str(&cached.data_json)
-                    .map_err(|e| anyhow!("Corrupt cache entry for '{}': {}", name, e))?;
-            lock_data.push((name, label_str.to_string(), data));
-        } else {
-            return Err(anyhow!(
-                "No cached data for '{}' after resolution -- this should not happen",
-                spec
-            ));
-        }
-    }
-
-    // Build lock from collected data
-    let refs: Vec<(String, String, &conary::model::remote::CollectionData)> = lock_data
-        .iter()
-        .map(|(n, l, d)| (n.clone(), l.clone(), d))
-        .collect();
-    let mut lock = conary::model::lockfile::ModelLock::from_resolved(&refs);
-
-    // Set model hash
-    let model_bytes = std::fs::read(model_path)?;
-    lock.metadata.model_hash = format!("sha256:{}", conary::hash::sha256(&model_bytes));
-
-    // Determine output path
     let lock_path = if let Some(out) = output {
         std::path::PathBuf::from(out)
     } else {
@@ -841,11 +799,7 @@ pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> 
 /// file, and updates the lock with new hashes. Reports what changed.
 pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        return Err(anyhow!("Model file not found: {}", model_path.display()));
-    }
-
-    let model = parse_model_file(model_path)?;
+    let model = load_model(model_path)?;
     let conn = db::open(db_path)?;
 
     let model_dir = model_path.parent().unwrap_or(Path::new("."));
@@ -873,42 +827,17 @@ pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
         }
     }
 
-    // Re-resolve includes (will re-fetch from network)
     let _resolved = conary::model::resolve_includes(&model, &conn)?;
 
-    // Collect current state for drift check
-    let mut current_hashes: Vec<(String, String, String)> = Vec::new();
-    let mut lock_data: Vec<(String, String, conary::model::remote::CollectionData)> = Vec::new();
+    let lock_data = collect_lock_data(&model, &conn)?;
+    let current_hashes: Vec<(String, String, String)> = lock_data
+        .iter()
+        .map(|(n, l, d)| (n.clone(), l.clone(), d.content_hash.clone()))
+        .collect();
 
-    for spec in &model.include.models {
-        let (name, label) = parse_trove_spec(spec)?;
-        let label_str = label.as_deref().unwrap_or("");
-
-        if let Some(cached) = RemoteCollection::find_cached(&conn, &name, Some(label_str))
-            .map_err(|e| anyhow!("Database error: {}", e))?
-        {
-            let data: conary::model::remote::CollectionData =
-                serde_json::from_str(&cached.data_json)
-                    .map_err(|e| anyhow!("Corrupt cache entry for '{}': {}", name, e))?;
-            current_hashes.push((name.clone(), label_str.to_string(), data.content_hash.clone()));
-            lock_data.push((name, label_str.to_string(), data));
-        }
-    }
-
-    // Check drift against old lock
     let drifts = old_lock.check_drift(&current_hashes);
 
-    // Build new lock
-    let refs: Vec<(String, String, &conary::model::remote::CollectionData)> = lock_data
-        .iter()
-        .map(|(n, l, d)| (n.clone(), l.clone(), d))
-        .collect();
-    let mut new_lock = conary::model::lockfile::ModelLock::from_resolved(&refs);
-
-    // Set model hash
-    let model_bytes = std::fs::read(model_path)?;
-    new_lock.metadata.model_hash = format!("sha256:{}", conary::hash::sha256(&model_bytes));
-
+    let new_lock = build_lock_from_data(&lock_data, model_path)?;
     new_lock.save(&lock_path)?;
 
     // Report results
@@ -949,14 +878,8 @@ pub fn cmd_model_publish(
     force: bool,
     sign_key_path: Option<&str>,
 ) -> Result<()> {
-    // Check if model file exists
     let model_path = Path::new(model_path);
-    if !model_path.exists() {
-        return Err(anyhow!("Model file not found: {}", model_path.display()));
-    }
-
-    // Load the model
-    let model = parse_model_file(model_path)?;
+    let model = load_model(model_path)?;
 
     // Ensure group- prefix
     let group_name = if name.starts_with("group-") {

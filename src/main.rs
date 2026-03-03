@@ -315,26 +315,22 @@ fn main() -> Result<()> {
                     sign_key,
                 };
 
-                match generate_indices(&config) {
-                    Ok(results) => {
-                        if results.is_empty() {
-                            println!("No indices generated.");
-                        } else {
-                            for result in results {
-                                println!(
-                                    "{}: {} packages ({} versions) -> {}{}",
-                                    result.distro,
-                                    result.package_count,
-                                    result.version_count,
-                                    result.index_path,
-                                    if result.signed { " [signed]" } else { "" }
-                                );
-                            }
-                        }
-                        Ok(())
+                let results = generate_indices(&config)?;
+                if results.is_empty() {
+                    println!("No indices generated.");
+                } else {
+                    for result in results {
+                        println!(
+                            "{}: {} packages ({} versions) -> {}{}",
+                            result.distro,
+                            result.package_count,
+                            result.version_count,
+                            result.index_path,
+                            if result.signed { " [signed]" } else { "" }
+                        );
                     }
-                    Err(e) => Err(e),
                 }
+                Ok(())
             }
 
             #[cfg(feature = "server")]
@@ -361,33 +357,29 @@ fn main() -> Result<()> {
                     dry_run,
                 };
 
-                match run_prewarm(&config) {
-                    Ok(result) => {
-                        println!("Pre-warm complete:");
-                        println!("  Processed:  {}", result.packages_processed);
-                        println!("  Converted:  {}", result.packages_converted);
-                        println!("  Skipped:    {}", result.packages_skipped);
-                        println!("  Failed:     {}", result.packages_failed);
-                        println!("  Total size: {} bytes", result.total_bytes);
+                let result = run_prewarm(&config)?;
+                println!("Pre-warm complete:");
+                println!("  Processed:  {}", result.packages_processed);
+                println!("  Converted:  {}", result.packages_converted);
+                println!("  Skipped:    {}", result.packages_skipped);
+                println!("  Failed:     {}", result.packages_failed);
+                println!("  Total size: {} bytes", result.total_bytes);
 
-                        if !result.converted.is_empty() {
-                            println!("\nConverted packages:");
-                            for pkg in &result.converted {
-                                println!("  {}", pkg);
-                            }
-                        }
-
-                        if !result.failed.is_empty() {
-                            println!("\nFailed packages:");
-                            for (pkg, err) in &result.failed {
-                                println!("  {}: {}", pkg, err);
-                            }
-                        }
-
-                        Ok(())
+                if !result.converted.is_empty() {
+                    println!("\nConverted packages:");
+                    for pkg in &result.converted {
+                        println!("  {}", pkg);
                     }
-                    Err(e) => Err(e),
                 }
+
+                if !result.failed.is_empty() {
+                    println!("\nFailed packages:");
+                    for (pkg, err) in &result.failed {
+                        println!("  {}: {}", pkg, err);
+                    }
+                }
+
+                Ok(())
             }
 
             #[cfg(feature = "server")]

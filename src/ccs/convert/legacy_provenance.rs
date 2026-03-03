@@ -82,6 +82,15 @@ impl LegacyProvenance {
         }
     }
 
+    fn apply_signature(&mut self, sig: Option<ExtractedSignature>) {
+        if let Some(sig) = sig {
+            self.was_signed = true;
+            self.signature_key_id = Some(sig.key_id);
+            self.original_signature =
+                (!sig.signature_data.is_empty()).then_some(sig.signature_data);
+        }
+    }
+
     /// Extract provenance from an RPM package
     pub fn from_rpm(pkg: &RpmPackage, checksum: &str) -> Self {
         Self::from_rpm_with_path(pkg, checksum, None)
@@ -95,31 +104,18 @@ impl LegacyProvenance {
     ) -> Self {
         let mut prov = Self::new("rpm", checksum);
 
-        // Source layer
         prov.upstream_url = pkg.url().map(String::from);
         prov.source_rpm = pkg.source_rpm().map(String::from);
-
-        // Build layer
         prov.build_host = pkg.build_host().map(String::from);
         prov.vendor = pkg.vendor().map(String::from);
         prov.packager = None; // RPM uses vendor instead
 
-        // License
         if let Some(license) = pkg.license() {
             prov.licenses = parse_license_string(license);
         }
 
-        // Extract signature if we have the package path
-        if let Some(path) = package_path
-            && let Some(sig) = extract_rpm_signature(path)
-        {
-            prov.was_signed = true;
-            prov.signature_key_id = Some(sig.key_id);
-            prov.original_signature = if sig.signature_data.is_empty() {
-                None
-            } else {
-                Some(sig.signature_data)
-            };
+        if let Some(path) = package_path {
+            prov.apply_signature(extract_rpm_signature(path));
         }
 
         prov
@@ -138,27 +134,13 @@ impl LegacyProvenance {
     ) -> Self {
         let mut prov = Self::new("deb", checksum);
 
-        // Source layer
         prov.upstream_url = pkg.homepage().map(String::from);
-
-        // Build layer
         prov.packager = pkg.maintainer().map(String::from);
-
-        // Debian-specific
         prov.section = pkg.section().map(String::from);
         prov.priority = pkg.priority().map(String::from);
 
-        // Extract signature if we have the package path
-        if let Some(path) = package_path
-            && let Some(sig) = extract_deb_signature(path)
-        {
-            prov.was_signed = true;
-            prov.signature_key_id = Some(sig.key_id);
-            prov.original_signature = if sig.signature_data.is_empty() {
-                None
-            } else {
-                Some(sig.signature_data)
-            };
+        if let Some(path) = package_path {
+            prov.apply_signature(extract_deb_signature(path));
         }
 
         prov
@@ -438,52 +420,26 @@ pub fn extract_rpm_signature(path: &str) -> Option<ExtractedSignature> {
     let mut reader = BufReader::new(file);
     let pkg = rpm::Package::parse(&mut reader).ok()?;
 
-    // Try to get RSA signature (most common in modern RPMs)
-    if let Ok(sig_data) = pkg
-        .metadata
-        .signature
-        .get_entry_data_as_binary(IndexSignatureTag::RPMSIGTAG_RSA)
-    {
-        let key_id = extract_pgp_key_id(sig_data);
-        let sig_b64 = STANDARD.encode(sig_data);
+    // Try signature tags in order of preference: RSA (modern), DSA, PGP (legacy)
+    let sig_tags = [
+        (IndexSignatureTag::RPMSIGTAG_RSA, "RSA"),
+        (IndexSignatureTag::RPMSIGTAG_DSA, "DSA"),
+        (IndexSignatureTag::RPMSIGTAG_PGP, "PGP"),
+    ];
 
-        return Some(ExtractedSignature {
-            key_id: key_id.unwrap_or_else(|| "unknown".to_string()),
-            sig_type: "RSA".to_string(),
-            signature_data: sig_b64,
-        });
-    }
-
-    // Try DSA signature
-    if let Ok(sig_data) = pkg
-        .metadata
-        .signature
-        .get_entry_data_as_binary(IndexSignatureTag::RPMSIGTAG_DSA)
-    {
-        let key_id = extract_pgp_key_id(sig_data);
-        let sig_b64 = STANDARD.encode(sig_data);
-
-        return Some(ExtractedSignature {
-            key_id: key_id.unwrap_or_else(|| "unknown".to_string()),
-            sig_type: "DSA".to_string(),
-            signature_data: sig_b64,
-        });
-    }
-
-    // Try legacy PGP signature (RPM v3 style)
-    if let Ok(sig_data) = pkg
-        .metadata
-        .signature
-        .get_entry_data_as_binary(IndexSignatureTag::RPMSIGTAG_PGP)
-    {
-        let key_id = extract_pgp_key_id(sig_data);
-        let sig_b64 = STANDARD.encode(sig_data);
-
-        return Some(ExtractedSignature {
-            key_id: key_id.unwrap_or_else(|| "unknown".to_string()),
-            sig_type: "PGP".to_string(),
-            signature_data: sig_b64,
-        });
+    for (tag, sig_type) in sig_tags {
+        if let Ok(sig_data) = pkg
+            .metadata
+            .signature
+            .get_entry_data_as_binary(tag)
+        {
+            return Some(ExtractedSignature {
+                key_id: extract_pgp_key_id(sig_data)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                sig_type: sig_type.to_string(),
+                signature_data: STANDARD.encode(sig_data),
+            });
+        }
     }
 
     None

@@ -136,13 +136,17 @@ pub struct PackageFile {
 }
 
 impl PackageFile {
+    fn is_bin_path(path: &str) -> bool {
+        path.starts_with("/usr/bin")
+            || path.starts_with("/usr/sbin")
+            || path.starts_with("/bin")
+            || path.starts_with("/sbin")
+    }
+
     /// Create a new package file entry
     pub fn new(path: impl Into<String>) -> Self {
         let path = path.into();
-        let is_executable = path.starts_with("/usr/bin")
-            || path.starts_with("/usr/sbin")
-            || path.starts_with("/bin")
-            || path.starts_with("/sbin");
+        let is_executable = Self::is_bin_path(&path);
 
         Self {
             path,
@@ -158,10 +162,7 @@ impl PackageFile {
     pub fn with_content(path: impl Into<String>, content: Vec<u8>) -> Self {
         let path = path.into();
         let size = content.len() as u64;
-        let is_executable = path.starts_with("/usr/bin")
-            || path.starts_with("/usr/sbin")
-            || path.starts_with("/bin")
-            || path.starts_with("/sbin");
+        let is_executable = Self::is_bin_path(&path);
 
         Self {
             path,

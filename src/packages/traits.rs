@@ -40,6 +40,16 @@ pub enum DependencyType {
     Optional,
 }
 
+impl DependencyType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Build => "build",
+            Self::Optional => "optional",
+        }
+    }
+}
+
 /// When a scriptlet runs during the package lifecycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptletPhase {

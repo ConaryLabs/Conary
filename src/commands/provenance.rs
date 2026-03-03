@@ -79,7 +79,7 @@ pub fn cmd_provenance_show(
     recursive: bool,
     format: &str,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
 
     // Parse package@version format
     let (name, version) = parse_package_spec(package);
@@ -109,7 +109,7 @@ pub fn cmd_provenance_show(
 
 /// Verify provenance against transparency log
 pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -214,7 +214,7 @@ pub fn cmd_provenance_diff(
     package2: &str,
     format: &str,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
 
     let (name1, version1) = parse_package_spec(package1);
     let (name2, version2) = parse_package_spec(package2);
@@ -237,32 +237,19 @@ pub fn cmd_provenance_diff(
                     println!("[NOT IMPLEMENTED] JSON diff format");
                 }
                 _ => {
-                    // Compare source
-                    if prov1.upstream_hash != prov2.upstream_hash {
-                        println!("[SOURCE] Upstream hash changed");
-                        println!("  - {}", prov1.upstream_hash.as_deref().unwrap_or("none"));
-                        println!("  + {}", prov2.upstream_hash.as_deref().unwrap_or("none"));
-                    }
+                    let diffs: &[(&str, &str, &Option<String>, &Option<String>)] = &[
+                        ("SOURCE", "Upstream hash", &prov1.upstream_hash, &prov2.upstream_hash),
+                        ("BUILD", "Recipe", &prov1.recipe_hash, &prov2.recipe_hash),
+                        ("CONTENT", "Package content", &prov1.merkle_root, &prov2.merkle_root),
+                        ("DNA", "Provenance chain", &prov1.dna_hash, &prov2.dna_hash),
+                    ];
 
-                    // Compare recipe
-                    if prov1.recipe_hash != prov2.recipe_hash {
-                        println!("[BUILD] Recipe changed");
-                        println!("  - {}", prov1.recipe_hash.as_deref().unwrap_or("none"));
-                        println!("  + {}", prov2.recipe_hash.as_deref().unwrap_or("none"));
-                    }
-
-                    // Compare merkle root
-                    if prov1.merkle_root != prov2.merkle_root {
-                        println!("[CONTENT] Package content changed");
-                        println!("  - {}", prov1.merkle_root.as_deref().unwrap_or("none"));
-                        println!("  + {}", prov2.merkle_root.as_deref().unwrap_or("none"));
-                    }
-
-                    // Compare DNA
-                    if prov1.dna_hash != prov2.dna_hash {
-                        println!("[DNA] Provenance chain changed");
-                        println!("  - {}", prov1.dna_hash.as_deref().unwrap_or("none"));
-                        println!("  + {}", prov2.dna_hash.as_deref().unwrap_or("none"));
+                    for (tag, label, old, new) in diffs {
+                        if old != new {
+                            println!("[{}] {} changed", tag, label);
+                            println!("  - {}", old.as_deref().unwrap_or("none"));
+                            println!("  + {}", new.as_deref().unwrap_or("none"));
+                        }
                     }
                 }
             }
@@ -287,7 +274,7 @@ pub fn cmd_provenance_find_by_dep(
     version: Option<&str>,
     dna: Option<&str>,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
 
     println!("=== Packages Built With {} ===", dep_name);
     if let Some(v) = version {
@@ -340,7 +327,7 @@ pub fn cmd_provenance_export(
     output: Option<&str>,
     recursive: bool,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -394,6 +381,10 @@ pub fn cmd_provenance_export(
     Ok(())
 }
 
+fn purl(name: &str, version: &str) -> String {
+    format!("pkg:conary/{}@{}", name, version)
+}
+
 /// Generate SPDX 2.3 SBOM in JSON format
 fn generate_spdx_sbom(
     name: &str,
@@ -421,7 +412,7 @@ fn generate_spdx_sbom(
         "externalRefs": prov.dna_hash.as_ref().map(|dna| vec![serde_json::json!({
             "referenceCategory": "PACKAGE-MANAGER",
             "referenceType": "purl",
-            "referenceLocator": format!("pkg:conary/{}@{}?dna={}", name, version, dna)
+            "referenceLocator": format!("{}?dna={}", purl(name, version), dna)
         })]).unwrap_or_default(),
         "supplier": "NOASSERTION",
         "copyrightText": "NOASSERTION"
@@ -445,7 +436,7 @@ fn generate_spdx_sbom(
             "externalRefs": dep_dna.as_ref().map(|dna| vec![serde_json::json!({
                 "referenceCategory": "PACKAGE-MANAGER",
                 "referenceType": "purl",
-                "referenceLocator": format!("pkg:conary/{}@{}?dna={}", dep_name, dep_version, dna)
+                "referenceLocator": format!("{}?dna={}", purl(dep_name, dep_version), dna)
             })]).unwrap_or_default(),
             "supplier": "NOASSERTION",
             "copyrightText": "NOASSERTION"
@@ -488,10 +479,10 @@ fn generate_cyclonedx_sbom(
 
     let mut components = vec![serde_json::json!({
         "type": "library",
-        "bom-ref": format!("pkg:conary/{}@{}", name, version),
+        "bom-ref": purl(name, version),
         "name": name,
         "version": version,
-        "purl": format!("pkg:conary/{}@{}", name, version),
+        "purl": purl(name, version),
         "hashes": prov.upstream_hash.as_ref().map(|h| {
             let parts: Vec<&str> = h.splitn(2, ':').collect();
             vec![serde_json::json!({
@@ -506,22 +497,22 @@ fn generate_cyclonedx_sbom(
     })];
 
     let mut dependencies = vec![serde_json::json!({
-        "ref": format!("pkg:conary/{}@{}", name, version),
-        "dependsOn": deps.iter().map(|(n, v, _)| format!("pkg:conary/{}@{}", n, v)).collect::<Vec<_>>()
+        "ref": purl(name, version),
+        "dependsOn": deps.iter().map(|(n, v, _)| purl(n, v)).collect::<Vec<_>>()
     })];
 
     // Add dependency components
     for (dep_name, dep_version, _dep_dna) in deps {
         components.push(serde_json::json!({
             "type": "library",
-            "bom-ref": format!("pkg:conary/{}@{}", dep_name, dep_version),
+            "bom-ref": purl(dep_name, dep_version),
             "name": dep_name,
             "version": dep_version,
-            "purl": format!("pkg:conary/{}@{}", dep_name, dep_version)
+            "purl": purl(dep_name, dep_version)
         }));
 
         dependencies.push(serde_json::json!({
-            "ref": format!("pkg:conary/{}@{}", dep_name, dep_version),
+            "ref": purl(dep_name, dep_version),
             "dependsOn": []
         }));
     }
@@ -542,7 +533,7 @@ fn generate_cyclonedx_sbom(
                 "type": "application",
                 "name": name,
                 "version": version,
-                "purl": format!("pkg:conary/{}@{}", name, version)
+                "purl": purl(name, version)
             }
         },
         "components": components,
@@ -590,7 +581,7 @@ pub fn cmd_provenance_register(
     keyless: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -657,7 +648,7 @@ pub fn cmd_provenance_audit(
     missing: Option<&str>,
     include_converted: bool,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary::db::open(db_path)?;
 
     println!("=== Provenance Audit ===");
     println!();
@@ -1083,12 +1074,9 @@ fn print_provenance_text(
     }
     println!();
 
-    let show_source = section == "all" || section == "source";
-    let show_build = section == "all" || section == "build";
-    let show_signatures = section == "all" || section == "signatures";
-    let show_content = section == "all" || section == "content";
+    let show = |name: &str| section == "all" || section == name;
 
-    if show_source {
+    if show("source") {
         println!("--- Source Layer ---");
         if let Some(ref url) = prov.upstream_url {
             println!("  Upstream: {}", url);
@@ -1108,7 +1096,7 @@ fn print_provenance_text(
         println!();
     }
 
-    if show_build {
+    if show("build") {
         println!("--- Build Layer ---");
         if let Some(ref hash) = prov.recipe_hash {
             println!("  Recipe hash: {}", hash);
@@ -1128,7 +1116,7 @@ fn print_provenance_text(
         println!();
     }
 
-    if show_signatures {
+    if show("signatures") {
         println!("--- Signature Layer ---");
         if prov.signatures_json.is_some() {
             println!("  Signatures: (see JSON output for details)");
@@ -1141,7 +1129,7 @@ fn print_provenance_text(
         println!();
     }
 
-    if show_content {
+    if show("content") {
         println!("--- Content Layer ---");
         if let Some(ref root) = prov.merkle_root {
             println!("  Merkle root: {}", root);
@@ -1183,45 +1171,28 @@ fn print_provenance_json(prov: &ProvenanceData, section: &str, _recursive: bool)
 
 /// Print provenance in tree format
 fn print_provenance_tree(prov: &ProvenanceData, _section: &str, _recursive: bool) -> Result<()> {
-    println!("DNA: {}", prov.dna_hash.as_deref().unwrap_or("(none)"));
+    fn field(val: &Option<String>) -> &str {
+        val.as_deref().unwrap_or("(none)")
+    }
+
+    let rekor = prov
+        .rekor_log_index
+        .map(|i| i.to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+
+    println!("DNA: {}", field(&prov.dna_hash));
     println!("├── Source");
-    println!(
-        "│   ├── URL: {}",
-        prov.upstream_url.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "│   ├── Hash: {}",
-        prov.upstream_hash.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "│   └── Git: {}",
-        prov.git_commit.as_deref().unwrap_or("(none)")
-    );
+    println!("│   ├── URL: {}", field(&prov.upstream_url));
+    println!("│   ├── Hash: {}", field(&prov.upstream_hash));
+    println!("│   └── Git: {}", field(&prov.git_commit));
     println!("├── Build");
-    println!(
-        "│   ├── Recipe: {}",
-        prov.recipe_hash.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "│   ├── Arch: {}",
-        prov.host_arch.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "│   └── Kernel: {}",
-        prov.host_kernel.as_deref().unwrap_or("(none)")
-    );
+    println!("│   ├── Recipe: {}", field(&prov.recipe_hash));
+    println!("│   ├── Arch: {}", field(&prov.host_arch));
+    println!("│   └── Kernel: {}", field(&prov.host_kernel));
     println!("├── Signatures");
-    println!(
-        "│   └── Rekor: {}",
-        prov.rekor_log_index
-            .map(|i| i.to_string())
-            .unwrap_or_else(|| "(none)".to_string())
-    );
+    println!("│   └── Rekor: {}", rekor);
     println!("└── Content");
-    println!(
-        "    └── Merkle: {}",
-        prov.merkle_root.as_deref().unwrap_or("(none)")
-    );
+    println!("    └── Merkle: {}", field(&prov.merkle_root));
 
     Ok(())
 }

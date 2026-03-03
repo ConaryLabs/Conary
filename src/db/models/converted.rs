@@ -12,6 +12,14 @@
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+/// Column list for ConvertedPackage SELECT queries (avoids repetition across methods)
+const CONVERTED_COLUMNS: &str = "id, trove_id, original_format, original_checksum, \
+    conversion_version, conversion_fidelity, detected_hooks, converted_at, \
+    enhancement_version, inferred_caps_json, extracted_provenance_json, \
+    enhancement_status, enhancement_error, enhancement_attempted_at, \
+    package_name, package_version, distro, chunk_hashes_json, total_size, \
+    content_hash, ccs_path";
+
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages
 pub const CONVERSION_VERSION: i32 = 1;
@@ -218,33 +226,19 @@ impl ConvertedPackage {
 
     /// Find a converted package by its original checksum
     pub fn find_by_checksum(conn: &Connection, checksum: &str) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-                 FROM converted_packages WHERE original_checksum = ?1",
-                [checksum],
-                Self::from_row,
-            )
-            .optional()?;
-
+        let sql = format!(
+            "SELECT {CONVERTED_COLUMNS} FROM converted_packages WHERE original_checksum = ?1"
+        );
+        let result = conn.query_row(&sql, [checksum], Self::from_row).optional()?;
         Ok(result)
     }
 
     /// Find a converted package by trove_id
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-                 FROM converted_packages WHERE trove_id = ?1",
-                [trove_id],
-                Self::from_row,
-            )
-            .optional()?;
-
+        let sql = format!(
+            "SELECT {CONVERTED_COLUMNS} FROM converted_packages WHERE trove_id = ?1"
+        );
+        let result = conn.query_row(&sql, [trove_id], Self::from_row).optional()?;
         Ok(result)
     }
 
@@ -255,34 +249,26 @@ impl ConvertedPackage {
 
     /// List all converted packages with a specific fidelity level
     pub fn find_by_fidelity(conn: &Connection, fidelity: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                    package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-             FROM converted_packages WHERE conversion_fidelity = ?1
-             ORDER BY converted_at DESC",
-        )?;
-
+        let sql = format!(
+            "SELECT {CONVERTED_COLUMNS} FROM converted_packages \
+             WHERE conversion_fidelity = ?1 ORDER BY converted_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([fidelity], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-
         Ok(results)
     }
 
     /// List all converted packages
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                    enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                    package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-             FROM converted_packages ORDER BY converted_at DESC",
-        )?;
-
+        let sql = format!(
+            "SELECT {CONVERTED_COLUMNS} FROM converted_packages ORDER BY converted_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-
         Ok(results)
     }
 
@@ -294,31 +280,21 @@ impl ConvertedPackage {
         version: Option<&str>,
     ) -> Result<Option<Self>> {
         let result = if let Some(ver) = version {
-            conn.query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-                 FROM converted_packages
-                 WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3",
-                params![distro, name, ver],
-                Self::from_row,
-            )
-            .optional()?
+            let sql = format!(
+                "SELECT {CONVERTED_COLUMNS} FROM converted_packages \
+                 WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3"
+            );
+            conn.query_row(&sql, params![distro, name, ver], Self::from_row)
+                .optional()?
         } else {
-            // Find latest version for this package
-            conn.query_row(
-                "SELECT id, trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks, converted_at,
-                        enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status, enhancement_error, enhancement_attempted_at,
-                        package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
-                 FROM converted_packages
-                 WHERE distro = ?1 AND package_name = ?2
-                 ORDER BY converted_at DESC LIMIT 1",
-                params![distro, name],
-                Self::from_row,
-            )
-            .optional()?
+            let sql = format!(
+                "SELECT {CONVERTED_COLUMNS} FROM converted_packages \
+                 WHERE distro = ?1 AND package_name = ?2 \
+                 ORDER BY converted_at DESC LIMIT 1"
+            );
+            conn.query_row(&sql, params![distro, name], Self::from_row)
+                .optional()?
         };
-
         Ok(result)
     }
 

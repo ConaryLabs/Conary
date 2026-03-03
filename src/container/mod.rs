@@ -192,20 +192,8 @@ impl ContainerConfig {
     /// Create a strict config with maximum isolation
     pub fn strict() -> Self {
         Self {
-            isolate_pid: true,
-            isolate_uts: true,
-            isolate_ipc: true,
-            isolate_mount: true,
-            isolate_network: true, // Strict mode includes network isolation
-            memory_limit: DEFAULT_MEMORY_LIMIT,
-            cpu_time_limit: DEFAULT_CPU_TIME_LIMIT,
-            file_size_limit: DEFAULT_FILE_SIZE_LIMIT,
-            nproc_limit: DEFAULT_NPROC_LIMIT,
             timeout: Duration::from_secs(30),
-            hostname: "conary-sandbox".to_string(),
-            bind_mounts: default_bind_mounts(),
-            workdir: PathBuf::from("/"),
-            capability_policy: None,
+            ..Self::default()
         }
     }
 
@@ -371,6 +359,16 @@ fn default_bind_mounts() -> Vec<BindMount> {
     ]
 }
 
+/// Write script content to a file and set it executable (mode 0o700).
+fn write_executable_script(path: &Path, content: &str) -> Result<()> {
+    let mut f = File::create(path)?;
+    f.write_all(content.as_bytes())?;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o700);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
 /// Container sandbox for executing scriptlets
 pub struct Sandbox {
     config: ContainerConfig,
@@ -439,15 +437,8 @@ impl Sandbox {
         // Set up the container filesystem
         self.setup_container_fs(root_dir.path())?;
 
-        // Write the script to execute
         let script_path = root_dir.path().join("script.sh");
-        {
-            let mut f = File::create(&script_path)?;
-            f.write_all(script_content.as_bytes())?;
-            let mut perms = fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(&script_path, perms)?;
-        }
+        write_executable_script(&script_path, script_content)?;
 
         // Fork and execute in isolated namespaces
         let start = Instant::now();
@@ -484,14 +475,7 @@ impl Sandbox {
     ) -> Result<(i32, String, String)> {
         let temp_dir = TempDir::new()?;
         let script_path = temp_dir.path().join("script.sh");
-
-        {
-            let mut f = File::create(&script_path)?;
-            f.write_all(script_content.as_bytes())?;
-            let mut perms = fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(&script_path, perms)?;
-        }
+        write_executable_script(&script_path, script_content)?;
 
         // Apply resource limits before exec
         self.apply_resource_limits()?;
@@ -580,12 +564,7 @@ impl Sandbox {
                         sig
                     )));
                 }
-                Ok(WaitStatus::StillAlive) => {
-                    // Still running, sleep a bit
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Ok(_) => {
-                    // Other status, keep waiting
+                Ok(WaitStatus::StillAlive) | Ok(_) => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(e) => {
@@ -604,23 +583,17 @@ impl Sandbox {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<i32> {
-        // Unshare namespaces
-        let mut flags = CloneFlags::empty();
-        if self.config.isolate_pid {
-            flags |= CloneFlags::CLONE_NEWPID;
-        }
-        if self.config.isolate_uts {
-            flags |= CloneFlags::CLONE_NEWUTS;
-        }
-        if self.config.isolate_ipc {
-            flags |= CloneFlags::CLONE_NEWIPC;
-        }
-        if self.config.isolate_mount {
-            flags |= CloneFlags::CLONE_NEWNS;
-        }
-        if self.config.isolate_network {
-            flags |= CloneFlags::CLONE_NEWNET;
-        }
+        let namespace_flags: &[(bool, CloneFlags)] = &[
+            (self.config.isolate_pid, CloneFlags::CLONE_NEWPID),
+            (self.config.isolate_uts, CloneFlags::CLONE_NEWUTS),
+            (self.config.isolate_ipc, CloneFlags::CLONE_NEWIPC),
+            (self.config.isolate_mount, CloneFlags::CLONE_NEWNS),
+            (self.config.isolate_network, CloneFlags::CLONE_NEWNET),
+        ];
+        let flags = namespace_flags
+            .iter()
+            .filter(|(enabled, _)| *enabled)
+            .fold(CloneFlags::empty(), |acc, (_, flag)| acc | *flag);
 
         if !flags.is_empty() {
             unshare(flags).map_err(|e| Error::ScriptletError(format!("Unshare failed: {}", e)))?;

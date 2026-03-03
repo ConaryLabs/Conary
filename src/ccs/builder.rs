@@ -624,14 +624,12 @@ fn build_binary_manifest(
     content_root: super::binary_manifest::Hash,
 ) -> Result<super::binary_manifest::BinaryManifest> {
     use crate::ccs::binary_manifest::{
-        BinaryAlternativeHook, BinaryBuildInfo, BinaryCapability, BinaryDirectoryHook,
-        BinaryGroupHook, BinaryHooks, BinaryManifest, BinaryPlatform, BinaryRequirement,
-        BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook, FORMAT_VERSION,
+        BinaryBuildInfo, BinaryCapability, BinaryManifest, BinaryPlatform, BinaryRequirement,
+        FORMAT_VERSION,
     };
 
     let manifest = &result.manifest;
 
-    // Convert platform
     let platform = manifest.package.platform.as_ref().map(|p| BinaryPlatform {
         os: p.os.clone(),
         arch: p.arch.clone(),
@@ -639,115 +637,36 @@ fn build_binary_manifest(
         abi: p.abi.clone(),
     });
 
-    // Convert provides
-    let mut provides = Vec::new();
-    for cap in &manifest.provides.capabilities {
-        provides.push(BinaryCapability {
+    let provides: Vec<BinaryCapability> = manifest
+        .provides
+        .capabilities
+        .iter()
+        .map(|cap| BinaryCapability {
             name: cap.clone(),
             version: None,
-        });
-    }
+        })
+        .collect();
 
-    // Convert requires
-    let mut requires = Vec::new();
-    for cap in &manifest.requires.capabilities {
-        requires.push(BinaryRequirement {
+    let requires: Vec<BinaryRequirement> = manifest
+        .requires
+        .capabilities
+        .iter()
+        .map(|cap| BinaryRequirement {
             name: cap.name().to_string(),
             version: cap.version().map(String::from),
             kind: "capability".to_string(),
-        });
-    }
-    for pkg in &manifest.requires.packages {
-        requires.push(BinaryRequirement {
-            name: pkg.name.clone(),
-            version: pkg.version.clone(),
-            kind: "package".to_string(),
-        });
-    }
-
-    // Convert hooks
-    let hooks = &manifest.hooks;
-    let binary_hooks = if hooks.users.is_empty()
-        && hooks.groups.is_empty()
-        && hooks.directories.is_empty()
-        && hooks.systemd.is_empty()
-        && hooks.tmpfiles.is_empty()
-        && hooks.sysctl.is_empty()
-        && hooks.alternatives.is_empty()
-    {
-        None
-    } else {
-        Some(BinaryHooks {
-            users: hooks
-                .users
-                .iter()
-                .map(|u| BinaryUserHook {
-                    name: u.name.clone(),
-                    system: u.system,
-                    home: u.home.clone(),
-                    shell: u.shell.clone(),
-                    group: u.group.clone(),
-                })
-                .collect(),
-            groups: hooks
-                .groups
-                .iter()
-                .map(|g| BinaryGroupHook {
-                    name: g.name.clone(),
-                    system: g.system,
-                })
-                .collect(),
-            directories: hooks
-                .directories
-                .iter()
-                .map(|d| BinaryDirectoryHook {
-                    path: d.path.clone(),
-                    mode: u32::from_str_radix(d.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
-                    owner: d.owner.clone(),
-                    group: d.group.clone(),
-                })
-                .collect(),
-            systemd: hooks
-                .systemd
-                .iter()
-                .map(|s| BinarySystemdHook {
-                    unit: s.unit.clone(),
-                    enable: s.enable,
-                })
-                .collect(),
-            tmpfiles: hooks
-                .tmpfiles
-                .iter()
-                .map(|t| BinaryTmpfilesHook {
-                    entry_type: t.entry_type.clone(),
-                    path: t.path.clone(),
-                    mode: u32::from_str_radix(t.mode.trim_start_matches('0'), 8).unwrap_or(0o755),
-                    owner: t.owner.clone(),
-                    group: t.group.clone(),
-                })
-                .collect(),
-            sysctl: hooks
-                .sysctl
-                .iter()
-                .map(|s| BinarySysctlHook {
-                    key: s.key.clone(),
-                    value: s.value.clone(),
-                    only_if_lower: s.only_if_lower,
-                })
-                .collect(),
-            alternatives: hooks
-                .alternatives
-                .iter()
-                .map(|a| BinaryAlternativeHook {
-                    name: a.name.clone(),
-                    path: a.path.clone(),
-                    priority: a.priority,
-                })
-                .collect(),
         })
-    };
+        .chain(manifest.requires.packages.iter().map(|pkg| {
+            BinaryRequirement {
+                name: pkg.name.clone(),
+                version: pkg.version.clone(),
+                kind: "package".to_string(),
+            }
+        }))
+        .collect();
 
-    // Convert build info
+    let binary_hooks = convert_hooks_to_binary(&manifest.hooks);
+
     let build = manifest.build.as_ref().map(|b| BinaryBuildInfo {
         source: b.source.clone(),
         commit: b.commit.clone(),
@@ -769,6 +688,90 @@ fn build_binary_manifest(
         build,
         content_root,
     })
+}
+
+fn parse_octal_mode(mode: &str) -> u32 {
+    u32::from_str_radix(mode.trim_start_matches('0'), 8).unwrap_or(0o755)
+}
+
+fn convert_hooks_to_binary(
+    hooks: &crate::ccs::manifest::Hooks,
+) -> Option<super::binary_manifest::BinaryHooks> {
+    use crate::ccs::binary_manifest::{
+        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks,
+        BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
+    };
+
+    let binary = BinaryHooks {
+        users: hooks
+            .users
+            .iter()
+            .map(|u| BinaryUserHook {
+                name: u.name.clone(),
+                system: u.system,
+                home: u.home.clone(),
+                shell: u.shell.clone(),
+                group: u.group.clone(),
+            })
+            .collect(),
+        groups: hooks
+            .groups
+            .iter()
+            .map(|g| BinaryGroupHook {
+                name: g.name.clone(),
+                system: g.system,
+            })
+            .collect(),
+        directories: hooks
+            .directories
+            .iter()
+            .map(|d| BinaryDirectoryHook {
+                path: d.path.clone(),
+                mode: parse_octal_mode(&d.mode),
+                owner: d.owner.clone(),
+                group: d.group.clone(),
+            })
+            .collect(),
+        systemd: hooks
+            .systemd
+            .iter()
+            .map(|s| BinarySystemdHook {
+                unit: s.unit.clone(),
+                enable: s.enable,
+            })
+            .collect(),
+        tmpfiles: hooks
+            .tmpfiles
+            .iter()
+            .map(|t| BinaryTmpfilesHook {
+                entry_type: t.entry_type.clone(),
+                path: t.path.clone(),
+                mode: parse_octal_mode(&t.mode),
+                owner: t.owner.clone(),
+                group: t.group.clone(),
+            })
+            .collect(),
+        sysctl: hooks
+            .sysctl
+            .iter()
+            .map(|s| BinarySysctlHook {
+                key: s.key.clone(),
+                value: s.value.clone(),
+                only_if_lower: s.only_if_lower,
+            })
+            .collect(),
+        alternatives: hooks
+            .alternatives
+            .iter()
+            .map(|a| BinaryAlternativeHook {
+                name: a.name.clone(),
+                path: a.path.clone(),
+                priority: a.priority,
+            })
+            .collect(),
+    };
+
+    if binary.is_empty() { None } else { Some(binary) }
 }
 
 /// Print build summary

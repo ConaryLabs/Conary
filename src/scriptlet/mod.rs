@@ -34,11 +34,49 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 use wait_timeout::ChildExt;
+
+/// Write script content to a file and set it executable (mode 0o700).
+fn write_executable_script(path: &Path, content: &str) -> Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(content.as_bytes())?;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o700);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Log captured stdout/stderr lines with a phase prefix.
+fn log_script_output(phase: &str, stdout: &str, stderr: &str) {
+    if !stdout.is_empty() {
+        for line in stdout.lines() {
+            info!("[{}] {}", phase, line);
+        }
+    }
+    if !stderr.is_empty() {
+        for line in stderr.lines() {
+            warn!("[{}] {}", phase, line);
+        }
+    }
+}
+
+/// Check an exit status from a scriptlet and return an appropriate error.
+fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Result<()> {
+    if status.success() {
+        info!("{} scriptlet completed successfully{}", phase, context);
+        Ok(())
+    } else {
+        let code = status.code().unwrap_or(-1);
+        Err(Error::ScriptletError(format!(
+            "{} scriptlet failed with exit code {}{}",
+            phase, code, context
+        )))
+    }
+}
 
 /// Sandbox mode for scriptlet execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -303,17 +341,7 @@ impl ScriptletExecutor {
         let mut sandbox = Sandbox::new(config);
         let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
 
-        // Log output
-        if !stdout.is_empty() {
-            for line in stdout.lines() {
-                info!("[{}] {}", phase, line);
-            }
-        }
-        if !stderr.is_empty() {
-            for line in stderr.lines() {
-                warn!("[{}] {}", phase, line);
-            }
-        }
+        log_script_output(phase, &stdout, &stderr);
 
         if code == 0 {
             info!("{} scriptlet completed successfully (sandboxed)", phase);
@@ -340,17 +368,9 @@ impl ScriptletExecutor {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<()> {
-        // Create temp directory for script
         let temp_dir = TempDir::new()?;
         let script_path = temp_dir.path().join("scriptlet.sh");
-
-        {
-            let mut file = File::create(&script_path)?;
-            file.write_all(content.as_bytes())?;
-            let mut perms = fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(&script_path, perms)?;
-        }
+        write_executable_script(&script_path, content)?;
 
         // Copy script into target root temporarily
         let target_script_dir = self.root.join("tmp/conary-scriptlets");
@@ -417,48 +437,25 @@ impl ScriptletExecutor {
             Error::ScriptletError(format!("Failed to spawn chroot for scriptlet: {}", e))
         })?;
 
-        // Wait with timeout
+        let context = format!(" (chroot: {})", self.root.display());
+
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
                 let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-
-                if !stdout.is_empty() {
-                    for line in stdout.lines() {
-                        info!("[{}] {}", phase, line);
-                    }
-                }
-                if !stderr.is_empty() {
-                    for line in stderr.lines() {
-                        warn!("[{}] {}", phase, line);
-                    }
-                }
-
-                if status.success() {
-                    info!(
-                        "{} scriptlet completed successfully (chroot: {})",
-                        phase,
-                        self.root.display()
-                    );
-                    Ok(())
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    Err(Error::ScriptletError(format!(
-                        "{} scriptlet failed with exit code {} (chroot: {})",
-                        phase,
-                        code,
-                        self.root.display()
-                    )))
-                }
+                log_script_output(
+                    phase,
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                );
+                check_scriptlet_status(phase, status, &context)
             }
             None => {
                 let _ = child.kill();
                 Err(Error::ScriptletError(format!(
-                    "{} scriptlet timed out after {} seconds (chroot: {})",
+                    "{} scriptlet timed out after {} seconds{}",
                     phase,
                     self.timeout.as_secs(),
-                    self.root.display()
+                    context
                 )))
             }
         }
@@ -473,17 +470,9 @@ impl ScriptletExecutor {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<()> {
-        // Create temp directory for script
         let temp_dir = TempDir::new()?;
         let script_path = temp_dir.path().join("scriptlet.sh");
-
-        {
-            let mut file = File::create(&script_path)?;
-            file.write_all(content.as_bytes())?;
-            let mut perms = fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(&script_path, perms)?;
-        }
+        write_executable_script(&script_path, content)?;
 
         debug!(
             "Executing script: {} {} {:?}",
@@ -492,7 +481,6 @@ impl ScriptletExecutor {
             args
         );
 
-        // Execute with timeout and stdin nullification
         let mut cmd = Command::new(interpreter);
         cmd.arg(&script_path)
             .args(args)
@@ -508,38 +496,17 @@ impl ScriptletExecutor {
             .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
 
-        // Wait with timeout
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
-                // Capture output for logging
                 let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-
-                if !stdout.is_empty() {
-                    for line in stdout.lines() {
-                        info!("[{}] {}", phase, line);
-                    }
-                }
-                if !stderr.is_empty() {
-                    for line in stderr.lines() {
-                        warn!("[{}] {}", phase, line);
-                    }
-                }
-
-                if status.success() {
-                    info!("{} scriptlet completed successfully", phase);
-                    Ok(())
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    Err(Error::ScriptletError(format!(
-                        "{} scriptlet failed with exit code {}",
-                        phase, code
-                    )))
-                }
+                log_script_output(
+                    phase,
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                );
+                check_scriptlet_status(phase, status, "")
             }
             None => {
-                // Timeout - kill the process
                 let _ = child.kill();
                 Err(Error::ScriptletError(format!(
                     "{} scriptlet timed out after {} seconds",

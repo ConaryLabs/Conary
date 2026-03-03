@@ -10,6 +10,13 @@
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+/// Column list for ComponentDependency SELECT queries (avoids repetition across methods)
+const COMP_DEP_COLUMNS: &str = "id, component_id, depends_on_component, depends_on_package, \
+    dependency_type, version_constraint";
+
+/// Column list for ComponentProvide SELECT queries (avoids repetition across methods)
+const COMP_PROVIDE_COLUMNS: &str = "id, component_id, capability, version";
+
 /// Dependency type for component dependencies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentDepType {
@@ -111,25 +118,20 @@ impl ComponentDependency {
 
     /// Find all dependencies for a component
     pub fn find_by_component(conn: &Connection, component_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, component_id, depends_on_component, depends_on_package, dependency_type, version_constraint
-             FROM component_dependencies WHERE component_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMP_DEP_COLUMNS} FROM component_dependencies WHERE component_id = ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let deps = stmt
             .query_map([component_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(deps)
     }
 
     /// Find a dependency by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, component_id, depends_on_component, depends_on_package, dependency_type, version_constraint
-             FROM component_dependencies WHERE id = ?1",
-        )?;
-
+        let sql = format!("SELECT {COMP_DEP_COLUMNS} FROM component_dependencies WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
         let dep = stmt.query_row([id], Self::from_row).optional()?;
         Ok(dep)
     }
@@ -140,16 +142,14 @@ impl ComponentDependency {
         package: &str,
         component: &str,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, component_id, depends_on_component, depends_on_package, dependency_type, version_constraint
-             FROM component_dependencies
-             WHERE depends_on_package = ?1 AND depends_on_component = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMP_DEP_COLUMNS} FROM component_dependencies \
+             WHERE depends_on_package = ?1 AND depends_on_component = ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let deps = stmt
             .query_map(params![package, component], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(deps)
     }
 
@@ -220,29 +220,25 @@ impl ComponentProvide {
 
     /// Find all provides for a component
     pub fn find_by_component(conn: &Connection, component_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, component_id, capability, version
-             FROM component_provides WHERE component_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMP_PROVIDE_COLUMNS} FROM component_provides WHERE component_id = ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([component_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
     /// Find components that provide a capability
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, component_id, capability, version
-             FROM component_provides WHERE capability = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMP_PROVIDE_COLUMNS} FROM component_provides WHERE capability = ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 

@@ -27,7 +27,7 @@ use conary::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, ProvideEntry, ScriptletEntry, Trove,
 };
 use conary::dependencies::{LanguageDep, LanguageDepDetector};
-use conary::packages::traits::{DependencyType, ExtractedFile, Scriptlet};
+use conary::packages::traits::{ExtractedFile, Scriptlet};
 use conary::scriptlet::SandboxMode;
 use conary::transaction::{
     FileToRemove, PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
@@ -399,27 +399,17 @@ impl<'a> BatchInstaller<'a> {
 
                 // Insert dependencies
                 for dep in &pkg.dependencies {
-                    let dep_type_str = match dep.dep_type {
-                        DependencyType::Runtime => "runtime",
-                        DependencyType::Build => "build",
-                        DependencyType::Optional => "optional",
-                    };
                     let mut dep_entry = DependencyEntry::new(
                         trove_id,
                         dep.name.clone(),
                         None,
-                        dep_type_str.to_string(),
+                        dep.dep_type.as_str().to_string(),
                         dep.version.clone(),
                     );
                     dep_entry.insert(tx)?;
                 }
 
                 // Store scriptlets
-                let format_str = match pkg.format {
-                    PackageFormatType::Rpm => "rpm",
-                    PackageFormatType::Deb => "deb",
-                    PackageFormatType::Arch => "arch",
-                };
                 for scriptlet in &pkg.scriptlets {
                     let mut entry = ScriptletEntry::with_flags(
                         trove_id,
@@ -427,7 +417,7 @@ impl<'a> BatchInstaller<'a> {
                         scriptlet.interpreter.clone(),
                         scriptlet.content.clone(),
                         scriptlet.flags.clone(),
-                        format_str,
+                        pkg.format.as_str(),
                     );
                     entry.insert(tx)?;
                 }
@@ -520,35 +510,7 @@ impl<'a> BatchInstaller<'a> {
             .flat_map(|pkg| pkg.extracted_files.iter().map(|f| f.path.clone()))
             .collect();
 
-        let trigger_executor = conary::trigger::TriggerExecutor::new(&conn, Path::new(self.root));
-        let triggered = trigger_executor
-            .record_triggers(changeset_id, &all_file_paths)
-            .unwrap_or_else(|e| {
-                warn!("Failed to record triggers: {}", e);
-                Vec::new()
-            });
-
-        if !triggered.is_empty() {
-            info!("Recorded {} trigger(s) for execution", triggered.len());
-            match trigger_executor.execute_pending(changeset_id) {
-                Ok(results) => {
-                    if results.total() > 0 {
-                        info!(
-                            "Triggers: {} succeeded, {} failed, {} skipped",
-                            results.succeeded, results.failed, results.skipped
-                        );
-                        if !results.all_succeeded() {
-                            for error in &results.errors {
-                                warn!("Trigger error: {}", error);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Trigger execution failed: {}", e);
-                }
-            }
-        }
+        super::run_triggers(&conn, Path::new(self.root), changeset_id, &all_file_paths);
 
         // Phase 8: Finish transaction
         let tx_result = txn.finish().context("Failed to finish batch transaction")?;
@@ -715,6 +677,21 @@ impl fmt::Display for BatchConflict {
     }
 }
 
+fn get_old_files_for_upgrade(
+    conn: &Connection,
+    old_trove: Option<&Trove>,
+    new_files: &[conary::packages::traits::PackageFile],
+) -> Result<Vec<FileToRemove>> {
+    if let Some(old_trove) = old_trove
+        && let Some(old_id) = old_trove.id
+    {
+        let new_paths: HashSet<&str> = new_files.iter().map(|f| f.path.as_str()).collect();
+        super::execute::get_files_to_remove(conn, old_id, &new_paths)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// Prepare a package for batch installation
 ///
 /// This extracts the package, parses metadata, and checks for upgrades.
@@ -746,17 +723,7 @@ pub fn prepare_package_for_batch(
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
     };
 
-    // Get files to remove for upgrades
-    let old_files = if let Some(ref old_trove) = old_trove {
-        if let Some(old_id) = old_trove.id {
-            let new_paths: HashSet<&str> = pkg.files().iter().map(|f| f.path.as_str()).collect();
-            super::execute::get_files_to_remove(&conn, old_id, &new_paths)?
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+    let old_files = get_old_files_for_upgrade(&conn, old_trove.as_deref(), pkg.files())?;
 
     // Extract files
     info!("Extracting files from {}...", pkg.name());
@@ -770,8 +737,7 @@ pub fn prepare_package_for_batch(
     let installed_components: Vec<ComponentType> = classified_files.keys().copied().collect();
 
     // Detect language provides
-    let installed_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
-    let language_provides = LanguageDepDetector::detect_all_provides(&installed_paths);
+    let language_provides = LanguageDepDetector::detect_all_provides(&file_paths);
 
     Ok(PreparedPackage {
         name: pkg.name().to_string(),
@@ -821,17 +787,7 @@ pub fn prepare_from_parsed(
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
     };
 
-    // Get files to remove for upgrades
-    let old_files = if let Some(ref old_trove) = old_trove {
-        if let Some(old_id) = old_trove.id {
-            let new_paths: HashSet<&str> = pkg.files().iter().map(|f| f.path.as_str()).collect();
-            super::execute::get_files_to_remove(&conn, old_id, &new_paths)?
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+    let old_files = get_old_files_for_upgrade(&conn, old_trove.as_deref(), pkg.files())?;
 
     // Extract files
     info!("Extracting files from {}...", pkg.name());

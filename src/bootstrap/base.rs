@@ -383,64 +383,31 @@ impl BaseBuilder {
         Ok(())
     }
 
+    fn phase_packages(phase: BaseBuildPhase) -> &'static [(&'static str, &'static str)] {
+        match phase {
+            BaseBuildPhase::Libraries => Self::LIBRARY_PACKAGES,
+            BaseBuildPhase::DevTools => Self::DEV_PACKAGES,
+            BaseBuildPhase::CoreSystem => Self::CORE_PACKAGES,
+            BaseBuildPhase::Userland => Self::USERLAND_PACKAGES,
+            BaseBuildPhase::Boot => Self::BOOT_PACKAGES,
+        }
+    }
+
     /// Initialize packages for all phases
     pub fn init_packages(&mut self) -> Result<(), BaseError> {
         self.packages.clear();
 
-        // Add packages for each phase
-        for (name, category) in Self::LIBRARY_PACKAGES {
-            self.packages.push(BasePackage {
-                name: (*name).to_string(),
-                category: (*category).to_string(),
-                phase: BaseBuildPhase::Libraries,
-                recipe: None,
-                status: BaseBuildStatus::Pending,
-                log: String::new(),
-            });
-        }
-
-        for (name, category) in Self::DEV_PACKAGES {
-            self.packages.push(BasePackage {
-                name: (*name).to_string(),
-                category: (*category).to_string(),
-                phase: BaseBuildPhase::DevTools,
-                recipe: None,
-                status: BaseBuildStatus::Pending,
-                log: String::new(),
-            });
-        }
-
-        for (name, category) in Self::CORE_PACKAGES {
-            self.packages.push(BasePackage {
-                name: (*name).to_string(),
-                category: (*category).to_string(),
-                phase: BaseBuildPhase::CoreSystem,
-                recipe: None,
-                status: BaseBuildStatus::Pending,
-                log: String::new(),
-            });
-        }
-
-        for (name, category) in Self::USERLAND_PACKAGES {
-            self.packages.push(BasePackage {
-                name: (*name).to_string(),
-                category: (*category).to_string(),
-                phase: BaseBuildPhase::Userland,
-                recipe: None,
-                status: BaseBuildStatus::Pending,
-                log: String::new(),
-            });
-        }
-
-        for (name, category) in Self::BOOT_PACKAGES {
-            self.packages.push(BasePackage {
-                name: (*name).to_string(),
-                category: (*category).to_string(),
-                phase: BaseBuildPhase::Boot,
-                recipe: None,
-                status: BaseBuildStatus::Pending,
-                log: String::new(),
-            });
+        for &phase in BaseBuildPhase::all() {
+            for (name, category) in Self::phase_packages(phase) {
+                self.packages.push(BasePackage {
+                    name: (*name).to_string(),
+                    category: (*category).to_string(),
+                    phase,
+                    recipe: None,
+                    status: BaseBuildStatus::Pending,
+                    log: String::new(),
+                });
+            }
         }
 
         info!(
@@ -752,46 +719,29 @@ impl BaseBuilder {
         Ok(())
     }
 
-    /// Extract source archive
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), BaseError> {
         fs::create_dir_all(dest)?;
+
+        let archive_str = archive.to_str().expect("archive path must be valid utf-8");
+        let dest_str = dest.to_str().expect("dest path must be valid utf-8");
 
         let filename = archive
             .file_name()
             .expect("archive path must have a filename")
             .to_string_lossy();
-        let args = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            vec![
-                "xJf",
-                archive.to_str().expect("archive path must be valid utf-8"),
-                "-C",
-                dest.to_str().expect("dest path must be valid utf-8"),
-            ]
+
+        let flag = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
+            "xJf"
         } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            vec![
-                "xzf",
-                archive.to_str().expect("archive path must be valid utf-8"),
-                "-C",
-                dest.to_str().expect("dest path must be valid utf-8"),
-            ]
+            "xzf"
         } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            vec![
-                "xjf",
-                archive.to_str().expect("archive path must be valid utf-8"),
-                "-C",
-                dest.to_str().expect("dest path must be valid utf-8"),
-            ]
+            "xjf"
         } else {
-            vec![
-                "xf",
-                archive.to_str().expect("archive path must be valid utf-8"),
-                "-C",
-                dest.to_str().expect("dest path must be valid utf-8"),
-            ]
+            "xf"
         };
 
         let output = Command::new("tar")
-            .args(&args)
+            .args([flag, archive_str, "-C", dest_str])
             .output()
             .map_err(|e| BaseError::BuildFailed("extract".to_string(), e.to_string()))?;
 
@@ -847,76 +797,45 @@ impl BaseBuilder {
         Ok(())
     }
 
-    /// Run configure phase
-    fn run_configure(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
+    fn run_recipe_phase(
+        &mut self,
+        idx: usize,
+        workdir: &Path,
+        phase_name: &str,
+        get_cmd: fn(&Recipe) -> Option<&String>,
+    ) -> Result<(), BaseError> {
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
             .expect("recipe must be loaded before build");
 
-        let configure = match &recipe.build.configure {
+        let raw_cmd = match get_cmd(recipe) {
             Some(cmd) if !cmd.is_empty() => cmd.clone(),
             _ => return Ok(()),
         };
 
         let destdir = self.target_root.to_string_lossy().to_string();
-        let mut cmd = recipe.substitute(&configure, &destdir);
+        let mut cmd = recipe.substitute(&raw_cmd, &destdir);
         cmd = self.substitute_vars(&cmd);
 
-        info!("  Configuring...");
+        info!("  {}...", phase_name);
         self.packages[idx]
             .log
-            .push_str(&format!("=== Configure ===\n{}\n", cmd));
+            .push_str(&format!("=== {} ===\n{}\n", phase_name, cmd));
 
-        self.run_shell_command(idx, &cmd, workdir, "configure")
+        self.run_shell_command(idx, &cmd, workdir, phase_name)
     }
 
-    /// Run make phase
+    fn run_configure(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
+        self.run_recipe_phase(idx, workdir, "configure", |r| r.build.configure.as_ref())
+    }
+
     fn run_make(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx]
-            .recipe
-            .as_ref()
-            .expect("recipe must be loaded before build");
-
-        let make = match &recipe.build.make {
-            Some(cmd) => cmd.clone(),
-            None => return Ok(()),
-        };
-
-        let destdir = self.target_root.to_string_lossy().to_string();
-        let mut cmd = recipe.substitute(&make, &destdir);
-        cmd = self.substitute_vars(&cmd);
-
-        info!("  Building...");
-        self.packages[idx]
-            .log
-            .push_str(&format!("=== Make ===\n{}\n", cmd));
-
-        self.run_shell_command(idx, &cmd, workdir, "make")
+        self.run_recipe_phase(idx, workdir, "make", |r| r.build.make.as_ref())
     }
 
-    /// Run install phase
     fn run_install(&mut self, idx: usize, workdir: &Path) -> Result<(), BaseError> {
-        let recipe = self.packages[idx]
-            .recipe
-            .as_ref()
-            .expect("recipe must be loaded before build");
-
-        let install = match &recipe.build.install {
-            Some(cmd) => cmd.clone(),
-            None => return Ok(()),
-        };
-
-        let destdir = self.target_root.to_string_lossy().to_string();
-        let mut cmd = recipe.substitute(&install, &destdir);
-        cmd = self.substitute_vars(&cmd);
-
-        info!("  Installing...");
-        self.packages[idx]
-            .log
-            .push_str(&format!("=== Install ===\n{}\n", cmd));
-
-        self.run_shell_command(idx, &cmd, workdir, "install")
+        self.run_recipe_phase(idx, workdir, "install", |r| r.build.install.as_ref())
     }
 
     /// Substitute build variables

@@ -79,6 +79,27 @@ static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
     }
 });
 
+fn source_line(cap: &regex::Captures) -> String {
+    cap.get(0)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default()
+}
+
+fn report_detected(
+    report: &mut FidelityReport,
+    operation_type: OperationType,
+    phase: &str,
+    parameters: std::collections::HashMap<String, String>,
+    cap: &regex::Captures,
+) {
+    report.add_detected(DetectedOperation {
+        operation_type,
+        phase: phase.to_string(),
+        parameters,
+        source_lines: vec![source_line(cap)],
+    });
+}
+
 impl Default for ScriptletAnalyzer {
     fn default() -> Self {
         Self::new()
@@ -131,17 +152,7 @@ impl ScriptletAnalyzer {
                     params.insert("home".to_string(), home.clone());
                 }
 
-                report.add_detected(DetectedOperation {
-                    operation_type: OperationType::UserAdd,
-                    phase: phase.to_string(),
-                    parameters: params,
-                    source_lines: vec![
-                        cap.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    ],
-                });
-
+                report_detected(report, OperationType::UserAdd, phase, params, &cap);
                 hooks.push(DetectedHook::User(hook));
             }
         }
@@ -156,79 +167,45 @@ impl ScriptletAnalyzer {
                     params.insert("system".to_string(), "true".to_string());
                 }
 
-                report.add_detected(DetectedOperation {
-                    operation_type: OperationType::GroupAdd,
-                    phase: phase.to_string(),
-                    parameters: params,
-                    source_lines: vec![
-                        cap.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    ],
-                });
-
+                report_detected(report, OperationType::GroupAdd, phase, params, &cap);
                 hooks.push(DetectedHook::Group(hook));
             }
         }
 
-        // Directory creation (mkdir -p)
-        for cap in PATTERNS.mkdir.captures_iter(content) {
-            let path = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-            if !path.is_empty() && path.starts_with('/') {
-                let hook = DirectoryHook {
-                    path: path.to_string(),
-                    mode: "0755".to_string(),
-                    owner: "root".to_string(),
-                    group: "root".to_string(),
-                    cleanup: None,
-                };
+        // Directory creation (mkdir -p and install -d)
+        let dir_matches: Vec<_> = PATTERNS
+            .mkdir
+            .captures_iter(content)
+            .filter_map(|cap| {
+                let path = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+                (!path.is_empty() && path.starts_with('/'))
+                    .then(|| (path.to_string(), source_line(&cap)))
+            })
+            .chain(PATTERNS.install_d.captures_iter(content).filter_map(|cap| {
+                let path = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                (!path.is_empty() && path.starts_with('/'))
+                    .then(|| (path.to_string(), source_line(&cap)))
+            }))
+            .collect();
 
-                let mut params = std::collections::HashMap::new();
-                params.insert("path".to_string(), path.to_string());
+        for (path, src_line) in dir_matches {
+            let hook = DirectoryHook {
+                path: path.clone(),
+                mode: "0755".to_string(),
+                owner: "root".to_string(),
+                group: "root".to_string(),
+                cleanup: None,
+            };
 
-                report.add_detected(DetectedOperation {
-                    operation_type: OperationType::DirectoryCreate,
-                    phase: phase.to_string(),
-                    parameters: params,
-                    source_lines: vec![
-                        cap.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    ],
-                });
+            let params = [("path".to_string(), path)].into_iter().collect();
+            report.add_detected(DetectedOperation {
+                operation_type: OperationType::DirectoryCreate,
+                phase: phase.to_string(),
+                parameters: params,
+                source_lines: vec![src_line],
+            });
 
-                hooks.push(DetectedHook::Directory(hook));
-            }
-        }
-
-        // Directory creation (install -d)
-        for cap in PATTERNS.install_d.captures_iter(content) {
-            let path = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-            if !path.is_empty() && path.starts_with('/') {
-                let hook = DirectoryHook {
-                    path: path.to_string(),
-                    mode: "0755".to_string(),
-                    owner: "root".to_string(),
-                    group: "root".to_string(),
-                    cleanup: None,
-                };
-
-                let mut params = std::collections::HashMap::new();
-                params.insert("path".to_string(), path.to_string());
-
-                report.add_detected(DetectedOperation {
-                    operation_type: OperationType::DirectoryCreate,
-                    phase: phase.to_string(),
-                    parameters: params,
-                    source_lines: vec![
-                        cap.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    ],
-                });
-
-                hooks.push(DetectedHook::Directory(hook));
-            }
+            hooks.push(DetectedHook::Directory(hook));
         }
 
         // Systemd enable/disable
@@ -242,59 +219,42 @@ impl ScriptletAnalyzer {
                     enable: action == "enable",
                 };
 
-                let mut params = std::collections::HashMap::new();
-                params.insert("unit".to_string(), unit.to_string());
-                params.insert("enable".to_string(), hook.enable.to_string());
+                let params = [
+                    ("unit".to_string(), unit.to_string()),
+                    ("enable".to_string(), hook.enable.to_string()),
+                ]
+                .into_iter()
+                .collect();
 
-                report.add_detected(DetectedOperation {
-                    operation_type: OperationType::SystemdEnable,
-                    phase: phase.to_string(),
-                    parameters: params,
-                    source_lines: vec![
-                        cap.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    ],
-                });
-
+                report_detected(report, OperationType::SystemdEnable, phase, params, &cap);
                 hooks.push(DetectedHook::Systemd(hook));
             }
         }
 
         // Detect common operations that don't need hooks (handled by triggers)
         for cap in PATTERNS.ldconfig.captures_iter(content) {
-            report.add_detected(DetectedOperation {
-                operation_type: OperationType::Ldconfig,
-                phase: phase.to_string(),
-                parameters: std::collections::HashMap::new(),
-                source_lines: vec![
-                    cap.get(0)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_default(),
-                ],
-            });
+            report_detected(
+                report,
+                OperationType::Ldconfig,
+                phase,
+                std::collections::HashMap::new(),
+                &cap,
+            );
         }
 
         for cap in PATTERNS.systemctl_reload.captures_iter(content) {
-            report.add_detected(DetectedOperation {
-                operation_type: OperationType::SystemdReload,
-                phase: phase.to_string(),
-                parameters: std::collections::HashMap::new(),
-                source_lines: vec![
-                    cap.get(0)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_default(),
-                ],
-            });
+            report_detected(
+                report,
+                OperationType::SystemdReload,
+                phase,
+                std::collections::HashMap::new(),
+                &cap,
+            );
         }
 
         // Detect uncertain operations
         for cap in PATTERNS.external_script.captures_iter(content) {
-            let line = cap
-                .get(0)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-            // Skip if it's a shebang line
+            let line = source_line(&cap);
             if !line.trim().starts_with("#!") {
                 report.add_uncertain(UncertainOperation {
                     description: "External script execution".to_string(),
@@ -310,11 +270,7 @@ impl ScriptletAnalyzer {
                 description: "Complex control flow".to_string(),
                 reason: "Contains loops, conditionals, or command substitution".to_string(),
                 severity: UncertaintySeverity::Medium,
-                source_lines: vec![
-                    cap.get(0)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_default(),
-                ],
+                source_lines: vec![source_line(&cap)],
             });
         }
     }

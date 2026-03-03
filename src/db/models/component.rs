@@ -14,6 +14,10 @@ use crate::components::ComponentType;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+/// Column list for Component SELECT queries (avoids repetition across methods)
+const COMPONENT_COLUMNS: &str = "id, parent_trove_id, name, description, installed_at, \
+    is_installed";
+
 /// A Component represents an installable unit within a package
 #[derive(Debug, Clone)]
 pub struct Component {
@@ -75,26 +79,21 @@ impl Component {
 
     /// Find a component by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed
-             FROM components WHERE id = ?1",
-        )?;
-
+        let sql = format!("SELECT {COMPONENT_COLUMNS} FROM components WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
         let component = stmt.query_row([id], Self::from_row).optional()?;
         Ok(component)
     }
 
     /// Find all components for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed
-             FROM components WHERE parent_trove_id = ?1 ORDER BY name",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMPONENT_COLUMNS} FROM components WHERE parent_trove_id = ?1 ORDER BY name"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let components = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(components)
     }
 
@@ -104,29 +103,27 @@ impl Component {
         trove_id: i64,
         name: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed
-             FROM components WHERE parent_trove_id = ?1 AND name = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMPONENT_COLUMNS} FROM components \
+             WHERE parent_trove_id = ?1 AND name = ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let component = stmt
             .query_row(params![trove_id, name], Self::from_row)
             .optional()?;
-
         Ok(component)
     }
 
     /// Find all installed components for a trove
     pub fn find_installed_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed
-             FROM components WHERE parent_trove_id = ?1 AND is_installed = 1 ORDER BY name",
-        )?;
-
+        let sql = format!(
+            "SELECT {COMPONENT_COLUMNS} FROM components \
+             WHERE parent_trove_id = ?1 AND is_installed = 1 ORDER BY name"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let components = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(components)
     }
 

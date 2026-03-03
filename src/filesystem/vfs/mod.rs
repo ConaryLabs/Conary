@@ -306,58 +306,19 @@ impl VfsTree {
         permissions: u32,
     ) -> Result<NodeId> {
         let path = normalize_path(path.as_ref());
+        let (parent_id, name) = self.validate_insertion(&path, "cannot create root")?;
 
-        // Check if already exists
-        if self.exists(&path) {
-            return Err(Error::AlreadyExists(format!(
-                "path already exists: {}",
-                path.display()
-            )));
-        }
-
-        // Get parent directory
-        let parent_path = path
-            .parent()
-            .ok_or_else(|| Error::InvalidPath("cannot create root".into()))?;
-
-        let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!(
-                "parent directory not found: {}",
-                parent_path.display()
-            ))
-        })?;
-
-        // Verify parent is a directory
-        if !self.get_node(parent_id).is_directory() {
-            return Err(Error::InvalidPath(format!(
-                "parent is not a directory: {}",
-                parent_path.display()
-            )));
-        }
-
-        // Get the directory name
-        let name = path
-            .file_name()
-            .ok_or_else(|| Error::InvalidPath("invalid path".into()))?
-            .to_string_lossy()
-            .to_string();
-
-        // Create the node
-        let node_id = self.allocate_node(VfsNode {
-            name,
-            kind: NodeKind::Directory,
-            parent: Some(parent_id),
-            children: Vec::new(),
-            permissions,
-        });
-
-        // Add to parent's children
-        self.get_node_mut(parent_id).children.push(node_id);
-
-        // Add to path index
-        self.path_index.insert(path, node_id);
-
-        Ok(node_id)
+        Ok(self.insert_node(
+            path,
+            parent_id,
+            VfsNode {
+                name,
+                kind: NodeKind::Directory,
+                parent: Some(parent_id),
+                children: Vec::new(),
+                permissions,
+            },
+        ))
     }
 
     /// Create a directory and all parent directories as needed
@@ -417,61 +378,22 @@ impl VfsTree {
         permissions: u32,
     ) -> Result<NodeId> {
         let path = normalize_path(path.as_ref());
+        let (parent_id, name) = self.validate_insertion(&path, "cannot create file at root")?;
 
-        // Check if already exists
-        if self.exists(&path) {
-            return Err(Error::AlreadyExists(format!(
-                "path already exists: {}",
-                path.display()
-            )));
-        }
-
-        // Get parent directory
-        let parent_path = path
-            .parent()
-            .ok_or_else(|| Error::InvalidPath("cannot create file at root".into()))?;
-
-        let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!(
-                "parent directory not found: {}",
-                parent_path.display()
-            ))
-        })?;
-
-        // Verify parent is a directory
-        if !self.get_node(parent_id).is_directory() {
-            return Err(Error::InvalidPath(format!(
-                "parent is not a directory: {}",
-                parent_path.display()
-            )));
-        }
-
-        // Get the file name
-        let name = path
-            .file_name()
-            .ok_or_else(|| Error::InvalidPath("invalid path".into()))?
-            .to_string_lossy()
-            .to_string();
-
-        // Create the node
-        let node_id = self.allocate_node(VfsNode {
-            name,
-            kind: NodeKind::File {
-                hash: hash.into(),
-                size,
+        Ok(self.insert_node(
+            path,
+            parent_id,
+            VfsNode {
+                name,
+                kind: NodeKind::File {
+                    hash: hash.into(),
+                    size,
+                },
+                parent: Some(parent_id),
+                children: Vec::new(),
+                permissions,
             },
-            parent: Some(parent_id),
-            children: Vec::new(),
-            permissions,
-        });
-
-        // Add to parent's children
-        self.get_node_mut(parent_id).children.push(node_id);
-
-        // Add to path index
-        self.path_index.insert(path, node_id);
-
-        Ok(node_id)
+        ))
     }
 
     /// Add a symlink to the tree
@@ -481,60 +403,21 @@ impl VfsTree {
         target: impl AsRef<Path>,
     ) -> Result<NodeId> {
         let path = normalize_path(path.as_ref());
+        let (parent_id, name) = self.validate_insertion(&path, "cannot create symlink at root")?;
 
-        // Check if already exists
-        if self.exists(&path) {
-            return Err(Error::AlreadyExists(format!(
-                "path already exists: {}",
-                path.display()
-            )));
-        }
-
-        // Get parent directory
-        let parent_path = path
-            .parent()
-            .ok_or_else(|| Error::InvalidPath("cannot create symlink at root".into()))?;
-
-        let parent_id = self.lookup(parent_path).ok_or_else(|| {
-            Error::NotFound(format!(
-                "parent directory not found: {}",
-                parent_path.display()
-            ))
-        })?;
-
-        // Verify parent is a directory
-        if !self.get_node(parent_id).is_directory() {
-            return Err(Error::InvalidPath(format!(
-                "parent is not a directory: {}",
-                parent_path.display()
-            )));
-        }
-
-        // Get the symlink name
-        let name = path
-            .file_name()
-            .ok_or_else(|| Error::InvalidPath("invalid path".into()))?
-            .to_string_lossy()
-            .to_string();
-
-        // Create the node
-        let node_id = self.allocate_node(VfsNode {
-            name,
-            kind: NodeKind::Symlink {
-                target: target.as_ref().to_path_buf(),
+        Ok(self.insert_node(
+            path,
+            parent_id,
+            VfsNode {
+                name,
+                kind: NodeKind::Symlink {
+                    target: target.as_ref().to_path_buf(),
+                },
+                parent: Some(parent_id),
+                children: Vec::new(),
+                permissions: 0o777,
             },
-            parent: Some(parent_id),
-            children: Vec::new(),
-            permissions: 0o777, // Symlinks typically have 777 permissions
-        });
-
-        // Add to parent's children
-        self.get_node_mut(parent_id).children.push(node_id);
-
-        // Add to path index
-        self.path_index.insert(path, node_id);
-
-        Ok(node_id)
+        ))
     }
 
     /// Remove a node and all its children from the tree
@@ -597,87 +480,7 @@ impl VfsTree {
         source: impl AsRef<Path>,
         new_parent: impl AsRef<Path>,
     ) -> Result<()> {
-        let source_path = normalize_path(source.as_ref());
-        let new_parent_path = normalize_path(new_parent.as_ref());
-
-        // Cannot reparent root
-        if source_path == Path::new("/") {
-            return Err(Error::InvalidPath("cannot reparent root".into()));
-        }
-
-        // Get source node
-        let source_id = self.lookup(&source_path).ok_or_else(|| {
-            Error::NotFound(format!("source path not found: {}", source_path.display()))
-        })?;
-
-        // Get new parent node
-        let new_parent_id = self.lookup(&new_parent_path).ok_or_else(|| {
-            Error::NotFound(format!(
-                "new parent not found: {}",
-                new_parent_path.display()
-            ))
-        })?;
-
-        // Verify new parent is a directory
-        if !self.get_node(new_parent_id).is_directory() {
-            return Err(Error::InvalidPath(format!(
-                "new parent is not a directory: {}",
-                new_parent_path.display()
-            )));
-        }
-
-        // Check if new parent is a descendant of source (would create cycle)
-        if self.is_descendant_of(new_parent_id, source_id) {
-            return Err(Error::InvalidPath(
-                "cannot reparent a node into its own subtree".into(),
-            ));
-        }
-
-        // Get source node name and check for name collision in new parent
-        let source_name = self.get_node(source_id).name.clone();
-        let new_path = new_parent_path.join(&source_name);
-
-        if self.exists(&new_path) {
-            return Err(Error::AlreadyExists(format!(
-                "path already exists: {}",
-                new_path.display()
-            )));
-        }
-
-        // Get old parent ID
-        let old_parent_id = self.get_node(source_id).parent.ok_or_else(|| {
-            Error::InternalError("non-root node has no parent (corrupted VFS tree)".into())
-        })?;
-
-        // Collect all nodes in the subtree for path index updates
-        let mut subtree_nodes = vec![source_id];
-        self.collect_descendants(source_id, &mut subtree_nodes);
-
-        // Collect old paths before modifying the tree
-        let old_paths: Vec<(NodeId, PathBuf)> = subtree_nodes
-            .iter()
-            .map(|&id| (id, self.get_path(id)))
-            .collect();
-
-        // Remove from old parent's children list
-        self.get_node_mut(old_parent_id)
-            .children
-            .retain(|&id| id != source_id);
-
-        // Update source node's parent
-        self.get_node_mut(source_id).parent = Some(new_parent_id);
-
-        // Add to new parent's children list
-        self.get_node_mut(new_parent_id).children.push(source_id);
-
-        // Update path index for all nodes in the subtree
-        for (id, old_path) in old_paths {
-            self.path_index.remove(&old_path);
-            let new_node_path = self.get_path(id);
-            self.path_index.insert(new_node_path, id);
-        }
-
-        Ok(())
+        self.reparent_inner(source, new_parent, None)
     }
 
     /// Reparent with rename - move a subtree to a new location with a new name
@@ -689,26 +492,33 @@ impl VfsTree {
         new_parent: impl AsRef<Path>,
         new_name: impl Into<String>,
     ) -> Result<()> {
+        self.reparent_inner(source, new_parent, Some(new_name.into()))
+    }
+
+    /// Shared implementation for reparent and reparent_with_rename.
+    fn reparent_inner(
+        &mut self,
+        source: impl AsRef<Path>,
+        new_parent: impl AsRef<Path>,
+        new_name: Option<String>,
+    ) -> Result<()> {
         let source_path = normalize_path(source.as_ref());
         let new_parent_path = normalize_path(new_parent.as_ref());
-        let new_name = new_name.into();
 
-        // Cannot reparent root
         if source_path == Path::new("/") {
             return Err(Error::InvalidPath("cannot reparent root".into()));
         }
 
-        // Validate new name
-        if new_name.is_empty() || new_name.contains('/') {
-            return Err(Error::InvalidPath(format!("invalid name: {}", new_name)));
+        if let Some(ref name) = new_name
+            && (name.is_empty() || name.contains('/'))
+        {
+            return Err(Error::InvalidPath(format!("invalid name: {}", name)));
         }
 
-        // Get source node
         let source_id = self.lookup(&source_path).ok_or_else(|| {
             Error::NotFound(format!("source path not found: {}", source_path.display()))
         })?;
 
-        // Get new parent node
         let new_parent_id = self.lookup(&new_parent_path).ok_or_else(|| {
             Error::NotFound(format!(
                 "new parent not found: {}",
@@ -716,7 +526,6 @@ impl VfsTree {
             ))
         })?;
 
-        // Verify new parent is a directory
         if !self.get_node(new_parent_id).is_directory() {
             return Err(Error::InvalidPath(format!(
                 "new parent is not a directory: {}",
@@ -724,15 +533,18 @@ impl VfsTree {
             )));
         }
 
-        // Check if new parent is a descendant of source (would create cycle)
         if self.is_descendant_of(new_parent_id, source_id) {
             return Err(Error::InvalidPath(
                 "cannot reparent a node into its own subtree".into(),
             ));
         }
 
-        // Check for name collision in new parent
-        let new_path = new_parent_path.join(&new_name);
+        let dest_name = new_name
+            .as_deref()
+            .unwrap_or(&self.get_node(source_id).name)
+            .to_string();
+        let new_path = new_parent_path.join(&dest_name);
+
         if self.exists(&new_path) {
             return Err(Error::AlreadyExists(format!(
                 "path already exists: {}",
@@ -740,35 +552,30 @@ impl VfsTree {
             )));
         }
 
-        // Get old parent ID
         let old_parent_id = self.get_node(source_id).parent.ok_or_else(|| {
             Error::InternalError("non-root node has no parent (corrupted VFS tree)".into())
         })?;
 
-        // Collect all nodes in the subtree for path index updates
         let mut subtree_nodes = vec![source_id];
         self.collect_descendants(source_id, &mut subtree_nodes);
 
-        // Collect old paths before modifying the tree
         let old_paths: Vec<(NodeId, PathBuf)> = subtree_nodes
             .iter()
             .map(|&id| (id, self.get_path(id)))
             .collect();
 
-        // Remove from old parent's children list
         self.get_node_mut(old_parent_id)
             .children
             .retain(|&id| id != source_id);
 
-        // Update source node's parent and name
         let source_node = self.get_node_mut(source_id);
         source_node.parent = Some(new_parent_id);
-        source_node.name = new_name;
+        if new_name.is_some() {
+            source_node.name = dest_name;
+        }
 
-        // Add to new parent's children list
         self.get_node_mut(new_parent_id).children.push(source_id);
 
-        // Update path index for all nodes in the subtree
         for (id, old_path) in old_paths {
             self.path_index.remove(&old_path);
             let new_node_path = self.get_path(id);
@@ -799,11 +606,51 @@ impl VfsTree {
         }
     }
 
-    /// Allocate a new node in the arena
-    fn allocate_node(&mut self, node: VfsNode) -> NodeId {
-        let id = NodeId(self.nodes.len());
+    /// Validate a path for insertion: check it doesn't exist, parent exists and is a directory.
+    ///
+    /// Returns `(parent_id, name)` on success.
+    fn validate_insertion(&self, path: &Path, root_error_msg: &str) -> Result<(NodeId, String)> {
+        if self.exists(path) {
+            return Err(Error::AlreadyExists(format!(
+                "path already exists: {}",
+                path.display()
+            )));
+        }
+
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| Error::InvalidPath(root_error_msg.into()))?;
+
+        let parent_id = self.lookup(parent_path).ok_or_else(|| {
+            Error::NotFound(format!(
+                "parent directory not found: {}",
+                parent_path.display()
+            ))
+        })?;
+
+        if !self.get_node(parent_id).is_directory() {
+            return Err(Error::InvalidPath(format!(
+                "parent is not a directory: {}",
+                parent_path.display()
+            )));
+        }
+
+        let name = path
+            .file_name()
+            .ok_or_else(|| Error::InvalidPath("invalid path".into()))?
+            .to_string_lossy()
+            .to_string();
+
+        Ok((parent_id, name))
+    }
+
+    /// Insert a new node: allocate it, register as child of parent, and index its path.
+    fn insert_node(&mut self, path: PathBuf, parent_id: NodeId, node: VfsNode) -> NodeId {
+        let node_id = NodeId(self.nodes.len());
         self.nodes.push(node);
-        id
+        self.get_node_mut(parent_id).children.push(node_id);
+        self.path_index.insert(path, node_id);
+        node_id
     }
 
     /// Iterate over all nodes in the tree
