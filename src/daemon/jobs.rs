@@ -425,13 +425,13 @@ impl OperationQueue {
     /// Cancel a job by ID
     pub async fn cancel(&self, job_id: &str) -> bool {
         // Check if it's the currently running job
-        if let Some(ref current) = *self.current_job.read().await {
-            if current == job_id {
-                // Set cancel token
-                if let Some(token) = self.cancel_tokens.read().await.get(job_id) {
-                    token.store(true, Ordering::Relaxed);
-                    return true;
-                }
+        if let Some(ref current) = *self.current_job.read().await
+            && current == job_id
+        {
+            // Set cancel token
+            if let Some(token) = self.cancel_tokens.read().await.get(job_id) {
+                token.store(true, Ordering::Relaxed);
+                return true;
             }
         }
 

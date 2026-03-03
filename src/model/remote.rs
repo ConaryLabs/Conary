@@ -22,6 +22,9 @@ use crate::repository::RepositoryClient;
 
 use super::{FetchedCollection, IncludedMember, ModelError, ModelResult};
 
+/// Maximum size for fetched remote collection data (1MB)
+const MAX_INCLUDE_SIZE: usize = 1_048_576;
+
 /// Wire format for collection data served by Remi `/v1/models/:name`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionData {
@@ -230,6 +233,16 @@ pub fn fetch_remote_collection(
         .download_to_bytes(&url)
         .map_err(|e| ModelError::RemoteNotFound(format!("{}: {}", name, e)))?;
 
+    // Enforce size limit
+    if bytes.len() > MAX_INCLUDE_SIZE {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{}' exceeds size limit ({} bytes > {} bytes)",
+            name,
+            bytes.len(),
+            MAX_INCLUDE_SIZE
+        )));
+    }
+
     // Deserialize
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {}: {}", url, e)))?;
@@ -317,6 +330,15 @@ pub fn fetch_and_verify_remote_collection(
     let bytes = client
         .download_to_bytes(&url)
         .map_err(|e| ModelError::RemoteNotFound(format!("{name}: {e}")))?;
+
+    // Enforce size limit
+    if bytes.len() > MAX_INCLUDE_SIZE {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Remote collection '{name}' exceeds size limit ({} bytes > {} bytes)",
+            bytes.len(),
+            MAX_INCLUDE_SIZE
+        )));
+    }
 
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;

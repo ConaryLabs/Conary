@@ -419,7 +419,7 @@ mod tests {
         let plan = resolver.resolve_install("myapp", "devel", &deps);
 
         // devel is already installed, lib (nginx) is already installed
-        assert!(plan.install_order.is_empty() || plan.already_installed.len() >= 1);
+        assert!(plan.install_order.is_empty() || !plan.already_installed.is_empty());
     }
 
     #[test]

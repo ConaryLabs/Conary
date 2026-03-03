@@ -71,7 +71,7 @@ pub async fn head_chunk(
                 .header(header::ETAG, format!("\"{}\"", hash))
                 .header(header::ACCEPT_RANGES, "bytes")
                 .body(Body::empty())
-                .unwrap()
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(_) => {
             state.metrics.record_miss();
@@ -219,7 +219,7 @@ pub async fn get_chunk(
                     .status(StatusCode::RANGE_NOT_SATISFIABLE)
                     .header(header::CONTENT_RANGE, format!("bytes */{}", file_size))
                     .body(Body::empty())
-                    .unwrap();
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
             }
         };
 
@@ -262,7 +262,7 @@ pub async fn get_chunk(
             .header(header::ETAG, format!("\"{}\"", hash))
             .header(header::ACCEPT_RANGES, "bytes")
             .body(Body::from(buffer))
-            .unwrap();
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
 
     // No Range header - serve full content
@@ -282,7 +282,7 @@ pub async fn get_chunk(
         .header(header::ETAG, format!("\"{}\"", hash))
         .header(header::ACCEPT_RANGES, "bytes")
         .body(body)
-        .unwrap()
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Pull-through caching: fetch from upstream and store locally
@@ -373,7 +373,7 @@ async fn pull_through_fetch(
         .header(header::ETAG, format!("\"{}\"", hash))
         .header(header::ACCEPT_RANGES, "bytes")
         .body(Body::from(data))
-        .unwrap()
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Compute SHA-256 hash of data
@@ -604,7 +604,7 @@ pub async fn batch_fetch(
         )
         .header(header::CONTENT_LENGTH, body_parts.len())
         .body(Body::from(body_parts))
-        .unwrap()
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 // === Admin/Stats Endpoints ===

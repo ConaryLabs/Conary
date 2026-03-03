@@ -167,7 +167,7 @@ fn test_query_operations() {
     assert!(file.is_some(), "Should find file by path");
     let file = file.unwrap();
     assert_eq!(file.size, 1024000);
-    assert_eq!(file.permissions, 0o755 as i32);
+    assert_eq!(file.permissions, 0o755_i32);
 
     // Test finding files by package
     let nginx_id = nginx_troves[0].id.unwrap();

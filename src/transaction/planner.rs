@@ -656,14 +656,14 @@ mod tests {
             plan.operations
                 .iter()
                 .any(|op| op.op_type == OperationType::RemoveFile
-                    && op.path == PathBuf::from("usr/bin/old"))
+                    && op.path == Path::new("usr/bin/old"))
         );
 
         // Old file should be in backup list
         assert!(
             plan.files_to_backup
                 .iter()
-                .any(|b| b.path == PathBuf::from("usr/bin/old"))
+                .any(|b| b.path == Path::new("usr/bin/old"))
         );
     }
 }

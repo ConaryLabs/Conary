@@ -68,11 +68,11 @@ pub struct VersionResponse {
 }
 
 /// Error response wrapper for RFC 7807 format
-pub struct ApiError(DaemonError);
+pub struct ApiError(Box<DaemonError>);
 
 impl From<DaemonError> for ApiError {
     fn from(err: DaemonError) -> Self {
-        ApiError(err)
+        ApiError(Box::new(err))
     }
 }
 
@@ -81,7 +81,7 @@ impl IntoResponse for ApiError {
         let status =
             StatusCode::from_u16(self.0.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-        let body = Json(&self.0);
+        let body = Json(&*self.0);
 
         (status, [("content-type", "application/problem+json")], body).into_response()
     }
@@ -106,8 +106,8 @@ async fn run_db_query<T: Send + 'static>(
         f(&conn).map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))
     })
     .await
-    .map_err(|e| ApiError(DaemonError::internal(&format!("Task join error: {}", e))))?
-    .map_err(ApiError)
+    .map_err(|e| ApiError(Box::new(DaemonError::internal(&format!("Task join error: {}", e)))))?
+    .map_err(|e| ApiError(Box::new(e)))
 }
 
 /// Check authorization for a mutating action.
@@ -132,18 +132,18 @@ fn require_auth(creds: &Option<PeerCredentials>, action: Action) -> Result<(), A
                     action = ?action,
                     "Authorization denied"
                 );
-                Err(ApiError(DaemonError::forbidden(&format!(
+                Err(ApiError(Box::new(DaemonError::forbidden(&format!(
                     "User (uid={}) is not authorized for {:?}",
                     creds.uid, action
-                ))))
+                )))))
             }
         }
         None => {
             // No peer credentials (TCP connection) - deny mutating actions
             tracing::warn!(action = ?action, "Mutating request denied: no peer credentials (TCP connection)");
-            Err(ApiError(DaemonError::forbidden(
+            Err(ApiError(Box::new(DaemonError::forbidden(
                 "Mutating operations require a Unix socket connection with peer credentials",
-            )))
+            ))))
         }
     }
 }
@@ -631,9 +631,9 @@ async fn create_transaction_handler(
 
     // Validate request
     if request.operations.is_empty() {
-        return Err(ApiError(DaemonError::bad_request(
+        return Err(ApiError(Box::new(DaemonError::bad_request(
             "At least one operation is required",
-        )));
+        ))));
     }
 
     // Get idempotency key from headers
@@ -672,10 +672,10 @@ async fn create_transaction_handler(
 
     // Create the job
     let spec = serde_json::to_value(&request.operations).map_err(|e| {
-        ApiError(DaemonError::internal(&format!(
+        ApiError(Box::new(DaemonError::internal(&format!(
             "Serialization error: {}",
             e
-        )))
+        ))))
     })?;
 
     let mut job = DaemonJob::new(job_kind, spec);
@@ -769,10 +769,10 @@ async fn get_transaction_handler(
             let details = TransactionDetails::from_job(&job, queue_position);
             Ok(Json(details))
         }
-        None => Err(ApiError(DaemonError::not_found(&format!(
+        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
             "transaction '{}'",
             id
-        )))),
+        ))))),
     }
 }
 
@@ -796,16 +796,16 @@ async fn cancel_transaction_handler(
     let find_id = job_id.clone();
     let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
         .await?
-        .ok_or_else(|| ApiError(DaemonError::not_found(&format!("transaction '{}'", id))))?;
+        .ok_or_else(|| ApiError(Box::new(DaemonError::not_found(&format!("transaction '{}'", id)))))?;
 
     // Check if already completed/cancelled/failed
     match job.status {
         JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => {
-            return Err(ApiError(DaemonError::conflict(&format!(
+            return Err(ApiError(Box::new(DaemonError::conflict(&format!(
                 "Transaction '{}' is already {}",
                 id,
                 job.status.as_str()
-            ))));
+            )))));
         }
         _ => {}
     }
@@ -826,16 +826,16 @@ async fn cancel_transaction_handler(
             state.emit(DaemonEvent::JobCancelled { job_id });
             Ok(StatusCode::NO_CONTENT)
         } else {
-            Err(ApiError(DaemonError::not_found(&format!(
+            Err(ApiError(Box::new(DaemonError::not_found(&format!(
                 "transaction '{}'",
                 id
-            ))))
+            )))))
         }
     } else {
-        Err(ApiError(DaemonError::conflict(&format!(
+        Err(ApiError(Box::new(DaemonError::conflict(&format!(
             "Cannot cancel transaction '{}' - it may already be completing",
             id
-        ))))
+        )))))
     }
 }
 
@@ -864,10 +864,10 @@ async fn transaction_stream_handler(
     .await?;
 
     if !exists {
-        return Err(ApiError(DaemonError::not_found(&format!(
+        return Err(ApiError(Box::new(DaemonError::not_found(&format!(
             "transaction '{}'",
             id
-        ))));
+        )))));
     }
 
     // Track SSE connection (guard decrements on drop when stream ends)
@@ -971,9 +971,9 @@ async fn dry_run_handler(
     require_auth(&creds, action)?;
     // Validate request
     if request.operations.is_empty() {
-        return Err(ApiError(DaemonError::bad_request(
+        return Err(ApiError(Box::new(DaemonError::bad_request(
             "At least one operation is required",
-        )));
+        ))));
     }
 
     // Extract package names from operations (placeholder implementation)
@@ -1020,7 +1020,7 @@ async fn dry_run_handler(
 async fn list_packages_handler(
     State(state): State<SharedState>,
 ) -> ApiResult<Json<Vec<PackageSummary>>> {
-    let troves = run_db_query(&state, |conn| Trove::list_all(conn)).await?;
+    let troves = run_db_query(&state, Trove::list_all).await?;
     let packages: Vec<PackageSummary> = troves.iter().map(PackageSummary::from).collect();
     Ok(Json(packages))
 }
@@ -1066,10 +1066,10 @@ async fn get_package_handler(
             };
             Ok(Json(details))
         }
-        None => Err(ApiError(DaemonError::not_found(&format!(
+        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
             "package '{}'",
             name
-        )))),
+        ))))),
     }
 }
 
@@ -1102,10 +1102,10 @@ async fn get_package_files_handler(
 
     match result {
         Some(files) => Ok(Json(files)),
-        None => Err(ApiError(DaemonError::not_found(&format!(
+        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
             "package '{}'",
             name
-        )))),
+        ))))),
     }
 }
 
@@ -1127,9 +1127,9 @@ async fn install_packages_handler(
 )> {
     // Validate request
     if request.packages.is_empty() {
-        return Err(ApiError(DaemonError::bad_request(
+        return Err(ApiError(Box::new(DaemonError::bad_request(
             "At least one package name is required",
-        )));
+        ))));
     }
 
     // Convert to transaction request
@@ -1163,9 +1163,9 @@ async fn remove_packages_handler(
 )> {
     // Validate request
     if request.packages.is_empty() {
-        return Err(ApiError(DaemonError::bad_request(
+        return Err(ApiError(Box::new(DaemonError::bad_request(
             "At least one package name is required",
-        )));
+        ))));
     }
 
     // Convert to transaction request
@@ -1279,10 +1279,10 @@ async fn depends_handler(
             let dep_info: Vec<DependencyInfo> = deps.iter().map(DependencyInfo::from).collect();
             Ok(Json(dep_info))
         }
-        None => Err(ApiError(DaemonError::not_found(&format!(
+        None => Err(ApiError(Box::new(DaemonError::not_found(&format!(
             "package '{}'",
             name
-        )))),
+        ))))),
     }
 }
 
@@ -1302,11 +1302,11 @@ async fn rdepends_handler(
         let mut troves = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
         for dep in dep_entries {
-            if !seen_ids.contains(&dep.trove_id) {
-                if let Some(trove) = Trove::find_by_id(conn, dep.trove_id)? {
-                    seen_ids.insert(dep.trove_id);
-                    troves.push(trove);
-                }
+            if !seen_ids.contains(&dep.trove_id)
+                && let Some(trove) = Trove::find_by_id(conn, dep.trove_id)?
+            {
+                seen_ids.insert(dep.trove_id);
+                troves.push(trove);
             }
         }
         Ok(troves)
@@ -1323,7 +1323,7 @@ async fn rdepends_handler(
 ///
 /// Returns the history of all changesets (transactions).
 async fn history_handler(State(state): State<SharedState>) -> ApiResult<Json<Vec<HistoryEntry>>> {
-    let changesets = run_db_query(&state, |conn| Changeset::list_all(conn)).await?;
+    let changesets = run_db_query(&state, Changeset::list_all).await?;
     let history: Vec<HistoryEntry> = changesets.iter().map(HistoryEntry::from).collect();
     Ok(Json(history))
 }
@@ -1348,12 +1348,12 @@ async fn rollback_handler(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     require_auth(&creds, Action::Rollback)?;
 
-    Err(ApiError(DaemonError::new(
+    Err(ApiError(Box::new(DaemonError::new(
         "not_implemented",
         "Not Implemented",
         501,
         "Rollback not yet implemented",
-    )))
+    ))))
 }
 
 /// Verify system integrity
@@ -1365,12 +1365,12 @@ async fn verify_handler(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::Verify)?;
 
-    Err(ApiError(DaemonError::new(
+    Err(ApiError(Box::new(DaemonError::new(
         "not_implemented",
         "Not Implemented",
         501,
         "System verification not yet implemented",
-    )))
+    ))))
 }
 
 /// Garbage collect unused data
@@ -1382,12 +1382,12 @@ async fn gc_handler(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::GarbageCollect)?;
 
-    Err(ApiError(DaemonError::new(
+    Err(ApiError(Box::new(DaemonError::new(
         "not_implemented",
         "Not Implemented",
         501,
         "Garbage collection not yet implemented",
-    )))
+    ))))
 }
 
 /// Global event stream (SSE)

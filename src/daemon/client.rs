@@ -99,7 +99,7 @@ impl DaemonClient {
     /// Create a new client with default socket path
     pub fn new() -> Self {
         Self {
-            socket_path: PathBuf::from(DaemonConfig::default().socket_path),
+            socket_path: DaemonConfig::default().socket_path,
             timeout: Duration::from_secs(30),
         }
     }
@@ -281,10 +281,10 @@ impl DaemonClient {
                 Ok(_) => {
                     let line = line.trim_end();
 
-                    if line.starts_with("event:") {
-                        event_type = line[6..].trim().to_string();
-                    } else if line.starts_with("data:") {
-                        event_data = line[5..].trim().to_string();
+                    if let Some(stripped) = line.strip_prefix("event:") {
+                        event_type = stripped.trim().to_string();
+                    } else if let Some(stripped) = line.strip_prefix("data:") {
+                        event_data = stripped.trim().to_string();
                     } else if line.is_empty() && !event_data.is_empty() {
                         // Event complete, process it
                         if let Ok(event) = serde_json::from_str::<DaemonEvent>(&event_data) {

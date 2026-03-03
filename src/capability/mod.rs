@@ -338,13 +338,11 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(
             all.iter()
-                .find(|(n, _, has)| n == "nginx" && *has)
-                .is_some()
+                .any(|(n, _, has)| n == "nginx" && *has)
         );
         assert!(
             all.iter()
-                .find(|(n, _, has)| n == "curl" && !*has)
-                .is_some()
+                .any(|(n, _, has)| n == "curl" && !*has)
         );
 
         // List only missing

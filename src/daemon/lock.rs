@@ -203,7 +203,7 @@ mod tests {
         let lock = SystemLock::try_acquire(&lock_path).unwrap();
         assert!(lock.is_some());
 
-        let lock = lock.unwrap();
+        let _lock = lock.unwrap();
         assert!(lock_path.exists());
     }
 
@@ -250,7 +250,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let lock_path = temp_dir.path().join("subdir/deep/test.lock");
 
-        let lock = SystemLock::acquire(&lock_path).unwrap();
+        let _lock = SystemLock::acquire(&lock_path).unwrap();
         assert!(lock_path.exists());
         assert!(lock_path.parent().unwrap().exists());
     }

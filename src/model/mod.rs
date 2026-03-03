@@ -282,6 +282,9 @@ fn fetch_collection(
     )))
 }
 
+/// Maximum depth for nested include resolution (prevents unbounded recursion)
+const MAX_INCLUDE_DEPTH: usize = 10;
+
 /// Resolve all includes in a system model
 ///
 /// This performs a two-pass resolution:
@@ -316,6 +319,7 @@ pub fn resolve_includes_with_options(
         &mut resolved,
         &mut visited,
         offline,
+        0,
     )?;
 
     Ok(resolved)
@@ -328,7 +332,15 @@ fn resolve_includes_recursive(
     resolved: &mut ResolvedModel,
     visited: &mut HashSet<String>,
     offline: bool,
+    depth: usize,
 ) -> ModelResult<()> {
+    if depth > MAX_INCLUDE_DEPTH {
+        return Err(ModelError::ConflictingSpecs(format!(
+            "Include depth limit exceeded (max {}): possible circular or deeply nested includes",
+            MAX_INCLUDE_DEPTH
+        )));
+    }
+
     for include_spec in includes {
         // Cycle detection
         if visited.contains(include_spec) {
@@ -354,6 +366,7 @@ fn resolve_includes_recursive(
                 resolved,
                 visited,
                 offline,
+                depth + 1,
             )?;
         }
 

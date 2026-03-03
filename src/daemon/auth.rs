@@ -201,8 +201,6 @@ impl AuthChecker {
     /// Check PolicyKit authorization for an action
     #[cfg(feature = "polkit")]
     fn check_polkit(&self, creds: &PeerCredentials, action: Action) -> Permission {
-        use zbus::Connection;
-
         // TODO: Implement proper PolicyKit check via DBus
         // This is a placeholder that always denies
         log::warn!(

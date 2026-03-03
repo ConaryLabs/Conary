@@ -100,18 +100,18 @@ impl SocketManager {
         self.unix_listener = Some(unix_listener);
 
         // Optionally bind TCP socket
-        if self.config.enable_tcp {
-            if let Some(ref bind_addr) = self.config.tcp_bind {
-                let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-                    crate::Error::IoError(format!(
-                        "Failed to bind TCP socket at {}: {}",
-                        bind_addr, e
-                    ))
-                })?;
+        if self.config.enable_tcp
+            && let Some(ref bind_addr) = self.config.tcp_bind
+        {
+            let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+                crate::Error::IoError(format!(
+                    "Failed to bind TCP socket at {}: {}",
+                    bind_addr, e
+                ))
+            })?;
 
-                log::info!("Listening on TCP: {}", bind_addr);
-                self.tcp_listener = Some(tcp_listener);
-            }
+            log::info!("Listening on TCP: {}", bind_addr);
+            self.tcp_listener = Some(tcp_listener);
         }
 
         Ok(())
@@ -144,10 +144,10 @@ impl SocketManager {
 
     /// Clean up socket file on shutdown
     pub fn cleanup(&self) {
-        if self.config.unix_path.exists() {
-            if let Err(e) = std::fs::remove_file(&self.config.unix_path) {
-                log::warn!("Failed to remove socket file: {}", e);
-            }
+        if self.config.unix_path.exists()
+            && let Err(e) = std::fs::remove_file(&self.config.unix_path)
+        {
+            log::warn!("Failed to remove socket file: {}", e);
         }
     }
 }

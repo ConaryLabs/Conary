@@ -56,20 +56,19 @@ pub enum NotifyState<'a> {
     Custom(&'a str),
 }
 
-impl<'a> NotifyState<'a> {
-    /// Convert to notification string
-    fn to_string(&self) -> String {
+impl<'a> std::fmt::Display for NotifyState<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NotifyState::Ready => "READY=1".to_string(),
-            NotifyState::Reloading => "RELOADING=1".to_string(),
-            NotifyState::Stopping => "STOPPING=1".to_string(),
-            NotifyState::Status(s) => format!("STATUS={}", s),
-            NotifyState::MainPid(pid) => format!("MAINPID={}", pid),
-            NotifyState::Watchdog => "WATCHDOG=1".to_string(),
-            NotifyState::WatchdogTrigger => "WATCHDOG=trigger".to_string(),
-            NotifyState::WatchdogUsec(usec) => format!("WATCHDOG_USEC={}", usec),
-            NotifyState::ExtendTimeoutUsec(usec) => format!("EXTEND_TIMEOUT_USEC={}", usec),
-            NotifyState::Custom(s) => s.to_string(),
+            NotifyState::Ready => write!(f, "READY=1"),
+            NotifyState::Reloading => write!(f, "RELOADING=1"),
+            NotifyState::Stopping => write!(f, "STOPPING=1"),
+            NotifyState::Status(s) => write!(f, "STATUS={}", s),
+            NotifyState::MainPid(pid) => write!(f, "MAINPID={}", pid),
+            NotifyState::Watchdog => write!(f, "WATCHDOG=1"),
+            NotifyState::WatchdogTrigger => write!(f, "WATCHDOG=trigger"),
+            NotifyState::WatchdogUsec(usec) => write!(f, "WATCHDOG_USEC={}", usec),
+            NotifyState::ExtendTimeoutUsec(usec) => write!(f, "EXTEND_TIMEOUT_USEC={}", usec),
+            NotifyState::Custom(s) => write!(f, "{}", s),
         }
     }
 }
@@ -382,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_watchdog_task() {
-        let mut wd = WatchdogTask::new(Duration::from_millis(100));
+        let wd = WatchdogTask::new(Duration::from_millis(100));
 
         // First tick should succeed (enough time since creation)
         // Note: In practice this depends on timing

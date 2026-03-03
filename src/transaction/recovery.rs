@@ -476,7 +476,7 @@ mod tests {
         // Create work directory with backup
         let work_dir = engine.txn_work_dir("backup-test");
         let backup_dir = work_dir.join("backup");
-        fs::create_dir_all(&backup_dir.join("usr/bin")).unwrap();
+        fs::create_dir_all(backup_dir.join("usr/bin")).unwrap();
 
         // "Back up" the file (simulate what transaction would do)
         fs::rename(&original_file, backup_dir.join("usr/bin/test")).unwrap();

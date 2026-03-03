@@ -432,6 +432,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         ban_middleware,
     ));
 
+    // Add body size limit (16MB max for all requests)
+    app = app.layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024));
+
     // Add audit logging if enabled
     if config.enable_audit_log {
         app = app.route_layer(middleware::from_fn_with_state(
@@ -696,8 +699,10 @@ mod tests {
 
     #[test]
     fn test_cors_layer_restricted_with_origins() {
-        let mut config = ServerConfig::default();
-        config.cors_allowed_origins = vec!["https://example.com".to_string()];
+        let config = ServerConfig {
+            cors_allowed_origins: vec!["https://example.com".to_string()],
+            ..ServerConfig::default()
+        };
         let _cors = create_cors_layer(&config, true);
         // Just verify it doesn't panic
     }

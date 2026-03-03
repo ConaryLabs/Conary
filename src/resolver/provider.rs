@@ -519,7 +519,7 @@ mod tests {
             repo_package_id: None,
         });
 
-        let candidates = vec![s1, s2, s3];
+        let candidates = [s1, s2, s3];
 
         // Test the filtering logic directly
         let (_, ref constraint) = provider.version_sets[vs_id.0 as usize];
@@ -591,7 +591,7 @@ mod tests {
         });
 
         // Test sort logic directly
-        let mut solvables = vec![s1, s2, s3];
+        let mut solvables = [s1, s2, s3];
         solvables.sort_by(|a, b| {
             let pkg_a = &provider.solvables[a.0 as usize];
             let pkg_b = &provider.solvables[b.0 as usize];

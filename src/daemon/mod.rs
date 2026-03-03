@@ -559,7 +559,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Get Unix listener
     let unix_listener = socket_manager
         .take_unix_listener()
-        .expect("Unix listener should be bound");
+        .ok_or_else(|| crate::Error::IoError("Unix listener not bound - check socket configuration".to_string()))?;
 
     log::info!("Daemon ready, accepting connections");
 
@@ -640,6 +640,21 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Notify systemd we're stopping
     systemd_manager.notify_stopping();
     log::info!("Daemon shutting down");
+
+    // Graceful drain: wait for in-flight connections to finish (max 10s)
+    let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let conn_count = active_connections.load(std::sync::atomic::Ordering::Relaxed);
+        if conn_count == 0 {
+            log::info!("All connections drained");
+            break;
+        }
+        if tokio::time::Instant::now() >= drain_deadline {
+            log::warn!("Drain timeout: {} connections still active, forcing shutdown", conn_count);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     // Cleanup handled by Drop implementations
     Ok(())

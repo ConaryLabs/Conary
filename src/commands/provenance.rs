@@ -1256,9 +1256,8 @@ mod tests {
         let key = std::env::var("CONARY_TEST_KEY").ok();
         let keyless = std::env::var("CONARY_TEST_KEYLESS").is_ok();
 
-        let _ =
-            cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false).unwrap();
+        cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false).unwrap();
 
-        let _ = cmd_provenance_verify(&db_path, &package, true).unwrap();
+        cmd_provenance_verify(&db_path, &package, true).unwrap();
     }
 }

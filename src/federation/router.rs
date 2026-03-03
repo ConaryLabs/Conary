@@ -371,10 +371,10 @@ mod tests {
         for i in 0..1000 {
             let chunk_hash = format!("chunk_{}", i);
             let selected = router.select_peers(&chunk_hash, &peers);
-            if let Some(peer) = selected.first() {
-                if let Some(idx) = peers.iter().position(|p| p.id == peer.id) {
-                    counts[idx] += 1;
-                }
+            if let Some(peer) = selected.first()
+                && let Some(idx) = peers.iter().position(|p| p.id == peer.id)
+            {
+                counts[idx] += 1;
             }
         }
 

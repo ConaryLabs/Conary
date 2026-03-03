@@ -64,6 +64,14 @@ pub async fn get_package(
     Path((distro, name)): Path<(String, String)>,
     Query(query): Query<PackageQuery>,
 ) -> Response {
+    // Validate path parameters
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let state_guard = state.read().await;
 
     // Validate distro
@@ -73,17 +81,13 @@ pub async fn get_package(
 
     // Check if package is already converted
     let db_path = &state_guard.config.db_path;
-    let converted = match check_converted(db_path, &distro, &name, query.version.as_deref()) {
+    match check_converted(db_path, &distro, &name, query.version.as_deref()) {
         Ok(Some(manifest)) => return Json(manifest).into_response(),
-        Ok(None) => false,
+        Ok(None) => {}
         Err(e) => {
             tracing::error!("Database error checking conversion: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
         }
-    };
-
-    if converted {
-        unreachable!("Already returned above");
     }
 
     // Package not converted - check if conversion is already in progress
@@ -170,7 +174,16 @@ fn check_converted(
                 let chunk_hashes: Vec<String> = converted
                     .chunk_hashes_json
                     .as_ref()
-                    .and_then(|json| serde_json::from_str(json).ok())
+                    .and_then(|json| match serde_json::from_str(json) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse chunk_hashes JSON for {}/{}: {}",
+                                distro, name, e
+                            );
+                            None
+                        }
+                    })
                     .unwrap_or_default();
 
                 let chunks: Vec<ChunkRef> = chunk_hashes
@@ -185,9 +198,13 @@ fn check_converted(
 
                 return Ok(Some(PackageManifest {
                     name: converted.package_name.unwrap_or_else(|| name.to_string()),
-                    version: converted
-                        .package_version
-                        .unwrap_or_else(|| "unknown".to_string()),
+                    version: converted.package_version.unwrap_or_else(|| {
+                        tracing::warn!(
+                            "Package {}/{} has no stored version, falling back to 'unknown'",
+                            distro, name
+                        );
+                        "unknown".to_string()
+                    }),
                     distro: converted.distro.unwrap_or_else(|| distro.to_string()),
                     chunks,
                     total_size: converted.total_size.unwrap_or(0) as u64,
@@ -293,6 +310,14 @@ pub async fn download_package(
     Query(query): Query<PackageQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    // Validate path parameters
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let state_guard = state.read().await;
 
     // Validate distro
@@ -502,7 +527,7 @@ async fn stream_ccs_file(
         // CCS packages are versioned but can be re-converted, so moderate caching
         .header(header::CACHE_CONTROL, "public, max-age=3600")
         .body(body)
-        .unwrap()
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// POST /v1/admin/convert

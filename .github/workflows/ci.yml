@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [ main, develop ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -20,7 +21,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.91
+          toolchain: 1.93
           components: rustfmt, clippy
 
       - name: Cache cargo registry
@@ -65,7 +66,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.91
+          toolchain: 1.93
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -82,7 +83,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.91
+          toolchain: 1.93
 
       - name: Build release
         run: cargo build --release --verbose
@@ -91,3 +92,35 @@ jobs:
         run: |
           ls -lh target/release/conary
           echo "Binary size:" $(stat -c%s target/release/conary | numfmt --to=iec-i)
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93
+
+      - name: Build release binaries
+        run: |
+          cargo build --release
+          cargo build --release --features server
+          cp target/release/conary target/release/conary-server
+          cargo build --release --features daemon
+          cp target/release/conary target/release/conary-daemon
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            target/release/conary
+            target/release/conary-server
+            target/release/conary-daemon

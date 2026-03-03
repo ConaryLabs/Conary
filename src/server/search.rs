@@ -494,7 +494,7 @@ mod tests {
 
         // Prefix "ngi" should match nginx*
         let suggestions = engine.suggest("ngi", 10).unwrap();
-        assert!(suggestions.len() >= 1);
+        assert!(!suggestions.is_empty());
         assert!(suggestions.iter().all(|s| s.starts_with("ngi")));
 
         // Prefix "n" should match multiple

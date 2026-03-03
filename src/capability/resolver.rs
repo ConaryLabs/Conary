@@ -627,11 +627,10 @@ mod tests {
         if required.starts_with(pattern) && required[pattern.len()..].starts_with('/') {
             return true;
         }
-        if pattern.ends_with("/*") {
-            let prefix = &pattern[..pattern.len() - 2];
-            if required.starts_with(prefix) {
-                return true;
-            }
+        if let Some(prefix) = pattern.strip_suffix("/*")
+            && required.starts_with(prefix)
+        {
+            return true;
         }
         false
     }
@@ -640,14 +639,14 @@ mod tests {
     fn test_port_range_matching() {
         // Test port range parsing
         fn port_in_range(range_spec: &str, port: &str) -> bool {
-            if let Some((start, end)) = range_spec.split_once('-') {
-                if let (Ok(s), Ok(e), Ok(p)) = (
+            if let Some((start, end)) = range_spec.split_once('-')
+                && let (Ok(s), Ok(e), Ok(p)) = (
                     start.parse::<u16>(),
                     end.parse::<u16>(),
                     port.parse::<u16>(),
-                ) {
-                    return p >= s && p <= e;
-                }
+                )
+            {
+                return p >= s && p <= e;
             }
             false
         }

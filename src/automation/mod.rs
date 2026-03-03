@@ -421,8 +421,10 @@ mod tests {
 
     #[test]
     fn test_automation_manager_modes() {
-        let mut config = AutomationConfig::default();
-        config.mode = AutomationMode::Suggest;
+        let mut config = AutomationConfig {
+            mode: AutomationMode::Suggest,
+            ..AutomationConfig::default()
+        };
         config.security.mode = Some(AutomationMode::Auto);
 
         let manager = AutomationManager::new(config);

@@ -263,7 +263,7 @@ fn test_accuracy_known_packages() {
         // Test well-known profile
         if let Some(profile) = WellKnownProfiles::lookup(pkg.name) {
             total += 1;
-            let network_match = !profile.network.no_network == pkg.expected_needs_network;
+            let network_match = profile.network.no_network != pkg.expected_needs_network;
             if network_match {
                 correct += 1;
             }
@@ -283,7 +283,7 @@ fn test_accuracy_known_packages() {
             let files = vec![&file];
             if let Ok(result) = BinaryAnalyzer::analyze_all(&files) {
                 total += 1;
-                let network_match = !result.network.no_network == pkg.expected_needs_network;
+                let network_match = result.network.no_network != pkg.expected_needs_network;
                 if network_match {
                     correct += 1;
                 }

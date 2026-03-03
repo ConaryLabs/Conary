@@ -553,8 +553,8 @@ mod tests {
         let mut data2 = data1.clone();
 
         // Modify a small portion (simulates a code change)
-        for i in 250_000..250_200 {
-            data2[i] = 0xFF;
+        for item in data2.iter_mut().take(250_200).skip(250_000) {
+            *item = 0xFF;
         }
 
         let temp_dir = TempDir::new().unwrap();
@@ -686,8 +686,8 @@ mod tests {
         let mut modified = data.clone();
         if modified.len() > 10000 {
             // Change a few bytes to simulate a patch
-            for i in 10000..10010 {
-                modified[i] = modified[i].wrapping_add(1);
+            for item in modified.iter_mut().take(10010).skip(10000) {
+                *item = item.wrapping_add(1);
             }
         }
 
