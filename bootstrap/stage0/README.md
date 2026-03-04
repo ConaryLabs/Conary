@@ -8,10 +8,10 @@ toolchain).
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| GCC | 13.3.0 | C/C++ compiler |
-| glibc | 2.39 | C library |
-| binutils | 2.42 | Assembler, linker, etc. |
-| Linux headers | 6.6.70 | Kernel API headers |
+| GCC | 15.2.0 | C/C++ compiler |
+| glibc | 2.42 | C library |
+| binutils | 2.45.1 | Assembler, linker, etc. |
+| Linux headers | 6.18 | Kernel API headers |
 
 ## Prerequisites
 

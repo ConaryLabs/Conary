@@ -14,7 +14,7 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
 
-**96K lines of Rust, 1,300+ tests, database schema v36.** This is not a prototype.
+**100K+ lines of Rust, 1,300+ tests, database schema v44.** This is not a prototype.
 
 ---
 
@@ -86,16 +86,16 @@ Define desired system state in TOML. Conary computes what needs to change and ap
 
 ```toml
 # /etc/conary/system.toml
-[model]
-version = 1
-install = ["nginx", "postgresql", "redis"]
+[packages]
+include = ["nginx", "postgresql", "redis"]
 exclude = ["sendmail"]
 
-[pin]
+[packages.pinned]
 openssl = "3.0.*"
 
-[include]
-models = ["group-base-server@corp:production"]
+[[collections]]
+name = "base-server"
+url = "https://packages.conary.io/collections/base-server.toml"
 ```
 
 ```bash
@@ -268,7 +268,7 @@ cargo build --features daemon
 conary daemon
 ```
 
-See the [API documentation](CLAUDE.md) for the full REST endpoint list.
+See the [Conaryopedia](docs/conaryopedia-v2.md) for the full REST endpoint list.
 
 ---
 
@@ -309,13 +309,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.2.0** -- Core architecture is complete and tested. The codebase has 96,000+ lines of Rust across 326 source files, with 1,300+ tests passing. A production Remi server is running at packages.conary.io.
-
-Areas of active development:
-- Atomic filesystem updates (renameat2 RENAME_EXCHANGE)
-- Multi-version package support
-- Factory system for recipe templates
-- Web interface for system state visualization
+**Version 0.2.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,300+ tests passing (schema v44). A production Remi server is running at packages.conary.io.
 
 See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 
@@ -330,7 +324,7 @@ See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and contribution guidelines |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting policy |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design overview |
-| [docs/conaryopedia.md](docs/conaryopedia.md) | Original Conary concepts and terminology |
+| [docs/conaryopedia-v2.md](docs/conaryopedia-v2.md) | Comprehensive technical guide |
 | [docs/specs/ccs-format-v1.md](docs/specs/ccs-format-v1.md) | CCS package format specification |
 | [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md) | Scriptlet sandboxing and isolation |
 

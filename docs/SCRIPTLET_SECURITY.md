@@ -180,10 +180,16 @@ Full namespace isolation requires root privileges. When running as non-root:
 | `src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
 | `src/db/models/scriptlet.rs` | Scriptlet database storage |
 
+## Implemented Since Initial Design
+
+The following features, originally planned as future enhancements, are now implemented:
+
+- **seccomp-BPF syscall filtering** -- See `src/capability/enforcement/seccomp.rs`
+- **Network namespace isolation** -- `CLONE_NEWNET` blocks all network access in hermetic builds
+- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `src/capability/enforcement/landlock.rs`
+- **Capability declarations** -- Packages declare network, filesystem, and syscall requirements
+
 ## Future Enhancements
 
-- seccomp-bpf syscall filtering
-- Capability dropping (CAP_NET_RAW, etc.)
-- Network namespace isolation (block all network access)
 - cgroups v2 for finer resource control
 - Script signing and verification

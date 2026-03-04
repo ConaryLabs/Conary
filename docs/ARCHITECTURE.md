@@ -373,6 +373,6 @@ Trust Chain:
 
 ## Related Documentation
 
-- [CLAUDE.md](/CLAUDE.md) - Development conventions and module reference
+- [docs/conaryopedia-v2.md](/docs/conaryopedia-v2.md) - Comprehensive technical guide
 - [ROADMAP.md](/ROADMAP.md) - Feature status and version history
 - [docs/SCRIPTLET_SECURITY.md](/docs/SCRIPTLET_SECURITY.md) - Scriptlet isolation details
