@@ -6,9 +6,10 @@
 
 	const navLinks = [
 		{ href: '/', label: 'Home' },
+		{ href: '/install', label: 'Install' },
+		{ href: '/compare', label: 'Compare' },
 		{ href: '/packages', label: 'Packages' },
-		{ href: '/stats', label: 'Stats' },
-		{ href: '/about', label: 'About' }
+		{ href: '/stats', label: 'Stats' }
 	];
 
 	function isActive(href: string): boolean {
@@ -45,8 +46,19 @@
 
 	<footer class="site-footer">
 		<div class="container footer-inner">
-			<span class="footer-prompt">$</span>
-			<span class="footer-text">powered by conary remi</span>
+			<div class="footer-links">
+				<a href="/">Home</a>
+				<a href="/install">Install</a>
+				<a href="/compare">Compare</a>
+				<a href="/packages">Packages</a>
+				<a href="/stats">Stats</a>
+				<a href="/about">About</a>
+				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer">GitHub</a>
+			</div>
+			<div class="footer-bottom">
+				<span class="footer-prompt">$</span>
+				<span class="footer-text">powered by conary remi</span>
+			</div>
 		</div>
 	</footer>
 </div>
@@ -149,23 +161,48 @@
 
 	.footer-inner {
 		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.25rem;
+		padding-top: 2.5rem;
+		padding-bottom: 2.5rem;
+	}
+
+	.footer-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		justify-content: center;
+	}
+
+	.footer-links a {
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
+		padding: 0.25rem 0.625rem;
+		border-radius: var(--radius-sm);
+		transition: color 0.15s;
+	}
+
+	.footer-links a:hover {
+		color: var(--color-accent);
+	}
+
+	.footer-bottom {
+		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding-top: 2rem;
-		padding-bottom: 2rem;
-		justify-content: center;
 	}
 
 	.footer-prompt {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		color: var(--color-accent);
 		font-weight: 500;
 	}
 
 	.footer-text {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		color: var(--color-text-muted);
 	}
 
