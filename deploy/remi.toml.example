@@ -146,7 +146,7 @@ tier = "leaf"
 # signing_key = "/conary/keys/manifest.key"
 
 # Static peer list (alternative to mDNS discovery)
-# peers = ["https://peer1.conary.dev:8080"]
+# peers = ["https://peer1.conary.io:8080"]
 
 [security]
 # Rate limiting (per-IP, token bucket algorithm)
@@ -155,7 +155,7 @@ rate_limit_rps = 200
 rate_limit_burst = 400
 
 # CORS allowed origins (empty = same-origin only for chunk endpoints)
-# cors_origins = ["https://packages.conary.dev"]
+# cors_origins = ["https://packages.conary.io"]
 
 # Trusted proxy header for real client IP extraction
 # Required when behind Cloudflare or other reverse proxy

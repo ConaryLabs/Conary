@@ -133,7 +133,7 @@ in {
     # Main systemd service
     systemd.services.conary-remi = {
       description = "Conary Remi Package Server";
-      documentation = [ "https://github.com/conaryos/conary" ];
+      documentation = [ "https://github.com/ConaryLabs/Conary" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];

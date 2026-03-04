@@ -36,6 +36,17 @@ CLAUDE.local.md
 # Build logs
 *.log
 
+# Generated man pages (built by build.rs via clap_mangen)
+/man/
+
+# Web frontend build artifacts
+web/node_modules/
+web/.svelte-kit/
+web/build/
+
+# Compilation cache
+.sccache/
+
 .gemini/
 gha-creds-*.json
 

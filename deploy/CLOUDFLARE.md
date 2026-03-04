@@ -1,11 +1,11 @@
 # Cloudflare Setup for Conary Remi
 
-This document covers the Cloudflare configuration for `packages.conary.dev`, including DNS, R2, caching, and security.
+This document covers the Cloudflare configuration for `packages.conary.io`, including DNS, R2, caching, and security.
 
 ## Prerequisites
 
 - A Cloudflare account (Free plan works, Pro recommended for advanced WAF rules)
-- The `packages.conary.dev` domain managed by Cloudflare DNS
+- The `packages.conary.io` domain managed by Cloudflare DNS
 - A running Remi server (see `deploy/setup-remi.sh` or `deploy/nixos/remi.nix`)
 
 ## 1. DNS Setup
@@ -41,7 +41,7 @@ For the origin certificate (on the Remi server):
 # Save to /etc/conary/ssl/origin.pem and /etc/conary/ssl/origin-key.pem
 
 # Option B: Let's Encrypt (if you need direct access without Cloudflare)
-certbot certonly --standalone -d packages.conary.dev
+certbot certonly --standalone -d packages.conary.io
 ```
 
 ## 3. R2 Bucket Setup
@@ -107,7 +107,7 @@ write_through = true
 To serve chunks directly from R2 via a custom domain:
 
 1. Go to R2 > conary-chunks > Settings > Public Access
-2. Add custom domain: `chunks.conary.dev`
+2. Add custom domain: `chunks.conary.io`
 3. Add a CNAME record: `chunks` -> R2 bucket URL
 
 This bypasses the origin server for chunk reads, reducing server load.
@@ -237,12 +237,12 @@ If using Page Rules instead of Cache Rules:
 
 | URL Pattern                          | Setting              | Value        |
 |--------------------------------------|----------------------|--------------|
-| `packages.conary.dev/v1/chunks/*`    | Cache Level          | Cache Everything |
+| `packages.conary.io/v1/chunks/*`    | Cache Level          | Cache Everything |
 |                                      | Edge Cache TTL       | 1 month      |
 |                                      | Browser Cache TTL    | 1 year       |
-| `packages.conary.dev/v1/index/*`     | Cache Level          | Cache Everything |
+| `packages.conary.io/v1/index/*`     | Cache Level          | Cache Everything |
 |                                      | Edge Cache TTL       | 1 minute     |
-| `packages.conary.dev/v1/admin/*`     | Cache Level          | Bypass       |
+| `packages.conary.io/v1/admin/*`     | Cache Level          | Bypass       |
 
 Note: Page Rules are being deprecated in favor of Cache Rules. Use Cache Rules (Section 4) for new deployments.
 
@@ -280,7 +280,7 @@ cloudflare_ips_file = "/etc/conary/cloudflare-ips.txt"
 ### Origin Health
 
 - Set up a **Health Check** (under Traffic > Health Checks):
-  - URL: `https://packages.conary.dev/health`
+  - URL: `https://packages.conary.io/health`
   - Interval: 60 seconds
   - Expected status: 200
   - Expected body contains: `"status":"ok"`
@@ -298,8 +298,8 @@ Configure alerts under **Notifications**:
 
 After completing setup, verify:
 
-1. `curl -I https://packages.conary.dev/health` returns 200
-2. `curl -I https://packages.conary.dev/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
-3. `curl -I https://packages.conary.dev/v1/index/fedora/43/x86_64` returns short-TTL cache headers
+1. `curl -I https://packages.conary.io/health` returns 200
+2. `curl -I https://packages.conary.io/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
+3. `curl -I https://packages.conary.io/v1/index/fedora/43/x86_64` returns short-TTL cache headers
 4. R2 dashboard shows objects being written (if write-through is enabled)
 5. WAF dashboard shows no false positives on legitimate traffic

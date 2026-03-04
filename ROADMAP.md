@@ -8,10 +8,10 @@ This document tracks the implementation status of Conary features, both complete
 
 - [COMPLETE] **Trove Model** - Core unit for packages, components, and collections
 - [COMPLETE] **Changeset System** - Atomic transactions for all operations
-- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v30)
+- [COMPLETE] **SQLite Backend** - All state in queryable database (schema v44)
 - [COMPLETE] **Content-Addressable Storage** - Git-style file deduplication
 - [COMPLETE] **File-Level Tracking** - SHA-256 hashes, ownership, permissions for all files
-- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v28)
+- [COMPLETE] **Schema Migrations** - Automatic database evolution (v1-v44)
 
 ### Package Formats
 
@@ -43,7 +43,7 @@ This document tracks the implementation status of Conary features, both complete
 - [COMPLETE] **Graph-Based Solver** - Topological sort with cycle detection
 - [COMPLETE] **Version Constraints** - Full RPM version comparison
 - [COMPLETE] **Install Reason Tracking** - Explicit vs dependency installation
-- [COMPLETE] **Orphan Detection** - Find dependencies no longer needed
+- [COMPLETE] **Orphan Detection** - Find dependencies no longer needed (with `orphan_since` grace period tracking, schema v39)
 - [COMPLETE] **Autoremove** - Safe removal of orphaned packages
 - [COMPLETE] **whatprovides** - Query what package provides a capability
 - [COMPLETE] **whatbreaks** - Show what would break if package removed
@@ -66,6 +66,10 @@ This document tracks the implementation status of Conary features, both complete
 - [COMPLETE] **HTTP Downloads** - Retry with exponential backoff
 - [COMPLETE] **Metadata Caching** - Configurable expiry time
 - [COMPLETE] **Reference Mirrors** - Split metadata (trusted) from content (CDN) sources via `--content-url`
+- [COMPLETE] **Mirror Health Tracking** - Per-mirror latency, throughput, failure tracking, composite health scores (`mirror_health` table, schema v44)
+- [COMPLETE] **Mirror Selector** - Ranked mirror selection using health scores and geographic hints
+- [COMPLETE] **Metalink Parser** - Parse metalink files for mirror list with priority and geographic preference
+- [COMPLETE] **Substituter Chain** - Composable content substituters for transparent package resolution
 
 ### System Model (Declarative OS)
 
@@ -77,6 +81,10 @@ Inspired by original Conary's CML (Conary Model Language), declare desired syste
 - [COMPLETE] **Drift Detection** - CI/CD-friendly check with exit codes (`model-check`)
 - [COMPLETE] **State Sync** - Apply model to reach desired state (`model-apply`)
 - [COMPLETE] **Version Pinning** - Pin packages to version patterns in model
+- [COMPLETE] **Remote Include Resolution** - Fetch collections from Remi endpoints for `[include]` directives (schema v41)
+- [COMPLETE] **Model Lockfile** - Pin remote include content hashes to prevent silent upstream drift
+- [COMPLETE] **Model Signing** - Ed25519 signatures for published collections with verification
+- [COMPLETE] **Model Publishing** - Publish collections to Remi server (`model-publish`)
 
 ### Delta Updates
 
@@ -85,6 +93,7 @@ Inspired by original Conary's CML (Conary Model Language), declare desired syste
 - [COMPLETE] **Delta Application** - Apply deltas to upgrade packages
 - [COMPLETE] **Automatic Fallback** - Fall back to full download if delta fails
 - [COMPLETE] **Bandwidth Statistics** - Track bytes saved across updates
+- [COMPLETE] **Delta Manifests** - Pre-computed chunk set differences between package versions for efficient upgrades (schema v44)
 
 ### Security
 
@@ -92,6 +101,40 @@ Inspired by original Conary's CML (Conary Model Language), declare desired syste
 - [COMPLETE] **Key Management** - List, remove imported keys
 - [COMPLETE] **Signature Verification** - Verify package signatures
 - [COMPLETE] **Strict Mode** - Require valid signatures for all packages
+
+### TUF Supply Chain Trust
+
+The Update Framework (TUF) for repository metadata verification.
+
+- [COMPLETE] **TUF Metadata** - Root, timestamp, snapshot, targets roles (schema v43)
+- [COMPLETE] **Trust Client** - Fetch and verify TUF metadata with threshold signatures
+- [COMPLETE] **Key Management** - TUF key generation, storage, and rotation support
+- [COMPLETE] **Root Ceremony** - Generate and sign root metadata with key thresholds
+- [COMPLETE] **Target Verification** - Verify package hashes against signed targets metadata
+- [COMPLETE] **CLI Commands** - trust init, trust status, trust verify, trust key-gen
+- [COMPLETE] **Server Integration** - Remi serves TUF metadata and supports timestamp refresh
+
+### Capability Enforcement
+
+Declare and enforce package capabilities (network, filesystem, syscall access).
+
+- [COMPLETE] **Capability Declarations** - Packages declare required capabilities (network, filesystem, syscalls; schema v33)
+- [COMPLETE] **Capability Audit** - Audit installed packages against declared capabilities
+- [COMPLETE] **Capability Inference** - Heuristic-based capability detection from package contents
+- [COMPLETE] **Capability Resolver** - Resolve capability requirements during dependency solving
+- [COMPLETE] **Landlock Enforcement** - Filesystem access control via Linux Landlock LSM
+- [COMPLETE] **Seccomp-BPF Enforcement** - Syscall filtering via seccomp-BPF
+
+### Package Provenance (DNA)
+
+Full provenance tracking from source to deployment.
+
+- [COMPLETE] **Source Provenance** - Track source URLs, VCS info, checksums
+- [COMPLETE] **Build Provenance** - Record compiler, flags, environment, timestamps
+- [COMPLETE] **Signature Provenance** - Track signing keys, timestamps, verification status
+- [COMPLETE] **Content Provenance** - File-level content hashes and integrity verification
+- [COMPLETE] **SLSA Integration** - Generate SLSA provenance attestations
+- [COMPLETE] **Database Storage** - Provenance tables (sources, builds, signatures, content, verifications; schema v32)
 
 ### System Operations
 
@@ -125,6 +168,8 @@ Native package format (CCS - Conary Component Specification) with build policies
 - [COMPLETE] **SOURCE_DATE_EPOCH** - Reproducible build support with timestamp normalization
 - [COMPLETE] **OCI Export** - Export packages to OCI container images (podman/docker compatible)
 - [COMPLETE] **CLI Commands** - ccs-init, ccs-build, ccs-inspect, ccs-verify, ccs-sign, ccs-keygen, ccs-install, ccs-export
+- [COMPLETE] **Lockfiles** - `ccs.lock` pinning exact versions, content hashes, and source URLs of all transitive dependencies
+- [COMPLETE] **Retroactive Enhancement** - Apply CCS hooks (systemd, tmpfiles, sysctl, user/group, alternatives) to converted legacy packages (schema v36-v37)
 
 ### Container-Isolated Scriptlets
 
@@ -137,6 +182,15 @@ Run package scripts in lightweight Linux containers for safety.
 - [COMPLETE] **Resource Limits** - CPU, memory, file size, process limits for scriptlets
 - [COMPLETE] **Dangerous Script Detection** - Automatic risk analysis with pattern matching
 - [COMPLETE] **CLI Integration** - `--sandbox` flag (auto, always, never) for install/remove commands
+
+### Developer Experience (Inspired by Nix)
+
+Workflow features that make Nix beloved by developers.
+
+- [COMPLETE] **Dev Shells** - `ccs shell <packages>` for temporary environments without permanent install
+- [COMPLETE] **Lockfiles** - `ccs.lock` pinning exact versions and hashes of all transitive dependencies
+- [COMPLETE] **One-Shot Run** - `ccs run <package> -- <command>` to execute without installing
+- [ ] **Shell Integration** - Automatic environment activation when entering project directories
 
 ---
 
@@ -261,48 +315,9 @@ Inspired by original Conary's label concept for tracking package provenance.
 - [COMPLETE] **Security Metadata** - Track severity, CVE IDs, advisory info on repository packages
 - [COMPLETE] **Update Groups** - `conary update-group <name>` updates collection members atomically
 
-### Developer Experience (Inspired by Nix)
-
-Workflow features that make Nix beloved by developers.
-
-- [COMPLETE] **Dev Shells** - `ccs shell <packages>` for temporary environments without permanent install
-- [ ] **Lockfiles** - `ccs.lock` pinning exact versions and hashes of all transitive dependencies
-- [COMPLETE] **One-Shot Run** - `ccs run <package> -- <command>` to execute without installing
-- [ ] **Shell Integration** - Automatic environment activation when entering project directories
-
 ---
 
-## Long-Term / Future Consideration
-
-### Atomic Filesystem Updates (Inspired by Aeryn OS)
-
-Use atomic operations to swap entire filesystem trees.
-
-- [ ] **Staging Directory** - Build complete filesystem tree before deployment
-- [ ] **renameat2 RENAME_EXCHANGE** - Atomic directory swap on Linux
-- [ ] **Content-Addressable /usr** - Deduplicated, immutable /usr trees
-- [ ] **Instant Rollback** - Swap back to previous tree atomically
-- [ ] **Fallback Strategy** - Graceful degradation on non-Linux systems
-
-### VFS Tree with Reparenting (Inspired by Aeryn OS)
-
-Virtual filesystem tree for efficient file operations.
-
-- [COMPLETE] **Arena Allocator** - Efficient node storage for large trees (`src/filesystem/vfs/mod.rs`)
-- [COMPLETE] **O(1) Path Lookup** - HashMap for instant path-to-node resolution
-- [ ] **Subtree Reparenting** - Efficiently move entire subtrees
-- [ ] **Component Merging** - Merge component trees for installation
-
-### Fast Hashing Option (Inspired by Aeryn OS)
-
-Optional xxhash for non-cryptographic use cases.
-
-- [ ] **xxhash Support** - Add xxh128 as alternative to SHA-256
-- [ ] **Hash Selection** - Configure hash algorithm per use case
-- [ ] **Dedup with xxhash** - Faster deduplication checks
-- [ ] **Verify with SHA-256** - Keep SHA-256 for security verification
-
-### Repository 2026: Chunk-Level Distribution
+## Repository 2026: Chunk-Level Distribution
 
 Move from file-level to chunk-level for massive efficiency gains. CDC gives "delta compression for free" - no need to pre-compute version-to-version deltas.
 
@@ -320,19 +335,73 @@ Move from file-level to chunk-level for massive efficiency gains. CDC gives "del
 - [x] **Chunk CAS Storage** - Store converted chunks in content-addressed storage
 - [x] **Client Integration** - RemiClient with automatic polling and chunk assembly
 - [x] **LRU Cache Design** - Evict old chunks to manage disk space (implementation pending)
-- [x] **Deployed** - Running on remi.conary.io (Hetzner i7-8700, 64GB, 2x1TB NVMe ZFS mirror)
+- [x] **Deployed** - Running on packages.conary.io (Hetzner dedi, 12 cores, 64GB, 2x1TB NVMe RAID 0)
 
-**Phase 3: HTTP Chunk Repository**
-- [ ] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`)
-- [ ] **HTTP/2 Multiplexed Client** - Parallel chunk fetching from CDN/S3/nginx
-- [ ] **Manifest with Merkle Root** - Cryptographically sealed repo state (supply chain security)
+**Phase 3: HTTP Chunk Repository** [COMPLETE]
+- [x] **ChunkFetcher Trait** - Transport abstraction (`fn fetch(hash) -> bytes`) with HTTP, local, and composite implementations
+- [x] **HTTP/2 Client** - Parallel chunk fetching with configurable concurrency
+- [x] **Sparse Index** - crates.io-style per-package JSON documents, CDN-cacheable
+- [x] **R2 Storage Backend** - Cloudflare R2 object storage for CDN-backed chunk distribution with presigned URL redirects
+- [x] **Bloom Filter Protection** - In-memory Bloom filter to reject invalid chunk hashes without disk I/O
+- [x] **Negative Cache** - Cache conversion failures to avoid repeated attempts
+- [x] **Batch Operations** - Batch chunk existence checks and multi-chunk fetch endpoints
 
-**Phase 4: P2P Plugin (Future)**
+**Phase 4: Production Hardening** [COMPLETE]
+- [x] **CORS Restrictions** - Public vs restricted CORS layers for chunk/admin endpoints
+- [x] **Token-Bucket Rate Limiting** - Per-IP rate limiting with configurable RPS and burst
+- [x] **Audit Logging** - Middleware-based audit logging for federation and admin requests
+- [x] **Ban List** - IP ban list enforcement for misbehaving clients
+- [x] **Admin API Separation** - Localhost-only admin router for privileged operations (conversion, cache, recipes)
+- [x] **Cloudflare Integration** - CF-Connecting-IP header extraction, IP range validation
+
+**Phase 5: Observability** [COMPLETE]
+- [x] **Prometheus Metrics** - Atomic counters for requests, hits, misses, errors; exposed at `/metrics`
+- [x] **Download Analytics** - Buffered download event recording with periodic aggregation (schema v40)
+- [x] **Package Statistics** - Popular packages, recent additions, overview endpoints (`/v1/stats/*`)
+- [x] **Server Info** - Admin endpoint with runtime and storage details
+- [x] **Popularity Tracking** - Download count aggregation (30-day, 7-day, total) for ranking
+
+**Phase 6: Advanced Distribution** [COMPLETE]
+- [x] **Delta Manifests** - Pre-computed chunk set differences between versions (`delta_manifests` table, schema v44)
+- [x] **Smart Pre-warming** - Background conversion of popular packages before they are requested
+- [x] **Federated Sparse Index** - Merge package metadata from upstream Remi instances with TTL caching
+- [x] **OCI Distribution API** - Expose CCS packages as OCI artifacts (v2 spec: catalog, manifests, blobs, tags)
+- [x] **Remi Lite Proxy** - Zero-config LAN proxy with pull-through caching and mDNS auto-discovery
+- [x] **Web Package Index** - SvelteKit frontend for browsing packages, versions, dependencies, and stats
+
+**P2P Plugin (Future)**
 - [ ] **IPFS Fetcher Plugin** - Check local IPFS node before CDN fallback
 - [ ] **BitTorrent DHT Plugin** - Peer discovery for popular chunks
-- [ ] **Transport Priority** - P2P → CDN → Mirror fallback chain
+- [ ] **Transport Priority** - P2P -> CDN -> Mirror fallback chain
 
 Design principle: Don't embed P2P in core. Build clean fetch API, let plugins add P2P later. Enterprise blocks P2P anyway.
+
+### CAS Federation
+
+Distributed chunk sharing across Conary nodes for bandwidth savings.
+
+- [COMPLETE] **Hierarchical Peer Model** - Region hub (WAN), cell hub (LAN), leaf (client) tiers
+- [COMPLETE] **Peer Discovery** - mDNS (`_conary-cas._tcp.local`) and manual configuration
+- [COMPLETE] **Chunk Router** - Hierarchical routing (cell -> region -> upstream) with preference ordering
+- [COMPLETE] **Request Coalescing** - Deduplicate concurrent identical chunk requests
+- [COMPLETE] **Circuit Breaker** - Automatic failover for unresponsive peers
+- [COMPLETE] **Signed Manifests** - Ed25519-signed chunk manifests for integrity verification
+- [COMPLETE] **Federation Statistics** - Per-peer success rates, latency tracking, daily stats (schema v34)
+- [COMPLETE] **CLI Commands** - federation status, peers, add-peer, test, scan, stats
+- [COMPLETE] **Server Directory** - Federation peer directory endpoint for discovery
+
+### conaryd Daemon
+
+Local daemon providing REST API for package operations, acting as the "Guardian of State" with exclusive transaction lock ownership.
+
+- [COMPLETE] **REST API** - Unix socket primary (`/run/conary/conaryd.sock`) with optional TCP
+- [COMPLETE] **Job Queue** - Priority-ordered operation queue with SQLite persistence (schema v35)
+- [COMPLETE] **SSE Streaming** - Real-time progress events for transaction monitoring
+- [COMPLETE] **CLI Forwarding** - CLI auto-detects daemon and forwards operations when available
+- [COMPLETE] **Peer Authentication** - SO_PEERCRED for Unix socket identity verification
+- [COMPLETE] **System Lock** - System-wide flock for exclusive transaction access
+- [COMPLETE] **Systemd Integration** - Socket activation, watchdog, and idle timeout support
+- [COMPLETE] **Audit Logging** - Per-operation audit trail with peer credentials
 
 ### Recipe System (Cooking)
 
@@ -344,18 +413,82 @@ Building packages from source using recipe files, following original Conary's cu
 - [COMPLETE] **Recipe Validation** - Validate recipes with warnings for common issues
 - [COMPLETE] **Cook Command** - `conary cook <recipe>` to build packages from source
 - [COMPLETE] **Recipe Resolution Strategy** - Resolver can fetch and cook recipes automatically
+- [COMPLETE] **Hermetic Builds** - Network-isolated builds with PID/UTS/IPC/mount/net namespaces
+- [COMPLETE] **Build Cache** - Content-addressed artifact caching with invalidation on dependency changes
+- [COMPLETE] **Recipe Graph** - Dependency graph for multi-recipe build ordering with cycle breaking for bootstrap
+- [COMPLETE] **PKGBUILD Converter** - Convert Arch Linux PKGBUILD files to Conary recipe format
+- [COMPLETE] **Provenance Capture** - Automatic build provenance recording during cooking
 - [ ] **Source Components** - Store :source troves in repository
 - [ ] **Factory System** - Templates for common package types
 
-### Advanced Package Building
+### Derived Packages
 
-Building on the CCS format with more sophisticated features.
+- [COMPLETE] **Derived Package Builder** - Create packages based on existing ones with modifications (overrides, patches)
+- [COMPLETE] **Version Policy** - Configurable version derivation (match parent, custom, append suffix)
+- [COMPLETE] **Database Tracking** - Track parent-child relationships in `derived_packages` table (schema v26)
+- [COMPLETE] **CLI Commands** - derive command for creating derived packages
 
-- [ ] **Derived Packages** - Create packages based on existing ones
+### Package Evolution
 
-### Repository Server
+- [COMPLETE] **Redirect Packages** - Package redirects for renames/obsoletes with automatic resolution during install (schema v28)
+- [COMPLETE] **Package Splits** - Track when packages split (`firefox` -> `firefox-bin` + `firefox-lib`) via split redirects
+- [COMPLETE] **Obsoletes Handling** - Clean removal of deprecated packages during updates via obsolete redirects
+- [COMPLETE] **Subpackage Relationships** - Track RPM/DEB subpackage structure (base, component type; schema v36)
 
-- [ ] **Conary Repository Service** - Network-accessible repository
+### Bootstrap System
+
+Build a complete Conary system from scratch.
+
+- [COMPLETE] **Stage 0** - Minimal cross-compilation toolchain bootstrap
+- [COMPLETE] **Stage 1** - Self-hosting build environment
+- [COMPLETE] **Toolchain Management** - Compiler and build tool versioning
+- [COMPLETE] **Base System** - Minimal bootable system definition
+- [COMPLETE] **Image Generation** - Produce installable system images
+
+### Automated Maintenance
+
+AI-assisted and scheduled maintenance operations.
+
+- [COMPLETE] **Security Update Checks** - Automated security vulnerability scanning
+- [COMPLETE] **Orphan Cleanup** - Scheduled orphaned package removal with grace periods
+- [COMPLETE] **Action Engine** - Pluggable action system for automated operations
+- [COMPLETE] **Scheduler** - Configurable maintenance scheduling
+
+### VFS Tree with Reparenting (Inspired by Aeryn OS)
+
+Virtual filesystem tree for efficient file operations.
+
+- [COMPLETE] **Arena Allocator** - Efficient node storage for large trees (`src/filesystem/vfs/mod.rs`)
+- [COMPLETE] **O(1) Path Lookup** - HashMap for instant path-to-node resolution
+- [COMPLETE] **Subtree Reparenting** - Efficiently move entire subtrees (reparent, reparent_with_rename)
+- [ ] **Component Merging** - Merge component trees for installation
+
+### Fast Hashing Option (Inspired by Aeryn OS)
+
+Optional xxhash for non-cryptographic use cases.
+
+- [COMPLETE] **XXH128 Support** - XXH3-128 implementation via `xxhash-rust` crate (`src/hash.rs`)
+- [COMPLETE] **Hash Selection** - Configure hash algorithm per use case (SHA-256, Blake3, XXH128)
+- [COMPLETE] **Dedup with XXH128** - Faster deduplication checks with non-cryptographic hashing
+- [COMPLETE] **Verify with SHA-256** - SHA-256 retained for security verification
+
+---
+
+## Long-Term / Future Consideration
+
+### Atomic Filesystem Updates (Inspired by Aeryn OS)
+
+Use atomic operations to swap entire filesystem trees.
+
+- [ ] **Staging Directory** - Build complete filesystem tree before deployment
+- [ ] **renameat2 RENAME_EXCHANGE** - Atomic directory swap on Linux
+- [ ] **Content-Addressable /usr** - Deduplicated, immutable /usr trees
+- [ ] **Instant Rollback** - Swap back to previous tree atomically
+- [ ] **Fallback Strategy** - Graceful degradation on non-Linux systems
+
+### Repository Server (Full)
+
+- [ ] **Conary Repository Service** - Network-accessible source repository (beyond Remi package proxy)
 - [ ] **Version Control** - Repository as version control system
 - [ ] **Commit/Checkout** - Check in/out package sources
 - [ ] **Branch Management** - Create and manage branches
@@ -367,23 +500,10 @@ Building on the CCS format with more sophisticated features.
 - [ ] **Optional Members** - Groups can have required and optional members
 - [ ] **Migrate Command** - Migrate system to new group version atomically
 
-### Package Evolution
-
-- [COMPLETE] **Redirect Packages** - Package redirects for renames/obsoletes with automatic resolution during install (schema v28)
-- [ ] **Package Splits** - Track when packages split (`firefox` → `firefox-bin` + `firefox-lib`)
-- [ ] **Obsoletes Handling** - Clean removal of deprecated packages during updates
-
 ### Advanced Features
 
 - [ ] **Info Packages** - Create system users/groups via packages
 - [ ] **Capsule Packages** - Encapsulate foreign packages
-
-### Web Interface
-
-- [ ] **System State Dashboard** - Visual view of installed packages
-- [ ] **Changeset Browser** - Browse and compare changesets
-- [ ] **Dependency Graph** - Visual dependency tree
-- [ ] **Update Preview** - Preview updates before applying
 
 ---
 
@@ -402,6 +522,9 @@ These features from original Conary are not planned for implementation:
 
 - **Original Conary** (rPath) - Troves, changesets, flavors, components, labels, groups
 - **Aeryn OS / Serpent OS** - Atomic updates, triggers, state snapshots, typed deps, container isolation
+- **Nix** - Dev shells, lockfiles, one-shot run, reproducible builds
+- **TUF** - Supply chain trust framework for repository metadata
+- **crates.io** - Sparse index design for package metadata
 
 ---
 
@@ -429,12 +552,26 @@ These features from original Conary are not planned for implementation:
 | - | CCS Native Package Format (CBOR manifest, Merkle tree, Ed25519 signatures) |
 | - | Build Policy System (trait-based policies, SOURCE_DATE_EPOCH, reproducible builds) |
 | - | OCI Container Export (podman/docker compatible image generation) |
-| v25 | Legacy→CCS conversion tracking (`converted_packages` table) |
+| v25 | Legacy to CCS conversion tracking (`converted_packages` table) |
 | v26 | Derived packages for model-apply operations |
 | v27 | Remi chunk access tracking for LRU cache |
 | v28 | Package redirects (renames, obsoletes), SBOM export, CAS garbage collection, dev shells |
 | v29 | Per-package routing (package_resolution table), unified resolution strategies |
 | v30 | Label federation (repository_id, delegate_to_label_id), recipe cooking system |
+| v31 | Repository default resolution strategy (binary, remi, recipe, delegate) |
+| v32 | Package DNA / full provenance tracking (sources, builds, signatures, content, verifications) |
+| v33 | Capability declarations and audits (network, filesystem, syscalls) |
+| v34 | CAS federation peers and daily bandwidth statistics |
+| v35 | conaryd daemon persistent job queue |
+| v36 | Retroactive CCS enhancement framework, subpackage relationships |
+| v37 | Enhancement priority scheduling |
+| v38 | Server-side conversion tracking (package identity, chunk manifest, CCS path) |
+| v39 | Orphan tracking with grace periods (orphan_since column on troves) |
+| v40 | Download statistics for package popularity ranking |
+| v41 | Remote collection cache for model include resolution |
+| v42 | Ed25519 signatures for remote collections |
+| v43 | TUF supply chain trust (root, keys, metadata, targets tables; repository TUF columns) |
+| v44 | Mirror health tracking, delta manifests |
 
 ---
 
@@ -442,8 +579,9 @@ These features from original Conary are not planned for implementation:
 
 Contributions welcome. Priority areas:
 1. Atomic filesystem updates (renameat2 RENAME_EXCHANGE)
-2. VFS tree with reparenting
-3. Fast hashing option (xxhash)
-4. Web interface for system state visualization
+2. VFS component merging
+3. Shell integration for dev shells (direnv-style)
+4. P2P chunk distribution plugins
+5. Web interface improvements
 
 See README.md for development setup and CLAUDE.md for coding conventions.
