@@ -51,9 +51,9 @@
 			<div class="package-grid">
 				{#each packages as pkg}
 					<PackageCard
-						name={pkg.package_name}
+						name={pkg.name}
 						distro={pkg.distro}
-						downloads={pkg.total_count}
+						downloads={pkg.download_count}
 					/>
 				{/each}
 			</div>
@@ -63,7 +63,7 @@
 
 <style>
 	.page {
-		padding: 2rem 1.5rem;
+		padding: 2.5rem 1.5rem;
 	}
 
 	.page-header {
@@ -71,7 +71,9 @@
 	}
 
 	.page-header h1 {
+		font-family: var(--font-display);
 		font-size: 1.75rem;
+		font-weight: 700;
 		margin-bottom: 0.25rem;
 	}
 
@@ -81,11 +83,13 @@
 	}
 
 	.section {
-		margin-top: 2rem;
+		margin-top: 2.5rem;
 	}
 
 	.section h2 {
+		font-family: var(--font-display);
 		font-size: 1.25rem;
+		font-weight: 700;
 		margin-bottom: 1rem;
 	}
 

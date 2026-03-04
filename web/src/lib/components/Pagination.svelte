@@ -97,19 +97,19 @@
 		padding: 0.5rem 1rem;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
-		background: var(--color-bg);
+		background: var(--color-surface);
 		color: var(--color-text);
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		transition: all 0.15s;
 	}
 
 	.page-btn:hover:not(:disabled) {
-		border-color: var(--color-primary);
-		color: var(--color-primary);
+		border-color: var(--color-accent);
+		color: var(--color-accent);
 	}
 
 	.page-btn:disabled {
-		opacity: 0.4;
+		opacity: 0.3;
 		cursor: not-allowed;
 	}
 
@@ -122,24 +122,26 @@
 		border: 1px solid transparent;
 		border-radius: var(--radius-sm);
 		background: none;
-		color: var(--color-text);
-		font-size: 0.875rem;
+		color: var(--color-text-secondary);
+		font-size: 0.8125rem;
+		font-family: var(--font-mono);
 		transition: all 0.15s;
 	}
 
 	.page-num:hover {
-		background: var(--color-card-bg);
+		color: var(--color-text);
+		background: var(--color-surface);
 	}
 
 	.page-num.active {
-		background: var(--color-primary);
-		color: #fff;
-		border-color: var(--color-primary);
+		background: var(--color-accent);
+		color: var(--color-bg);
+		border-color: var(--color-accent);
 	}
 
 	.page-ellipsis {
 		min-width: 2.25rem;
 		text-align: center;
-		color: var(--color-text-secondary);
+		color: var(--color-text-muted);
 	}
 </style>

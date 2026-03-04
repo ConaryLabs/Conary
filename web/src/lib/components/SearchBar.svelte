@@ -87,7 +87,6 @@
 	}
 
 	function handleBlur() {
-		// Delay to allow click on suggestion
 		setTimeout(() => {
 			showSuggestions = false;
 		}, 200);
@@ -96,9 +95,7 @@
 
 <div class="search-bar">
 	<div class="search-input-wrapper">
-		<svg class="search-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-			<path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
-		</svg>
+		<span class="search-prompt" aria-hidden="true">&gt;_</span>
 		<input
 			bind:this={inputEl}
 			bind:value={query}
@@ -149,22 +146,25 @@
 	.search-input-wrapper {
 		display: flex;
 		align-items: center;
-		background: var(--color-bg);
-		border: 2px solid var(--color-border);
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
 		border-radius: var(--radius-lg);
-		transition: border-color 0.15s;
+		transition: border-color 0.2s, box-shadow 0.2s;
 	}
 
 	.search-input-wrapper:focus-within {
-		border-color: var(--color-primary);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 3px var(--color-accent-subtle), var(--shadow-glow);
 	}
 
-	.search-icon {
-		width: 1.25rem;
-		height: 1.25rem;
-		margin-left: 1rem;
-		color: var(--color-text-secondary);
+	.search-prompt {
+		font-family: var(--font-mono);
+		font-size: 0.9375rem;
+		font-weight: 500;
+		color: var(--color-accent);
+		margin-left: 1.125rem;
 		flex-shrink: 0;
+		user-select: none;
 	}
 
 	input {
@@ -172,49 +172,49 @@
 		border: none;
 		background: none;
 		padding: 0.875rem 0.75rem;
-		font-size: 1.0625rem;
+		font-size: 1rem;
 		color: var(--color-text);
 		outline: none;
 		min-width: 0;
 	}
 
 	input::placeholder {
-		color: var(--color-text-secondary);
+		color: var(--color-text-muted);
 	}
 
 	.search-submit {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--color-primary);
-		color: #fff;
+		background: var(--color-accent);
+		color: var(--color-bg);
 		border: none;
-		border-radius: 0 var(--radius-md) var(--radius-md) 0;
-		padding: 0.75rem 1rem;
+		border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0;
+		padding: 0.875rem 1.125rem;
 		transition: background-color 0.15s;
 	}
 
 	.search-submit:hover {
-		background: var(--color-primary-hover);
+		background: var(--color-accent-hover);
 	}
 
 	.search-submit svg {
-		width: 1.25rem;
-		height: 1.25rem;
+		width: 1.125rem;
+		height: 1.125rem;
 	}
 
 	.suggestions {
 		position: absolute;
-		top: 100%;
+		top: calc(100% + 4px);
 		left: 0;
 		right: 0;
-		margin: 0.25rem 0 0;
+		margin: 0;
 		padding: 0.25rem 0;
 		list-style: none;
-		background: var(--color-bg);
+		background: var(--color-surface);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		box-shadow: var(--shadow-md);
+		box-shadow: var(--shadow-lg);
 		z-index: 100;
 		max-height: 300px;
 		overflow-y: auto;
@@ -224,16 +224,18 @@
 		display: block;
 		width: 100%;
 		text-align: left;
-		padding: 0.5rem 1rem;
+		padding: 0.5rem 1rem 0.5rem 2.75rem;
 		border: none;
 		background: none;
 		color: var(--color-text);
 		font-size: 0.9375rem;
+		font-family: var(--font-mono);
+		transition: background 0.1s, color 0.1s;
 	}
 
 	.suggestions li button:hover,
 	.suggestions li.selected button {
-		background: var(--color-card-bg);
-		color: var(--color-primary);
+		background: var(--color-accent-subtle);
+		color: var(--color-accent);
 	}
 </style>

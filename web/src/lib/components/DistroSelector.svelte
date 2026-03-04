@@ -30,33 +30,31 @@
 
 <style>
 	.distro-selector {
-		display: flex;
-		gap: 0.25rem;
-		background: var(--color-bg-secondary);
+		display: inline-flex;
+		gap: 2px;
+		background: var(--color-surface);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		padding: 0.25rem;
+		padding: 3px;
 	}
 
 	button {
-		padding: 0.5rem 1.25rem;
+		padding: 0.4375rem 1.125rem;
 		border: none;
-		border-radius: var(--radius-sm);
+		border-radius: calc(var(--radius-md) - 3px);
 		background: none;
 		color: var(--color-text-secondary);
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		font-weight: 500;
 		transition: all 0.15s;
 	}
 
 	button:hover {
 		color: var(--color-text);
-		background: var(--color-bg);
 	}
 
 	button.active {
-		background: var(--color-bg);
-		color: var(--color-primary);
-		box-shadow: var(--shadow-sm);
+		background: var(--color-accent-subtle);
+		color: var(--color-accent);
 	}
 </style>

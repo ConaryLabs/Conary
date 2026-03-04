@@ -43,15 +43,15 @@
 		<p class="card-description">{description}</p>
 	{/if}
 	<div class="card-meta">
-		<span class="card-distro">{distro}</span>
+		<span class="card-distro distro-{distro}">{distro}</span>
 		{#if converted}
-			<span class="card-badge badge-converted">CCS</span>
+			<span class="card-badge">CCS</span>
 		{/if}
 		{#if size > 0}
-			<span class="card-size">{formatSize(size)}</span>
+			<span class="card-stat">{formatSize(size)}</span>
 		{/if}
 		{#if downloads > 0}
-			<span class="card-downloads">{formatDownloads(downloads)} downloads</span>
+			<span class="card-stat">{formatDownloads(downloads)} dl</span>
 		{/if}
 	</div>
 </a>
@@ -60,18 +60,20 @@
 	.package-card {
 		display: block;
 		padding: 1rem 1.25rem;
-		background: var(--color-card-bg);
-		border: 1px solid var(--color-card-border);
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 		text-decoration: none;
 		color: var(--color-text);
-		transition: border-color 0.15s, box-shadow 0.15s;
+		transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 	}
 
 	.package-card:hover {
-		border-color: var(--color-primary);
+		border-color: var(--color-border-hover);
 		box-shadow: var(--shadow-md);
+		transform: translateY(-1px);
 		text-decoration: none;
+		color: var(--color-text);
 	}
 
 	.card-header {
@@ -82,24 +84,31 @@
 	}
 
 	.card-name {
-		font-weight: 600;
-		font-size: 1.0625rem;
-		color: var(--color-primary);
+		font-family: var(--font-mono);
+		font-weight: 500;
+		font-size: 0.9375rem;
+		color: var(--color-accent);
+		transition: color 0.15s;
+	}
+
+	.package-card:hover .card-name {
+		color: var(--color-accent-hover);
 	}
 
 	.card-version {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		font-size: 0.75rem;
+		color: var(--color-text-muted);
 	}
 
 	.card-description {
 		margin: 0 0 0.625rem;
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		color: var(--color-text-secondary);
 		line-height: 1.5;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
@@ -107,33 +116,48 @@
 	.card-meta {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		gap: 0.625rem;
+		font-size: 0.75rem;
+		color: var(--color-text-muted);
 	}
 
 	.card-distro {
 		font-weight: 500;
 		text-transform: capitalize;
-	}
-
-	.card-badge {
 		padding: 0.1em 0.5em;
 		border-radius: var(--radius-sm);
 		font-size: 0.6875rem;
+		letter-spacing: 0.02em;
+	}
+
+	.distro-fedora {
+		background: rgba(60, 110, 180, 0.15);
+		color: #6B9FE0;
+	}
+
+	.distro-arch {
+		background: rgba(23, 147, 209, 0.15);
+		color: #4DB8E8;
+	}
+
+	.distro-ubuntu {
+		background: rgba(233, 84, 32, 0.15);
+		color: #F08060;
+	}
+
+	.card-badge {
+		padding: 0.1em 0.4em;
+		border-radius: var(--radius-sm);
+		font-size: 0.625rem;
 		font-weight: 600;
 		text-transform: uppercase;
-		letter-spacing: 0.03em;
+		letter-spacing: 0.04em;
+		background: rgba(52, 211, 153, 0.15);
+		color: var(--color-success);
 	}
 
-	.badge-converted {
-		background: var(--color-success);
-		color: #fff;
-	}
-
-	.card-size,
-	.card-downloads {
+	.card-stat {
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: 0.6875rem;
 	}
 </style>

@@ -13,7 +13,7 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 
-	let distro = $derived(page.params.distro);
+	let distro = $derived(page.params.distro ?? '');
 	let totalPages = $derived(Math.ceil(totalPackages / PER_PAGE));
 
 	$effect(() => {
@@ -57,7 +57,10 @@
 
 <div class="container page">
 	<div class="page-header">
-		<h1>{distroLabel(distro)} Packages</h1>
+		<div class="title-row">
+			<span class="distro-indicator distro-{distro}" aria-hidden="true"></span>
+			<h1>{distroLabel(distro)} Packages</h1>
+		</div>
 		{#if totalPackages > 0}
 			<p class="page-subtitle">{totalPackages.toLocaleString()} packages available</p>
 		{/if}
@@ -78,7 +81,7 @@
 			{#each packages as pkg}
 				<PackageCard
 					name={pkg}
-					distro={distro}
+					{distro}
 				/>
 			{/each}
 		</div>
@@ -93,21 +96,41 @@
 
 <style>
 	.page {
-		padding: 2rem 1.5rem;
+		padding: 2.5rem 1.5rem;
 	}
 
 	.page-header {
 		margin-bottom: 1.5rem;
 	}
 
-	.page-header h1 {
+	.title-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.distro-indicator {
+		width: 4px;
+		height: 1.75rem;
+		border-radius: 2px;
+	}
+
+	.distro-indicator.distro-fedora { background: var(--color-fedora); }
+	.distro-indicator.distro-arch { background: var(--color-arch); }
+	.distro-indicator.distro-ubuntu { background: var(--color-ubuntu); }
+
+	.title-row h1 {
+		font-family: var(--font-display);
 		font-size: 1.75rem;
-		margin-bottom: 0.25rem;
+		font-weight: 700;
+		margin-bottom: 0;
 	}
 
 	.page-subtitle {
 		color: var(--color-text-secondary);
-		margin: 0;
+		margin: 0.25rem 0 0;
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
 	}
 
 	.toolbar {

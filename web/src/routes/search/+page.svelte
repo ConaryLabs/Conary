@@ -4,7 +4,6 @@
 	import PackageCard from '$lib/components/PackageCard.svelte';
 	import DistroSelector from '$lib/components/DistroSelector.svelte';
 	import { searchPackages } from '$lib/api';
-	import { goto } from '$app/navigation';
 	import type { SearchResult } from '$lib/types';
 
 	let results: SearchResult[] = $state([]);
@@ -83,11 +82,13 @@
 
 <style>
 	.page {
-		padding: 2rem 1.5rem;
+		padding: 2.5rem 1.5rem;
 	}
 
 	.page-header h1 {
+		font-family: var(--font-display);
 		font-size: 1.75rem;
+		font-weight: 700;
 		margin-bottom: 1.5rem;
 	}
 
@@ -99,9 +100,10 @@
 	}
 
 	.result-count {
-		font-size: 0.875rem;
-		color: var(--color-text-secondary);
+		font-size: 0.8125rem;
+		color: var(--color-text-muted);
 		margin-bottom: 1rem;
+		font-family: var(--font-mono);
 	}
 
 	.results-list {

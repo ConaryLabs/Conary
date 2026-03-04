@@ -9,9 +9,9 @@ toolchain).
 | Component | Version | Purpose |
 |-----------|---------|---------|
 | GCC | 15.2.0 | C/C++ compiler |
-| glibc | 2.42 | C library |
-| binutils | 2.45.1 | Assembler, linker, etc. |
-| Linux headers | 6.18 | Kernel API headers |
+| glibc | 2.43 | C library |
+| binutils | 2.46 | Assembler, linker, etc. |
+| Linux headers | 6.19.5 | Kernel API headers |
 
 ## Prerequisites
 

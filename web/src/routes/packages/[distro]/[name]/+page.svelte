@@ -11,8 +11,8 @@
 	let showAllDeps = $state(false);
 	let showAllRdeps = $state(false);
 
-	let distro = $derived(page.params.distro);
-	let name = $derived(page.params.name);
+	let distro = $derived(page.params.distro ?? '');
+	let name = $derived(page.params.name ?? '');
 
 	$effect(() => {
 		loadPackage();
@@ -69,7 +69,7 @@
 	{:else if error}
 		<p class="status-msg error">{error}</p>
 	{:else if pkg}
-		<div class="pkg-header">
+		<div class="pkg-header animate-in" style="--stagger: 0">
 			<div class="pkg-title-row">
 				<h1>{pkg.name}</h1>
 				{#if pkg.converted}
@@ -77,9 +77,9 @@
 				{/if}
 			</div>
 			<p class="pkg-version">
-				<span class="version-label">Latest:</span>
+				<span class="version-label">latest</span>
 				<code>{pkg.latest_version}</code>
-				<span class="pkg-distro">{distroLabel(pkg.distro)}</span>
+				<span class="pkg-distro distro-{pkg.distro}">{distroLabel(pkg.distro)}</span>
 			</p>
 			{#if pkg.description}
 				<p class="pkg-description">{pkg.description}</p>
@@ -89,37 +89,39 @@
 		<div class="pkg-grid">
 			<div class="pkg-main">
 				<!-- Versions -->
-				<section class="pkg-section">
+				<section class="pkg-section animate-in" style="--stagger: 2">
 					<h2>Versions</h2>
 					{#if pkg.versions.length === 0}
 						<p class="muted">No version information available.</p>
 					{:else}
-						<table class="version-table">
-							<thead>
-								<tr>
-									<th>Version</th>
-									<th>Architecture</th>
-									<th>Size</th>
-									<th>Format</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each (showAllVersions ? pkg.versions : pkg.versions.slice(0, 10)) as v}
+						<div class="table-wrap">
+							<table class="version-table">
+								<thead>
 									<tr>
-										<td><code>{v.version}</code></td>
-										<td>{v.architecture ?? '-'}</td>
-										<td>{formatSize(v.size)}</td>
-										<td>
-											{#if v.converted}
-												<span class="badge badge-converted">CCS</span>
-											{:else}
-												<span class="badge badge-legacy">Legacy</span>
-											{/if}
-										</td>
+										<th>Version</th>
+										<th>Architecture</th>
+										<th>Size</th>
+										<th>Format</th>
 									</tr>
-								{/each}
-							</tbody>
-						</table>
+								</thead>
+								<tbody>
+									{#each (showAllVersions ? pkg.versions : pkg.versions.slice(0, 10)) as v}
+										<tr>
+											<td><code>{v.version}</code></td>
+											<td class="text-muted">{v.architecture ?? '-'}</td>
+											<td class="mono-cell">{formatSize(v.size)}</td>
+											<td>
+												{#if v.converted}
+													<span class="badge badge-converted">CCS</span>
+												{:else}
+													<span class="badge badge-legacy">Legacy</span>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
 						{#if pkg.versions.length > 10 && !showAllVersions}
 							<button class="show-more" onclick={() => showAllVersions = true}>
 								Show all {pkg.versions.length} versions
@@ -129,7 +131,7 @@
 				</section>
 
 				<!-- Dependencies -->
-				<section class="pkg-section">
+				<section class="pkg-section animate-in" style="--stagger: 4">
 					<h2>Dependencies ({pkg.dependencies.length})</h2>
 					{#if pkg.dependencies.length === 0}
 						<p class="muted">No dependencies.</p>
@@ -149,7 +151,7 @@
 
 				<!-- Reverse Dependencies -->
 				{#if rdepends.length > 0}
-					<section class="pkg-section">
+					<section class="pkg-section animate-in" style="--stagger: 6">
 						<h2>Reverse Dependencies ({rdepends.length})</h2>
 						<ul class="dep-list">
 							{#each (showAllRdeps ? rdepends : rdepends.slice(0, 20)) as dep}
@@ -167,7 +169,7 @@
 				{/if}
 			</div>
 
-			<aside class="pkg-sidebar">
+			<aside class="pkg-sidebar animate-in" style="--stagger: 3">
 				<div class="sidebar-section">
 					<h3>Details</h3>
 					<dl class="detail-list">
@@ -175,7 +177,7 @@
 						<dd>{distroLabel(pkg.distro)}</dd>
 
 						<dt>Size</dt>
-						<dd>{formatSize(pkg.size_bytes)}</dd>
+						<dd class="mono-value">{formatSize(pkg.size_bytes)}</dd>
 
 						{#if pkg.license}
 							<dt>License</dt>
@@ -183,10 +185,10 @@
 						{/if}
 
 						<dt>Downloads</dt>
-						<dd>{formatNumber(pkg.download_count)}</dd>
+						<dd class="mono-value">{formatNumber(pkg.download_count)}</dd>
 
 						<dt>Downloads (30d)</dt>
-						<dd>{formatNumber(pkg.download_count_30d)}</dd>
+						<dd class="mono-value">{formatNumber(pkg.download_count_30d)}</dd>
 
 						<dt>Format</dt>
 						<dd>{pkg.converted ? 'CCS (converted)' : 'Legacy'}</dd>
@@ -197,6 +199,9 @@
 					<div class="sidebar-section">
 						<h3>Links</h3>
 						<a href={pkg.homepage} target="_blank" rel="noopener noreferrer" class="external-link">
+							<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" width="14" height="14">
+								<path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854-1h4.146a.25.25 0 01.25.25v4.146a.25.25 0 01-.427.177L13.03 4.03 9.28 7.78a.751.751 0 01-1.042-.018.751.751 0 01-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0110.604 1z"/>
+							</svg>
 							Homepage
 						</a>
 					</div>
@@ -204,7 +209,10 @@
 
 				<div class="sidebar-section">
 					<h3>Install</h3>
-					<pre><code>conary install {pkg.name}</code></pre>
+					<div class="terminal-block">
+						<span class="terminal-prompt">$</span>
+						<code>conary install {pkg.name}</code>
+					</div>
 				</div>
 			</aside>
 		</div>
@@ -213,7 +221,7 @@
 
 <style>
 	.page {
-		padding: 2rem 1.5rem;
+		padding: 2.5rem 1.5rem;
 	}
 
 	.pkg-header {
@@ -229,13 +237,15 @@
 	}
 
 	.pkg-title-row h1 {
+		font-family: var(--font-display);
 		font-size: 2rem;
+		font-weight: 800;
 		margin-bottom: 0;
 	}
 
 	.pkg-version {
 		margin: 0.5rem 0 0;
-		font-size: 0.9375rem;
+		font-size: 0.875rem;
 		color: var(--color-text-secondary);
 		display: flex;
 		align-items: center;
@@ -243,21 +253,31 @@
 	}
 
 	.version-label {
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
 		font-weight: 500;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	.pkg-distro {
 		padding: 0.1em 0.5em;
-		background: var(--color-bg-secondary);
 		border-radius: var(--radius-sm);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		text-transform: capitalize;
+		font-weight: 500;
 	}
+
+	.distro-fedora { background: rgba(60, 110, 180, 0.15); color: #6B9FE0; }
+	.distro-arch { background: rgba(23, 147, 209, 0.15); color: #4DB8E8; }
+	.distro-ubuntu { background: rgba(233, 84, 32, 0.15); color: #F08060; }
 
 	.pkg-description {
 		margin: 0.75rem 0 0;
-		font-size: 1.0625rem;
+		font-size: 1rem;
 		line-height: 1.6;
+		color: var(--color-text-secondary);
 	}
 
 	.pkg-grid {
@@ -268,34 +288,52 @@
 	}
 
 	.pkg-section {
-		margin-bottom: 2rem;
+		margin-bottom: 2.5rem;
 	}
 
 	.pkg-section h2 {
-		font-size: 1.25rem;
+		font-family: var(--font-display);
+		font-size: 1.125rem;
+		font-weight: 700;
 		margin-bottom: 1rem;
 		padding-bottom: 0.5rem;
 		border-bottom: 1px solid var(--color-border);
 	}
 
+	.table-wrap {
+		overflow-x: auto;
+	}
+
 	.version-table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 	}
 
 	.version-table th {
 		text-align: left;
 		font-weight: 600;
 		padding: 0.625rem 0.75rem;
-		border-bottom: 2px solid var(--color-border);
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		border-bottom: 1px solid var(--color-border);
+		font-size: 0.75rem;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	.version-table td {
 		padding: 0.5rem 0.75rem;
 		border-bottom: 1px solid var(--color-border);
+	}
+
+	.text-muted {
+		color: var(--color-text-secondary);
+	}
+
+	.mono-cell {
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		color: var(--color-text-secondary);
 	}
 
 	.dep-list {
@@ -309,9 +347,16 @@
 
 	.dep-list li {
 		padding: 0.25rem 0.625rem;
-		background: var(--color-bg-secondary);
+		background: var(--color-surface);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
+		font-size: 0.8125rem;
+	}
+
+	.dep-list li code {
+		background: none;
+		padding: 0;
+		color: var(--color-text-secondary);
 		font-size: 0.8125rem;
 	}
 
@@ -320,7 +365,7 @@
 	}
 
 	.dep-list a:hover code {
-		color: var(--color-primary);
+		color: var(--color-accent);
 	}
 
 	.show-more {
@@ -329,63 +374,67 @@
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
 		background: none;
-		color: var(--color-primary);
+		color: var(--color-accent);
 		font-size: 0.8125rem;
+		transition: background 0.15s;
 	}
 
 	.show-more:hover {
-		background: var(--color-bg-secondary);
+		background: var(--color-accent-subtle);
 	}
 
 	.badge {
-		padding: 0.1em 0.5em;
+		padding: 0.1em 0.4em;
 		border-radius: var(--radius-sm);
-		font-size: 0.6875rem;
+		font-size: 0.625rem;
 		font-weight: 600;
 		text-transform: uppercase;
-		letter-spacing: 0.03em;
+		letter-spacing: 0.04em;
 	}
 
 	.badge-converted {
-		background: var(--color-success);
-		color: #fff;
+		background: rgba(52, 211, 153, 0.15);
+		color: var(--color-success);
 	}
 
 	.badge-legacy {
-		background: var(--color-secondary);
-		color: #fff;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		border: 1px solid var(--color-border);
 	}
 
 	.pkg-sidebar {
 		position: sticky;
-		top: 4.5rem;
+		top: calc(var(--header-height) + 1rem);
 	}
 
 	.sidebar-section {
 		padding: 1.25rem;
-		background: var(--color-card-bg);
-		border: 1px solid var(--color-card-border);
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		margin-bottom: 1rem;
+		margin-bottom: 0.75rem;
 	}
 
 	.sidebar-section h3 {
-		font-size: 0.875rem;
+		font-family: var(--font-mono);
+		font-size: 0.6875rem;
 		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--color-text-secondary);
+		letter-spacing: 0.08em;
+		color: var(--color-text-muted);
 		margin-bottom: 0.75rem;
 	}
 
 	.detail-list {
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 	}
 
 	.detail-list dt {
 		font-weight: 500;
-		color: var(--color-text-secondary);
-		margin-top: 0.5rem;
+		color: var(--color-text-muted);
+		font-size: 0.75rem;
+		margin-top: 0.625rem;
 	}
 
 	.detail-list dt:first-child {
@@ -395,20 +444,49 @@
 	.detail-list dd {
 		margin: 0.125rem 0 0;
 		padding: 0;
+		color: var(--color-text);
+	}
+
+	.mono-value {
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
 	}
 
 	.external-link {
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
 	}
 
-	.sidebar-section pre {
-		margin: 0;
+	.terminal-block {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		background: var(--color-code-bg);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		padding: 0.625rem 0.875rem;
+	}
+
+	.terminal-prompt {
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+		color: var(--color-accent);
+		font-weight: 500;
+		user-select: none;
+	}
+
+	.terminal-block code {
+		background: none;
+		padding: 0;
+		color: var(--color-text);
 		font-size: 0.8125rem;
 	}
 
 	.muted {
 		color: var(--color-text-secondary);
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 	}
 
 	.status-msg {

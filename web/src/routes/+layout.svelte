@@ -21,8 +21,9 @@
 	<header class="site-header">
 		<div class="container header-inner">
 			<a href="/" class="logo">
-				<span class="logo-text">Conary</span>
-				<span class="logo-badge">Remi</span>
+				<span class="logo-text">conary</span>
+				<span class="logo-sep">/</span>
+				<span class="logo-badge">remi</span>
 			</a>
 			<nav aria-label="Main navigation">
 				<ul class="nav-links">
@@ -44,7 +45,8 @@
 
 	<footer class="site-footer">
 		<div class="container footer-inner">
-			<p>Powered by Conary Remi</p>
+			<span class="footer-prompt">$</span>
+			<span class="footer-text">powered by conary remi</span>
 		</div>
 	</footer>
 </div>
@@ -61,47 +63,53 @@
 	}
 
 	.site-header {
-		border-bottom: 1px solid var(--color-border);
-		background: var(--color-bg);
 		position: sticky;
 		top: 0;
 		z-index: 50;
+		background: rgba(12, 15, 20, 0.85);
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border-bottom: 1px solid var(--color-border);
 	}
 
 	.header-inner {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		height: 3.5rem;
+		height: var(--header-height);
 	}
 
 	.logo {
 		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		align-items: baseline;
+		gap: 0;
 		text-decoration: none;
 		color: var(--color-text);
 	}
 
 	.logo:hover {
 		text-decoration: none;
+		color: var(--color-text);
 	}
 
 	.logo-text {
+		font-family: var(--font-display);
 		font-size: 1.25rem;
 		font-weight: 700;
 		letter-spacing: -0.02em;
 	}
 
+	.logo-sep {
+		margin: 0 0.25rem;
+		color: var(--color-text-muted);
+		font-weight: 300;
+	}
+
 	.logo-badge {
-		font-size: 0.6875rem;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		padding: 0.15em 0.5em;
-		background: var(--color-primary);
-		color: #fff;
-		border-radius: var(--radius-sm);
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: var(--color-accent);
 	}
 
 	.nav-links {
@@ -109,29 +117,29 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		gap: 0.25rem;
+		gap: 0.125rem;
 	}
 
 	.nav-links a {
 		display: block;
-		padding: 0.375rem 0.75rem;
+		padding: 0.375rem 0.875rem;
 		border-radius: var(--radius-sm);
 		font-size: 0.875rem;
 		font-weight: 500;
 		color: var(--color-text-secondary);
 		text-decoration: none;
-		transition: all 0.15s;
+		transition: color 0.15s, background 0.15s;
 	}
 
 	.nav-links a:hover {
 		color: var(--color-text);
-		background: var(--color-bg-secondary);
+		background: var(--color-surface);
 		text-decoration: none;
 	}
 
 	.nav-links a.active {
-		color: var(--color-primary);
-		background: var(--color-bg-secondary);
+		color: var(--color-accent);
+		background: var(--color-accent-subtle);
 	}
 
 	.site-footer {
@@ -140,15 +148,25 @@
 	}
 
 	.footer-inner {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 		padding-top: 2rem;
 		padding-bottom: 2rem;
-		text-align: center;
+		justify-content: center;
 	}
 
-	.footer-inner p {
-		margin: 0;
+	.footer-prompt {
+		font-family: var(--font-mono);
 		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		color: var(--color-accent);
+		font-weight: 500;
+	}
+
+	.footer-text {
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+		color: var(--color-text-muted);
 	}
 
 	@media (max-width: 640px) {

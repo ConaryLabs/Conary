@@ -61,7 +61,7 @@
 	</div>
 
 	{#if stats}
-		<div class="overview-grid">
+		<div class="overview-grid animate-in" style="--stagger: 0">
 			<div class="overview-card">
 				<span class="overview-value">{formatNumber(stats.total_packages)}</span>
 				<span class="overview-label">Total Packages</span>
@@ -72,7 +72,7 @@
 			</div>
 			<div class="overview-card">
 				<span class="overview-value">{formatNumber(stats.downloads_30d)}</span>
-				<span class="overview-label">Downloads (30 days)</span>
+				<span class="overview-label">Downloads (30d)</span>
 			</div>
 			<div class="overview-card">
 				<span class="overview-value">{stats.total_distros}</span>
@@ -95,62 +95,66 @@
 		<p class="status-msg error">{error}</p>
 	{:else}
 		<div class="tables-grid">
-			<section class="table-section">
+			<section class="table-section animate-in" style="--stagger: 2">
 				<h2>Most Popular</h2>
-				<table>
-					<thead>
-						<tr>
-							<th>#</th>
-							<th>Package</th>
-							<th>Distro</th>
-							<th>Version</th>
-							<th>Downloads</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each popular as pkg, i}
+				<div class="table-wrap">
+					<table>
+						<thead>
 							<tr>
-								<td class="rank">{i + 1}</td>
-								<td>
-									<a href="/packages/{pkg.distro}/{pkg.name}">
-										{pkg.name}
-									</a>
-								</td>
-								<td class="distro">{pkg.distro}</td>
-								<td><code>{pkg.version}</code></td>
-								<td class="number">{formatNumber(pkg.download_count)}</td>
+								<th class="col-rank">#</th>
+								<th>Package</th>
+								<th>Distro</th>
+								<th>Version</th>
+								<th class="col-right">Downloads</th>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							{#each popular as pkg, i}
+								<tr>
+									<td class="rank">{i + 1}</td>
+									<td>
+										<a href="/packages/{pkg.distro}/{pkg.name}">
+											{pkg.name}
+										</a>
+									</td>
+									<td class="distro">{pkg.distro}</td>
+									<td><code>{pkg.version}</code></td>
+									<td class="number">{formatNumber(pkg.download_count)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</section>
 
-			<section class="table-section">
+			<section class="table-section animate-in" style="--stagger: 4">
 				<h2>Recently Updated</h2>
-				<table>
-					<thead>
-						<tr>
-							<th>Package</th>
-							<th>Version</th>
-							<th>Distro</th>
-							<th>Size</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each recent as pkg}
+				<div class="table-wrap">
+					<table>
+						<thead>
 							<tr>
-								<td>
-									<a href="/packages/{pkg.distro}/{pkg.name}">
-										{pkg.name}
-									</a>
-								</td>
-								<td><code>{pkg.version}</code></td>
-								<td class="distro">{pkg.distro}</td>
-								<td class="number">{formatSize(pkg.size)}</td>
+								<th>Package</th>
+								<th>Version</th>
+								<th>Distro</th>
+								<th class="col-right">Size</th>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							{#each recent as pkg}
+								<tr>
+									<td>
+										<a href="/packages/{pkg.distro}/{pkg.name}">
+											{pkg.name}
+										</a>
+									</td>
+									<td><code>{pkg.version}</code></td>
+									<td class="distro">{pkg.distro}</td>
+									<td class="number">{formatSize(pkg.size)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</section>
 		</div>
 	{/if}
@@ -158,18 +162,20 @@
 
 <style>
 	.page {
-		padding: 2rem 1.5rem;
+		padding: 2.5rem 1.5rem;
 	}
 
 	.page-header h1 {
+		font-family: var(--font-display);
 		font-size: 1.75rem;
+		font-weight: 700;
 		margin-bottom: 1.5rem;
 	}
 
 	.overview-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-		gap: 1rem;
+		gap: 0.75rem;
 		margin-bottom: 2rem;
 	}
 
@@ -178,22 +184,26 @@
 		flex-direction: column;
 		align-items: center;
 		padding: 1.25rem;
-		background: var(--color-card-bg);
-		border: 1px solid var(--color-card-border);
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 	}
 
 	.overview-value {
+		font-family: var(--font-mono);
 		font-size: 1.75rem;
 		font-weight: 700;
-		font-family: var(--font-mono);
-		color: var(--color-primary);
+		color: var(--color-accent);
+		text-shadow: 0 0 30px var(--color-accent-glow);
 	}
 
 	.overview-label {
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		font-size: 0.6875rem;
+		color: var(--color-text-muted);
 		margin-top: 0.25rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		font-weight: 500;
 	}
 
 	.filter-bar {
@@ -207,23 +217,31 @@
 	}
 
 	.table-section h2 {
-		font-size: 1.25rem;
+		font-family: var(--font-display);
+		font-size: 1.125rem;
+		font-weight: 700;
 		margin-bottom: 1rem;
+	}
+
+	.table-wrap {
+		overflow-x: auto;
 	}
 
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 	}
 
 	th {
 		text-align: left;
 		font-weight: 600;
 		padding: 0.625rem 0.5rem;
-		border-bottom: 2px solid var(--color-border);
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		border-bottom: 1px solid var(--color-border);
+		font-size: 0.6875rem;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	td {
@@ -232,8 +250,9 @@
 	}
 
 	td.rank {
-		color: var(--color-text-secondary);
-		font-weight: 500;
+		color: var(--color-text-muted);
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
 		width: 2rem;
 	}
 
@@ -244,10 +263,16 @@
 
 	td.number {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		text-align: right;
+		color: var(--color-text-secondary);
 	}
 
+	.col-rank {
+		width: 2rem;
+	}
+
+	.col-right,
 	th:last-child {
 		text-align: right;
 	}
