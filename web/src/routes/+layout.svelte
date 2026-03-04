@@ -4,15 +4,23 @@
 
 	let { children } = $props();
 
+	const mainSite = 'https://conary.io';
+
 	const navLinks = [
-		{ href: '/', label: 'Home' },
-		{ href: '/packages', label: 'Packages' },
-		{ href: '/stats', label: 'Stats' },
-		{ href: '/about', label: 'About' }
+		{ href: `${mainSite}/`, label: 'Home' },
+		{ href: `${mainSite}/install`, label: 'Install' },
+		{ href: `${mainSite}/compare`, label: 'Compare' },
+		{ href: `${mainSite}/about`, label: 'About' }
 	];
 
-	function isActive(href: string): boolean {
-		if (href === '/') return page.url.pathname === '/';
+	// Local package-site links that use SvelteKit routing
+	const localLinks = [
+		{ href: '/', label: 'Packages', isActive: true },
+		{ href: '/stats', label: 'Stats' }
+	];
+
+	function isLocalActive(href: string): boolean {
+		if (href === '/') return page.url.pathname === '/' || page.url.pathname.startsWith('/packages') || page.url.pathname.startsWith('/search');
 		return page.url.pathname.startsWith(href);
 	}
 </script>
@@ -20,16 +28,21 @@
 <div class="app">
 	<header class="site-header">
 		<div class="container header-inner">
-			<a href="/" class="logo">
+			<a href={mainSite} class="logo">
 				<span class="logo-text">conary</span>
-				<span class="logo-sep">/</span>
-				<span class="logo-badge">remi</span>
 			</a>
 			<nav aria-label="Main navigation">
 				<ul class="nav-links">
 					{#each navLinks as link}
 						<li>
-							<a href={link.href} class:active={isActive(link.href)}>
+							<a href={link.href}>
+								{link.label}
+							</a>
+						</li>
+					{/each}
+					{#each localLinks as link}
+						<li>
+							<a href={link.href} class:active={isLocalActive(link.href)}>
 								{link.label}
 							</a>
 						</li>
@@ -45,8 +58,19 @@
 
 	<footer class="site-footer">
 		<div class="container footer-inner">
-			<span class="footer-prompt">$</span>
-			<span class="footer-text">powered by conary remi</span>
+			<div class="footer-links">
+				<a href={mainSite}>Home</a>
+				<a href="{mainSite}/install">Install</a>
+				<a href="{mainSite}/compare">Compare</a>
+				<a href="{mainSite}/about">About</a>
+				<a href="/">Packages</a>
+				<a href="/stats">Stats</a>
+				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer">GitHub</a>
+			</div>
+			<div class="footer-bottom">
+				<span class="footer-prompt">$</span>
+				<span class="footer-text">conary -- the cross-distribution package manager</span>
+			</div>
 		</div>
 	</footer>
 </div>
@@ -99,19 +123,6 @@
 		letter-spacing: -0.02em;
 	}
 
-	.logo-sep {
-		margin: 0 0.25rem;
-		color: var(--color-text-muted);
-		font-weight: 300;
-	}
-
-	.logo-badge {
-		font-family: var(--font-mono);
-		font-size: 0.8125rem;
-		font-weight: 500;
-		color: var(--color-accent);
-	}
-
 	.nav-links {
 		display: flex;
 		list-style: none;
@@ -149,23 +160,48 @@
 
 	.footer-inner {
 		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.25rem;
+		padding-top: 2.5rem;
+		padding-bottom: 2.5rem;
+	}
+
+	.footer-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		justify-content: center;
+	}
+
+	.footer-links a {
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
+		padding: 0.25rem 0.625rem;
+		border-radius: var(--radius-sm);
+		transition: color 0.15s;
+	}
+
+	.footer-links a:hover {
+		color: var(--color-accent);
+	}
+
+	.footer-bottom {
+		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding-top: 2rem;
-		padding-bottom: 2rem;
-		justify-content: center;
 	}
 
 	.footer-prompt {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		color: var(--color-accent);
 		font-weight: 500;
 	}
 
 	.footer-text {
 		font-family: var(--font-mono);
-		font-size: 0.8125rem;
+		font-size: 0.75rem;
 		color: var(--color-text-muted);
 	}
 
