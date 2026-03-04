@@ -19,6 +19,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -381,6 +382,29 @@ async fn pull_through_fetch(
     let (tx, _) = tokio::sync::broadcast::channel(1);
     inflight.insert(hash.to_string(), tx.clone());
 
+    // Drop guard: if this future is cancelled (client disconnect, timeout, etc.),
+    // remove the in-flight entry and notify waiters so they don't hang forever.
+    struct InflightGuard {
+        map: Arc<DashMap<String, tokio::sync::broadcast::Sender<()>>>,
+        key: String,
+        tx: tokio::sync::broadcast::Sender<()>,
+        defused: bool,
+    }
+    impl Drop for InflightGuard {
+        fn drop(&mut self) {
+            if !self.defused {
+                self.map.remove(&self.key);
+                let _ = self.tx.send(());
+            }
+        }
+    }
+    let mut _cleanup = InflightGuard {
+        map: Arc::clone(&inflight),
+        key: hash.to_string(),
+        tx: tx.clone(),
+        defused: false,
+    };
+
     tracing::debug!(
         "Pull-through fetch for chunk {} from {}",
         hash,
@@ -397,16 +421,12 @@ async fn pull_through_fetch(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Failed to fetch chunk {} from upstream: {}", hash, e);
-            inflight.remove(hash);
-            let _ = tx.send(());
             return chunk_not_found();
         }
     };
 
     if !response.status().is_success() {
         state_guard.metrics.record_miss();
-        inflight.remove(hash);
-        let _ = tx.send(());
         return chunk_not_found();
     }
 
@@ -415,8 +435,6 @@ async fn pull_through_fetch(
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("Failed to read chunk {} from upstream: {}", hash, e);
-            inflight.remove(hash);
-            let _ = tx.send(());
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read chunk").into_response();
         }
     };
@@ -429,8 +447,6 @@ async fn pull_through_fetch(
             hash,
             computed_hash
         );
-        inflight.remove(hash);
-        let _ = tx.send(());
         return (StatusCode::INTERNAL_SERVER_ERROR, "Chunk hash mismatch").into_response();
     }
 
@@ -443,6 +459,9 @@ async fn pull_through_fetch(
     if let Some(ref bloom) = state_guard.bloom_filter {
         bloom.add(hash);
     }
+
+    // Defuse the drop guard -- the background task will handle cleanup instead.
+    _cleanup.defused = true;
 
     // Store in background (don't block response), then notify waiters
     let inflight_bg = Arc::clone(&inflight);

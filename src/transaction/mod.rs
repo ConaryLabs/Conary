@@ -343,8 +343,12 @@ impl TransactionEngine {
                     if elapsed >= timeout {
                         break;
                     }
-                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, then cap at 2s
-                    let delay_ms = std::cmp::min(100u64 * (1 << attempt), 2000);
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, then cap at 2s.
+                    // Use saturating arithmetic to avoid overflow at high attempt counts.
+                    let delay_ms = std::cmp::min(
+                        100u64.saturating_mul(1u64.checked_shl(attempt).unwrap_or(u64::MAX)),
+                        2000,
+                    );
                     let delay = std::time::Duration::from_millis(delay_ms);
                     // Do not sleep past the timeout
                     let remaining = timeout.saturating_sub(elapsed);
