@@ -46,6 +46,11 @@ web/node_modules/
 web/.svelte-kit/
 web/build/
 
+# Site frontend build artifacts
+site/node_modules/
+site/.svelte-kit/
+site/build/
+
 # Compilation cache
 .sccache/
 
