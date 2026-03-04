@@ -184,9 +184,7 @@ pub fn merge_popularity(
 
     // Query local download statistics (use 30-day counts for recency)
     let local_counts = conn
-        .prepare(
-            "SELECT package_name, count_30d FROM download_counts ORDER BY count_30d DESC",
-        )
+        .prepare("SELECT package_name, count_30d FROM download_counts ORDER BY count_30d DESC")
         .and_then(|mut stmt| {
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))

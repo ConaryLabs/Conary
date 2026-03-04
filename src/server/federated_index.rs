@@ -13,8 +13,8 @@
 
 use crate::server::handlers::sparse::{SparseIndexEntry, SparseVersionEntry};
 use anyhow::{Context, Result};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -396,11 +396,7 @@ mod tests {
         }
     }
 
-    fn make_entry(
-        name: &str,
-        distro: &str,
-        versions: Vec<SparseVersionEntry>,
-    ) -> SparseIndexEntry {
+    fn make_entry(name: &str, distro: &str, versions: Vec<SparseVersionEntry>) -> SparseIndexEntry {
         SparseIndexEntry {
             name: name.to_string(),
             distro: distro.to_string(),
@@ -504,9 +500,7 @@ mod tests {
 
         cache.put("fedora", "nginx", entry.clone()).await;
 
-        let cached = cache
-            .get("fedora", "nginx", Duration::from_secs(60))
-            .await;
+        let cached = cache.get("fedora", "nginx", Duration::from_secs(60)).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().versions.len(), 1);
     }
@@ -515,9 +509,7 @@ mod tests {
     async fn test_cache_miss_no_entry() {
         let cache = FederatedIndexCache::new();
 
-        let cached = cache
-            .get("fedora", "nginx", Duration::from_secs(60))
-            .await;
+        let cached = cache.get("fedora", "nginx", Duration::from_secs(60)).await;
         assert!(cached.is_none());
     }
 
@@ -529,9 +521,7 @@ mod tests {
         cache.put("fedora", "nginx", entry).await;
 
         // With a zero TTL, the entry should be considered expired immediately
-        let cached = cache
-            .get("fedora", "nginx", Duration::from_secs(0))
-            .await;
+        let cached = cache.get("fedora", "nginx", Duration::from_secs(0)).await;
         assert!(cached.is_none());
     }
 

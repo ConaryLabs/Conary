@@ -1,12 +1,12 @@
 [package]
 name = "conary"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.93"
 authors = ["Conary Contributors"]
 description = "Modern package manager with atomic operations, rollback, and delta updates"
 repository = "https://github.com/ConaryLabs/Conary"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 keywords = ["package-manager", "rpm", "deb", "system"]
 categories = ["command-line-utilities"]
 

@@ -74,10 +74,12 @@ impl MirrorHealthTracker {
         match existing {
             Some(health) => {
                 // EMA update for latency and throughput
-                let new_latency =
-                    (EMA_ALPHA * latency_ms as f64 + (1.0 - EMA_ALPHA) * health.latency_avg_ms as f64) as i64;
-                let new_throughput =
-                    (EMA_ALPHA * bytes_per_sec as f64 + (1.0 - EMA_ALPHA) * health.throughput_bps as f64) as i64;
+                let new_latency = (EMA_ALPHA * latency_ms as f64
+                    + (1.0 - EMA_ALPHA) * health.latency_avg_ms as f64)
+                    as i64;
+                let new_throughput = (EMA_ALPHA * bytes_per_sec as f64
+                    + (1.0 - EMA_ALPHA) * health.throughput_bps as f64)
+                    as i64;
 
                 conn.execute(
                     "UPDATE mirror_health SET
@@ -225,11 +227,7 @@ impl MirrorHealthTracker {
     /// - normalized_throughput: throughput relative to best mirror in the repo (0.0-1.0)
     /// - normalized_latency: inverse of latency relative to best mirror (0.0-1.0, lower latency = higher score)
     /// - recency_bonus: 1.0 if last success within 1 hour, decays toward 0.0
-    pub fn update_health_score(
-        conn: &Connection,
-        repo_id: i64,
-        mirror_url: &str,
-    ) -> Result<()> {
+    pub fn update_health_score(conn: &Connection, repo_id: i64, mirror_url: &str) -> Result<()> {
         // Get the target mirror's stats
         let health = match Self::get_health(conn, repo_id, mirror_url)? {
             Some(h) => h,
@@ -441,8 +439,14 @@ mod tests {
 
         MirrorHealthTracker::record_success(&conn, 1, "https://good.example.com", 10, 10_000_000)
             .unwrap();
-        MirrorHealthTracker::record_success(&conn, 1, "https://disabled.example.com", 10, 10_000_000)
-            .unwrap();
+        MirrorHealthTracker::record_success(
+            &conn,
+            1,
+            "https://disabled.example.com",
+            10,
+            10_000_000,
+        )
+        .unwrap();
 
         MirrorHealthTracker::disable_mirror(&conn, 1, "https://disabled.example.com").unwrap();
 
@@ -479,8 +483,14 @@ mod tests {
 
         // Mirror with all successes, good throughput, low latency
         for _ in 0..10 {
-            MirrorHealthTracker::record_success(&conn, 1, "https://perfect.example.com", 10, 10_000_000)
-                .unwrap();
+            MirrorHealthTracker::record_success(
+                &conn,
+                1,
+                "https://perfect.example.com",
+                10,
+                10_000_000,
+            )
+            .unwrap();
         }
 
         let health = MirrorHealthTracker::get_health(&conn, 1, "https://perfect.example.com")
@@ -497,8 +507,8 @@ mod tests {
     fn test_get_nonexistent_mirror() {
         let (_tmp, conn) = create_test_db();
 
-        let result = MirrorHealthTracker::get_health(&conn, 1, "https://nonexistent.example.com")
-            .unwrap();
+        let result =
+            MirrorHealthTracker::get_health(&conn, 1, "https://nonexistent.example.com").unwrap();
         assert!(result.is_none());
     }
 

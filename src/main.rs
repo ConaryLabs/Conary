@@ -962,11 +962,9 @@ fn main() -> Result<()> {
         // Model Commands
         // =====================================================================
         Some(Commands::Model(model_cmd)) => match model_cmd {
-            cli::ModelCommands::Diff {
-                model,
-                offline,
-                db,
-            } => commands::cmd_model_diff(&model, &db.db_path, offline),
+            cli::ModelCommands::Diff { model, offline, db } => {
+                commands::cmd_model_diff(&model, &db.db_path, offline)
+            }
 
             cli::ModelCommands::Apply {
                 model,
@@ -994,11 +992,9 @@ fn main() -> Result<()> {
                 offline,
             } => commands::cmd_model_check(&model, &db.db_path, verbose, offline),
 
-            cli::ModelCommands::RemoteDiff {
-                model,
-                refresh,
-                db,
-            } => commands::cmd_model_remote_diff(&model, &db.db_path, refresh),
+            cli::ModelCommands::RemoteDiff { model, refresh, db } => {
+                commands::cmd_model_remote_diff(&model, &db.db_path, refresh)
+            }
 
             cli::ModelCommands::Snapshot {
                 output,
@@ -1006,16 +1002,13 @@ fn main() -> Result<()> {
                 description,
             } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()),
 
-            cli::ModelCommands::Lock {
-                model,
-                output,
-                db,
-            } => commands::cmd_model_lock(&model, output.as_deref(), &db.db_path),
+            cli::ModelCommands::Lock { model, output, db } => {
+                commands::cmd_model_lock(&model, output.as_deref(), &db.db_path)
+            }
 
-            cli::ModelCommands::Update {
-                model,
-                db,
-            } => commands::cmd_model_update(&model, &db.db_path),
+            cli::ModelCommands::Update { model, db } => {
+                commands::cmd_model_update(&model, &db.db_path)
+            }
 
             cli::ModelCommands::Publish {
                 model,
@@ -1337,7 +1330,12 @@ fn main() -> Result<()> {
                 repo,
                 db,
             } => commands::cmd_trust_rotate_key(
-                &role, &old_key, &new_key, &root_key, &repo, &db.db_path,
+                &role,
+                &old_key,
+                &new_key,
+                &root_key,
+                &repo,
+                &db.db_path,
             ),
         },
 

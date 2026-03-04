@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use conary::ccs::signing::SigningKeyPair;
 use conary::db;
 use conary::db::models::Repository;
-use conary::trust::client::TufClient;
 use conary::trust::ceremony;
+use conary::trust::client::TufClient;
 use conary::trust::metadata::Role;
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -26,9 +26,7 @@ fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i
 /// Generate a new Ed25519 key pair for a TUF role
 pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     // Validate role name
-    let _: Role = role
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
+    let _: Role = role.parse().map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     let output_dir = Path::new(output);
     if !output_dir.exists() {
@@ -78,15 +76,16 @@ pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -
     let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     // Check that TUF has been bootstrapped
-    let has_root: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM tuf_roots WHERE repository_id = ?1",
-            params![repo_id],
-            |row| row.get(0),
-        )?;
+    let has_root: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM tuf_roots WHERE repository_id = ?1",
+        params![repo_id],
+        |row| row.get(0),
+    )?;
 
     if !has_root {
-        anyhow::bail!("No TUF root found. Run 'conary trust init {repo_name} --root <root.json>' first.");
+        anyhow::bail!(
+            "No TUF root found. Run 'conary trust init {repo_name} --root <root.json>' first."
+        );
     }
 
     conn.execute(
@@ -105,9 +104,7 @@ pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -
 /// Disable TUF verification for a repository (unsafe operation)
 pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<()> {
     if !force {
-        anyhow::bail!(
-            "Disabling TUF removes supply chain protection. Use --force to confirm."
-        );
+        anyhow::bail!("Disabling TUF removes supply chain protection. Use --force to confirm.");
     }
 
     let conn = db::open(db_path)?;
@@ -130,7 +127,10 @@ pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     println!("Repository: {repo_name}");
-    println!("TUF enabled: {}", if repo.tuf_enabled { "yes" } else { "no" });
+    println!(
+        "TUF enabled: {}",
+        if repo.tuf_enabled { "yes" } else { "no" }
+    );
 
     if let Some(url) = &repo.tuf_root_url {
         println!("TUF URL: {url}");
@@ -156,7 +156,10 @@ pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
         println!("No TUF metadata stored yet.");
     } else {
         println!();
-        println!("{:<12} {:<8} {:<25} {:<25}", "Role", "Version", "Expires", "Last Verified");
+        println!(
+            "{:<12} {:<8} {:<25} {:<25}",
+            "Role", "Version", "Expires", "Last Verified"
+        );
         println!("{}", "-".repeat(70));
         for (role, version, expires, verified) in &rows {
             println!("{role:<12} v{version:<6} {expires:<25} {verified:<25}");
@@ -199,7 +202,11 @@ pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
     match client.update(&conn) {
         Ok(state) => {
             println!("[OK] Root:      v{}", state.root_version);
-            println!("[OK] Targets:   v{} ({} targets)", state.targets_version, state.targets.len());
+            println!(
+                "[OK] Targets:   v{} ({} targets)",
+                state.targets_version,
+                state.targets.len()
+            );
             println!("[OK] Snapshot:  v{}", state.snapshot_version);
             println!("[OK] Timestamp: v{}", state.timestamp_version);
             println!();
@@ -224,7 +231,9 @@ pub fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) ->
         .with_context(|| format!("Failed to load signing key: {key_path}"))?;
 
     // TODO: Read packages from repository and generate targets
-    println!("Targets signing for server-side use - implementation pending full server integration");
+    println!(
+        "Targets signing for server-side use - implementation pending full server integration"
+    );
 
     Ok(())
 }

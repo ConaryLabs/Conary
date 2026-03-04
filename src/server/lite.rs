@@ -29,12 +29,12 @@ use crate::repository::chunk_fetcher::{
     ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
 };
 use anyhow::Result;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -118,7 +118,10 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         "[remi-lite] Starting Remi Lite proxy on port {}",
         config.port
     );
-    info!("[remi-lite] Cache directory: {}", config.cache_dir.display());
+    info!(
+        "[remi-lite] Cache directory: {}",
+        config.cache_dir.display()
+    );
     info!(
         "[remi-lite] Mode: {}",
         if config.offline { "offline" } else { "online" }
@@ -275,8 +278,10 @@ fn build_chunk_fetcher(
         upstream
     );
 
-    let composite =
-        CompositeChunkFetcher::with_cache(vec![Arc::new(cache), Arc::new(http_fetcher)], &config.cache_dir);
+    let composite = CompositeChunkFetcher::with_cache(
+        vec![Arc::new(cache), Arc::new(http_fetcher)],
+        &config.cache_dir,
+    );
 
     Ok(Arc::new(composite))
 }
@@ -289,7 +294,13 @@ fn advertise_mdns(port: u16) -> Result<MdnsDiscovery> {
     let instance_name = format!("remi-lite-{}", &hostname);
     let node_id = crate::hash::sha256(instance_name.as_bytes());
 
-    mdns.register(&instance_name, &node_id, port, PeerTier::Leaf, Some(&hostname))?;
+    mdns.register(
+        &instance_name,
+        &node_id,
+        port,
+        PeerTier::Leaf,
+        Some(&hostname),
+    )?;
 
     Ok(mdns)
 }
@@ -302,8 +313,7 @@ fn gethostname_safe() -> String {
         let mut buf = [0u8; 256];
         unsafe {
             if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0
-                && let Ok(cstr) =
-                    CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str()
+                && let Ok(cstr) = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str()
             {
                 return cstr.split('.').next().unwrap_or(cstr).to_string();
             }
@@ -348,10 +358,7 @@ async fn health(State(state): State<Arc<RwLock<ProxyState>>>) -> Response {
     let body = format!(
         "OK\nmode: {}\nupstream: {}\ncache_dir: {}",
         mode,
-        state_guard
-            .upstream_url
-            .as_deref()
-            .unwrap_or("none"),
+        state_guard.upstream_url.as_deref().unwrap_or("none"),
         state_guard.config.cache_dir.display()
     );
 
@@ -394,10 +401,7 @@ async fn proxy_chunk(
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/octet-stream")
                 .header(header::CONTENT_LENGTH, data.len())
-                .header(
-                    header::CACHE_CONTROL,
-                    "public, max-age=31536000, immutable",
-                )
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
                 .header(header::ETAG, format!("\"{}\"", hash))
                 .body(Body::from(data))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
@@ -536,10 +540,7 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
 
     if !response.status().is_success() {
         let status = response.status();
-        debug!(
-            "[remi-lite] Upstream returned {} for {}",
-            status, fetch_url
-        );
+        debug!("[remi-lite] Upstream returned {} for {}", status, fetch_url);
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             format!("Upstream returned {}", status),

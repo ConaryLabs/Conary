@@ -121,10 +121,7 @@ pub fn cmd_adopt_convert(
         .into_iter()
         .map(|trove| {
             let trove_id = trove.id.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Adopted trove '{}' has no database id",
-                    trove.name
-                )
+                anyhow::anyhow!("Adopted trove '{}' has no database id", trove.name)
             })?;
             let files = FileEntry::find_by_trove(&conn, trove_id)?;
             let deps = DependencyEntry::find_by_trove(&conn, trove_id)?;

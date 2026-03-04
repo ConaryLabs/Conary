@@ -232,9 +232,8 @@ impl ComponentProvide {
 
     /// Find components that provide a capability
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {COMP_PROVIDE_COLUMNS} FROM component_provides WHERE capability = ?1"
-        );
+        let sql =
+            format!("SELECT {COMP_PROVIDE_COLUMNS} FROM component_provides WHERE capability = ?1");
         let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([capability], Self::from_row)?

@@ -104,10 +104,7 @@ impl SocketManager {
             && let Some(ref bind_addr) = self.config.tcp_bind
         {
             let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-                crate::Error::IoError(format!(
-                    "Failed to bind TCP socket at {}: {}",
-                    bind_addr, e
-                ))
+                crate::Error::IoError(format!("Failed to bind TCP socket at {}: {}", bind_addr, e))
             })?;
 
             log::info!("Listening on TCP: {}", bind_addr);

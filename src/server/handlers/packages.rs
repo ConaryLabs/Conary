@@ -179,7 +179,9 @@ fn check_converted(
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to parse chunk_hashes JSON for {}/{}: {}",
-                                distro, name, e
+                                distro,
+                                name,
+                                e
                             );
                             None
                         }
@@ -201,7 +203,8 @@ fn check_converted(
                     version: converted.package_version.unwrap_or_else(|| {
                         tracing::warn!(
                             "Package {}/{} has no stored version, falling back to 'unknown'",
-                            distro, name
+                            distro,
+                            name
                         );
                         "unknown".to_string()
                     }),

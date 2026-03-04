@@ -20,8 +20,7 @@ pub mod verify;
 pub use keys::{canonical_json, compute_key_id, sign_tuf_metadata, signing_keypair_to_tuf_key};
 pub use metadata::{
     KeyVal, MetaFile, Role, RoleDefinition, RootMetadata, Signed, SnapshotMetadata,
-    TargetDescription, TargetsMetadata, TimestampMetadata, TufKey, TufSignature,
-    TUF_SPEC_VERSION,
+    TUF_SPEC_VERSION, TargetDescription, TargetsMetadata, TimestampMetadata, TufKey, TufSignature,
 };
 
 /// Errors specific to TUF trust operations

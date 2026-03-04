@@ -428,14 +428,9 @@ pub fn extract_rpm_signature(path: &str) -> Option<ExtractedSignature> {
     ];
 
     for (tag, sig_type) in sig_tags {
-        if let Ok(sig_data) = pkg
-            .metadata
-            .signature
-            .get_entry_data_as_binary(tag)
-        {
+        if let Ok(sig_data) = pkg.metadata.signature.get_entry_data_as_binary(tag) {
             return Some(ExtractedSignature {
-                key_id: extract_pgp_key_id(sig_data)
-                    .unwrap_or_else(|| "unknown".to_string()),
+                key_id: extract_pgp_key_id(sig_data).unwrap_or_else(|| "unknown".to_string()),
                 sig_type: sig_type.to_string(),
                 signature_data: STANDARD.encode(sig_data),
             });

@@ -563,23 +563,38 @@ impl Stage1Builder {
     ) -> Result<(), Stage1Error> {
         let has_workdir = self.packages[idx].recipe.build.workdir.is_some();
         let workdir = if has_workdir { build_dir } else { src_dir };
-        self.run_recipe_phase(idx, workdir, "configure", "Configuring", PackageBuildStatus::Configuring, |r| {
-            r.build.configure.as_ref()
-        })
+        self.run_recipe_phase(
+            idx,
+            workdir,
+            "configure",
+            "Configuring",
+            PackageBuildStatus::Configuring,
+            |r| r.build.configure.as_ref(),
+        )
     }
 
     /// Run the make phase
     fn run_make(&mut self, idx: usize, build_dir: &Path) -> Result<(), Stage1Error> {
-        self.run_recipe_phase(idx, build_dir, "make", "Building", PackageBuildStatus::Building, |r| {
-            r.build.make.as_ref()
-        })
+        self.run_recipe_phase(
+            idx,
+            build_dir,
+            "make",
+            "Building",
+            PackageBuildStatus::Building,
+            |r| r.build.make.as_ref(),
+        )
     }
 
     /// Run the install phase
     fn run_install(&mut self, idx: usize, build_dir: &Path) -> Result<(), Stage1Error> {
-        self.run_recipe_phase(idx, build_dir, "install", "Installing", PackageBuildStatus::Installing, |r| {
-            r.build.install.as_ref()
-        })
+        self.run_recipe_phase(
+            idx,
+            build_dir,
+            "install",
+            "Installing",
+            PackageBuildStatus::Installing,
+            |r| r.build.install.as_ref(),
+        )
     }
 
     /// Substitute cross-compilation variables in a command

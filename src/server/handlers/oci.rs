@@ -319,11 +319,7 @@ async fn manifest_inner(
 }
 
 /// GET /v2/{name}/blobs/{digest}
-async fn get_blob_inner(
-    state: Arc<RwLock<ServerState>>,
-    _name: &str,
-    digest: &str,
-) -> Response {
+async fn get_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &str) -> Response {
     let hash = match strip_digest_prefix(digest) {
         Some(h) => h,
         None => {
@@ -374,11 +370,7 @@ async fn get_blob_inner(
 }
 
 /// HEAD /v2/{name}/blobs/{digest}
-async fn head_blob_inner(
-    state: Arc<RwLock<ServerState>>,
-    _name: &str,
-    digest: &str,
-) -> Response {
+async fn head_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &str) -> Response {
     let hash = match strip_digest_prefix(digest) {
         Some(h) => h,
         None => {
@@ -727,11 +719,8 @@ mod tests {
         assert_eq!(name, "conary/fedora/nginx");
         assert_eq!(reference, "1.24.0");
 
-        let (name, digest) = split_oci_segment(
-            "fedora/curl/blobs/sha256:abc123",
-            "/blobs/",
-        )
-        .unwrap();
+        let (name, digest) =
+            split_oci_segment("fedora/curl/blobs/sha256:abc123", "/blobs/").unwrap();
         assert_eq!(name, "fedora/curl");
         assert_eq!(digest, "sha256:abc123");
     }
@@ -762,11 +751,18 @@ mod tests {
         assert_eq!(strip_digest_prefix("sha256:abc123"), None);
 
         // sha256: prefix but contains path traversal characters
-        assert_eq!(strip_digest_prefix("sha256:../../etc/passwd/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), None);
+        assert_eq!(
+            strip_digest_prefix(
+                "sha256:../../etc/passwd/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            None
+        );
 
         // sha256: prefix but contains non-hex chars (64 chars total)
         assert_eq!(
-            strip_digest_prefix("sha256:zzzzzz1234567890abcdef1234567890abcdef1234567890abcdef12345678"),
+            strip_digest_prefix(
+                "sha256:zzzzzz1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+            ),
             None
         );
 
@@ -796,13 +792,7 @@ mod tests {
             "1.25.0-1.fc43",
             &["chunk2".to_string()],
         );
-        insert_converted_package(
-            &conn,
-            "arch",
-            "nginx",
-            "1.25.0-1",
-            &["chunk3".to_string()],
-        );
+        insert_converted_package(&conn, "arch", "nginx", "1.25.0-1", &["chunk3".to_string()]);
 
         let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
         assert_eq!(tags, vec!["1.24.0-1.fc43", "1.25.0-1.fc43"]);
@@ -818,27 +808,9 @@ mod tests {
     fn test_build_catalog() {
         let (temp_file, conn) = create_test_db();
 
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.24.0",
-            &["chunk1".to_string()],
-        );
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "curl",
-            "8.5.0",
-            &["chunk2".to_string()],
-        );
-        insert_converted_package(
-            &conn,
-            "arch",
-            "nginx",
-            "1.25.0",
-            &["chunk3".to_string()],
-        );
+        insert_converted_package(&conn, "fedora", "nginx", "1.24.0", &["chunk1".to_string()]);
+        insert_converted_package(&conn, "fedora", "curl", "8.5.0", &["chunk2".to_string()]);
+        insert_converted_package(&conn, "arch", "nginx", "1.25.0", &["chunk3".to_string()]);
 
         let catalog = build_catalog(temp_file.path()).unwrap();
         assert_eq!(
@@ -892,7 +864,12 @@ mod tests {
         assert_eq!(layers[1]["digest"], "sha256:eeff0011");
 
         // Config should be present
-        assert!(parsed["config"]["digest"].as_str().unwrap().starts_with("sha256:"));
+        assert!(
+            parsed["config"]["digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
 
         // Digest should be sha256
         assert!(digest.starts_with("sha256:"));

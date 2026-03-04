@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use super::remote::CollectionData;
 use super::ModelResult;
+use super::remote::CollectionData;
 
 /// The lockfile structure, serialized as TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,17 +49,15 @@ impl ModelLock {
     /// Load a lockfile from disk
     pub fn load(path: &Path) -> ModelResult<Self> {
         let content = std::fs::read_to_string(path)?;
-        let lock: Self =
-            toml::from_str(&content).map_err(super::ModelError::ParseError)?;
+        let lock: Self = toml::from_str(&content).map_err(super::ModelError::ParseError)?;
         Ok(lock)
     }
 
     /// Save the lockfile to disk
     pub fn save(&self, path: &Path) -> ModelResult<()> {
-        let content =
-            toml::to_string_pretty(self).map_err(|e| super::ModelError::RemoteFetchError(
-                format!("Failed to serialize lockfile: {}", e),
-            ))?;
+        let content = toml::to_string_pretty(self).map_err(|e| {
+            super::ModelError::RemoteFetchError(format!("Failed to serialize lockfile: {}", e))
+        })?;
         std::fs::write(path, content)?;
         Ok(())
     }
@@ -181,11 +179,7 @@ mod tests {
         let data2 = make_collection_data("group-extra", "sha256:bbb", 2);
         let collections = vec![
             ("group-base".to_string(), "repo:stable".to_string(), &data1),
-            (
-                "group-extra".to_string(),
-                "extras:dev".to_string(),
-                &data2,
-            ),
+            ("group-extra".to_string(), "extras:dev".to_string(), &data2),
         ];
 
         let lock = ModelLock::from_resolved(&collections);
@@ -205,11 +199,7 @@ mod tests {
     #[test]
     fn test_check_drift_detects_change() {
         let data = make_collection_data("group-base", "sha256:original", 3);
-        let collections = vec![(
-            "group-base".to_string(),
-            "repo:stable".to_string(),
-            &data,
-        )];
+        let collections = vec![("group-base".to_string(), "repo:stable".to_string(), &data)];
         let lock = ModelLock::from_resolved(&collections);
 
         // Check with a different hash
@@ -229,11 +219,7 @@ mod tests {
     #[test]
     fn test_check_drift_no_change() {
         let data = make_collection_data("group-base", "sha256:same", 3);
-        let collections = vec![(
-            "group-base".to_string(),
-            "repo:stable".to_string(),
-            &data,
-        )];
+        let collections = vec![("group-base".to_string(), "repo:stable".to_string(), &data)];
         let lock = ModelLock::from_resolved(&collections);
 
         // Check with same hash

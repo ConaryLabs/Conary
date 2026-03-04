@@ -793,8 +793,7 @@ mod tests {
 
     #[test]
     fn test_safe_ccs_filename_complex_name() {
-        let result =
-            ConversionService::safe_ccs_filename("lib32-glibc-devel", "2.38-1").unwrap();
+        let result = ConversionService::safe_ccs_filename("lib32-glibc-devel", "2.38-1").unwrap();
         assert_eq!(result, "lib32-glibc-devel-2.38-1.ccs");
     }
 
@@ -883,7 +882,9 @@ mod tests {
             None,
         );
 
-        let pkg = service.find_package(&conn, "fedora", "nginx", None).unwrap();
+        let pkg = service
+            .find_package(&conn, "fedora", "nginx", None)
+            .unwrap();
         assert_eq!(pkg.name, "nginx");
         assert_eq!(pkg.version, "1.24.0");
     }
@@ -974,7 +975,9 @@ mod tests {
             None,
         );
 
-        let pkg = service.find_package(&conn, "ubuntu", "libc6", None).unwrap();
+        let pkg = service
+            .find_package(&conn, "ubuntu", "libc6", None)
+            .unwrap();
         assert_eq!(pkg.name, "libc6");
     }
 
@@ -1078,9 +1081,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let repo_pkg = service
-            .find_package(&conn, "fedora", "curl", None)
-            .unwrap();
+        let repo_pkg = service.find_package(&conn, "fedora", "curl", None).unwrap();
 
         let result = service
             .build_result_from_existing(&existing, "fedora", &repo_pkg)
@@ -1161,14 +1162,8 @@ mod tests {
         );
 
         let mut blobs = std::collections::HashMap::new();
-        blobs.insert(
-            "abcdef1234567890".to_string(),
-            b"chunk data one".to_vec(),
-        );
-        blobs.insert(
-            "1234567890abcdef".to_string(),
-            b"chunk data two".to_vec(),
-        );
+        blobs.insert("abcdef1234567890".to_string(), b"chunk data one".to_vec());
+        blobs.insert("1234567890abcdef".to_string(), b"chunk data two".to_vec());
 
         let result = make_conversion_result(blobs);
         let hashes = service.store_chunks(&result).await.unwrap();
@@ -1178,7 +1173,11 @@ mod tests {
         for hash in &hashes {
             let (prefix, rest) = hash.split_at(2);
             let chunk_path = chunk_dir.join("objects").join(prefix).join(rest);
-            assert!(chunk_path.exists(), "Chunk file should exist at {:?}", chunk_path);
+            assert!(
+                chunk_path.exists(),
+                "Chunk file should exist at {:?}",
+                chunk_path
+            );
         }
     }
 

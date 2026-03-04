@@ -87,13 +87,12 @@ fn get_version_chunks(
 
     match row {
         Some((json, total_size)) => {
-            let hashes: Vec<String> = serde_json::from_str(&json)
-                .with_context(|| {
-                    format!(
-                        "Failed to parse chunk_hashes_json for {}/{}/{}",
-                        distro, package_name, version
-                    )
-                })?;
+            let hashes: Vec<String> = serde_json::from_str(&json).with_context(|| {
+                format!(
+                    "Failed to parse chunk_hashes_json for {}/{}/{}",
+                    distro, package_name, version
+                )
+            })?;
             Ok((hashes, total_size as u64))
         }
         None => Ok((Vec::new(), 0)),
@@ -103,18 +102,13 @@ fn get_version_chunks(
 /// Look up chunk sizes from the chunk_access table.
 ///
 /// Returns a map of hash -> size_bytes for all requested hashes found in the DB.
-fn get_chunk_sizes(
-    conn: &Connection,
-    hashes: &[String],
-) -> Result<HashMap<String, u64>> {
+fn get_chunk_sizes(conn: &Connection, hashes: &[String]) -> Result<HashMap<String, u64>> {
     let mut sizes = HashMap::new();
     if hashes.is_empty() {
         return Ok(sizes);
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT hash, size_bytes FROM chunk_access WHERE hash = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT hash, size_bytes FROM chunk_access WHERE hash = ?1")?;
 
     for hash in hashes {
         if let Some(size) = stmt
@@ -313,10 +307,8 @@ pub fn get_delta(
 
     match row {
         Some((id, distro, pkg, from_v, to_v, new_json, rem_json, dl_size, full_size, computed)) => {
-            let new_chunks: Vec<String> =
-                serde_json::from_str(&new_json).unwrap_or_default();
-            let removed_chunks: Vec<String> =
-                serde_json::from_str(&rem_json).unwrap_or_default();
+            let new_chunks: Vec<String> = serde_json::from_str(&new_json).unwrap_or_default();
+            let removed_chunks: Vec<String> = serde_json::from_str(&rem_json).unwrap_or_default();
 
             Ok(Some(DeltaManifest {
                 id: Some(id),
@@ -385,9 +377,23 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Version 1 has chunks A, B, C
-        insert_converted(&conn, "fedora", "nginx", "1.0", &["chunkA", "chunkB", "chunkC"], 3000);
+        insert_converted(
+            &conn,
+            "fedora",
+            "nginx",
+            "1.0",
+            &["chunkA", "chunkB", "chunkC"],
+            3000,
+        );
         // Version 2 has chunks B, C, D (A removed, D added)
-        insert_converted(&conn, "fedora", "nginx", "2.0", &["chunkB", "chunkC", "chunkD"], 3500);
+        insert_converted(
+            &conn,
+            "fedora",
+            "nginx",
+            "2.0",
+            &["chunkB", "chunkC", "chunkD"],
+            3500,
+        );
 
         insert_chunk(&conn, "chunkA", 1000);
         insert_chunk(&conn, "chunkB", 1000);

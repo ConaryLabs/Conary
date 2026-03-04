@@ -13,10 +13,7 @@ use conary::repository::{
 use std::path::Path;
 use tracing::{info, warn};
 
-fn find_installed_trove(
-    conn: &rusqlite::Connection,
-    package_name: &str,
-) -> Result<(Trove, i64)> {
+fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Result<(Trove, i64)> {
     let troves = Trove::find_by_name(conn, package_name)?;
     let trove = troves
         .into_iter()

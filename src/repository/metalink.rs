@@ -238,7 +238,8 @@ fn strip_file_path(url: &str, filename: &str) -> Option<String> {
         Some(format!("{}/", base))
     } else {
         // Filename not found in URL - try stripping from the last path component
-        url.rfind('/').map(|last_slash| format!("{}/", &url[..last_slash]))
+        url.rfind('/')
+            .map(|last_slash| format!("{}/", &url[..last_slash]))
     }
 }
 
@@ -622,9 +623,11 @@ mod tests {
         // Should strip "repodata/repomd.xml" from each mirror URL
         assert_eq!(base_urls.len(), 4);
 
-        assert!(base_urls[0]
-            .url
-            .ends_with("/linux/releases/43/Everything/x86_64/os/"));
+        assert!(
+            base_urls[0]
+                .url
+                .ends_with("/linux/releases/43/Everything/x86_64/os/")
+        );
         assert!(base_urls[0].url.contains("mirror1.example.com"));
 
         // Should be sorted by priority

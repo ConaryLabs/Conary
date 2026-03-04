@@ -385,9 +385,8 @@ impl ChangesetTrigger {
 
     /// Get all triggers for a changeset
     pub fn find_by_changeset(conn: &Connection, changeset_id: i64) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {CS_TRIGGER_COLUMNS} FROM changeset_triggers WHERE changeset_id = ?1"
-        );
+        let sql =
+            format!("SELECT {CS_TRIGGER_COLUMNS} FROM changeset_triggers WHERE changeset_id = ?1");
         let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([changeset_id], Self::from_row)?

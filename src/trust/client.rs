@@ -20,8 +20,8 @@ use crate::trust::metadata::{
     VerifiedTufState,
 };
 use crate::trust::verify::{
-    extract_role_keys, verify_metadata_hash, verify_not_expired, verify_root,
-    verify_signatures, verify_snapshot_consistency, verify_version_increase,
+    extract_role_keys, verify_metadata_hash, verify_not_expired, verify_root, verify_signatures,
+    verify_snapshot_consistency, verify_version_increase,
 };
 use crate::trust::{TrustError, TrustResult};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -59,11 +59,9 @@ impl TufClient {
 
         // Step 1: Fetch and verify timestamp
         let timestamp_bytes = self.fetch_metadata("timestamp.json")?;
-        let signed_timestamp: Signed<TimestampMetadata> =
-            serde_json::from_slice(&timestamp_bytes)?;
+        let signed_timestamp: Signed<TimestampMetadata> = serde_json::from_slice(&timestamp_bytes)?;
 
-        let (ts_keys, ts_threshold) =
-            extract_role_keys(&trusted_root.signed, Role::Timestamp)?;
+        let (ts_keys, ts_threshold) = extract_role_keys(&trusted_root.signed, Role::Timestamp)?;
         verify_signatures(&signed_timestamp, Role::Timestamp, &ts_keys, ts_threshold)?;
         verify_not_expired(Role::Timestamp, &signed_timestamp.signed.expires)?;
 
@@ -85,8 +83,7 @@ impl TufClient {
             })?;
 
         let stored_snapshot_version = self.load_metadata_version(conn, "snapshot")?;
-        let snapshot_changed = stored_snapshot_version
-            .is_none_or(|v| snapshot_ref.version > v);
+        let snapshot_changed = stored_snapshot_version.is_none_or(|v| snapshot_ref.version > v);
 
         let signed_snapshot = if snapshot_changed {
             let snapshot_bytes = self.fetch_metadata("snapshot.json")?;
@@ -127,9 +124,8 @@ impl TufClient {
         let targets_ref = signed_snapshot.signed.meta.get("targets.json");
         let stored_targets_version = self.load_metadata_version(conn, "targets")?;
 
-        let targets_changed = targets_ref.is_some_and(|tr| {
-            stored_targets_version.is_none_or(|v| tr.version > v)
-        });
+        let targets_changed =
+            targets_ref.is_some_and(|tr| stored_targets_version.is_none_or(|v| tr.version > v));
 
         let signed_targets = if targets_changed {
             let targets_bytes = self.fetch_metadata("targets.json")?;
@@ -138,8 +134,7 @@ impl TufClient {
             }
 
             let signed: Signed<TargetsMetadata> = serde_json::from_slice(&targets_bytes)?;
-            let (tgt_keys, tgt_threshold) =
-                extract_role_keys(&current_root.signed, Role::Targets)?;
+            let (tgt_keys, tgt_threshold) = extract_role_keys(&current_root.signed, Role::Targets)?;
             verify_signatures(&signed, Role::Targets, &tgt_keys, tgt_threshold)?;
             verify_not_expired(Role::Targets, &signed.signed.expires)?;
 
@@ -461,11 +456,7 @@ impl TufClient {
         )?;
 
         for (path, desc) in &targets.targets {
-            let sha256 = desc
-                .hashes
-                .get("sha256")
-                .cloned()
-                .unwrap_or_default();
+            let sha256 = desc.hashes.get("sha256").cloned().unwrap_or_default();
 
             stmt.execute(params![
                 self.repo_id,

@@ -91,9 +91,7 @@ fn map_http_error(status: u16, body: String, name: &str, distro: &str) -> Error 
             "Package '{}' not found in {} repositories",
             name, distro
         )),
-        503 => Error::DownloadError(
-            "Remi conversion queue is full, try again later".to_string(),
-        ),
+        503 => Error::DownloadError("Remi conversion queue is full, try again later".to_string()),
         _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
     }
 }

@@ -114,9 +114,7 @@ impl Changeset {
 
     /// List all changesets
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {CHANGESET_COLUMNS} FROM changesets ORDER BY created_at DESC"
-        );
+        let sql = format!("SELECT {CHANGESET_COLUMNS} FROM changesets ORDER BY created_at DESC");
         let mut stmt = conn.prepare(&sql)?;
         let changesets = stmt
             .query_map([], Self::from_row)?

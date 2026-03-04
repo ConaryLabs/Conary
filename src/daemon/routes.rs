@@ -136,7 +136,12 @@ async fn run_db_query<T: Send + 'static>(
         f(&conn).map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))
     })
     .await
-    .map_err(|e| ApiError(Box::new(DaemonError::internal(&format!("Task join error: {}", e)))))?
+    .map_err(|e| {
+        ApiError(Box::new(DaemonError::internal(&format!(
+            "Task join error: {}",
+            e
+        ))))
+    })?
     .map_err(|e| ApiError(Box::new(e)))
 }
 
@@ -676,7 +681,10 @@ async fn create_transaction_handler(
     [(axum::http::header::HeaderName, String); 1],
     Json<CreateTransactionResponse>,
 )> {
-    require_auth(&creds, action_for_job_kind(determine_job_kind(&request.operations)))?;
+    require_auth(
+        &creds,
+        action_for_job_kind(determine_job_kind(&request.operations)),
+    )?;
 
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
@@ -717,8 +725,12 @@ async fn create_transaction_handler(
     let job_kind = determine_job_kind(&request.operations);
 
     // Create the job
-    let spec = serde_json::to_value(&request.operations)
-        .map_err(|e| ApiError(Box::new(DaemonError::internal(&format!("Serialization error: {}", e)))))?;
+    let spec = serde_json::to_value(&request.operations).map_err(|e| {
+        ApiError(Box::new(DaemonError::internal(&format!(
+            "Serialization error: {}",
+            e
+        ))))
+    })?;
 
     let mut job = DaemonJob::new(job_kind, spec);
     if let Some(key) = idempotency_key {
@@ -971,7 +983,10 @@ async fn dry_run_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<Json<DryRunResponse>> {
-    require_auth(&creds, action_for_job_kind(determine_job_kind(&request.operations)))?;
+    require_auth(
+        &creds,
+        action_for_job_kind(determine_job_kind(&request.operations)),
+    )?;
 
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
@@ -1093,7 +1108,9 @@ async fn get_package_files_handler(
     })
     .await?;
 
-    result.map(Json).ok_or_else(|| not_found_error("package", &name))
+    result
+        .map(Json)
+        .ok_or_else(|| not_found_error("package", &name))
 }
 
 type TransactionResult = ApiResult<(
@@ -1307,7 +1324,9 @@ async fn verify_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::Verify)?;
-    Err(not_implemented_error("System verification not yet implemented"))
+    Err(not_implemented_error(
+        "System verification not yet implemented",
+    ))
 }
 
 /// POST /v1/system/gc
@@ -1316,7 +1335,9 @@ async fn gc_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_auth(&creds, Action::GarbageCollect)?;
-    Err(not_implemented_error("Garbage collection not yet implemented"))
+    Err(not_implemented_error(
+        "Garbage collection not yet implemented",
+    ))
 }
 
 /// Global event stream (SSE)
@@ -1754,10 +1775,12 @@ mod tests {
 
         let json = body_json(response).await;
         assert_eq!(json["status"], 404);
-        assert!(json["detail"]
-            .as_str()
-            .unwrap()
-            .contains("nonexistent-job-id"));
+        assert!(
+            json["detail"]
+                .as_str()
+                .unwrap()
+                .contains("nonexistent-job-id")
+        );
     }
 
     // -- POST /v1/transactions (valid) ----------------------------------------
@@ -1794,13 +1817,23 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         // Should have a Location header
-        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(location.starts_with("/v1/transactions/"));
 
         let json = body_json(response).await;
         assert!(!json["job_id"].as_str().unwrap().is_empty());
         assert_eq!(json["status"], "queued");
-        assert!(json["location"].as_str().unwrap().starts_with("/v1/transactions/"));
+        assert!(
+            json["location"]
+                .as_str()
+                .unwrap()
+                .starts_with("/v1/transactions/")
+        );
     }
 
     // -- POST /v1/transactions (empty operations = 400) -----------------------
@@ -1832,10 +1865,7 @@ mod tests {
 
         let json = body_json(response).await;
         assert_eq!(json["status"], 400);
-        assert!(json["detail"]
-            .as_str()
-            .unwrap()
-            .contains("operation"));
+        assert!(json["detail"].as_str().unwrap().contains("operation"));
     }
 
     // -- POST /v1/transactions (invalid JSON = 400) ---------------------------
@@ -1917,7 +1947,7 @@ mod tests {
         let body_str = serde_json::to_string(&body).unwrap();
 
         // First request creates the job
-        let app1 = test_router(state.clone(), root_creds.clone());
+        let app1 = test_router(state.clone(), root_creds);
         let request1 = axum::http::Request::builder()
             .method("POST")
             .uri("/v1/transactions")
@@ -1968,7 +1998,7 @@ mod tests {
             ]
         });
 
-        let app1 = test_router(state.clone(), root_creds.clone());
+        let app1 = test_router(state.clone(), root_creds);
         let create_req = axum::http::Request::builder()
             .method("POST")
             .uri("/v1/transactions")
@@ -2018,7 +2048,7 @@ mod tests {
             ]
         });
 
-        let app1 = test_router(state.clone(), root_creds.clone());
+        let app1 = test_router(state.clone(), root_creds);
         let create_req = axum::http::Request::builder()
             .method("POST")
             .uri("/v1/transactions")
@@ -2030,7 +2060,7 @@ mod tests {
         assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
 
         // List queued transactions
-        let app2 = test_router(state.clone(), root_creds.clone());
+        let app2 = test_router(state.clone(), root_creds);
         let list_req = axum::http::Request::builder()
             .uri("/v1/transactions?status=queued")
             .body(Body::empty())

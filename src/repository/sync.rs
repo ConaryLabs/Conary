@@ -230,8 +230,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         .packages
         .into_iter()
         .map(|entry| {
-            let download_url =
-                format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
+            let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
             let mut pkg = RepositoryPackage::new(
                 repo_id,
                 entry.name,
@@ -272,12 +271,9 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
             .id
             .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
-        let tuf_client = crate::trust::client::TufClient::new(
-            repo_id,
-            &repo.url,
-            repo.tuf_root_url.as_deref(),
-        )
-        .map_err(|e| Error::TrustError(e.to_string()))?;
+        let tuf_client =
+            crate::trust::client::TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())
+                .map_err(|e| Error::TrustError(e.to_string()))?;
 
         let verified = tuf_client
             .update(conn)

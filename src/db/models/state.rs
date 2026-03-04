@@ -97,9 +97,7 @@ impl SystemState {
 
     /// List all states ordered by state number (newest first)
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {STATE_COLUMNS} FROM system_states ORDER BY state_number DESC"
-        );
+        let sql = format!("SELECT {STATE_COLUMNS} FROM system_states ORDER BY state_number DESC");
         let mut stmt = conn.prepare(&sql)?;
         let states = stmt
             .query_map([], Self::from_row)?

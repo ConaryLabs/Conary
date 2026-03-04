@@ -652,12 +652,9 @@ mod tests {
         assert!(!plan.has_conflicts());
 
         // Should have operation to remove old file
-        assert!(
-            plan.operations
-                .iter()
-                .any(|op| op.op_type == OperationType::RemoveFile
-                    && op.path == Path::new("usr/bin/old"))
-        );
+        assert!(plan.operations.iter().any(
+            |op| op.op_type == OperationType::RemoveFile && op.path == Path::new("usr/bin/old")
+        ));
 
         // Old file should be in backup list
         assert!(

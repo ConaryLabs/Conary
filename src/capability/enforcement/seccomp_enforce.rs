@@ -139,12 +139,12 @@ pub fn build_seccomp_filter(
     }
 
     // Determine target architecture
-    let arch: seccompiler::TargetArch = std::env::consts::ARCH
-        .try_into()
-        .map_err(|_| EnforcementError::Seccomp(format!(
+    let arch: seccompiler::TargetArch = std::env::consts::ARCH.try_into().map_err(|_| {
+        EnforcementError::Seccomp(format!(
             "Unsupported architecture for seccomp: {}",
             std::env::consts::ARCH
-        )))?;
+        ))
+    })?;
 
     debug!(
         "Building seccomp filter: {} allowed syscalls, mode: {}",
@@ -154,8 +154,8 @@ pub fn build_seccomp_filter(
 
     let filter = SeccompFilter::new(
         rules,
-        default_action,        // for syscalls NOT in the map
-        SeccompAction::Allow,  // for syscalls IN the map
+        default_action,       // for syscalls NOT in the map
+        SeccompAction::Allow, // for syscalls IN the map
         arch,
     )
     .map_err(|e| EnforcementError::Seccomp(format!("Failed to build filter: {e}")))?;

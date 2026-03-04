@@ -9,8 +9,8 @@ use std::path::Path;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
-use super::remote::CollectionData;
 use super::ModelError;
+use super::remote::CollectionData;
 
 /// Sign canonical JSON of a CollectionData
 pub fn sign_collection(data: &CollectionData, key: &SigningKey) -> Vec<u8> {
@@ -60,9 +60,9 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
         ));
     };
 
-    let seed: [u8; 32] = seed_bytes.try_into().map_err(|_| {
-        ModelError::RemoteFetchError("Invalid key length after decode".to_string())
-    })?;
+    let seed: [u8; 32] = seed_bytes
+        .try_into()
+        .map_err(|_| ModelError::RemoteFetchError("Invalid key length after decode".to_string()))?;
 
     Ok(SigningKey::from_bytes(&seed))
 }
@@ -81,7 +81,7 @@ pub fn key_id(verifying_key: &VerifyingKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::remote::{CollectionMemberData, CollectionData};
+    use crate::model::remote::{CollectionData, CollectionMemberData};
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
     use std::collections::HashMap;

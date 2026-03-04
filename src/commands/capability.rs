@@ -7,8 +7,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use conary::capability::enforcement::{
-    EnforcementMode, EnforcementPolicy, check_enforcement_support,
-    landlock_enforce, seccomp_enforce,
+    EnforcementMode, EnforcementPolicy, check_enforcement_support, landlock_enforce,
+    seccomp_enforce,
 };
 use conary::capability::{
     CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
@@ -376,10 +376,7 @@ pub fn cmd_capability_audit(
     // Syscall enforcement report
     if !caps.syscalls.is_empty() {
         println!("[Syscall Enforcement (Seccomp)]");
-        let info = seccomp_enforce::describe_seccomp_filter(
-            &caps.syscalls,
-            EnforcementMode::Audit,
-        );
+        let info = seccomp_enforce::describe_seccomp_filter(&caps.syscalls, EnforcementMode::Audit);
         if let Some(ref profile) = info.profile {
             println!("  Profile:          {}", profile);
         }
@@ -512,8 +509,7 @@ pub fn cmd_capability_run(
     let script_content = build_exec_script(command);
 
     let mut sandbox = Sandbox::new(config);
-    let (exit_code, stdout, stderr) =
-        sandbox.execute("/bin/sh", &script_content, &[], &[])?;
+    let (exit_code, stdout, stderr) = sandbox.execute("/bin/sh", &script_content, &[], &[])?;
 
     // Print output
     if !stdout.is_empty() {
@@ -535,11 +531,7 @@ fn build_exec_script(command: &[String]) -> String {
     let mut script = String::from("#!/bin/sh\nexec");
     for arg in command {
         // Shell-escape arguments
-        if arg.contains(' ')
-            || arg.contains('\'')
-            || arg.contains('"')
-            || arg.contains('\\')
-        {
+        if arg.contains(' ') || arg.contains('\'') || arg.contains('"') || arg.contains('\\') {
             script.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
         } else {
             script.push(' ');

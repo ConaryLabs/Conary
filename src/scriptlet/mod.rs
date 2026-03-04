@@ -33,8 +33,8 @@ use crate::packages::traits::{Scriptlet, ScriptletPhase};
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
 use std::os::unix::process::CommandExt as _;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -427,7 +427,11 @@ impl ScriptletExecutor {
             interpreter,
             script_in_chroot,
             args,
-            if seccomp_enabled { "enabled" } else { "unavailable" }
+            if seccomp_enabled {
+                "enabled"
+            } else {
+                "unavailable"
+            }
         );
 
         // Use interpreter directly with pre_exec for native chroot + seccomp
@@ -453,9 +457,8 @@ impl ScriptletExecutor {
                         format!("chroot failed: {e}"),
                     )
                 })?;
-                nix::unistd::chdir("/").map_err(|e| {
-                    std::io::Error::other(format!("chdir failed: {e}"))
-                })?;
+                nix::unistd::chdir("/")
+                    .map_err(|e| std::io::Error::other(format!("chdir failed: {e}")))?;
 
                 // 2. Set NO_NEW_PRIVS (required for unprivileged seccomp)
                 let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
@@ -485,7 +488,11 @@ impl ScriptletExecutor {
         let context = format!(
             " (chroot: {}, seccomp: {})",
             self.root.display(),
-            if seccomp_enabled { "enabled" } else { "unavailable" }
+            if seccomp_enabled {
+                "enabled"
+            } else {
+                "unavailable"
+            }
         );
 
         // Take stdout/stderr handles before waiting. After wait_timeout reaps
@@ -1155,13 +1162,8 @@ mod tests {
         std::fs::create_dir_all(target_root.join("tmp")).unwrap();
         std::fs::create_dir_all(target_root.join("bin")).unwrap();
 
-        let executor = ScriptletExecutor::new(
-            target_root,
-            "test-pkg",
-            "1.0.0",
-            PackageFormat::Rpm,
-        )
-        .with_sandbox_mode(SandboxMode::None);
+        let executor = ScriptletExecutor::new(target_root, "test-pkg", "1.0.0", PackageFormat::Rpm)
+            .with_sandbox_mode(SandboxMode::None);
 
         let result = executor.execute_in_target(
             "post-install",

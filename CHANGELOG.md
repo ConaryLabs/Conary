@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.0] - 2026-03-02
+## [0.1.0] - 2026-03-03
 
 Major release covering 10 months of development. Every subsystem listed below is implemented and tested.
 
@@ -12,7 +12,9 @@ Major release covering 10 months of development. Every subsystem listed below is
 
 #### Remi Server (feature-gated: `--features server`)
 - On-demand CCS conversion proxy that converts RPM/DEB/Arch packages to CCS format when requested
-- Chunk-level content-addressable storage with LRU eviction and access tracking (schema v27)
+- Chunk-level content-addressable storage with LRU eviction and access tracking (schema v27, v38)
+- Server-side conversion caching with package identity tracking for restarts (schema v38)
+- Download statistics with aggregated popularity rankings per distro (schema v40)
 - 202 Accepted pattern for async conversion with job polling
 - Bloom filter acceleration for chunk existence checks
 - Batch endpoints for multi-chunk requests
@@ -22,7 +24,9 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Cloudflare R2 write-through for chunk storage
 - Remi-native repository sync via `/v1/{distro}/metadata` API
 - Public package index with search at packages.conary.io
-- TUF supply chain trust with timestamp, snapshot, targets, and root role delegation
+- TUF supply chain trust with timestamp, snapshot, targets, and root role delegation (schema v43)
+- Mirror health tracking with latency, throughput, and composite scoring (schema v44)
+- Pre-computed delta manifests between package versions (schema v44)
 - CORS restrictions, token-bucket rate limiting, audit logging, and configurable ban lists
 - Prometheus metrics export at `/v1/admin/metrics/prometheus`
 - Podman-based integration test harness
@@ -31,6 +35,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Local REST API for package operations over Unix socket (`/run/conary/conaryd.sock`)
 - Optional TCP listener for remote management
 - SO_PEERCRED peer credential authentication with permission checking
+- Auth gate middleware rejecting unauthenticated POST/PUT/DELETE on v1 router
 - SSE event streaming for real-time operation progress
 - Persistent job queue in SQLite (survives daemon restart, schema v35)
 - Priority-based operation queue
@@ -65,7 +70,8 @@ Major release covering 10 months of development. Every subsystem listed below is
 
 #### System Model
 - Declarative OS state management in TOML format
-- Remote model includes with Remi API resolution
+- Remote model includes with Remi API resolution (schema v41, v42)
+- Cryptographic verification of remote collections with Ed25519 signatures
 - Model diff engine comparing declared state against current system
 - Model apply for atomic state convergence
 - Model check with exit codes for CI/CD drift detection
@@ -92,7 +98,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 #### Capability Enforcement
 - Package capability declarations for network, filesystem, and syscall access
 - Landlock filesystem restrictions
-- seccomp-bpf syscall filtering
+- seccomp-bpf syscall filtering with dedicated scriptlet profile (~90 allowed syscalls)
 - Capability auditing and inference for existing packages
 - Schema v33: `capabilities` and `capability_audits` tables
 
@@ -105,6 +111,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 #### Retroactive CCS Enhancement
 - Background capability inference for converted legacy packages
 - Subpackage relationship tracking (schema v36)
+- Enhancement priority scheduling for lazy processing (schema v37)
 - Parallel binary analysis with goblin
 - Lazy enhancement triggered on package access
 - 26 integration tests for the enhancement pipeline
@@ -158,6 +165,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Dangerous script detection with automatic risk analysis
 - Cross-distro scriptlet support (RPM, DEB, Arch calling conventions)
 - `--sandbox` flag: auto, always, never
+- Native chroot with seccomp enforcement in pre_exec (replaces external chroot command)
 
 #### Bootstrap System
 - Stage 1 bootstrap builder for cross-compiling a minimal system
@@ -179,7 +187,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Package pinning to prevent updates/removal (schema v15)
 - Selection reason tracking: explicit, dependency chain, collection attribution (schema v16)
 - Install reason tracking for autoremove support (schema v12)
-- Orphan detection and autoremove
+- Orphan detection and autoremove with grace period tracking (schema v39)
 - CAS garbage collection (`system gc`)
 - System adoption: scan and track packages installed by RPM/APT
 - `repquery` for querying repository packages (not just installed)
@@ -192,7 +200,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 
 ### Changed
 
-- Database schema upgraded from v5 to v36 (40+ tables, 30+ migrations)
+- Database schema upgraded from v5 to v44 (44 migrations across 40+ tables)
 - Dependency resolver replaced with SAT-based resolvo (from hand-rolled graph solver)
 - Unified package parser: single interface for RPM, DEB, and Arch formats
 - Unified decompression: Gzip, Xz, and Zstd with automatic format detection via magic bytes
@@ -202,6 +210,8 @@ Major release covering 10 months of development. Every subsystem listed below is
 
 ### Fixed
 
+- TOCTOU race in file deployer: CAS inode reference held during hardlink, copy reads from open fd (5714985)
+- Double-wait bug in scriptlet execution causing ECHILD errors (5714985)
 - Stale in-flight entries in download manager causing hangs on retry
 - Backoff overflow on high retry counts (arithmetic overflow in exponential calculation)
 - Atomic multi-package dependency installation (packages installed as a unit, not individually)

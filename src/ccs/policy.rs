@@ -506,12 +506,9 @@ impl CompressManpagesPolicy {
     /// Check if path looks like a man page
     fn is_manpage(path: &str) -> bool {
         const MAN_DIRS: &[&str] = &[
-            "/man/", "/man1/", "/man2/", "/man3/", "/man4/",
-            "/man5/", "/man6/", "/man7/", "/man8/",
+            "/man/", "/man1/", "/man2/", "/man3/", "/man4/", "/man5/", "/man6/", "/man7/", "/man8/",
         ];
-        const MAN_EXTS: &[&str] = &[
-            ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".n", ".l",
-        ];
+        const MAN_EXTS: &[&str] = &[".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".n", ".l"];
 
         if !MAN_DIRS.iter().any(|d| path.contains(d)) {
             return false;

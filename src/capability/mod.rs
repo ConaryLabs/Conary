@@ -336,14 +336,8 @@ mod tests {
         // List all packages
         let all = list_packages_with_capabilities(&conn, false).unwrap();
         assert_eq!(all.len(), 2);
-        assert!(
-            all.iter()
-                .any(|(n, _, has)| n == "nginx" && *has)
-        );
-        assert!(
-            all.iter()
-                .any(|(n, _, has)| n == "curl" && !*has)
-        );
+        assert!(all.iter().any(|(n, _, has)| n == "nginx" && *has));
+        assert!(all.iter().any(|(n, _, has)| n == "curl" && !*has));
 
         // List only missing
         let missing = list_packages_with_capabilities(&conn, true).unwrap();

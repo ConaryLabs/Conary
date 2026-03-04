@@ -238,9 +238,19 @@ pub fn cmd_provenance_diff(
                 }
                 _ => {
                     let diffs: &[(&str, &str, &Option<String>, &Option<String>)] = &[
-                        ("SOURCE", "Upstream hash", &prov1.upstream_hash, &prov2.upstream_hash),
+                        (
+                            "SOURCE",
+                            "Upstream hash",
+                            &prov1.upstream_hash,
+                            &prov2.upstream_hash,
+                        ),
                         ("BUILD", "Recipe", &prov1.recipe_hash, &prov2.recipe_hash),
-                        ("CONTENT", "Package content", &prov1.merkle_root, &prov2.merkle_root),
+                        (
+                            "CONTENT",
+                            "Package content",
+                            &prov1.merkle_root,
+                            &prov2.merkle_root,
+                        ),
                         ("DNA", "Provenance chain", &prov1.dna_hash, &prov2.dna_hash),
                     ];
 

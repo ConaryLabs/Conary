@@ -179,10 +179,7 @@ impl CasStore {
                         match fs::remove_file(entry.path()) {
                             Ok(()) => {
                                 *removed += 1;
-                                debug!(
-                                    "Removed orphaned temp file: {}",
-                                    entry.path().display()
-                                );
+                                debug!("Removed orphaned temp file: {}", entry.path().display());
                             }
                             Err(e) => {
                                 warn!(

@@ -15,12 +15,12 @@ use conary::db::models::{
 use conary::derived::build_from_definition;
 use conary::filesystem::CasStore;
 use conary::hash::sha256;
-use conary::model::{
-    DiffAction, ModelDiff, ModelDerivedPackage, SystemState, capture_current_state, compute_diff,
-    compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
-};
 use conary::model::parser::SystemModel;
 use conary::model::remote::fetch_remote_collection;
+use conary::model::{
+    DiffAction, ModelDerivedPackage, ModelDiff, SystemState, capture_current_state, compute_diff,
+    compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
+};
 use rusqlite::Connection;
 use tracing::{debug, info};
 
@@ -60,7 +60,9 @@ fn compute_model_diff(
                 mode
             );
         }
-        Ok(compute_diff_with_includes_offline(model, state, conn, offline)?)
+        Ok(compute_diff_with_includes_offline(
+            model, state, conn, offline,
+        )?)
     } else {
         Ok(compute_diff(model, state))
     }
@@ -119,9 +121,12 @@ fn create_derived_from_model(
             model_derived.name
         );
         // Return existing ID, patches/overrides will be checked separately
-        return existing
-            .id
-            .ok_or_else(|| anyhow!("Derived package '{}' exists but has no database id", model_derived.name));
+        return existing.id.ok_or_else(|| {
+            anyhow!(
+                "Derived package '{}' exists but has no database id",
+                model_derived.name
+            )
+        });
     }
 
     // Parse version policy
@@ -523,7 +528,12 @@ pub fn cmd_model_apply(
 }
 
 /// Check if system state matches the model
-pub fn cmd_model_check(model_path: &str, db_path: &str, verbose: bool, offline: bool) -> Result<()> {
+pub fn cmd_model_check(
+    model_path: &str,
+    db_path: &str,
+    verbose: bool,
+    offline: bool,
+) -> Result<()> {
     let model_path = Path::new(model_path);
     let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, false)?;
 
@@ -636,8 +646,8 @@ pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> 
 
         // Purge cache if refresh requested
         if refresh {
-            let purged = RemoteCollection::purge_by_name(&conn, &name, Some(label_str))
-                .unwrap_or(0);
+            let purged =
+                RemoteCollection::purge_by_name(&conn, &name, Some(label_str)).unwrap_or(0);
             if purged > 0 {
                 debug!(name = %name, label = %label_str, "Purged {} cache entries", purged);
             }
@@ -684,7 +694,11 @@ pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> 
         let drift_count = missing.len() + version_drift.len();
 
         if drift_count > 0 {
-            println!("  {} ({}):", spec, format_version_info(&conn, &name, label_str));
+            println!(
+                "  {} ({}):",
+                spec,
+                format_version_info(&conn, &name, label_str)
+            );
 
             if !missing.is_empty() {
                 println!("    Missing locally:");
@@ -915,17 +929,18 @@ pub fn cmd_model_publish(
 
     if is_remote {
         // Remote publish via HTTP PUT
-        let data = conary::model::remote::build_collection_data_from_model(
-            &model,
-            &group_name,
-            version,
-        );
+        let data =
+            conary::model::remote::build_collection_data_from_model(&model, &group_name, version);
 
         // Sign if key provided
         if let Some(ref key) = signing_key {
             let signature = conary::model::signing::sign_collection(&data, key);
             let key_id = conary::model::signing::key_id(&key.verifying_key());
-            println!("  Signed collection ({} bytes, key {})", signature.len(), key_id);
+            println!(
+                "  Signed collection ({} bytes, key {})",
+                signature.len(),
+                key_id
+            );
 
             // Store signature in cache so the server endpoint can serve it
             let mut sig_cache = conary::db::models::RemoteCollection::new(

@@ -58,12 +58,9 @@ pub async fn get_root(
     let result = tokio::task::spawn_blocking(move || query_latest_root(&db_path, &distro)).await;
 
     match result {
-        Ok(Ok(Some(json))) => (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            json,
-        )
-            .into_response(),
+        Ok(Ok(Some(json))) => {
+            (StatusCode::OK, [("content-type", "application/json")], json).into_response()
+        }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => {
             warn!("Failed to fetch TUF root: {e}");
@@ -82,7 +79,10 @@ pub async fn get_versioned_root(
     Path((distro, version_str)): Path<(String, String)>,
 ) -> Response {
     // Parse version from "{version}.root" pattern
-    let version: i64 = match version_str.strip_suffix(".root").and_then(|v| v.parse().ok()) {
+    let version: i64 = match version_str
+        .strip_suffix(".root")
+        .and_then(|v| v.parse().ok())
+    {
         Some(v) => v,
         None => return StatusCode::BAD_REQUEST.into_response(),
     };
@@ -93,16 +93,12 @@ pub async fn get_versioned_root(
     };
 
     let result =
-        tokio::task::spawn_blocking(move || query_versioned_root(&db_path, &distro, version))
-            .await;
+        tokio::task::spawn_blocking(move || query_versioned_root(&db_path, &distro, version)).await;
 
     match result {
-        Ok(Ok(Some(json))) => (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            json,
-        )
-            .into_response(),
+        Ok(Ok(Some(json))) => {
+            (StatusCode::OK, [("content-type", "application/json")], json).into_response()
+        }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => {
             warn!("Failed to fetch versioned TUF root: {e}");
@@ -118,9 +114,7 @@ pub async fn get_versioned_root(
 /// POST /v1/admin/tuf/refresh-timestamp (admin endpoint)
 ///
 /// Regenerates timestamp metadata for all TUF-enabled repositories.
-pub async fn refresh_timestamp(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Response {
+pub async fn refresh_timestamp(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let db_path = {
         let guard = state.read().await;
         guard.config.db_path.clone()
@@ -167,12 +161,9 @@ async fn get_tuf_metadata(
             .await;
 
     match result {
-        Ok(Ok(Some(json))) => (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            json,
-        )
-            .into_response(),
+        Ok(Ok(Some(json))) => {
+            (StatusCode::OK, [("content-type", "application/json")], json).into_response()
+        }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => {
             warn!("Failed to fetch TUF metadata: {e}");
@@ -187,10 +178,7 @@ async fn get_tuf_metadata(
 
 // --- Database query functions (run on blocking threads) ---
 
-fn query_latest_root(
-    db_path: &std::path::Path,
-    distro: &str,
-) -> anyhow::Result<Option<String>> {
+fn query_latest_root(db_path: &std::path::Path, distro: &str) -> anyhow::Result<Option<String>> {
     use rusqlite::OptionalExtension;
     let conn = crate::db::open(db_path)?;
     Ok(conn
@@ -243,9 +231,7 @@ fn query_tuf_role_metadata(
 
 fn query_tuf_repos(db_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
     let conn = crate::db::open(db_path)?;
-    let mut stmt = conn.prepare(
-        "SELECT name FROM repositories WHERE tuf_enabled = 1",
-    )?;
+    let mut stmt = conn.prepare("SELECT name FROM repositories WHERE tuf_enabled = 1")?;
 
     let repos: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
@@ -380,8 +366,18 @@ mod tests {
     fn test_latest_root_found() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "fedora");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
-        insert_tuf_root(&conn, repo_id, 2, r#"{"signed":{"_type":"root","version":2}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            2,
+            r#"{"signed":{"_type":"root","version":2}}"#,
+        );
 
         let result = query_latest_root(temp_file.path(), "fedora").unwrap();
         assert!(result.is_some());
@@ -394,7 +390,12 @@ mod tests {
     fn test_latest_root_single_version() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "arch");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
 
         let result = query_latest_root(temp_file.path(), "arch").unwrap();
         assert!(result.is_some());
@@ -412,7 +413,12 @@ mod tests {
     fn test_latest_root_wrong_distro() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "fedora");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
 
         let result = query_latest_root(temp_file.path(), "arch").unwrap();
         assert!(result.is_none());
@@ -424,8 +430,18 @@ mod tests {
     fn test_versioned_root_found() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "fedora");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
-        insert_tuf_root(&conn, repo_id, 2, r#"{"signed":{"_type":"root","version":2}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            2,
+            r#"{"signed":{"_type":"root","version":2}}"#,
+        );
 
         let result = query_versioned_root(temp_file.path(), "fedora", 1).unwrap();
         assert!(result.is_some());
@@ -440,7 +456,12 @@ mod tests {
     fn test_versioned_root_not_found_wrong_version() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "fedora");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
 
         let result = query_versioned_root(temp_file.path(), "fedora", 99).unwrap();
         assert!(result.is_none());
@@ -450,7 +471,12 @@ mod tests {
     fn test_versioned_root_not_found_wrong_distro() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_tuf_repo(&conn, "fedora");
-        insert_tuf_root(&conn, repo_id, 1, r#"{"signed":{"_type":"root","version":1}}"#);
+        insert_tuf_root(
+            &conn,
+            repo_id,
+            1,
+            r#"{"signed":{"_type":"root","version":1}}"#,
+        );
 
         let result = query_versioned_root(temp_file.path(), "arch", 1).unwrap();
         assert!(result.is_none());
@@ -497,18 +523,8 @@ mod tests {
         let fedora_id = insert_tuf_repo(&conn, "fedora");
         let arch_id = insert_tuf_repo(&conn, "arch");
 
-        insert_tuf_metadata(
-            &conn,
-            fedora_id,
-            "timestamp",
-            r#"{"distro":"fedora"}"#,
-        );
-        insert_tuf_metadata(
-            &conn,
-            arch_id,
-            "timestamp",
-            r#"{"distro":"arch"}"#,
-        );
+        insert_tuf_metadata(&conn, fedora_id, "timestamp", r#"{"distro":"fedora"}"#);
+        insert_tuf_metadata(&conn, arch_id, "timestamp", r#"{"distro":"arch"}"#);
 
         let fedora_ts = query_tuf_role_metadata(temp_file.path(), "fedora", "timestamp")
             .unwrap()
@@ -534,11 +550,15 @@ mod tests {
         insert_tuf_root(&conn, arch_id, 1, r#"{"distro":"arch","version":1}"#);
 
         // Fedora latest should be version 2
-        let fedora_latest = query_latest_root(temp_file.path(), "fedora").unwrap().unwrap();
+        let fedora_latest = query_latest_root(temp_file.path(), "fedora")
+            .unwrap()
+            .unwrap();
         assert!(fedora_latest.contains("\"version\":2"));
 
         // Arch latest should be version 1
-        let arch_latest = query_latest_root(temp_file.path(), "arch").unwrap().unwrap();
+        let arch_latest = query_latest_root(temp_file.path(), "arch")
+            .unwrap()
+            .unwrap();
         assert!(arch_latest.contains("\"distro\":\"arch\""));
 
         // Arch version 2 should not exist

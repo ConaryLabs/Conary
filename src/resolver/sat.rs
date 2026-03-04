@@ -200,8 +200,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     }
 
     // Expand transitively: packages that depend on breaking packages also break
-    let mut breaking_set: std::collections::HashSet<String> =
-        breaking.iter().cloned().collect();
+    let mut breaking_set: std::collections::HashSet<String> = breaking.iter().cloned().collect();
     let mut changed = true;
     while changed {
         changed = false;

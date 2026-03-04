@@ -6,11 +6,9 @@
 //! root metadata, and performing key rotation.
 
 use crate::ccs::signing::SigningKeyPair;
-use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
-use crate::trust::metadata::{
-    RoleDefinition, RootMetadata, Signed, TUF_SPEC_VERSION,
-};
 use crate::trust::TrustResult;
+use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
+use crate::trust::metadata::{RoleDefinition, RootMetadata, Signed, TUF_SPEC_VERSION};
 use chrono::{Duration, Utc};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,10 +16,7 @@ use std::path::Path;
 /// Generate a new Ed25519 key pair for a TUF role
 ///
 /// Saves the private and public keys to the specified directory.
-pub fn generate_role_key(
-    role: &str,
-    output_dir: &Path,
-) -> anyhow::Result<SigningKeyPair> {
+pub fn generate_role_key(role: &str, output_dir: &Path) -> anyhow::Result<SigningKeyPair> {
     let keypair = SigningKeyPair::generate().with_key_id(role);
 
     let private_path = output_dir.join(format!("{role}.private"));
@@ -190,14 +185,9 @@ mod tests {
         let snapshot_key = SigningKeyPair::generate();
         let timestamp_key = SigningKeyPair::generate();
 
-        let signed = create_initial_root(
-            &root_key,
-            &targets_key,
-            &snapshot_key,
-            &timestamp_key,
-            365,
-        )
-        .unwrap();
+        let signed =
+            create_initial_root(&root_key, &targets_key, &snapshot_key, &timestamp_key, 365)
+                .unwrap();
 
         assert_eq!(signed.signed.keys.len(), 4);
         assert_eq!(signed.signed.roles.len(), 4);

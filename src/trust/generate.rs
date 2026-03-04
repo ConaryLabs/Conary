@@ -6,12 +6,12 @@
 //! Feature-gated behind `server` to avoid pulling in unnecessary code on clients.
 
 use crate::ccs::signing::SigningKeyPair;
+use crate::trust::TrustResult;
 use crate::trust::keys::sign_tuf_metadata;
 use crate::trust::metadata::{
-    MetaFile, Signed, SnapshotMetadata, TargetDescription, TargetsMetadata,
-    TimestampMetadata, TUF_SPEC_VERSION,
+    MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
+    TimestampMetadata,
 };
-use crate::trust::TrustResult;
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -154,15 +154,28 @@ mod tests {
     fn test_generate_targets() {
         let key = SigningKeyPair::generate();
         let packages = vec![
-            ("packages/nginx-1.24.0.ccs".to_string(), 4096, "abc123".to_string()),
-            ("packages/curl-8.5.0.ccs".to_string(), 2048, "def456".to_string()),
+            (
+                "packages/nginx-1.24.0.ccs".to_string(),
+                4096,
+                "abc123".to_string(),
+            ),
+            (
+                "packages/curl-8.5.0.ccs".to_string(),
+                2048,
+                "def456".to_string(),
+            ),
         ];
 
         let targets = generate_targets(&packages, &key, 1, 30).unwrap();
 
         assert_eq!(targets.signed.version, 1);
         assert_eq!(targets.signed.targets.len(), 2);
-        assert!(targets.signed.targets.contains_key("packages/nginx-1.24.0.ccs"));
+        assert!(
+            targets
+                .signed
+                .targets
+                .contains_key("packages/nginx-1.24.0.ccs")
+        );
         assert_eq!(targets.signatures.len(), 1);
     }
 

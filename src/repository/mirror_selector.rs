@@ -44,11 +44,7 @@ impl MirrorSelector {
     /// - `Static`: returns an empty vec (caller should use the original URL)
     /// - `Dynamic`: queries mirror_health, returns mirrors weighted by health score
     /// - `Chain`: returns the configured list as-is
-    pub fn select_mirrors(
-        &self,
-        repo_id: i64,
-        strategy: &MirrorStrategy,
-    ) -> Result<Vec<String>> {
+    pub fn select_mirrors(&self, repo_id: i64, strategy: &MirrorStrategy) -> Result<Vec<String>> {
         match strategy {
             MirrorStrategy::Static => Ok(Vec::new()),
             MirrorStrategy::Chain(urls) => Ok(urls.clone()),
@@ -169,9 +165,7 @@ impl MirrorSelector {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            Error::DownloadError("All mirrors failed".to_string())
-        }))
+        Err(last_error.unwrap_or_else(|| Error::DownloadError("All mirrors failed".to_string())))
     }
 }
 
@@ -201,9 +195,7 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let selector = MirrorSelector::new(tmp.path());
 
-        let result = selector
-            .select_mirrors(1, &MirrorStrategy::Static)
-            .unwrap();
+        let result = selector.select_mirrors(1, &MirrorStrategy::Static).unwrap();
         assert!(result.is_empty());
     }
 
@@ -229,18 +221,12 @@ mod tests {
         let (tmp, conn) = create_test_db();
 
         // Insert mirror health data with varying scores
-        MirrorHealthTracker::record_success(
-            &conn, 1, "https://fast.example.com", 10, 10_000_000,
-        )
-        .unwrap();
-        MirrorHealthTracker::record_success(
-            &conn, 1, "https://medium.example.com", 50, 5_000_000,
-        )
-        .unwrap();
-        MirrorHealthTracker::record_success(
-            &conn, 1, "https://slow.example.com", 200, 1_000_000,
-        )
-        .unwrap();
+        MirrorHealthTracker::record_success(&conn, 1, "https://fast.example.com", 10, 10_000_000)
+            .unwrap();
+        MirrorHealthTracker::record_success(&conn, 1, "https://medium.example.com", 50, 5_000_000)
+            .unwrap();
+        MirrorHealthTracker::record_success(&conn, 1, "https://slow.example.com", 200, 1_000_000)
+            .unwrap();
         drop(conn);
 
         let selector = MirrorSelector::new(tmp.path());
@@ -272,10 +258,8 @@ mod tests {
     fn test_dynamic_single_mirror() {
         let (tmp, conn) = create_test_db();
 
-        MirrorHealthTracker::record_success(
-            &conn, 1, "https://only.example.com", 50, 1_000_000,
-        )
-        .unwrap();
+        MirrorHealthTracker::record_success(&conn, 1, "https://only.example.com", 50, 1_000_000)
+            .unwrap();
         drop(conn);
 
         let selector = MirrorSelector::new(tmp.path());
@@ -293,14 +277,16 @@ mod tests {
         // Give fast mirror many successes, slow mirror many failures
         for _ in 0..20 {
             MirrorHealthTracker::record_success(
-                &conn, 1, "https://fast.example.com", 10, 10_000_000,
+                &conn,
+                1,
+                "https://fast.example.com",
+                10,
+                10_000_000,
             )
             .unwrap();
         }
-        MirrorHealthTracker::record_success(
-            &conn, 1, "https://slow.example.com", 500, 100_000,
-        )
-        .unwrap();
+        MirrorHealthTracker::record_success(&conn, 1, "https://slow.example.com", 500, 100_000)
+            .unwrap();
         for _ in 0..4 {
             MirrorHealthTracker::record_failure(&conn, 1, "https://slow.example.com").unwrap();
         }
@@ -324,7 +310,8 @@ mod tests {
         assert!(
             fast_first > 60,
             "Expected fast mirror to be selected >60% of the time, got {}/{}",
-            fast_first, iterations
+            fast_first,
+            iterations
         );
     }
 
@@ -419,12 +406,8 @@ mod tests {
     fn test_fallback_empty_mirrors() {
         let (_tmp, conn) = create_test_db();
 
-        let result = MirrorSelector::try_download_with_fallback::<(), _>(
-            &[],
-            |_url| Ok(()),
-            &conn,
-            1,
-        );
+        let result =
+            MirrorSelector::try_download_with_fallback::<(), _>(&[], |_url| Ok(()), &conn, 1);
 
         assert!(result.is_err());
     }

@@ -14,8 +14,8 @@ mod client;
 mod dependencies;
 mod download;
 mod management;
-pub mod metalink;
 mod metadata;
+pub mod metalink;
 pub mod mirror_health;
 pub mod mirror_selector;
 pub mod registry;
@@ -33,10 +33,6 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::{RepositoryClient, RetryPolicy};
-pub use metalink::{MetalinkFile, MetalinkMirror, extract_base_urls, parse_metalink_headers, parse_metalink_xml};
-pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
-pub use mirror_selector::{MirrorSelector, MirrorStrategy};
-pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
 };
@@ -47,6 +43,11 @@ pub use download::{
 pub use gpg::GpgVerifier;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
+pub use metalink::{
+    MetalinkFile, MetalinkMirror, extract_base_urls, parse_metalink_headers, parse_metalink_xml,
+};
+pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
+pub use mirror_selector::{MirrorSelector, MirrorStrategy};
 pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
 pub use registry::{RepositoryFormat, create_parser, detect_repository_format};
 #[cfg(feature = "server")]
@@ -56,6 +57,7 @@ pub use resolution::{
     PackageResolver, PackageSource, ResolutionOptions, build_gpg_options, resolve_package,
 };
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
 };

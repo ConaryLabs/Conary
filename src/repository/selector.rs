@@ -137,8 +137,8 @@ impl PackageSelector {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        candidates.sort_by(|a, b| {
-            match b.repository.priority.cmp(&a.repository.priority) {
+        candidates.sort_by(
+            |a, b| match b.repository.priority.cmp(&a.repository.priority) {
                 std::cmp::Ordering::Equal => {
                     match (
                         RpmVersion::parse(&a.package.version),
@@ -149,8 +149,8 @@ impl PackageSelector {
                     }
                 }
                 ord => ord,
-            }
-        });
+            },
+        );
 
         // Safe: we verified candidates is non-empty above
         let selected = candidates.into_iter().next().unwrap();

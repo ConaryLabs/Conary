@@ -87,9 +87,7 @@ pub fn sign_tuf_metadata<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trust::metadata::{
-        RootMetadata, Signed, TUF_SPEC_VERSION, TimestampMetadata,
-    };
+    use crate::trust::metadata::{RootMetadata, Signed, TUF_SPEC_VERSION, TimestampMetadata};
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
 
@@ -125,10 +123,7 @@ mod tests {
         inner.insert("a".to_string(), serde_json::Value::from("first"));
 
         let mut outer = serde_json::Map::new();
-        outer.insert(
-            "nested".to_string(),
-            serde_json::Value::Object(inner),
-        );
+        outer.insert("nested".to_string(), serde_json::Value::Object(inner));
         outer.insert("top".to_string(), serde_json::Value::from(42));
 
         let val = serde_json::Value::Object(outer);
@@ -234,8 +229,7 @@ mod tests {
         // Verify the signature manually
         let canonical = canonical_json(&timestamp);
         let sig_bytes = hex::decode(&sig.sig).unwrap();
-        let signature =
-            ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
+        let signature = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
         keypair
             .verifying_key()
             .verify_strict(&canonical, &signature)

@@ -175,14 +175,7 @@ fn daemon_profile(
 }
 
 fn cli_profile(name: &str, read_paths: &[&str], write_paths: &[&str]) -> InferredCapabilities {
-    build_profile(
-        ProfileKind::Cli,
-        name,
-        &[],
-        &[],
-        read_paths,
-        write_paths,
-    )
+    build_profile(ProfileKind::Cli, name, &[], &[], read_paths, write_paths)
 }
 
 // Static registry of well-known profiles

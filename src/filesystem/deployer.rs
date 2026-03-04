@@ -865,9 +865,7 @@ mod tests {
 
         // Use copy_from_cas_fd directly
         let target_path = install_root.join("copy_test.txt");
-        deployer
-            .copy_from_cas_fd(&cas_file, &target_path)
-            .unwrap();
+        deployer.copy_from_cas_fd(&cas_file, &target_path).unwrap();
 
         // Verify content matches
         let copied = fs::read(&target_path).unwrap();
@@ -940,9 +938,7 @@ mod tests {
         let hash = deployer.cas().store(content).unwrap();
 
         // Deploy to a path that never had a file (NotFound on remove is tolerated)
-        deployer
-            .deploy_file("/opt/new/app", &hash, 0o644)
-            .unwrap();
+        deployer.deploy_file("/opt/new/app", &hash, 0o644).unwrap();
 
         let target_path = install_root.join("opt/new/app");
         assert!(target_path.exists());

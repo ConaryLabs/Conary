@@ -340,10 +340,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(packages::download_package),
         )
         // Delta manifest between two versions
-        .route(
-            "/v1/:distro/packages/:name/delta",
-            get(packages::get_delta),
-        )
+        .route("/v1/:distro/packages/:name/delta", get(packages::get_delta))
         // Conversion job status (for 202 Accepted polling)
         .route("/v1/jobs/:job_id", get(jobs::get_job_status))
         // Recipe package download (read-only, after build complete)
@@ -359,7 +356,10 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/suggest", get(search::suggest_packages))
         // === Model Collections (for remote include resolution) ===
         .route("/v1/models/:name", get(models::get_model))
-        .route("/v1/models/:name/signature", get(models::get_model_signature))
+        .route(
+            "/v1/models/:name/signature",
+            get(models::get_model_signature),
+        )
         .route("/v1/models", get(models::list_models))
         // === Package Detail API ===
         .route(
@@ -395,7 +395,10 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v2/_catalog", get(oci::catalog))
         // Catch-all for /v2/{name}/manifests/{ref}, /v2/{name}/blobs/{digest},
         // /v2/{name}/tags/list. Name can contain slashes so we use a wildcard.
-        .route("/v2/*path", get(oci::oci_catchall).head(oci::oci_catchall_head))
+        .route(
+            "/v2/*path",
+            get(oci::oci_catchall).head(oci::oci_catchall_head),
+        )
         .layer(compression)
         .layer(public_cors)
         .with_state(state.clone());
@@ -483,7 +486,10 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         // Model collection publishing
         .route("/v1/admin/models/:name", put(models::put_model))
         // TUF timestamp refresh
-        .route("/v1/admin/tuf/refresh-timestamp", post(tuf::refresh_timestamp))
+        .route(
+            "/v1/admin/tuf/refresh-timestamp",
+            post(tuf::refresh_timestamp),
+        )
         .with_state(state)
 }
 

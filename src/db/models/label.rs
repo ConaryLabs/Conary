@@ -142,9 +142,7 @@ impl LabelEntry {
 
     /// List all labels
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {LABEL_COLUMNS} FROM labels ORDER BY repository, namespace, tag"
-        );
+        let sql = format!("SELECT {LABEL_COLUMNS} FROM labels ORDER BY repository, namespace, tag");
         let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([], Self::from_row)?
@@ -240,9 +238,8 @@ impl LabelEntry {
             crate::error::Error::InitError("Cannot find children without label ID".to_string())
         })?;
 
-        let sql = format!(
-            "SELECT {LABEL_COLUMNS} FROM labels WHERE parent_label_id = ?1 ORDER BY tag"
-        );
+        let sql =
+            format!("SELECT {LABEL_COLUMNS} FROM labels WHERE parent_label_id = ?1 ORDER BY tag");
         let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([id], Self::from_row)?
@@ -431,9 +428,7 @@ impl LabelPathEntry {
 
     /// List all path entries ordered by priority
     pub fn list_ordered(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {LABEL_PATH_COLUMNS} FROM label_path ORDER BY priority ASC"
-        );
+        let sql = format!("SELECT {LABEL_PATH_COLUMNS} FROM label_path ORDER BY priority ASC");
         let mut stmt = conn.prepare(&sql)?;
         let entries = stmt
             .query_map([], Self::from_row)?

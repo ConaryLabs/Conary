@@ -148,9 +148,7 @@ impl FileEntry {
 
     /// Find files matching a path pattern (LIKE query)
     pub fn find_by_path_pattern(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {FILE_COLUMNS} FROM files WHERE path LIKE ?1 ORDER BY path"
-        );
+        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE path LIKE ?1 ORDER BY path");
         let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([pattern], Self::from_row)?
@@ -160,9 +158,7 @@ impl FileEntry {
 
     /// List all files for a trove with ls -l style information
     pub fn list_files_lsl(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {FILE_COLUMNS} FROM files WHERE trove_id = ?1 ORDER BY path"
-        );
+        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE trove_id = ?1 ORDER BY path");
         let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([trove_id], Self::from_row)?

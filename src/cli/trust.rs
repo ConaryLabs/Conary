@@ -2,8 +2,8 @@
 
 //! CLI definitions for TUF trust management commands
 
-use clap::Subcommand;
 use super::DbArgs;
+use clap::Subcommand;
 
 /// TUF trust management commands
 #[derive(Subcommand)]

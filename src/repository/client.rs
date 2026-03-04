@@ -366,9 +366,7 @@ impl RepositoryClient {
             attempt += 1;
 
             // Check for existing partial download
-            let existing_len = fs::metadata(&temp_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let existing_len = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
 
             let mut request = self.client.get(url);
             if existing_len > 0 {
@@ -422,9 +420,7 @@ impl RepositoryClient {
                         )));
                     }
 
-                    if !status.is_success()
-                        && status != reqwest::StatusCode::PARTIAL_CONTENT
-                    {
+                    if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
                         return Err(Error::DownloadError(format!(
                             "HTTP {} from {}",
                             status, url
@@ -448,15 +444,16 @@ impl RepositoryClient {
                                 "Resuming download from byte {}, total size {}",
                                 existing_len, content_range_total
                             );
-                            let file = OpenOptions::new()
-                                .append(true)
-                                .open(&temp_path)
-                                .map_err(|e| {
-                                    Error::IoError(format!(
-                                        "Failed to open {} for append: {e}",
-                                        temp_path.display()
-                                    ))
-                                })?;
+                            let file =
+                                OpenOptions::new()
+                                    .append(true)
+                                    .open(&temp_path)
+                                    .map_err(|e| {
+                                        Error::IoError(format!(
+                                            "Failed to open {} for append: {e}",
+                                            temp_path.display()
+                                        ))
+                                    })?;
                             (file, existing_len, content_range_total)
                         } else {
                             // HTTP 200 - server does not support range, or fresh download.

@@ -313,10 +313,7 @@ mod tests {
     fn test_targets_metadata_serialization_roundtrip() {
         let expires = Utc.with_ymd_and_hms(2030, 6, 15, 12, 0, 0).unwrap();
         let mut hashes = BTreeMap::new();
-        hashes.insert(
-            "sha256".to_string(),
-            "abc123def456".to_string(),
-        );
+        hashes.insert("sha256".to_string(), "abc123def456".to_string());
 
         let mut targets = BTreeMap::new();
         targets.insert(
@@ -405,10 +402,7 @@ mod tests {
         assert_eq!(deserialized.version, 42);
         let snap_meta = &deserialized.meta["snapshot.json"];
         assert_eq!(snap_meta.version, 7);
-        assert_eq!(
-            snap_meta.hashes.as_ref().unwrap()["sha256"],
-            "deadbeef"
-        );
+        assert_eq!(snap_meta.hashes.as_ref().unwrap()["sha256"], "deadbeef");
     }
 
     #[test]

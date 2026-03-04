@@ -570,9 +570,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     log::info!("Notified systemd: READY");
 
     // Get Unix listener
-    let unix_listener = socket_manager
-        .take_unix_listener()
-        .ok_or_else(|| crate::Error::IoError("Unix listener not bound - check socket configuration".to_string()))?;
+    let unix_listener = socket_manager.take_unix_listener().ok_or_else(|| {
+        crate::Error::IoError("Unix listener not bound - check socket configuration".to_string())
+    })?;
 
     log::info!("Daemon ready, accepting connections");
 
@@ -663,7 +663,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
             break;
         }
         if tokio::time::Instant::now() >= drain_deadline {
-            log::warn!("Drain timeout: {} connections still active, forcing shutdown", conn_count);
+            log::warn!(
+                "Drain timeout: {} connections still active, forcing shutdown",
+                conn_count
+            );
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

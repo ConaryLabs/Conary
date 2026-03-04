@@ -229,16 +229,18 @@ impl ConvertedPackage {
         let sql = format!(
             "SELECT {CONVERTED_COLUMNS} FROM converted_packages WHERE original_checksum = ?1"
         );
-        let result = conn.query_row(&sql, [checksum], Self::from_row).optional()?;
+        let result = conn
+            .query_row(&sql, [checksum], Self::from_row)
+            .optional()?;
         Ok(result)
     }
 
     /// Find a converted package by trove_id
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {CONVERTED_COLUMNS} FROM converted_packages WHERE trove_id = ?1"
-        );
-        let result = conn.query_row(&sql, [trove_id], Self::from_row).optional()?;
+        let sql = format!("SELECT {CONVERTED_COLUMNS} FROM converted_packages WHERE trove_id = ?1");
+        let result = conn
+            .query_row(&sql, [trove_id], Self::from_row)
+            .optional()?;
         Ok(result)
     }
 

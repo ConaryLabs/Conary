@@ -14,9 +14,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::db::models::{
-    DEFAULT_CACHE_TTL_SECS, LabelEntry, RemoteCollection, Repository,
-};
+use crate::db::models::{DEFAULT_CACHE_TTL_SECS, LabelEntry, RemoteCollection, Repository};
 use crate::hash;
 use crate::repository::RepositoryClient;
 
@@ -95,11 +93,7 @@ fn parse_simple_label(label_str: &str) -> ModelResult<(String, String)> {
 /// 2. If label has `repository_id`, follow to Repository and use its URL
 /// 3. If label has `delegate_to_label_id`, follow delegation chain
 /// 4. Fallback: `Repository::find_by_name` and use its URL directly
-pub fn resolve_label_to_url(
-    conn: &Connection,
-    name: &str,
-    label_str: &str,
-) -> ModelResult<String> {
+pub fn resolve_label_to_url(conn: &Connection, name: &str, label_str: &str) -> ModelResult<String> {
     let (repo_name, _tag) = parse_simple_label(label_str)?;
 
     // Try to find labels associated with this repository name
@@ -354,10 +348,7 @@ pub fn fetch_and_verify_remote_collection(
     }
 
     // Attempt to fetch signature
-    let sig_url = format!(
-        "{}/signature",
-        url.trim_end_matches('/')
-    );
+    let sig_url = format!("{}/signature", url.trim_end_matches('/'));
     let signature_result = client.download_to_bytes(&sig_url);
 
     let mut cached_signature: Option<Vec<u8>> = None;
@@ -377,11 +368,8 @@ pub fn fetch_and_verify_remote_collection(
                     match BASE64.decode(sig_b64) {
                         Ok(sig_raw) => {
                             // Try to verify against trusted keys
-                            let verified = verify_against_trusted_keys(
-                                &data,
-                                &sig_raw,
-                                trusted_keys,
-                            );
+                            let verified =
+                                verify_against_trusted_keys(&data, &sig_raw, trusted_keys);
 
                             match verified {
                                 Ok(true) => {
@@ -503,8 +491,9 @@ pub fn publish_remote_collection(
     data: &CollectionData,
     force: bool,
 ) -> ModelResult<()> {
-    let json = serde_json::to_vec(data)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {}", e)))?;
+    let json = serde_json::to_vec(data).map_err(|e| {
+        ModelError::RemoteFetchError(format!("Failed to serialize collection: {}", e))
+    })?;
 
     let base = base_url.trim_end_matches('/');
     let mut url = format!("{}/v1/admin/models/{}", base, data.name);
@@ -672,18 +661,13 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create a repository
-        let mut repo = Repository::new(
-            "myrepo".to_string(),
-            "https://remi.example.com".to_string(),
-        );
+        let mut repo =
+            Repository::new("myrepo".to_string(), "https://remi.example.com".to_string());
         let repo_id = repo.insert(&conn).unwrap();
 
         // Create a label linked to the repository
-        let mut label = LabelEntry::new(
-            "myrepo".to_string(),
-            "ns".to_string(),
-            "stable".to_string(),
-        );
+        let mut label =
+            LabelEntry::new("myrepo".to_string(), "ns".to_string(), "stable".to_string());
         label.insert(&conn).unwrap();
         label.set_repository(&conn, Some(repo_id)).unwrap();
 
@@ -697,10 +681,8 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         // Create a repository with no labels pointing to it
-        let mut repo = Repository::new(
-            "myrepo".to_string(),
-            "https://remi.example.com".to_string(),
-        );
+        let mut repo =
+            Repository::new("myrepo".to_string(), "https://remi.example.com".to_string());
         repo.insert(&conn).unwrap();
 
         // Resolve should fall back to Repository::find_by_name
@@ -805,12 +787,20 @@ models = ["group-core@upstream:stable"]
         assert!(redis.is_optional);
 
         // postgresql is in install, not optional, no pin
-        let pg = data.members.iter().find(|m| m.name == "postgresql").unwrap();
+        let pg = data
+            .members
+            .iter()
+            .find(|m| m.name == "postgresql")
+            .unwrap();
         assert!(!pg.is_optional);
         assert!(pg.version_constraint.is_none());
 
         // nginx-module-geoip is optional-only (not in install)
-        let geoip = data.members.iter().find(|m| m.name == "nginx-module-geoip").unwrap();
+        let geoip = data
+            .members
+            .iter()
+            .find(|m| m.name == "nginx-module-geoip")
+            .unwrap();
         assert!(geoip.is_optional);
 
         // Includes are passed through

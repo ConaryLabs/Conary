@@ -9,9 +9,7 @@
 //! - Snapshot consistency (mix-and-match protection)
 
 use crate::trust::keys::canonical_json;
-use crate::trust::metadata::{
-    MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TufKey,
-};
+use crate::trust::metadata::{MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TufKey};
 use crate::trust::{TrustError, TrustResult};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -93,7 +91,11 @@ fn verify_ed25519_signature(
 }
 
 /// Verify that a metadata version is strictly increasing (rollback protection)
-pub fn verify_version_increase(role: Role, new_version: u64, stored_version: u64) -> TrustResult<()> {
+pub fn verify_version_increase(
+    role: Role,
+    new_version: u64,
+    stored_version: u64,
+) -> TrustResult<()> {
     if new_version > stored_version {
         Ok(())
     } else {
@@ -151,10 +153,7 @@ pub fn verify_snapshot_consistency(
 }
 
 /// Verify that a hash matches the expected value from a MetaFile reference
-pub fn verify_metadata_hash(
-    meta_ref: &MetaFile,
-    actual_bytes: &[u8],
-) -> TrustResult<()> {
+pub fn verify_metadata_hash(meta_ref: &MetaFile, actual_bytes: &[u8]) -> TrustResult<()> {
     if let Some(ref hashes) = meta_ref.hashes
         && let Some(expected_sha256) = hashes.get("sha256")
     {
@@ -175,7 +174,9 @@ pub fn extract_role_keys(
 ) -> TrustResult<(BTreeMap<String, TufKey>, u64)> {
     let role_name = role.to_string();
     let role_def = root.roles.get(&role_name).ok_or_else(|| {
-        TrustError::ConsistencyError(format!("Root metadata missing role definition: {role_name}"))
+        TrustError::ConsistencyError(format!(
+            "Root metadata missing role definition: {role_name}"
+        ))
     })?;
 
     let mut role_keys = BTreeMap::new();

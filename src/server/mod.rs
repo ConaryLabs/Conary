@@ -41,12 +41,12 @@ pub use config::RemiConfig;
 pub use conversion::{ConversionService, ServerConversionResult};
 pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
+pub use lite::{ProxyConfig, run_proxy};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmResult, run_prewarm};
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_router};
-pub use lite::{ProxyConfig, run_proxy};
 pub use search::SearchEngine;
 pub use security::BanList;
 
@@ -401,11 +401,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
 
     // Start background pre-warming if enabled
     if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
-        let prewarm_interval = crate::server::config::parse_duration(
-            &remi_config.prewarm.metadata_sync_interval,
-        )
-        .map(|d| d.as_secs() / 3600)
-        .unwrap_or(6);
+        let prewarm_interval =
+            crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)
+                .map(|d| d.as_secs() / 3600)
+                .unwrap_or(6);
         let max_per_run = remi_config.prewarm.convert_top_n;
 
         for distro in &remi_config.prewarm.distros {
@@ -520,7 +519,9 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     // Initialize download analytics
     {
         let analytics_recorder = Arc::new(AnalyticsRecorder::new(config.db_path.clone()));
-        tokio::spawn(analytics::run_analytics_loop(Arc::clone(&analytics_recorder)));
+        tokio::spawn(analytics::run_analytics_loop(Arc::clone(
+            &analytics_recorder,
+        )));
         state.write().await.analytics = Some(analytics_recorder);
     }
 

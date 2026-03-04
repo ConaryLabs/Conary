@@ -103,7 +103,10 @@ impl SubstituterChain {
                 Ok(data) => {
                     info!(
                         "Source {} ({}) provided chunk {} ({} bytes)",
-                        idx, name, hash, data.len()
+                        idx,
+                        name,
+                        hash,
+                        data.len()
                     );
                     return Ok((
                         data,
@@ -114,7 +117,10 @@ impl SubstituterChain {
                     ));
                 }
                 Err(e) => {
-                    debug!("Source {} ({}) could not provide chunk {}: {}", idx, name, hash, e);
+                    debug!(
+                        "Source {} ({}) could not provide chunk {}: {}",
+                        idx, name, hash, e
+                    );
                 }
             }
         }
@@ -151,7 +157,9 @@ impl SubstituterChain {
             let name = source.name();
             debug!(
                 "Trying source {} ({}) for {} remaining chunks",
-                idx, name, remaining.len()
+                idx,
+                name,
+                remaining.len()
             );
 
             let mut newly_resolved = HashSet::new();
@@ -161,7 +169,9 @@ impl SubstituterChain {
                     Ok(data) => {
                         debug!(
                             "Source {} provided chunk {} ({} bytes)",
-                            name, hash, data.len()
+                            name,
+                            hash,
+                            data.len()
                         );
                         resolved.insert((*hash).clone(), data);
                         newly_resolved.insert((*hash).as_str());
@@ -247,12 +257,10 @@ impl SubstituterChain {
 
         match fs::read(&chunk_path) {
             Ok(data) => Ok(data),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(Error::NotFound(format!(
-                    "Chunk {} not in local cache",
-                    hash
-                )))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(Error::NotFound(format!(
+                "Chunk {} not in local cache",
+                hash
+            ))),
             Err(e) => Err(Error::IoError(format!(
                 "Failed to read cached chunk {}: {}",
                 chunk_path.display(),
@@ -342,7 +350,8 @@ mod tests {
             cache_dir: tmp_dir.path().to_path_buf(),
         }]);
 
-        let result = chain.resolve_chunk("deadbeef00112233deadbeef00112233deadbeef00112233deadbeef00112233");
+        let result =
+            chain.resolve_chunk("deadbeef00112233deadbeef00112233deadbeef00112233deadbeef00112233");
         assert!(result.is_err());
     }
 

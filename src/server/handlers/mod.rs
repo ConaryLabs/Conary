@@ -14,9 +14,9 @@ pub mod search;
 pub mod sparse;
 pub mod tuf;
 
+use crate::db::models::Repository;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use crate::db::models::Repository;
 use rusqlite::Connection;
 
 /// Supported distribution names for validation

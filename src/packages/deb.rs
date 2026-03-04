@@ -517,9 +517,10 @@ impl PackageFormat for DebPackage {
             self.meta.package_path()
         );
 
-        let path_str = self.meta.package_path().to_str().ok_or_else(|| {
-            Error::InitError("Package path contains invalid UTF-8".to_string())
-        })?;
+        let path_str =
+            self.meta.package_path().to_str().ok_or_else(|| {
+                Error::InitError("Package path contains invalid UTF-8".to_string())
+            })?;
         for name in DATA_TAR_NAMES {
             if let Ok(tar_data) = Self::extract_ar_file(path_str, name) {
                 let reader = Self::create_tar_decoder(&tar_data)?;

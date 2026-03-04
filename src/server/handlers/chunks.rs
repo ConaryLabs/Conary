@@ -344,7 +344,10 @@ async fn pull_through_fetch(
         drop(entry);
         drop(state_guard);
 
-        tracing::debug!("Coalescing request for chunk {} (waiting for in-flight fetch)", hash);
+        tracing::debug!(
+            "Coalescing request for chunk {} (waiting for in-flight fetch)",
+            hash
+        );
 
         // Wait for the in-flight fetch to complete (ignore send errors -- the
         // sender may have been dropped if the fetch failed, which closes the
@@ -483,7 +486,6 @@ async fn pull_through_fetch(
         .body(Body::from(data))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
-
 
 // === Batch Endpoints ===
 
@@ -976,8 +978,8 @@ mod tests {
 
         // A range that exceeds MAX_RANGE_SIZE would be rejected at the handler
         // level. Verify the constant is reasonable (> 0, < 1 GB).
-        assert!(MAX_RANGE_SIZE > 0);
-        assert!(MAX_RANGE_SIZE < 1024 * 1024 * 1024);
+        const { assert!(MAX_RANGE_SIZE > 0) };
+        const { assert!(MAX_RANGE_SIZE < 1024 * 1024 * 1024) };
     }
 
     #[test]

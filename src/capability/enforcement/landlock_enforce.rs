@@ -17,8 +17,8 @@
 use super::{EnforcementError, EnforcementMode};
 use crate::capability::FilesystemCapabilities;
 use landlock::{
-    Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr, RulesetCreatedAttr,
-    RulesetStatus, ABI, path_beneath_rules,
+    ABI, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    RulesetStatus, path_beneath_rules,
 };
 use tracing::{debug, warn};
 
@@ -59,15 +59,9 @@ pub fn apply_landlock_rules(
         .create()
         .map_err(|e| EnforcementError::Landlock(format!("Failed to create ruleset: {e}")))?
         .set_compatibility(CompatLevel::BestEffort)
-        .add_rules(path_beneath_rules(
-            &read_paths,
-            AccessFs::from_read(abi),
-        ))
+        .add_rules(path_beneath_rules(&read_paths, AccessFs::from_read(abi)))
         .map_err(|e| EnforcementError::Landlock(format!("Failed to add read rules: {e}")))?
-        .add_rules(path_beneath_rules(
-            &write_paths,
-            AccessFs::from_all(abi),
-        ))
+        .add_rules(path_beneath_rules(&write_paths, AccessFs::from_all(abi)))
         .map_err(|e| EnforcementError::Landlock(format!("Failed to add write rules: {e}")))?
         .add_rules(path_beneath_rules(
             &execute_paths,

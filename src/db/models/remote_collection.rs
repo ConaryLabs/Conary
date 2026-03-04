@@ -65,11 +65,7 @@ impl RemoteCollection {
     /// Find a cached collection that hasn't expired
     ///
     /// Returns None if not cached or if the cache entry has expired.
-    pub fn find_cached(
-        conn: &Connection,
-        name: &str,
-        label: Option<&str>,
-    ) -> Result<Option<Self>> {
+    pub fn find_cached(conn: &Connection, name: &str, label: Option<&str>) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, label, version, content_hash, data_json,
                     fetched_at, expires_at, repository_id, signature, signer_key_id
@@ -195,8 +191,8 @@ mod tests {
         assert!(id > 0);
 
         // Should find the cached entry
-        let found = RemoteCollection::find_cached(&conn, "group-base", Some("myrepo:stable"))
-            .unwrap();
+        let found =
+            RemoteCollection::find_cached(&conn, "group-base", Some("myrepo:stable")).unwrap();
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.name, "group-base");
@@ -281,8 +277,7 @@ mod tests {
         updated.upsert(&conn).unwrap();
 
         // Should get the updated entry
-        let found =
-            RemoteCollection::find_cached(&conn, "group-update", Some("repo:v1")).unwrap();
+        let found = RemoteCollection::find_cached(&conn, "group-update", Some("repo:v1")).unwrap();
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.content_hash, "sha256:second");
@@ -306,8 +301,7 @@ mod tests {
         assert!(found.is_some());
 
         // Should NOT find with a specific label
-        let found =
-            RemoteCollection::find_cached(&conn, "group-local", Some("repo:tag")).unwrap();
+        let found = RemoteCollection::find_cached(&conn, "group-local", Some("repo:tag")).unwrap();
         assert!(found.is_none());
     }
 
@@ -345,8 +339,7 @@ mod tests {
         assert!(found.is_none());
 
         // Dev should still exist
-        let found =
-            RemoteCollection::find_cached(&conn, "group-purge", Some("repo:dev")).unwrap();
+        let found = RemoteCollection::find_cached(&conn, "group-purge", Some("repo:dev")).unwrap();
         assert!(found.is_some());
     }
 }

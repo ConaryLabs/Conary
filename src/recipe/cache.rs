@@ -124,7 +124,10 @@ impl ToolchainInfo {
     }
 
     fn hash(&self) -> String {
-        let sysroot_str = self.sysroot.as_ref().map(|s| s.to_string_lossy().into_owned());
+        let sysroot_str = self
+            .sysroot
+            .as_ref()
+            .map(|s| s.to_string_lossy().into_owned());
 
         let mut data = String::new();
         let fields: &[(&str, Option<&str>)] = &[
@@ -311,7 +314,10 @@ impl BuildCache {
         }
 
         // Dependencies (sorted)
-        for (label, deps) in [("requires", &recipe.build.requires), ("makedepends", &recipe.build.makedepends)] {
+        for (label, deps) in [
+            ("requires", &recipe.build.requires),
+            ("makedepends", &recipe.build.makedepends),
+        ] {
             let mut sorted: Vec<_> = deps.to_vec();
             sorted.sort();
             for dep in sorted {

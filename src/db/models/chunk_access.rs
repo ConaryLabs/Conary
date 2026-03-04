@@ -175,9 +175,8 @@ impl ChunkAccess {
 
     /// Get most popular chunks
     pub fn get_popular_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {CHUNK_COLUMNS} FROM chunk_access ORDER BY access_count DESC LIMIT ?1"
-        );
+        let sql =
+            format!("SELECT {CHUNK_COLUMNS} FROM chunk_access ORDER BY access_count DESC LIMIT ?1");
         let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([limit as i64], Self::from_row)?
@@ -187,9 +186,8 @@ impl ChunkAccess {
 
     /// Get largest chunks
     pub fn get_largest_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {CHUNK_COLUMNS} FROM chunk_access ORDER BY size_bytes DESC LIMIT ?1"
-        );
+        let sql =
+            format!("SELECT {CHUNK_COLUMNS} FROM chunk_access ORDER BY size_bytes DESC LIMIT ?1");
         let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([limit as i64], Self::from_row)?

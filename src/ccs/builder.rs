@@ -656,13 +656,17 @@ fn build_binary_manifest(
             version: cap.version().map(String::from),
             kind: "capability".to_string(),
         })
-        .chain(manifest.requires.packages.iter().map(|pkg| {
-            BinaryRequirement {
-                name: pkg.name.clone(),
-                version: pkg.version.clone(),
-                kind: "package".to_string(),
-            }
-        }))
+        .chain(
+            manifest
+                .requires
+                .packages
+                .iter()
+                .map(|pkg| BinaryRequirement {
+                    name: pkg.name.clone(),
+                    version: pkg.version.clone(),
+                    kind: "package".to_string(),
+                }),
+        )
         .collect();
 
     let binary_hooks = convert_hooks_to_binary(&manifest.hooks);
@@ -698,8 +702,8 @@ fn convert_hooks_to_binary(
     hooks: &crate::ccs::manifest::Hooks,
 ) -> Option<super::binary_manifest::BinaryHooks> {
     use crate::ccs::binary_manifest::{
-        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks,
-        BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
+        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks, BinarySysctlHook,
+        BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
     };
 
     let binary = BinaryHooks {
@@ -771,7 +775,11 @@ fn convert_hooks_to_binary(
             .collect(),
     };
 
-    if binary.is_empty() { None } else { Some(binary) }
+    if binary.is_empty() {
+        None
+    } else {
+        Some(binary)
+    }
 }
 
 /// Print build summary

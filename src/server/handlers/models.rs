@@ -68,9 +68,7 @@ pub async fn get_model(
 /// GET /v1/models
 ///
 /// Lists all published collections (name, version, member count).
-pub async fn list_models(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Response {
+pub async fn list_models(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let state = state.read().await;
     let db_path = &state.config.db_path;
 
@@ -219,7 +217,10 @@ pub async fn put_model(
                 .body(axum::body::Body::from(json))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
-        Err(StoreError::NameMismatch { url_name, body_name }) => {
+        Err(StoreError::NameMismatch {
+            url_name,
+            body_name,
+        }) => {
             let msg = format!(
                 "Name mismatch: URL has '{}' but body has '{}'",
                 url_name, body_name
@@ -234,7 +235,10 @@ pub async fn put_model(
             (StatusCode::BAD_REQUEST, msg).into_response()
         }
         Err(StoreError::AlreadyExists(name)) => {
-            let msg = format!("Collection '{}' already exists (use ?force=true to overwrite)", name);
+            let msg = format!(
+                "Collection '{}' already exists (use ?force=true to overwrite)",
+                name
+            );
             (StatusCode::CONFLICT, msg).into_response()
         }
         Err(StoreError::InvalidJson(e)) => {
@@ -266,8 +270,8 @@ fn store_collection(
     force: bool,
 ) -> Result<PutModelResponse, StoreError> {
     // Deserialize body as CollectionData
-    let data: CollectionData = serde_json::from_slice(body)
-        .map_err(|e| StoreError::InvalidJson(e.to_string()))?;
+    let data: CollectionData =
+        serde_json::from_slice(body).map_err(|e| StoreError::InvalidJson(e.to_string()))?;
 
     // Validate: name in URL must match name in body
     if data.name != url_name {
@@ -288,13 +292,14 @@ fn store_collection(
         }
     }
 
-    let conn = Connection::open(db_path)
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+    let conn = Connection::open(db_path).map_err(|e| StoreError::Database(e.to_string()))?;
 
     // Check if collection already exists
-    let existing = Trove::find_by_name(&conn, url_name)
-        .map_err(|e| StoreError::Database(e.to_string()))?;
-    let existing_collection = existing.iter().find(|t| t.trove_type == TroveType::Collection);
+    let existing =
+        Trove::find_by_name(&conn, url_name).map_err(|e| StoreError::Database(e.to_string()))?;
+    let existing_collection = existing
+        .iter()
+        .find(|t| t.trove_type == TroveType::Collection);
 
     if let Some(coll) = existing_collection {
         if !force {
@@ -302,11 +307,12 @@ fn store_collection(
         }
 
         // Force mode: delete old collection and its members
-        let coll_id = coll.id.ok_or_else(|| StoreError::Database("Collection has no ID".into()))?;
+        let coll_id = coll
+            .id
+            .ok_or_else(|| StoreError::Database("Collection has no ID".into()))?;
         CollectionMember::delete_all_for_collection(&conn, coll_id)
             .map_err(|e| StoreError::Database(e.to_string()))?;
-        Trove::delete(&conn, coll_id)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Trove::delete(&conn, coll_id).map_err(|e| StoreError::Database(e.to_string()))?;
     }
 
     // Create collection trove
@@ -315,7 +321,8 @@ fn store_collection(
         data.version.clone(),
         TroveType::Collection,
     );
-    let collection_id = trove.insert(&conn)
+    let collection_id = trove
+        .insert(&conn)
         .map_err(|e| StoreError::Database(e.to_string()))?;
 
     // Add members
@@ -328,7 +335,8 @@ fn store_collection(
         if m.is_optional {
             member = member.optional();
         }
-        member.insert(&conn)
+        member
+            .insert(&conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
     }
 
@@ -392,9 +400,7 @@ fn build_collection_data(
 }
 
 /// Build a listing of all collections
-fn build_collection_list(
-    db_path: &std::path::Path,
-) -> Result<Vec<CollectionEntry>, anyhow::Error> {
+fn build_collection_list(db_path: &std::path::Path) -> Result<Vec<CollectionEntry>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
     // Find all collection troves

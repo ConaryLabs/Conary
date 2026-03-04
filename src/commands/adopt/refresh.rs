@@ -198,9 +198,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                     old_version,
                     new_version,
                 } => {
-                    let (sys_ver, sys_arch, sys_desc) = match system_packages
-                        .get(&trove.name)
-                    {
+                    let (sys_ver, sys_arch, sys_desc) = match system_packages.get(&trove.name) {
                         Some(entry) => entry,
                         None => {
                             warn!(

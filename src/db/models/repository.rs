@@ -346,9 +346,7 @@ impl RepositoryPackage {
 
     /// Find repository packages by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE name = ?1"
-        );
+        let sql = format!("SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE name = ?1");
         let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([name], Self::from_row)?
@@ -358,9 +356,8 @@ impl RepositoryPackage {
 
     /// Find repository packages by repository ID
     pub fn find_by_repository(conn: &Connection, repository_id: i64) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE repository_id = ?1"
-        );
+        let sql =
+            format!("SELECT {REPO_PKG_COLUMNS} FROM repository_packages WHERE repository_id = ?1");
         let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
             .query_map([repository_id], Self::from_row)?
