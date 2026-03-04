@@ -604,6 +604,14 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
         |row| row.get(0),
     )?;
 
+    // Count distinct distros from enabled repositories
+    let total_distros: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT COALESCE(default_strategy_distro, name))
+         FROM repositories WHERE enabled = 1",
+        [],
+        |row| row.get(0),
+    )?;
+
     // Download stats from aggregated table
     let download_stats = DownloadCount::global_stats(&conn)?;
 
@@ -611,7 +619,7 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
         total_packages,
         total_downloads: download_stats.total_downloads,
         downloads_30d: download_stats.downloads_30d,
-        total_distros: download_stats.total_distros,
+        total_distros,
         total_converted,
     })
 }

@@ -138,8 +138,8 @@ impl SearchEngine {
         // Version: stored but not tokenized for search
         schema_builder.add_text_field("version", STRING | STORED);
 
-        // Distro: faceted field for filtering
-        schema_builder.add_facet_field("distro", FacetOptions::default());
+        // Distro: faceted field for filtering (must be stored to retrieve in results)
+        schema_builder.add_facet_field("distro", FacetOptions::default().set_stored());
 
         // Description: full-text searchable and stored
         let desc_indexing = TextFieldIndexing::default()
@@ -460,6 +460,7 @@ mod tests {
         let results = engine.search("nginx", None, 10).unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].name, "nginx");
+        assert_eq!(results[0].distro, "fedora");
         assert!(results[0].converted);
 
         // Search for HTTP - should find nginx via description
