@@ -26,8 +26,12 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
+/// Maximum size for a single range request (64 MB)
+/// Prevents OOM from malicious Range headers requesting the entire file into memory.
+const MAX_RANGE_SIZE: u64 = 64 * 1024 * 1024;
+
 /// Validate chunk hash format (64 hex chars for SHA-256)
-fn is_valid_hash(hash: &str) -> bool {
+pub(crate) fn is_valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -254,6 +258,18 @@ pub async fn get_chunk(
         let (start, end) = range;
         let content_length = end - start + 1;
 
+        // Reject ranges that exceed MAX_RANGE_SIZE to prevent OOM
+        if content_length > MAX_RANGE_SIZE {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::CONTENT_RANGE, format!("bytes */{}", file_size))
+                .body(Body::from(format!(
+                    "Range too large ({} bytes, max {} bytes)",
+                    content_length, MAX_RANGE_SIZE
+                )))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+
         // Seek to start position
         if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
             tracing::error!("Failed to seek in chunk {}: {}", hash, e);
@@ -301,8 +317,12 @@ pub async fn get_chunk(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Pull-through caching: fetch from upstream and store locally
-/// Optional range parameter for Range request passthrough (not currently used)
+/// Pull-through caching: fetch from upstream and store locally.
+///
+/// Uses request coalescing to prevent thundering herd: when multiple clients
+/// request the same uncached chunk simultaneously, only the first triggers an
+/// upstream fetch. Subsequent requests wait for that fetch to complete, then
+/// serve the now-cached chunk from disk.
 async fn pull_through_fetch(
     state: Arc<RwLock<ServerState>>,
     hash: &str,
@@ -314,6 +334,52 @@ async fn pull_through_fetch(
         Some(url) => url.clone(),
         None => return chunk_not_found(),
     };
+
+    let inflight = Arc::clone(&state_guard.inflight_fetches);
+
+    // Check if another request is already fetching this chunk
+    if let Some(entry) = inflight.get(hash) {
+        let mut rx = entry.value().subscribe();
+        drop(entry);
+        drop(state_guard);
+
+        tracing::debug!("Coalescing request for chunk {} (waiting for in-flight fetch)", hash);
+
+        // Wait for the in-flight fetch to complete (ignore send errors -- the
+        // sender may have been dropped if the fetch failed, which closes the
+        // channel and causes RecvError)
+        let _ = rx.recv().await;
+
+        // Now try to serve from disk (the first fetch should have stored it)
+        let state_guard = state.read().await;
+        let chunk_path = state_guard.chunk_cache.chunk_path(hash);
+        if chunk_path.exists() {
+            let file = match tokio::fs::File::open(&chunk_path).await {
+                Ok(f) => f,
+                Err(_) => return chunk_not_found(),
+            };
+            let metadata = match file.metadata().await {
+                Ok(m) => m,
+                Err(_) => return chunk_not_found(),
+            };
+            let file_size = metadata.len();
+            state_guard.metrics.record_hit();
+            state_guard.metrics.record_bytes_served(file_size);
+            let stream = ReaderStream::new(file);
+            return chunk_response_builder(hash, StatusCode::OK)
+                .header(header::CONTENT_LENGTH, file_size)
+                .body(Body::from_stream(stream))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+
+        // Fetch failed or chunk was not stored -- fall through to 404
+        return chunk_not_found();
+    }
+
+    // First request for this chunk: register ourselves as the in-flight fetcher.
+    // Use a broadcast channel so all waiters get notified when we finish.
+    let (tx, _) = tokio::sync::broadcast::channel(1);
+    inflight.insert(hash.to_string(), tx.clone());
 
     tracing::debug!(
         "Pull-through fetch for chunk {} from {}",
@@ -331,12 +397,16 @@ async fn pull_through_fetch(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Failed to fetch chunk {} from upstream: {}", hash, e);
+            inflight.remove(hash);
+            let _ = tx.send(());
             return chunk_not_found();
         }
     };
 
     if !response.status().is_success() {
         state_guard.metrics.record_miss();
+        inflight.remove(hash);
+        let _ = tx.send(());
         return chunk_not_found();
     }
 
@@ -345,6 +415,8 @@ async fn pull_through_fetch(
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("Failed to read chunk {} from upstream: {}", hash, e);
+            inflight.remove(hash);
+            let _ = tx.send(());
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read chunk").into_response();
         }
     };
@@ -357,6 +429,8 @@ async fn pull_through_fetch(
             hash,
             computed_hash
         );
+        inflight.remove(hash);
+        let _ = tx.send(());
         return (StatusCode::INTERNAL_SERVER_ERROR, "Chunk hash mismatch").into_response();
     }
 
@@ -370,11 +444,16 @@ async fn pull_through_fetch(
         bloom.add(hash);
     }
 
-    // Store in background (don't block response)
+    // Store in background (don't block response), then notify waiters
+    let inflight_bg = Arc::clone(&inflight);
+    let hash_bg = hash.to_string();
     tokio::spawn(async move {
         if let Err(e) = cache.store_chunk(&hash_owned, &data_clone).await {
             tracing::warn!("Failed to store pull-through chunk {}: {}", hash_owned, e);
         }
+        // Remove from in-flight map and notify all waiting requests
+        inflight_bg.remove(&hash_bg);
+        let _ = tx.send(());
     });
 
     state_guard.metrics.record_hit();
@@ -869,6 +948,17 @@ mod tests {
         assert!(!is_valid_hash(
             "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF12345678901"
         )); // too long
+    }
+
+    #[test]
+    fn test_max_range_size_constant() {
+        // MAX_RANGE_SIZE should be 64 MB
+        assert_eq!(MAX_RANGE_SIZE, 64 * 1024 * 1024);
+
+        // A range that exceeds MAX_RANGE_SIZE would be rejected at the handler
+        // level. Verify the constant is reasonable (> 0, < 1 GB).
+        assert!(MAX_RANGE_SIZE > 0);
+        assert!(MAX_RANGE_SIZE < 1024 * 1024 * 1024);
     }
 
     #[test]

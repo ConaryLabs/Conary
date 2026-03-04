@@ -431,4 +431,406 @@ mod tests {
         assert_eq!(stats.chunk_count, 1);
         assert_eq!(stats.total_bytes, data.len() as u64);
     }
+
+    #[tokio::test]
+    async fn test_store_and_retrieve_chunk() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
+        let data = b"hello world chunk content";
+
+        let stored_path = cache.store_chunk(hash, data).await.unwrap();
+
+        // Verify the file exists at the returned path
+        assert!(stored_path.exists());
+
+        // Verify we can read back the exact data
+        let read_back = tokio::fs::read(&stored_path).await.unwrap();
+        assert_eq!(read_back, data);
+    }
+
+    #[tokio::test]
+    async fn test_has_chunk_hit_and_miss() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "1122334455667788990011223344556677889900aabbccddeeff001122334455";
+
+        // Before storing - cache miss
+        assert!(!cache.has_chunk(hash).await);
+
+        // After storing - cache hit
+        cache.store_chunk(hash, b"chunk data").await.unwrap();
+        assert!(cache.has_chunk(hash).await);
+    }
+
+    #[test]
+    fn test_chunk_path_structure() {
+        let cache = ChunkCache::new(
+            PathBuf::from("/data/chunks"),
+            1024 * 1024,
+            30,
+            PathBuf::from("/data/db.sqlite"),
+        );
+
+        let hash = "abcdef1234567890";
+        let path = cache.chunk_path(hash);
+
+        // Should use 2-character prefix directory
+        assert_eq!(
+            path,
+            PathBuf::from("/data/chunks/objects/ab/cdef1234567890")
+        );
+    }
+
+    #[test]
+    fn test_chunk_path_short_hash() {
+        let cache = ChunkCache::new(
+            PathBuf::from("/data/chunks"),
+            1024 * 1024,
+            30,
+            PathBuf::from("/data/db.sqlite"),
+        );
+
+        // Very short hash (edge case)
+        let hash = "ab";
+        let path = cache.chunk_path(hash);
+        assert_eq!(path, PathBuf::from("/data/chunks/objects/ab/"));
+    }
+
+    #[tokio::test]
+    async fn test_store_multiple_chunks_stats() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        // Store three chunks of different sizes
+        cache
+            .store_chunk(
+                "aaaa000000000000000000000000000000000000000000000000000000000001",
+                &[0u8; 1000],
+            )
+            .await
+            .unwrap();
+        cache
+            .store_chunk(
+                "bbbb000000000000000000000000000000000000000000000000000000000002",
+                &[0u8; 2000],
+            )
+            .await
+            .unwrap();
+        cache
+            .store_chunk(
+                "cccc000000000000000000000000000000000000000000000000000000000003",
+                &[0u8; 3000],
+            )
+            .await
+            .unwrap();
+
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.chunk_count, 3);
+        assert_eq!(stats.total_bytes, 6000);
+    }
+
+    #[tokio::test]
+    async fn test_stats_usage_percent() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let max_bytes = 10000u64;
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            max_bytes,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        // Store 5000 bytes => 50% usage
+        cache
+            .store_chunk(
+                "dd00000000000000000000000000000000000000000000000000000000000001",
+                &[0u8; 5000],
+            )
+            .await
+            .unwrap();
+
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.max_bytes, max_bytes);
+        assert!((stats.usage_percent - 50.0).abs() < 0.1);
+        assert_eq!(stats.ttl_days, 30);
+    }
+
+    #[tokio::test]
+    async fn test_stats_zero_max_bytes() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            0, // zero max
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.usage_percent, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_protect_and_unprotect_chunks() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "ee00000000000000000000000000000000000000000000000000000000000001";
+        cache.store_chunk(hash, b"protected data").await.unwrap();
+
+        // Protect the chunk
+        cache.protect_chunks(&[hash.to_string()]).await;
+
+        // Verify it's protected via stats
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.protected_chunks, 1);
+
+        // Unprotect
+        cache.unprotect_chunks(&[hash.to_string()]).await;
+
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.protected_chunks, 0);
+    }
+
+    #[tokio::test]
+    async fn test_record_access_updates_count() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "ff00000000000000000000000000000000000000000000000000000000000001";
+        cache.store_chunk(hash, b"access test").await.unwrap();
+
+        // Record additional accesses
+        cache.record_access(hash).await.unwrap();
+        cache.record_access(hash).await.unwrap();
+
+        // Verify via DB directly (access_count should be 3: 1 from store + 2 from record_access)
+        let conn = rusqlite::Connection::open(db_file.path()).unwrap();
+        let found = ChunkAccess::find_by_hash(&conn, hash).unwrap().unwrap();
+        assert_eq!(found.access_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_eviction_no_eviction_needed() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024, // 1MB max
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        // Store a small chunk - well within limits
+        cache
+            .store_chunk(
+                "1100000000000000000000000000000000000000000000000000000000000001",
+                b"small chunk",
+            )
+            .await
+            .unwrap();
+
+        let result = cache.run_eviction().await.unwrap();
+        assert_eq!(result.chunks_evicted, 0);
+        assert_eq!(result.bytes_freed, 0);
+        assert_eq!(result.reason, "No eviction needed");
+    }
+
+    #[tokio::test]
+    async fn test_eviction_size_based() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            500, // Very small max: 500 bytes
+            365, // Long TTL so we don't trigger TTL eviction
+            db_file.path().to_path_buf(),
+        );
+
+        // Store chunks totaling more than 500 bytes
+        cache
+            .store_chunk(
+                "2200000000000000000000000000000000000000000000000000000000000001",
+                &[0u8; 200],
+            )
+            .await
+            .unwrap();
+        cache
+            .store_chunk(
+                "3300000000000000000000000000000000000000000000000000000000000002",
+                &[0u8; 200],
+            )
+            .await
+            .unwrap();
+        cache
+            .store_chunk(
+                "4400000000000000000000000000000000000000000000000000000000000003",
+                &[0u8; 200],
+            )
+            .await
+            .unwrap();
+
+        // Total: 600 bytes, max: 500 bytes => should evict at least 100 bytes
+        let result = cache.run_eviction().await.unwrap();
+        assert!(result.chunks_evicted > 0);
+        assert!(result.bytes_freed > 0);
+        assert!(result.reason.contains("Size limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_eviction_skips_protected_chunks() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            300, // Very small max
+            365,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash1 = "5500000000000000000000000000000000000000000000000000000000000001";
+        let hash2 = "6600000000000000000000000000000000000000000000000000000000000002";
+
+        cache.store_chunk(hash1, &[0u8; 200]).await.unwrap();
+        cache.store_chunk(hash2, &[0u8; 200]).await.unwrap();
+
+        // Protect one chunk
+        cache.protect_chunks(&[hash1.to_string()]).await;
+
+        // Total: 400 bytes, max: 300 bytes
+        let _result = cache.run_eviction().await.unwrap();
+
+        // The protected chunk should still exist
+        assert!(cache.has_chunk(hash1).await);
+    }
+
+    #[tokio::test]
+    async fn test_store_chunk_atomic_write() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "7700000000000000000000000000000000000000000000000000000000000001";
+        let data = b"atomic write test data";
+
+        cache.store_chunk(hash, data).await.unwrap();
+
+        // Verify no .tmp file is left behind (atomic rename should clean up)
+        let chunk_path = cache.chunk_path(hash);
+        let tmp_path = chunk_path.with_extension("tmp");
+        assert!(!tmp_path.exists());
+        assert!(chunk_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_store_overwrite_existing_chunk() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            1024 * 1024,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let hash = "8800000000000000000000000000000000000000000000000000000000000001";
+
+        // Store same hash twice with different data (content-addressed should overwrite)
+        cache.store_chunk(hash, b"first version").await.unwrap();
+        cache.store_chunk(hash, b"second version").await.unwrap();
+
+        // Read back - should have the second version
+        let chunk_path = cache.chunk_path(hash);
+        let content = tokio::fs::read(&chunk_path).await.unwrap();
+        assert_eq!(content, b"second version");
+    }
+
+    // --- human_bytes tests ---
+
+    #[test]
+    fn test_human_bytes_bytes() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_human_bytes_kb() {
+        assert_eq!(human_bytes(1024), "1.00 KB");
+        assert_eq!(human_bytes(1536), "1.50 KB");
+    }
+
+    #[test]
+    fn test_human_bytes_mb() {
+        assert_eq!(human_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.00 MB");
+    }
+
+    #[test]
+    fn test_human_bytes_gb() {
+        assert_eq!(human_bytes(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(human_bytes(700 * 1024 * 1024 * 1024), "700.00 GB");
+    }
+
+    #[test]
+    fn test_human_bytes_tb() {
+        assert_eq!(human_bytes(1024 * 1024 * 1024 * 1024), "1.00 TB");
+    }
+
+    #[tokio::test]
+    async fn test_stats_human_readable_fields() {
+        let db_file = create_test_db();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let max_bytes = 1024 * 1024; // 1MB
+        let cache = ChunkCache::new(
+            temp_dir.path().to_path_buf(),
+            max_bytes,
+            30,
+            db_file.path().to_path_buf(),
+        );
+
+        let stats = cache.stats().await.unwrap();
+        assert_eq!(stats.total_size_human, "0 B");
+        assert_eq!(stats.max_size_human, "1.00 MB");
+        assert_eq!(stats.chunk_count, 0);
+    }
 }

@@ -64,6 +64,14 @@ pub async fn get_sparse_entry(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
+    // Validate path parameters against traversal and injection
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
     let fed_config = state_guard.federated_config.clone();
@@ -131,6 +139,11 @@ pub async fn list_packages(
     Path(distro): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Response {
+    // Validate path parameter against traversal and injection
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(100).clamp(1, 1000);
 

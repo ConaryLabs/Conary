@@ -198,9 +198,18 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
                     old_version,
                     new_version,
                 } => {
-                    let (sys_ver, sys_arch, sys_desc) = system_packages
+                    let (sys_ver, sys_arch, sys_desc) = match system_packages
                         .get(&trove.name)
-                        .expect("version drift entry must exist in system_packages");
+                    {
+                        Some(entry) => entry,
+                        None => {
+                            warn!(
+                                "Trove '{}' marked as updated but missing from system_packages map, skipping",
+                                trove.name
+                            );
+                            continue;
+                        }
+                    };
 
                     // Update version and metadata on the trove record
                     tx.execute(

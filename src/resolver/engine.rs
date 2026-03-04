@@ -83,7 +83,7 @@ impl<'db> Resolver<'db> {
 
         // Get installation order via topological sort (uses full graph, which is fine —
         // the order just needs to be valid, and including existing packages is harmless)
-        let install_order = self.graph.topological_sort().unwrap_or_default();
+        let install_order = self.graph.topological_sort()?;
 
         Ok(ResolutionPlan {
             install_order,
@@ -238,5 +238,280 @@ impl<'db> Resolver<'db> {
     /// Get the dependency graph (for visualization/stats).
     pub fn graph(&self) -> &DependencyGraph {
         &self.graph
+    }
+
+    /// Create a resolver with a pre-built graph (for testing).
+    #[cfg(test)]
+    fn with_graph(graph: DependencyGraph, conn: &'db Connection) -> Self {
+        Self { graph, conn }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::version::{RpmVersion, VersionConstraint};
+    use tempfile::TempDir;
+
+    fn v(s: &str) -> RpmVersion {
+        RpmVersion::parse(s).unwrap()
+    }
+
+    fn edge(from: &str, to: &str) -> DependencyEdge {
+        DependencyEdge {
+            from: from.to_string(),
+            to: to.to_string(),
+            constraint: VersionConstraint::Any,
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        }
+    }
+
+    fn node(name: &str) -> PackageNode {
+        PackageNode::new(name.to_string(), v("1.0.0"))
+    }
+
+    /// Create a minimal test database and return (TempDir, Connection).
+    /// Keep TempDir alive to prevent cleanup.
+    fn test_db() -> (TempDir, rusqlite::Connection) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db_str = db_path.to_str().unwrap();
+        db::init(db_str).unwrap();
+        let conn = db::open(db_str).unwrap();
+        (temp_dir, conn)
+    }
+
+    // --- resolve_install: basic success ---
+
+    #[test]
+    fn test_resolve_install_no_deps() {
+        let (_dir, conn) = test_db();
+        let graph = DependencyGraph::new();
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        let plan = resolver
+            .resolve_install("new-pkg".to_string(), v("1.0.0"), vec![])
+            .unwrap();
+
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.install_order, vec!["new-pkg"]);
+    }
+
+    #[test]
+    fn test_resolve_install_with_satisfied_dep() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(PackageNode::new("libfoo".to_string(), v("2.0.0")));
+
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        let deps = vec![DependencyEdge {
+            from: "app".to_string(),
+            to: "libfoo".to_string(),
+            constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        }];
+
+        let plan = resolver
+            .resolve_install("app".to_string(), v("1.0.0"), deps)
+            .unwrap();
+
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.install_order.len(), 2);
+        // libfoo should be installed before app
+        let pos = |n: &str| plan.install_order.iter().position(|x| x == n).unwrap();
+        assert!(pos("libfoo") < pos("app"));
+    }
+
+    // --- resolve_install: missing dependency ---
+
+    #[test]
+    fn test_resolve_install_missing_dep() {
+        let (_dir, conn) = test_db();
+        let graph = DependencyGraph::new();
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        let deps = vec![edge("app", "missing-lib")];
+
+        let plan = resolver
+            .resolve_install("app".to_string(), v("1.0.0"), deps)
+            .unwrap();
+
+        assert_eq!(plan.missing.len(), 1);
+        assert_eq!(plan.missing[0].name, "missing-lib");
+        assert_eq!(plan.missing[0].required_by, vec!["app"]);
+    }
+
+    // --- resolve_install: version conflict ---
+
+    #[test]
+    fn test_resolve_install_version_conflict() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(PackageNode::new("libold".to_string(), v("0.5.0")));
+
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        let deps = vec![DependencyEdge {
+            from: "app".to_string(),
+            to: "libold".to_string(),
+            constraint: VersionConstraint::parse(">= 2.0.0").unwrap(),
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        }];
+
+        let plan = resolver
+            .resolve_install("app".to_string(), v("1.0.0"), deps)
+            .unwrap();
+
+        assert_eq!(plan.conflicts.len(), 1);
+        match &plan.conflicts[0] {
+            Conflict::UnsatisfiableConstraint {
+                package,
+                required_by,
+                ..
+            } => {
+                assert_eq!(package, "libold");
+                assert_eq!(required_by, "app");
+            }
+            other => panic!("Expected UnsatisfiableConstraint, got: {other:?}"),
+        }
+    }
+
+    // --- resolve_install: cycle propagates error ---
+
+    #[test]
+    fn test_resolve_install_cycle_propagates_error() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        // Pre-existing cycle in the graph: X -> Y -> X
+        graph.add_node(node("X"));
+        graph.add_node(node("Y"));
+        graph.add_edge(edge("X", "Y"));
+        graph.add_edge(edge("Y", "X"));
+
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        // Installing a new package on top of a cyclic graph should error
+        let result = resolver.resolve_install("new-pkg".to_string(), v("1.0.0"), vec![]);
+
+        assert!(
+            result.is_err(),
+            "resolve_install should propagate cycle error, not silently succeed"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Circular dependency"),
+            "Error should mention circular dependency, got: {err_msg}"
+        );
+    }
+
+    // --- resolve_install: phantom dep does not cause false cycle ---
+
+    #[test]
+    fn test_resolve_install_phantom_dep_no_false_cycle() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        // Existing package with a dependency on a missing package
+        graph.add_node(node("existing"));
+        graph.add_edge(edge("existing", "phantom-lib"));
+
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        // Installing a new package should succeed (phantom is missing, not a cycle)
+        let plan = resolver
+            .resolve_install("new-pkg".to_string(), v("1.0.0"), vec![])
+            .unwrap();
+
+        // No cycles, just the two real packages in install order
+        assert!(plan.conflicts.is_empty());
+        assert_eq!(plan.install_order.len(), 2);
+    }
+
+    // --- resolve: consistency check ---
+
+    #[test]
+    fn test_resolve_clean_graph() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_node(node("B"));
+        graph.add_edge(edge("A", "B"));
+
+        let resolver = Resolver::with_graph(graph, &conn);
+        let plan = resolver.resolve().unwrap();
+
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.install_order.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_detects_cycle() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_node(node("B"));
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "A"));
+
+        let resolver = Resolver::with_graph(graph, &conn);
+        let plan = resolver.resolve().unwrap();
+
+        // resolve() returns Ok with conflicts, not Err
+        assert!(!plan.conflicts.is_empty());
+        assert!(plan.install_order.is_empty());
+        match &plan.conflicts[0] {
+            Conflict::CircularDependency { cycle } => {
+                assert!(cycle.contains(&"A".to_string()));
+                assert!(cycle.contains(&"B".to_string()));
+            }
+            other => panic!("Expected CircularDependency, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_finds_missing_deps() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("app"));
+        graph.add_edge(edge("app", "missing-lib"));
+
+        let resolver = Resolver::with_graph(graph, &conn);
+        let plan = resolver.resolve().unwrap();
+
+        assert_eq!(plan.missing.len(), 1);
+        assert_eq!(plan.missing[0].name, "missing-lib");
+        assert!(plan.missing[0].required_by.contains(&"app".to_string()));
+    }
+
+    // --- Resolver::new from real DB ---
+
+    #[test]
+    fn test_resolver_new_empty_db() {
+        let (_dir, conn) = test_db();
+        let resolver = Resolver::new(&conn).unwrap();
+
+        let plan = resolver.resolve().unwrap();
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.missing.is_empty());
+        assert!(plan.install_order.is_empty());
+    }
+
+    #[test]
+    fn test_graph_accessor() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("pkg1"));
+        graph.add_node(node("pkg2"));
+
+        let resolver = Resolver::with_graph(graph, &conn);
+        let g = resolver.graph();
+        assert_eq!(g.stats().total_packages, 2);
     }
 }

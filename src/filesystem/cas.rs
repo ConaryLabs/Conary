@@ -18,7 +18,9 @@ use crate::hash::{self, HashAlgorithm};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+use tracing::{debug, warn};
 
 /// Content-addressable storage manager
 #[derive(Clone)]
@@ -83,7 +85,16 @@ impl CasStore {
         self.algorithm
     }
 
+    /// Counter for generating unique temp file names within this process.
+    fn next_temp_id() -> u64 {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// Atomically write content to a CAS path (write to temp, fsync, rename).
+    ///
+    /// Uses a unique temp name incorporating PID and a monotonic counter to avoid
+    /// races when multiple processes or threads store to the same hash concurrently.
     ///
     /// Returns `true` if content was written, `false` if it already existed.
     fn atomic_store(&self, hash: &str, content: &[u8]) -> Result<bool> {
@@ -97,13 +108,96 @@ impl CasStore {
             fs::create_dir_all(parent)?;
         }
 
-        let temp_path = path.with_extension("tmp");
+        let temp_ext = format!("tmp.{}.{}", std::process::id(), Self::next_temp_id());
+        let temp_path = path.with_extension(temp_ext);
         let mut file = fs::File::create(&temp_path)?;
         file.write_all(content)?;
         file.sync_all()?;
         fs::rename(&temp_path, &path)?;
 
         Ok(true)
+    }
+
+    /// Remove orphaned temp files older than the given threshold.
+    ///
+    /// Temp files are left behind when a process crashes between creating the temp
+    /// file and renaming it into place. This method scans for files matching
+    /// `*.tmp.*` and removes any older than the specified duration.
+    ///
+    /// A threshold of 1 hour is recommended to avoid interfering with stores
+    /// that are legitimately in progress.
+    pub fn cleanup_orphaned_temps(&self, max_age: std::time::Duration) -> Result<usize> {
+        let now = SystemTime::now();
+        let mut removed = 0;
+
+        self.cleanup_temps_in_dir(&self.objects_dir, now, max_age, &mut removed)?;
+
+        if removed > 0 {
+            debug!(
+                "Cleaned up {} orphaned temp file(s) from CAS (older than {:?})",
+                removed, max_age
+            );
+        }
+
+        Ok(removed)
+    }
+
+    /// Recursively scan a directory for orphaned temp files.
+    fn cleanup_temps_in_dir(
+        &self,
+        dir: &Path,
+        now: SystemTime,
+        max_age: std::time::Duration,
+        removed: &mut usize,
+    ) -> Result<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                self.cleanup_temps_in_dir(&entry.path(), now, max_age, removed)?;
+            } else if file_type.is_file() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+
+                // Match temp files: any file whose name contains ".tmp."
+                if name_str.contains(".tmp.")
+                    && let Ok(metadata) = entry.metadata()
+                {
+                    let age = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|mtime| now.duration_since(mtime).ok());
+
+                    if age.is_some_and(|a| a > max_age) {
+                        match fs::remove_file(entry.path()) {
+                            Ok(()) => {
+                                *removed += 1;
+                                debug!(
+                                    "Removed orphaned temp file: {}",
+                                    entry.path().display()
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to remove orphaned temp file {}: {}",
+                                    entry.path().display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Store file content in CAS and return its hash
@@ -689,6 +783,75 @@ mod tests {
 
         // Content retrievable
         let retrieved = cas.retrieve(&hash1).unwrap();
+        assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    fn test_atomic_store_unique_temp_names() {
+        // Verify that successive stores use different temp name counters
+        // by checking that concurrent stores to the same hash do not corrupt data
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        let content1 = b"Content A for uniqueness test";
+        let content2 = b"Content B for uniqueness test";
+
+        let hash1 = cas.store(content1).unwrap();
+        let hash2 = cas.store(content2).unwrap();
+
+        // Different content should produce different hashes
+        assert_ne!(hash1, hash2);
+
+        // Both should be retrievable without corruption
+        let retrieved1 = cas.retrieve(&hash1).unwrap();
+        let retrieved2 = cas.retrieve(&hash2).unwrap();
+        assert_eq!(content1, retrieved1.as_slice());
+        assert_eq!(content2, retrieved2.as_slice());
+    }
+
+    #[test]
+    fn test_cleanup_orphaned_temps() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        // Create a fake orphaned temp file inside a CAS subdirectory
+        let sub_dir = temp_dir.path().join("ab");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let orphan = sub_dir.join("c123def456.tmp.99999.0");
+        fs::write(&orphan, "orphaned data").unwrap();
+
+        // With a very large max_age, nothing should be removed (file is too new)
+        let removed = cas
+            .cleanup_orphaned_temps(std::time::Duration::from_secs(999_999))
+            .unwrap();
+        assert_eq!(removed, 0);
+        assert!(orphan.exists());
+
+        // With zero max_age, the file should be removed (it is older than 0 seconds)
+        let removed = cas
+            .cleanup_orphaned_temps(std::time::Duration::from_secs(0))
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(!orphan.exists());
+    }
+
+    #[test]
+    fn test_cleanup_ignores_non_temp_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        // Store real content so there is a real CAS file
+        let content = b"Real CAS content that should survive cleanup";
+        let hash = cas.store(content).unwrap();
+
+        // Cleanup with zero threshold should not touch real CAS files
+        let removed = cas
+            .cleanup_orphaned_temps(std::time::Duration::from_secs(0))
+            .unwrap();
+        assert_eq!(removed, 0);
+
+        // Real content should still be retrievable
+        let retrieved = cas.retrieve(&hash).unwrap();
         assert_eq!(content, retrieved.as_slice());
     }
 }

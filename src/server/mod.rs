@@ -51,6 +51,7 @@ pub use search::SearchEngine;
 pub use security::BanList;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -164,6 +165,10 @@ pub struct ServerState {
     pub federated_config: Option<federated_index::FederatedIndexConfig>,
     /// Federated sparse index cache (TTL-based in-memory cache)
     pub federated_cache: Option<Arc<federated_index::FederatedIndexCache>>,
+    /// In-flight upstream fetches for request coalescing (thundering herd prevention).
+    /// Key is chunk hash; value is a broadcast sender that waiters subscribe to.
+    /// When the first fetch completes, all waiters are notified.
+    pub inflight_fetches: Arc<DashMap<String, tokio::sync::broadcast::Sender<()>>>,
 }
 
 impl ServerState {
@@ -232,6 +237,7 @@ impl ServerState {
             analytics: None,
             federated_config: None,
             federated_cache: None,
+            inflight_fetches: Arc::new(DashMap::new()),
         }
     }
 }

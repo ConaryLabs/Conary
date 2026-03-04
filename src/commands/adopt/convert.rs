@@ -120,7 +120,12 @@ pub fn cmd_adopt_convert(
     let bundles: Vec<AdoptedTroveBundle> = troves
         .into_iter()
         .map(|trove| {
-            let trove_id = trove.id.expect("adopted trove must have an id");
+            let trove_id = trove.id.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Adopted trove '{}' has no database id",
+                    trove.name
+                )
+            })?;
             let files = FileEntry::find_by_trove(&conn, trove_id)?;
             let deps = DependencyEntry::find_by_trove(&conn, trove_id)?;
             let provides = ProvideEntry::find_by_trove(&conn, trove_id)?;
@@ -242,7 +247,15 @@ fn convert_single_package(
     match convert_single_package_inner(bundle, output_dir, enable_chunking) {
         Ok((converted, ccs_path)) => {
             PackageConversionResult::Success(Box::new(ConversionSuccess {
-                trove_id: bundle.trove.id.expect("trove must have an id"),
+                trove_id: match bundle.trove.id {
+                    Some(id) => id,
+                    None => {
+                        return PackageConversionResult::Failed {
+                            name: bundle.trove.name.clone(),
+                            error: "Trove has no database id".to_string(),
+                        };
+                    }
+                },
                 converted,
                 ccs_path,
             }))

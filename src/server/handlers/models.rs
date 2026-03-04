@@ -37,6 +37,11 @@ pub async fn get_model(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
 ) -> Response {
+    // Validate path parameter against traversal and injection
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let state = state.read().await;
     let db_path = &state.config.db_path;
 
@@ -103,6 +108,11 @@ pub async fn get_model_signature(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
 ) -> Response {
+    // Validate path parameter against traversal and injection
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
 

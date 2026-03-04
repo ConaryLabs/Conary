@@ -106,9 +106,15 @@ pub struct TransactionConfig {
     pub hash_algorithm: HashAlgorithm,
     /// Whether to preserve old file content in CAS for long-term rollback
     pub preserve_old_content: bool,
+    /// Maximum time to wait for the transaction lock, in seconds.
+    /// Defaults to 30 seconds. Increase for systems with very long transactions.
+    pub lock_timeout_secs: u64,
 }
 
 impl TransactionConfig {
+    /// Default lock timeout in seconds (30s)
+    pub const DEFAULT_LOCK_TIMEOUT_SECS: u64 = 30;
+
     /// Create a new config with sensible defaults based on db_path
     pub fn new(root: PathBuf, db_path: PathBuf) -> Self {
         let db_dir = db_path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -119,6 +125,7 @@ impl TransactionConfig {
             journal_dir: db_dir.join("journal"),
             hash_algorithm: HashAlgorithm::Sha256,
             preserve_old_content: true,
+            lock_timeout_secs: Self::DEFAULT_LOCK_TIMEOUT_SECS,
         }
     }
 }
@@ -316,37 +323,47 @@ impl TransactionEngine {
     pub fn begin(&self, description: &str) -> Result<Transaction<'_>> {
         let tx_uuid = Uuid::new_v4().to_string();
 
-        // Acquire exclusive lock with retry logic
+        // Acquire exclusive lock with retry logic and exponential backoff
         let lock_path = self.config.txn_dir.join("conary.lock");
         let lock_file = File::create(&lock_path)?;
 
-        // Retry lock acquisition with exponential backoff
-        // Tries: 0ms, 100ms, 200ms, 400ms, 800ms (total ~1.5s wait)
-        const MAX_RETRIES: u32 = 5;
-        let mut last_error = None;
+        let timeout = std::time::Duration::from_secs(self.config.lock_timeout_secs);
+        let start = std::time::Instant::now();
+        let mut attempt = 0u32;
+        let mut lock_acquired = false;
 
-        for attempt in 0..MAX_RETRIES {
+        loop {
             match lock_file.try_lock_exclusive() {
                 Ok(()) => {
-                    last_error = None;
+                    lock_acquired = true;
                     break;
                 }
-                Err(e) => {
-                    last_error = Some(e);
-                    if attempt < MAX_RETRIES - 1 {
-                        let delay = std::time::Duration::from_millis(100 * (1 << attempt));
-                        std::thread::sleep(delay);
+                Err(_) => {
+                    let elapsed = start.elapsed();
+                    if elapsed >= timeout {
+                        break;
                     }
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, then cap at 2s
+                    let delay_ms = std::cmp::min(100u64 * (1 << attempt), 2000);
+                    let delay = std::time::Duration::from_millis(delay_ms);
+                    // Do not sleep past the timeout
+                    let remaining = timeout.saturating_sub(elapsed);
+                    std::thread::sleep(std::cmp::min(delay, remaining));
+                    attempt += 1;
                 }
             }
         }
 
-        if let Some(e) = last_error {
+        if !lock_acquired {
+            let waited = start.elapsed();
             return Err(crate::Error::IoError(format!(
-                "Failed to acquire transaction lock after {} retries. \
-                 Another transaction may be in progress or a previous transaction \
-                 crashed without releasing the lock. Error: {}",
-                MAX_RETRIES, e
+                "Failed to acquire transaction lock after {:.1}s (timeout: {}s). \
+                 Another conary transaction is likely in progress. \
+                 If you are sure no other transaction is running, remove the lock file \
+                 at {} and try again.",
+                waited.as_secs_f64(),
+                self.config.lock_timeout_secs,
+                lock_path.display(),
             )));
         }
 

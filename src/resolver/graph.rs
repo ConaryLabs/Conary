@@ -180,7 +180,10 @@ impl DependencyGraph {
 
     /// Perform topological sort using Kahn's algorithm
     ///
-    /// Returns packages in installation order (dependencies before dependents)
+    /// Returns packages in installation order (dependencies before dependents).
+    /// Only considers edges between nodes that exist in the graph. Edges pointing
+    /// to missing (phantom) nodes are ignored -- those are reported separately as
+    /// missing dependencies, not as cycles.
     pub fn topological_sort(&self) -> Result<Vec<String>> {
         let mut in_degree: HashMap<String, usize> = HashMap::new();
         let mut result = Vec::new();
@@ -191,9 +194,16 @@ impl DependencyGraph {
             in_degree.insert(name.clone(), 0);
         }
 
+        // Only count edges where the target is a known node.
+        // Edges to phantom (missing) nodes are not cycles -- they are missing
+        // dependencies and should not influence the topological sort.
         for edges in self.edges.values() {
             for edge in edges {
-                *in_degree.entry(edge.to.clone()).or_insert(0) += 1;
+                if self.nodes.contains_key(&edge.to)
+                    && let Some(degree) = in_degree.get_mut(&edge.to)
+                {
+                    *degree += 1;
+                }
             }
         }
 
@@ -208,7 +218,7 @@ impl DependencyGraph {
         while let Some(name) = queue.pop_front() {
             result.push(name.clone());
 
-            // Reduce in-degree of neighbors
+            // Reduce in-degree of neighbors (only for known nodes)
             if let Some(edges) = self.edges.get(&name) {
                 for edge in edges {
                     if let Some(degree) = in_degree.get_mut(&edge.to) {
@@ -221,11 +231,21 @@ impl DependencyGraph {
             }
         }
 
-        // If we haven't processed all nodes, there's a cycle
+        // If we haven't processed all nodes, there's a cycle.
+        // Identify the packages involved for a useful error message.
         if result.len() != self.nodes.len() {
-            return Err(Error::InitError(
-                "Circular dependency detected in package graph".to_string(),
-            ));
+            let processed: HashSet<&str> = result.iter().map(String::as_str).collect();
+            let mut cycle_members: Vec<String> = self
+                .nodes
+                .keys()
+                .filter(|n| !processed.contains(n.as_str()))
+                .cloned()
+                .collect();
+            cycle_members.sort();
+            return Err(Error::ResolutionError(format!(
+                "Circular dependency detected involving: {}",
+                cycle_members.join(", ")
+            )));
         }
 
         // Reverse to get installation order (dependencies before dependents)
@@ -385,4 +405,366 @@ pub struct GraphStats {
     pub total_dependencies: usize,
     pub max_dependencies: usize,
     pub max_dependents: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::version::{RpmVersion, VersionConstraint};
+
+    fn v(s: &str) -> RpmVersion {
+        RpmVersion::parse(s).unwrap()
+    }
+
+    fn edge(from: &str, to: &str) -> DependencyEdge {
+        DependencyEdge {
+            from: from.to_string(),
+            to: to.to_string(),
+            constraint: VersionConstraint::Any,
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        }
+    }
+
+    fn node(name: &str) -> PackageNode {
+        PackageNode::new(name.to_string(), v("1.0.0"))
+    }
+
+    // --- Empty graph ---
+
+    #[test]
+    fn test_empty_graph_topological_sort() {
+        let graph = DependencyGraph::new();
+        let sorted = graph.topological_sort().unwrap();
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn test_empty_graph_no_cycle() {
+        let graph = DependencyGraph::new();
+        assert!(graph.detect_cycle().is_none());
+    }
+
+    #[test]
+    fn test_empty_graph_stats() {
+        let graph = DependencyGraph::new();
+        let stats = graph.stats();
+        assert_eq!(stats.total_packages, 0);
+        assert_eq!(stats.total_dependencies, 0);
+    }
+
+    // --- Single node ---
+
+    #[test]
+    fn test_single_node_topological_sort() {
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("solo"));
+        let sorted = graph.topological_sort().unwrap();
+        assert_eq!(sorted, vec!["solo"]);
+    }
+
+    // --- Linear chain ---
+
+    #[test]
+    fn test_linear_chain_topological_order() {
+        // A -> B -> C -> D (A depends on B, B on C, C on D)
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C", "D"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "C"));
+        graph.add_edge(edge("C", "D"));
+
+        let sorted = graph.topological_sort().unwrap();
+        assert_eq!(sorted.len(), 4);
+
+        // Installation order: D first (no deps), then C, B, A
+        let pos = |n: &str| sorted.iter().position(|x| x == n).unwrap();
+        assert!(pos("D") < pos("C"));
+        assert!(pos("C") < pos("B"));
+        assert!(pos("B") < pos("A"));
+    }
+
+    // --- Diamond pattern ---
+
+    #[test]
+    fn test_diamond_topological_order() {
+        //     A
+        //    / \
+        //   B   C
+        //    \ /
+        //     D
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C", "D"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("A", "C"));
+        graph.add_edge(edge("B", "D"));
+        graph.add_edge(edge("C", "D"));
+
+        let sorted = graph.topological_sort().unwrap();
+        assert_eq!(sorted.len(), 4);
+
+        let pos = |n: &str| sorted.iter().position(|x| x == n).unwrap();
+        assert!(pos("D") < pos("B"));
+        assert!(pos("D") < pos("C"));
+        assert!(pos("B") < pos("A"));
+        assert!(pos("C") < pos("A"));
+    }
+
+    // --- Cycle detection ---
+
+    #[test]
+    fn test_real_cycle_topological_sort_error() {
+        // A -> B -> C -> A
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "C"));
+        graph.add_edge(edge("C", "A"));
+
+        let result = graph.topological_sort();
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Circular dependency"),
+            "Error should mention circular dependency, got: {err_msg}"
+        );
+        // The error should name the involved packages
+        assert!(err_msg.contains("A"), "Error should mention A: {err_msg}");
+        assert!(err_msg.contains("B"), "Error should mention B: {err_msg}");
+        assert!(err_msg.contains("C"), "Error should mention C: {err_msg}");
+    }
+
+    #[test]
+    fn test_real_cycle_detect_cycle() {
+        // A -> B -> A
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_node(node("B"));
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "A"));
+
+        let cycle = graph.detect_cycle();
+        assert!(cycle.is_some());
+        let cycle = cycle.unwrap();
+        assert!(cycle.contains(&"A".to_string()));
+        assert!(cycle.contains(&"B".to_string()));
+    }
+
+    #[test]
+    fn test_self_cycle() {
+        // A -> A
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_edge(edge("A", "A"));
+
+        let cycle = graph.detect_cycle();
+        assert!(cycle.is_some());
+
+        let result = graph.topological_sort();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cycle_with_non_cyclic_nodes() {
+        // D -> A -> B -> C -> A (cycle among A,B,C; D depends on A but is not in cycle)
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C", "D"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("D", "A"));
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "C"));
+        graph.add_edge(edge("C", "A"));
+
+        let result = graph.topological_sort();
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        // D should NOT be in the cycle members (it has no incoming cycle edges)
+        // A, B, C should be mentioned
+        assert!(err_msg.contains("A"), "Error should mention A: {err_msg}");
+        assert!(err_msg.contains("B"), "Error should mention B: {err_msg}");
+        assert!(err_msg.contains("C"), "Error should mention C: {err_msg}");
+    }
+
+    // --- Phantom (missing) dependency handling ---
+
+    #[test]
+    fn test_phantom_dependency_does_not_cause_false_cycle() {
+        // A depends on B, but B is not a node in the graph (missing package).
+        // This should NOT be reported as a cycle.
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_edge(edge("A", "phantom-lib"));
+
+        let result = graph.topological_sort();
+        assert!(
+            result.is_ok(),
+            "Phantom dependency should not cause cycle error, got: {:?}",
+            result.unwrap_err()
+        );
+        let sorted = result.unwrap();
+        assert_eq!(sorted, vec!["A"]);
+    }
+
+    #[test]
+    fn test_multiple_phantom_dependencies_no_false_cycle() {
+        // A -> phantom1, A -> phantom2, A -> B (B exists)
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("A"));
+        graph.add_node(node("B"));
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("A", "phantom1"));
+        graph.add_edge(edge("A", "phantom2"));
+
+        let result = graph.topological_sort();
+        assert!(
+            result.is_ok(),
+            "Multiple phantom deps should not cause false cycle: {:?}",
+            result.unwrap_err()
+        );
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 2);
+        let pos = |n: &str| sorted.iter().position(|x| x == n).unwrap();
+        assert!(pos("B") < pos("A"));
+    }
+
+    #[test]
+    fn test_chain_with_phantom_leaf_no_false_cycle() {
+        // A -> B -> C -> phantom-lib
+        // All of A, B, C exist but C depends on a missing package.
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "C"));
+        graph.add_edge(edge("C", "phantom-lib"));
+
+        let result = graph.topological_sort();
+        assert!(
+            result.is_ok(),
+            "Phantom leaf dep should not cause false cycle: {:?}",
+            result.unwrap_err()
+        );
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 3);
+        let pos = |n: &str| sorted.iter().position(|x| x == n).unwrap();
+        assert!(pos("C") < pos("B"));
+        assert!(pos("B") < pos("A"));
+    }
+
+    // --- detect_cycle_involving ---
+
+    #[test]
+    fn test_detect_cycle_involving_target_package() {
+        // A -> B -> A (cycle), C -> D (no cycle)
+        let mut graph = DependencyGraph::new();
+        for name in &["A", "B", "C", "D"] {
+            graph.add_node(node(name));
+        }
+        graph.add_edge(edge("A", "B"));
+        graph.add_edge(edge("B", "A"));
+        graph.add_edge(edge("C", "D"));
+
+        // Detecting for A should find the cycle
+        assert!(graph.detect_cycle_involving("A").is_some());
+        // Detecting for C should find no cycle
+        assert!(graph.detect_cycle_involving("C").is_none());
+    }
+
+    // --- Graph construction ---
+
+    #[test]
+    fn test_add_node_and_retrieve() {
+        let mut graph = DependencyGraph::new();
+        let n = PackageNode::new("pkg".to_string(), v("2.5.1"));
+        graph.add_node(n.clone());
+
+        assert_eq!(graph.get_node("pkg"), Some(&n));
+        assert_eq!(graph.get_node("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_add_edge_forward_and_reverse() {
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("app"));
+        graph.add_node(node("lib"));
+        graph.add_edge(edge("app", "lib"));
+
+        let deps = graph.get_dependencies("app");
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].to, "lib");
+
+        let dependents = graph.get_dependents("lib");
+        assert_eq!(dependents, vec!["app"]);
+    }
+
+    #[test]
+    fn test_node_with_trove_id() {
+        let n = PackageNode::new("pkg".to_string(), v("1.0.0")).with_trove_id(42);
+        assert_eq!(n.trove_id, Some(42));
+    }
+
+    // --- Version constraint checking ---
+
+    #[test]
+    fn test_check_constraints_with_multiple_dependents() {
+        let mut graph = DependencyGraph::new();
+        graph.add_node(node("lib"));
+        graph.add_node(node("app1"));
+        graph.add_node(node("app2"));
+
+        graph.add_edge(DependencyEdge {
+            from: "app1".to_string(),
+            to: "lib".to_string(),
+            constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        });
+        graph.add_edge(DependencyEdge {
+            from: "app2".to_string(),
+            to: "lib".to_string(),
+            constraint: VersionConstraint::parse(">= 0.5.0").unwrap(),
+            dep_type: "runtime".to_string(),
+            kind: "package".to_string(),
+        });
+
+        // lib is 1.0.0, both constraints satisfied
+        assert!(graph.check_constraints("lib", &v("1.0.0")).is_ok());
+        // lib is 0.3.0, both constraints violated
+        assert!(graph.check_constraints("lib", &v("0.3.0")).is_err());
+    }
+
+    // --- Typed edges ---
+
+    #[test]
+    fn test_typed_edge_constructor() {
+        let e = DependencyEdge::typed(
+            "app".to_string(),
+            "libfoo.so.1".to_string(),
+            VersionConstraint::Any,
+            "runtime".to_string(),
+            "soname".to_string(),
+        );
+        assert_eq!(e.kind, "soname");
+        assert_eq!(e.from, "app");
+        assert_eq!(e.to, "libfoo.so.1");
+    }
+
+    // --- Default trait ---
+
+    #[test]
+    fn test_default_graph() {
+        let graph = DependencyGraph::default();
+        assert_eq!(graph.nodes.len(), 0);
+        assert_eq!(graph.edges.len(), 0);
+    }
 }

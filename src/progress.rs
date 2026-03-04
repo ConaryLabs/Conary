@@ -395,13 +395,19 @@ impl MultiProgress {
 
     /// Add a tracked child operation
     pub fn add_child(&self, child: Arc<dyn ProgressTracker>) {
-        self.children.write().unwrap().push(child);
+        self.children
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(child);
     }
 }
 
 impl ProgressTracker for MultiProgress {
     fn set_message(&self, message: &str) {
-        *self.current_message.write().unwrap() = message.to_string();
+        *self
+            .current_message
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = message.to_string();
     }
 
     fn increment(&self, amount: u64) {
@@ -426,12 +432,18 @@ impl ProgressTracker for MultiProgress {
 
     fn finish_with_message(&self, message: &str) {
         self.finished.store(true, Ordering::Relaxed);
-        *self.current_message.write().unwrap() = message.to_string();
+        *self
+            .current_message
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = message.to_string();
     }
 
     fn finish_with_error(&self, message: &str) {
         self.finished.store(true, Ordering::Relaxed);
-        *self.current_message.write().unwrap() = format!("ERROR: {}", message);
+        *self
+            .current_message
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = format!("ERROR: {}", message);
     }
 
     fn is_finished(&self) -> bool {

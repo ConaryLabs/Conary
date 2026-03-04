@@ -644,9 +644,17 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
     Ok(OciCatalog { repositories })
 }
 
-/// Strip the "sha256:" prefix from an OCI digest, returning the bare hex hash
+/// Strip the "sha256:" prefix from an OCI digest, returning the bare hex hash.
+///
+/// Validates that the remaining string is exactly 64 lowercase hex characters
+/// to prevent path traversal via crafted digest strings.
 fn strip_digest_prefix(digest: &str) -> Option<&str> {
-    digest.strip_prefix("sha256:")
+    let hash = digest.strip_prefix("sha256:")?;
+    if super::chunks::is_valid_hash(hash) {
+        Some(hash)
+    } else {
+        None
+    }
 }
 
 use rusqlite::OptionalExtension;
@@ -737,9 +745,37 @@ mod tests {
 
     #[test]
     fn test_strip_digest_prefix() {
-        assert_eq!(strip_digest_prefix("sha256:abc123"), Some("abc123"));
-        assert_eq!(strip_digest_prefix("abc123"), None);
+        // Valid: sha256 prefix with exactly 64 hex chars
+        let valid_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        assert_eq!(
+            strip_digest_prefix(&format!("sha256:{}", valid_hash)),
+            Some(valid_hash)
+        );
+
+        // Missing sha256: prefix
+        assert_eq!(strip_digest_prefix(valid_hash), None);
+
+        // Wrong algorithm prefix
         assert_eq!(strip_digest_prefix("sha512:abc"), None);
+
+        // sha256: prefix but invalid hex (too short)
+        assert_eq!(strip_digest_prefix("sha256:abc123"), None);
+
+        // sha256: prefix but contains path traversal characters
+        assert_eq!(strip_digest_prefix("sha256:../../etc/passwd/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), None);
+
+        // sha256: prefix but contains non-hex chars (64 chars total)
+        assert_eq!(
+            strip_digest_prefix("sha256:zzzzzz1234567890abcdef1234567890abcdef1234567890abcdef12345678"),
+            None
+        );
+
+        // sha256: prefix with uppercase (is_valid_hash accepts ascii hex which includes A-F)
+        let upper_hash = "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
+        assert_eq!(
+            strip_digest_prefix(&format!("sha256:{}", upper_hash)),
+            Some(upper_hash)
+        );
     }
 
     #[test]

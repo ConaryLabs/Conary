@@ -1457,4 +1457,997 @@ mod tests {
         assert!(require_auth(&creds, Action::Install).is_err());
         assert!(require_auth(&creds, Action::Remove).is_err());
     }
+
+    // =========================================================================
+    // Handler endpoint tests
+    //
+    // These use tower::ServiceExt::oneshot to send HTTP requests through the
+    // full Axum router, testing actual handler logic against a temporary
+    // database.
+    // =========================================================================
+
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Create a DaemonState backed by a temporary database for testing.
+    ///
+    /// Returns the shared state and the temp directory (must be held alive
+    /// for the duration of the test to prevent cleanup).
+    fn create_test_state() -> (SharedState, tempfile::TempDir) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let lock_path = temp_dir.path().join("daemon.lock");
+
+        // Initialize the database with the full schema
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+        drop(conn);
+
+        let config = crate::daemon::DaemonConfig {
+            db_path,
+            lock_path: lock_path.clone(),
+            ..Default::default()
+        };
+
+        let system_lock = crate::daemon::SystemLock::try_acquire(&lock_path)
+            .unwrap()
+            .expect("Failed to acquire test lock");
+
+        let state = Arc::new(crate::daemon::DaemonState::new(config, system_lock));
+        (state, temp_dir)
+    }
+
+    /// Build a test router with peer credentials injected as a layer.
+    ///
+    /// The daemon normally injects credentials per-connection in run_daemon.
+    /// For tests we add them as a global layer so all requests have them.
+    fn test_router(state: SharedState, creds: Option<PeerCredentials>) -> Router {
+        build_router(state).layer(axum::Extension(creds))
+    }
+
+    /// Extract the response body as bytes.
+    async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec()
+    }
+
+    /// Extract the response body as a JSON value.
+    async fn body_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = body_bytes(response).await;
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // -- GET /health ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_health_returns_200() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], "healthy");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert!(json["pid"].is_number());
+        assert!(json["uptime_secs"].is_number());
+    }
+
+    // -- GET /v1/version ------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_version_returns_info() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/version")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["api_version"], "1.0");
+        assert!(json["schema_version"].is_number());
+    }
+
+    // -- GET /v1/metrics ------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_metrics_returns_prometheus_format() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/metrics")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let text = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(text.contains("conary_jobs_total"));
+        assert!(text.contains("conary_jobs_running"));
+        assert!(text.contains("conary_sse_connections"));
+    }
+
+    // -- GET /v1/packages (empty) ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_list_packages_empty_db() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    // -- GET /v1/packages/:name (404) -----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_get_package_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/packages/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 404);
+        assert!(json["detail"].as_str().unwrap().contains("nonexistent-pkg"));
+    }
+
+    // -- GET /v1/packages/:name/files (404) -----------------------------------
+
+    #[tokio::test]
+    async fn test_handler_get_package_files_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/packages/nonexistent-pkg/files")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -- GET /v1/search?q=pattern (empty results) -----------------------------
+
+    #[tokio::test]
+    async fn test_handler_search_empty_results() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/search?q=nonexistent")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    // -- GET /v1/search (no query param) --------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_search_no_query_param() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/search")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // Should succeed with empty results (matches all with wildcard)
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+    }
+
+    // -- GET /v1/transactions (empty) -----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_list_transactions_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/transactions")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    // -- GET /v1/transactions/:id (404) ---------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_get_transaction_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/transactions/nonexistent-job-id")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 404);
+        assert!(json["detail"]
+            .as_str()
+            .unwrap()
+            .contains("nonexistent-job-id"));
+    }
+
+    // -- POST /v1/transactions (valid) ----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_valid() {
+        let (state, _dir) = create_test_state();
+        // Root credentials required for mutating operations
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "install",
+                    "packages": ["nginx"]
+                }
+            ]
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        // Should have a Location header
+        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        assert!(location.starts_with("/v1/transactions/"));
+
+        let json = body_json(response).await;
+        assert!(!json["job_id"].as_str().unwrap().is_empty());
+        assert_eq!(json["status"], "queued");
+        assert!(json["location"].as_str().unwrap().starts_with("/v1/transactions/"));
+    }
+
+    // -- POST /v1/transactions (empty operations = 400) -----------------------
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_empty_operations() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "operations": []
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 400);
+        assert!(json["detail"]
+            .as_str()
+            .unwrap()
+            .contains("operation"));
+    }
+
+    // -- POST /v1/transactions (invalid JSON = 400) ---------------------------
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_invalid_json() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from("not valid json"))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // Axum returns 400 Bad Request for JSON deserialization failures
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // -- POST /v1/transactions (no auth = 403) --------------------------------
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_forbidden() {
+        let (state, _dir) = create_test_state();
+        // No credentials (simulates TCP connection)
+        let app = test_router(state, None);
+
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "install",
+                    "packages": ["nginx"]
+                }
+            ]
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 403);
+    }
+
+    // -- POST /v1/transactions with idempotency key ---------------------------
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_idempotency() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "install",
+                    "packages": ["curl"]
+                }
+            ]
+        });
+        let body_str = serde_json::to_string(&body).unwrap();
+
+        // First request creates the job
+        let app1 = test_router(state.clone(), root_creds.clone());
+        let request1 = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-idempotency-key", "idem-key-42")
+            .body(Body::from(body_str.clone()))
+            .unwrap();
+
+        let response1 = app1.oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+        let json1 = body_json(response1).await;
+        let first_job_id = json1["job_id"].as_str().unwrap().to_string();
+
+        // Second request with same key returns existing job (200 OK, not 202)
+        let app2 = test_router(state, root_creds);
+        let request2 = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-idempotency-key", "idem-key-42")
+            .body(Body::from(body_str))
+            .unwrap();
+
+        let response2 = app2.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::OK);
+        let json2 = body_json(response2).await;
+        assert_eq!(json2["job_id"].as_str().unwrap(), first_job_id);
+    }
+
+    // -- GET /v1/transactions/:id (after creation) ----------------------------
+
+    #[tokio::test]
+    async fn test_handler_get_transaction_after_creation() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+
+        // Create a transaction first
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "remove",
+                    "packages": ["vim"]
+                }
+            ]
+        });
+
+        let app1 = test_router(state.clone(), root_creds.clone());
+        let create_req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let create_resp = app1.oneshot(create_req).await.unwrap();
+        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
+        let create_json = body_json(create_resp).await;
+        let job_id = create_json["job_id"].as_str().unwrap().to_string();
+
+        // Now fetch the transaction details
+        let app2 = test_router(state, root_creds);
+        let get_req = axum::http::Request::builder()
+            .uri(format!("/v1/transactions/{}", job_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let get_resp = app2.oneshot(get_req).await.unwrap();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+
+        let details = body_json(get_resp).await;
+        assert_eq!(details["id"].as_str().unwrap(), job_id);
+        assert_eq!(details["kind"], "remove");
+        assert_eq!(details["status"], "queued");
+    }
+
+    // -- GET /v1/transactions?status=queued -----------------------------------
+
+    #[tokio::test]
+    async fn test_handler_list_transactions_with_status_filter() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+
+        // Create a transaction so there's something to list
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "update",
+                    "packages": ["bash"]
+                }
+            ]
+        });
+
+        let app1 = test_router(state.clone(), root_creds.clone());
+        let create_req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let create_resp = app1.oneshot(create_req).await.unwrap();
+        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
+
+        // List queued transactions
+        let app2 = test_router(state.clone(), root_creds.clone());
+        let list_req = axum::http::Request::builder()
+            .uri("/v1/transactions?status=queued")
+            .body(Body::empty())
+            .unwrap();
+
+        let list_resp = app2.oneshot(list_req).await.unwrap();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+
+        let json = body_json(list_resp).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["status"], "queued");
+
+        // List completed (should be empty)
+        let app3 = test_router(state, root_creds);
+        let list_req2 = axum::http::Request::builder()
+            .uri("/v1/transactions?status=completed")
+            .body(Body::empty())
+            .unwrap();
+
+        let list_resp2 = app3.oneshot(list_req2).await.unwrap();
+        assert_eq!(list_resp2.status(), StatusCode::OK);
+
+        let json2 = body_json(list_resp2).await;
+        assert!(json2.is_array());
+        assert_eq!(json2.as_array().unwrap().len(), 0);
+    }
+
+    // -- DELETE /v1/transactions/:id (404) ------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_cancel_transaction_not_found() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let request = axum::http::Request::builder()
+            .method("DELETE")
+            .uri("/v1/transactions/nonexistent-id")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -- POST /v1/packages/install (valid) ------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_install_packages_creates_transaction() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "packages": ["nginx", "curl"]
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/packages/install")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let json = body_json(response).await;
+        assert!(!json["job_id"].as_str().unwrap().is_empty());
+        assert_eq!(json["status"], "queued");
+    }
+
+    // -- POST /v1/packages/install (empty packages = 400) ---------------------
+
+    #[tokio::test]
+    async fn test_handler_install_packages_empty_list() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "packages": []
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/packages/install")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 400);
+        assert!(json["detail"].as_str().unwrap().contains("package"));
+    }
+
+    // -- POST /v1/packages/remove (empty packages = 400) ----------------------
+
+    #[tokio::test]
+    async fn test_handler_remove_packages_empty_list() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "packages": []
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/packages/remove")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // -- POST /v1/packages/update (empty packages = allowed) ------------------
+
+    #[tokio::test]
+    async fn test_handler_update_packages_empty_list_allowed() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        // Update with empty packages means "update all" -- should be accepted
+        let body = serde_json::json!({
+            "packages": []
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/packages/update")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    // -- GET /v1/depends/:name (404) ------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_depends_not_found() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/depends/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -- GET /v1/rdepends/:name (empty) ---------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_rdepends_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/rdepends/nonexistent-pkg")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // rdepends returns empty array (not 404) when no dependents exist
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    // -- GET /v1/history (empty) ----------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_history_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/history")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    // -- GET /v1/system/states (empty stub) -----------------------------------
+
+    #[tokio::test]
+    async fn test_handler_list_states_empty() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/system/states")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+    }
+
+    // -- POST /v1/system/rollback (501) ---------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_rollback_not_implemented() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/system/rollback")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 501);
+    }
+
+    // -- POST /v1/system/verify (501) -----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_verify_not_implemented() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/system/verify")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 501);
+    }
+
+    // -- POST /v1/system/gc (501) ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_gc_not_implemented() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/system/gc")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 501);
+    }
+
+    // -- POST /v1/system/* without auth (403) ---------------------------------
+
+    #[tokio::test]
+    async fn test_handler_system_endpoints_require_auth() {
+        let (state, _dir) = create_test_state();
+        // No credentials
+        let app = test_router(state, None);
+
+        for endpoint in &["/v1/system/rollback", "/v1/system/verify", "/v1/system/gc"] {
+            let app_clone = app.clone();
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri(*endpoint)
+                .body(Body::empty())
+                .unwrap();
+
+            let response = app_clone.oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "Expected 403 for {}",
+                endpoint
+            );
+        }
+    }
+
+    // -- POST /v1/transactions/dry-run ----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_dry_run_valid() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "install",
+                    "packages": ["nginx", "curl"]
+                },
+                {
+                    "type": "remove",
+                    "packages": ["vim"]
+                }
+            ]
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions/dry-run")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert_eq!(json["summary"]["install"].as_array().unwrap().len(), 2);
+        assert_eq!(json["summary"]["remove"].as_array().unwrap().len(), 1);
+        assert_eq!(json["summary"]["total_affected"], 3);
+    }
+
+    // -- POST /v1/transactions/dry-run (empty operations = 400) ---------------
+
+    #[tokio::test]
+    async fn test_handler_dry_run_empty_operations() {
+        let (state, _dir) = create_test_state();
+        let root_creds = Some(PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        });
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "operations": []
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions/dry-run")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // -- Nonexistent route returns 404 ----------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_nonexistent_route() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/does-not-exist")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

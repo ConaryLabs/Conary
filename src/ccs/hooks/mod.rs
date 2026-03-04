@@ -274,7 +274,17 @@ impl HookExecutor {
     ///
     /// Failures are logged as warnings but don't fail installation.
     pub fn execute_post_hooks(&self, hooks: &Hooks) -> Result<()> {
-        let _ = self.execute_post_hooks_with_results(hooks);
+        let results = self.execute_post_hooks_with_results(hooks);
+
+        for failure in results.failures() {
+            warn!(
+                "Post-hook {} '{}' failed: {}",
+                failure.hook_type,
+                failure.name,
+                failure.error.as_deref().unwrap_or("unknown error")
+            );
+        }
+
         Ok(())
     }
 

@@ -198,7 +198,9 @@ pub fn cmd_derive_patch(
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
 
-    let derived_id = derived.id.unwrap();
+    let derived_id = derived
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Derived package '{}' has no database id", name))?;
 
     // Read patch content
     let patch_content = std::fs::read(patch_file)?;
@@ -245,7 +247,9 @@ pub fn cmd_derive_override(
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
 
-    let derived_id = derived.id.unwrap();
+    let derived_id = derived
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Derived package '{}' has no database id", name))?;
 
     // Check if override already exists
     if DerivedOverride::find_by_path(&conn, derived_id, target_path)?.is_some() {
@@ -347,7 +351,9 @@ pub fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
 
-    let derived_id = derived.id.unwrap();
+    let derived_id = derived
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Derived package '{}' has no database id", name))?;
     DerivedPackage::delete(&conn, derived_id)?;
 
     println!("Deleted derived package: {}", name);

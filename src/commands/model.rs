@@ -119,7 +119,9 @@ fn create_derived_from_model(
             model_derived.name
         );
         // Return existing ID, patches/overrides will be checked separately
-        return Ok(existing.id.unwrap());
+        return existing
+            .id
+            .ok_or_else(|| anyhow!("Derived package '{}' exists but has no database id", model_derived.name));
     }
 
     // Parse version policy

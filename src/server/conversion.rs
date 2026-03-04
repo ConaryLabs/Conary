@@ -741,3 +741,699 @@ impl ConversionService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::{ConvertedPackage, Repository, RepositoryPackage};
+    use crate::db::schema;
+    use tempfile::NamedTempFile;
+
+    fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+
+    fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
+        let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some(distro.to_string());
+        repo.insert(conn).unwrap()
+    }
+
+    fn insert_package(
+        conn: &rusqlite::Connection,
+        repo_id: i64,
+        name: &str,
+        version: &str,
+        size: i64,
+    ) {
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            version.to_string(),
+            format!("sha256:{name}-{version}"),
+            size,
+            format!("https://example.com/{name}-{version}.rpm"),
+        );
+        pkg.architecture = Some("x86_64".to_string());
+        pkg.dependencies = Some(r#"["glibc","openssl"]"#.to_string());
+        pkg.insert(conn).unwrap();
+    }
+
+    // --- safe_ccs_filename tests ---
+
+    #[test]
+    fn test_safe_ccs_filename_normal() {
+        let result = ConversionService::safe_ccs_filename("nginx", "1.24.0-1.fc43").unwrap();
+        assert_eq!(result, "nginx-1.24.0-1.fc43.ccs");
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_complex_name() {
+        let result =
+            ConversionService::safe_ccs_filename("lib32-glibc-devel", "2.38-1").unwrap();
+        assert_eq!(result, "lib32-glibc-devel-2.38-1.ccs");
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_rejects_path_traversal_in_name() {
+        let result = ConversionService::safe_ccs_filename("../../../etc/passwd", "1.0");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid package name"));
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_rejects_path_traversal_in_version() {
+        let result = ConversionService::safe_ccs_filename("nginx", "../../evil");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid package version"));
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_rejects_slash_in_name() {
+        let result = ConversionService::safe_ccs_filename("foo/bar", "1.0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_rejects_empty_name() {
+        let result = ConversionService::safe_ccs_filename("", "1.0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_rejects_empty_version() {
+        let result = ConversionService::safe_ccs_filename("nginx", "");
+        assert!(result.is_err());
+    }
+
+    // --- calculate_checksum tests ---
+
+    #[test]
+    fn test_calculate_checksum_valid_file() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.pkg");
+        std::fs::write(&file_path, b"hello world").unwrap();
+
+        let checksum = ConversionService::calculate_checksum(&file_path).unwrap();
+        // SHA-256 of "hello world"
+        assert_eq!(
+            checksum,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    #[test]
+    fn test_calculate_checksum_empty_file() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("empty.pkg");
+        std::fs::write(&file_path, b"").unwrap();
+
+        let checksum = ConversionService::calculate_checksum(&file_path).unwrap();
+        // SHA-256 of empty string
+        assert_eq!(
+            checksum,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_calculate_checksum_missing_file() {
+        let result = ConversionService::calculate_checksum(Path::new("/nonexistent/file.pkg"));
+        assert!(result.is_err());
+    }
+
+    // --- find_package tests ---
+
+    #[test]
+    fn test_find_package_found() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let pkg = service.find_package(&conn, "fedora", "nginx", None).unwrap();
+        assert_eq!(pkg.name, "nginx");
+        assert_eq!(pkg.version, "1.24.0");
+    }
+
+    #[test]
+    fn test_find_package_with_specific_version() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
+        insert_package(&conn, repo_id, "nginx", "1.25.0", 1100);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let pkg = service
+            .find_package(&conn, "fedora", "nginx", Some("1.24.0"))
+            .unwrap();
+        assert_eq!(pkg.version, "1.24.0");
+    }
+
+    #[test]
+    fn test_find_package_not_found() {
+        let (temp_file, conn) = create_test_db();
+        insert_repo(&conn, "fedora-base", "fedora");
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let result = service.find_package(&conn, "fedora", "nonexistent", None);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("not found"));
+        assert!(err_msg.contains("repo-sync"));
+    }
+
+    #[test]
+    fn test_find_package_unknown_distro() {
+        let (temp_file, conn) = create_test_db();
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let result = service.find_package(&conn, "gentoo", "nginx", None);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unknown distribution"));
+    }
+
+    #[test]
+    fn test_find_package_arch_distro() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "arch-core", "arch");
+        insert_package(&conn, repo_id, "pacman", "6.0.0", 800);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let pkg = service.find_package(&conn, "arch", "pacman", None).unwrap();
+        assert_eq!(pkg.name, "pacman");
+    }
+
+    #[test]
+    fn test_find_package_ubuntu_distro() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "ubuntu-main", "ubuntu");
+        insert_package(&conn, repo_id, "libc6", "2.38-1", 2048);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let pkg = service.find_package(&conn, "ubuntu", "libc6", None).unwrap();
+        assert_eq!(pkg.name, "libc6");
+    }
+
+    #[test]
+    fn test_find_package_debian_uses_ubuntu_repos() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "ubuntu-main", "debian");
+        insert_package(&conn, repo_id, "apt", "2.7.0", 512);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        // debian maps to "ubuntu-%" repo pattern
+        let pkg = service.find_package(&conn, "debian", "apt", None).unwrap();
+        assert_eq!(pkg.name, "apt");
+    }
+
+    // --- build_result_from_existing tests ---
+
+    #[test]
+    fn test_build_result_from_existing_with_server_fields() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "nginx".to_string(),
+            "1.24.0".to_string(),
+            "rpm".to_string(),
+            "sha256:orig".to_string(),
+            "high".to_string(),
+            &["chunk1".to_string(), "chunk2".to_string()],
+            2048,
+            "sha256:content_abc".to_string(),
+            "/data/nginx.ccs".to_string(),
+        );
+        converted.insert(&conn).unwrap();
+
+        let existing = ConvertedPackage::find_by_checksum(&conn, "sha256:orig")
+            .unwrap()
+            .unwrap();
+
+        let repo_pkg = service
+            .find_package(&conn, "fedora", "nginx", None)
+            .unwrap();
+
+        let result = service
+            .build_result_from_existing(&existing, "fedora", &repo_pkg)
+            .unwrap();
+
+        assert_eq!(result.name, "nginx");
+        assert_eq!(result.version, "1.24.0");
+        assert_eq!(result.distro, "fedora");
+        assert_eq!(result.chunk_hashes, vec!["chunk1", "chunk2"]);
+        assert_eq!(result.total_size, 2048);
+        assert_eq!(result.content_hash, "sha256:content_abc");
+        assert_eq!(result.ccs_path, PathBuf::from("/data/nginx.ccs"));
+    }
+
+    #[test]
+    fn test_build_result_from_existing_without_chunk_hashes() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "curl", "8.5.0", 512);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        // Create a converted package with no chunk_hashes_json
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "curl".to_string(),
+            "8.5.0".to_string(),
+            "rpm".to_string(),
+            "sha256:curl-orig".to_string(),
+            "high".to_string(),
+            &[],
+            512,
+            "sha256:curl-content".to_string(),
+            "/data/curl.ccs".to_string(),
+        );
+        converted.insert(&conn).unwrap();
+
+        let existing = ConvertedPackage::find_by_checksum(&conn, "sha256:curl-orig")
+            .unwrap()
+            .unwrap();
+
+        let repo_pkg = service
+            .find_package(&conn, "fedora", "curl", None)
+            .unwrap();
+
+        let result = service
+            .build_result_from_existing(&existing, "fedora", &repo_pkg)
+            .unwrap();
+
+        // Should return empty chunk list, not panic
+        assert!(result.chunk_hashes.is_empty());
+    }
+
+    // --- store_chunks tests ---
+
+    /// Helper to create a minimal ConversionResult with the given blobs
+    fn make_conversion_result(
+        blobs: std::collections::HashMap<String, Vec<u8>>,
+    ) -> crate::ccs::convert::ConversionResult {
+        use crate::ccs::builder::{BuildResult, FileEntry};
+        use crate::ccs::convert::FidelityReport;
+        use crate::ccs::manifest::{CcsManifest, Hooks, Package};
+
+        let manifest = CcsManifest {
+            package: Package {
+                name: "test".to_string(),
+                version: "1.0".to_string(),
+                description: "test package".to_string(),
+                license: None,
+                homepage: None,
+                repository: None,
+                platform: None,
+                authors: None,
+            },
+            provides: Default::default(),
+            requires: Default::default(),
+            suggests: Default::default(),
+            components: Default::default(),
+            hooks: Hooks::default(),
+            config: Default::default(),
+            build: None,
+            legacy: None,
+            policy: Default::default(),
+            provenance: None,
+            capabilities: None,
+            redirects: Default::default(),
+        };
+
+        let build_result = BuildResult {
+            manifest,
+            components: std::collections::HashMap::new(),
+            files: Vec::<FileEntry>::new(),
+            blobs,
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+
+        crate::ccs::convert::ConversionResult {
+            build_result,
+            package_path: None,
+            fidelity: FidelityReport::default(),
+            original_format: "rpm".to_string(),
+            original_checksum: "sha256:test".to_string(),
+            detected_hooks: Hooks::default(),
+            inferred_capabilities: None,
+            legacy_provenance: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_store_chunks_writes_files() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let chunk_dir = temp_dir.path().join("chunks");
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+
+        let service = ConversionService::new(
+            chunk_dir.clone(),
+            temp_dir.path().to_path_buf(),
+            PathBuf::from("/tmp/nonexistent.db"),
+            None,
+        );
+
+        let mut blobs = std::collections::HashMap::new();
+        blobs.insert(
+            "abcdef1234567890".to_string(),
+            b"chunk data one".to_vec(),
+        );
+        blobs.insert(
+            "1234567890abcdef".to_string(),
+            b"chunk data two".to_vec(),
+        );
+
+        let result = make_conversion_result(blobs);
+        let hashes = service.store_chunks(&result).await.unwrap();
+        assert_eq!(hashes.len(), 2);
+
+        // Verify files were written to correct paths
+        for hash in &hashes {
+            let (prefix, rest) = hash.split_at(2);
+            let chunk_path = chunk_dir.join("objects").join(prefix).join(rest);
+            assert!(chunk_path.exists(), "Chunk file should exist at {:?}", chunk_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_store_chunks_idempotent() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let chunk_dir = temp_dir.path().join("chunks");
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+
+        let service = ConversionService::new(
+            chunk_dir.clone(),
+            temp_dir.path().to_path_buf(),
+            PathBuf::from("/tmp/nonexistent.db"),
+            None,
+        );
+
+        let mut blobs = std::collections::HashMap::new();
+        blobs.insert("aabbccdd11223344".to_string(), b"some data".to_vec());
+
+        let result = make_conversion_result(blobs.clone());
+
+        // Store twice - should not error
+        let hashes1 = service.store_chunks(&result).await.unwrap();
+
+        let result2 = make_conversion_result(blobs);
+        let hashes2 = service.store_chunks(&result2).await.unwrap();
+        assert_eq!(hashes1, hashes2);
+    }
+
+    #[tokio::test]
+    async fn test_store_chunks_empty() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let chunk_dir = temp_dir.path().join("chunks");
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+
+        let service = ConversionService::new(
+            chunk_dir,
+            temp_dir.path().to_path_buf(),
+            PathBuf::from("/tmp/nonexistent.db"),
+            None,
+        );
+
+        let result = make_conversion_result(std::collections::HashMap::new());
+        let hashes = service.store_chunks(&result).await.unwrap();
+        assert!(hashes.is_empty());
+    }
+
+    // --- validate_host tests ---
+
+    #[test]
+    fn test_validate_host_allows_public() {
+        assert!(ConversionService::validate_host("packages.conary.io").is_ok());
+        assert!(ConversionService::validate_host("github.com").is_ok());
+        assert!(ConversionService::validate_host("example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_host_blocks_localhost() {
+        assert!(ConversionService::validate_host("localhost").is_err());
+        assert!(ConversionService::validate_host("LOCALHOST").is_err());
+        assert!(ConversionService::validate_host("sub.localhost").is_err());
+        assert!(ConversionService::validate_host("127.0.0.1").is_err());
+        assert!(ConversionService::validate_host("::1").is_err());
+        assert!(ConversionService::validate_host("0.0.0.0").is_err());
+    }
+
+    #[test]
+    fn test_validate_host_blocks_cloud_metadata() {
+        assert!(ConversionService::validate_host("169.254.169.254").is_err());
+        assert!(ConversionService::validate_host("metadata.google.internal").is_err());
+    }
+
+    #[test]
+    fn test_validate_host_blocks_internal_domains() {
+        assert!(ConversionService::validate_host("server.internal").is_err());
+        assert!(ConversionService::validate_host("mybox.local").is_err());
+        assert!(ConversionService::validate_host("router.lan").is_err());
+        assert!(ConversionService::validate_host("nas.home").is_err());
+        assert!(ConversionService::validate_host("ldap.corp").is_err());
+    }
+
+    // --- validate_ip tests ---
+
+    #[test]
+    fn test_validate_ip_allows_public_ipv4() {
+        let ip: std::net::IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+
+        let ip: std::net::IpAddr = "46.4.33.93".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_loopback() {
+        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_private_10() {
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "10.255.255.255".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_private_172() {
+        let ip: std::net::IpAddr = "172.16.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "172.31.255.255".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        // 172.15.x.x is NOT private
+        let ip: std::net::IpAddr = "172.15.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+
+        // 172.32.x.x is NOT private
+        let ip: std::net::IpAddr = "172.32.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_private_192_168() {
+        let ip: std::net::IpAddr = "192.168.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "192.168.255.255".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_link_local() {
+        let ip: std::net::IpAddr = "169.254.169.254".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "169.254.0.1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_broadcast() {
+        let ip: std::net::IpAddr = "255.255.255.255".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_unspecified() {
+        let ip: std::net::IpAddr = "0.0.0.0".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_allows_public_ipv6() {
+        let ip: std::net::IpAddr = "2a01:4f8:221:350b::2".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+
+        let ip: std::net::IpAddr = "2001:4860:4860::8888".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_ipv6_loopback() {
+        let ip: std::net::IpAddr = "::1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_ipv6_unspecified() {
+        let ip: std::net::IpAddr = "::".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_ipv6_ula() {
+        let ip: std::net::IpAddr = "fc00::1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+
+        let ip: std::net::IpAddr = "fd12:3456:789a::1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_blocks_ipv6_link_local() {
+        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        assert!(ConversionService::validate_ip(&ip).is_err());
+    }
+
+    // --- ConversionService::new tests ---
+
+    #[test]
+    fn test_conversion_service_new() {
+        let service = ConversionService::new(
+            PathBuf::from("/chunks"),
+            PathBuf::from("/cache"),
+            PathBuf::from("/db.sqlite"),
+            None,
+        );
+        assert_eq!(service.chunk_dir, PathBuf::from("/chunks"));
+        assert_eq!(service.cache_dir, PathBuf::from("/cache"));
+        assert_eq!(service.db_path, PathBuf::from("/db.sqlite"));
+        assert!(service.r2_store.is_none());
+    }
+
+    // --- ServerConversionResult tests ---
+
+    #[test]
+    fn test_server_conversion_result_debug() {
+        let result = ServerConversionResult {
+            name: "nginx".to_string(),
+            version: "1.24.0".to_string(),
+            distro: "fedora".to_string(),
+            chunk_hashes: vec!["abc123".to_string()],
+            total_size: 1024,
+            content_hash: "sha256:deadbeef".to_string(),
+            ccs_path: PathBuf::from("/data/nginx.ccs"),
+        };
+        // Verify Debug is implemented (would fail to compile otherwise)
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("nginx"));
+    }
+
+    // --- distro mapping tests ---
+
+    #[test]
+    fn test_find_package_maps_distro_to_repo_pattern() {
+        // Verify all supported distros can resolve to their repo patterns.
+        // We insert repos with the expected naming pattern and ensure find_package
+        // correctly maps distro name -> LIKE pattern.
+        let (temp_file, conn) = create_test_db();
+
+        let arch_id = insert_repo(&conn, "arch-core", "arch");
+        insert_package(&conn, arch_id, "vim", "9.0", 500);
+
+        let fed_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, fed_id, "vim", "9.0", 500);
+
+        let ubuntu_id = insert_repo(&conn, "ubuntu-main", "ubuntu");
+        insert_package(&conn, ubuntu_id, "vim", "9.0", 500);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        assert!(service.find_package(&conn, "arch", "vim", None).is_ok());
+        assert!(service.find_package(&conn, "fedora", "vim", None).is_ok());
+        assert!(service.find_package(&conn, "ubuntu", "vim", None).is_ok());
+        assert!(service.find_package(&conn, "debian", "vim", None).is_ok());
+    }
+}
