@@ -30,6 +30,8 @@
 		<div class="container header-inner">
 			<a href={mainSite} class="logo">
 				<span class="logo-text">conary</span>
+				<span class="logo-sep">/</span>
+				<span class="logo-badge">remi</span>
 			</a>
 			<nav aria-label="Main navigation">
 				<ul class="nav-links">
@@ -121,6 +123,19 @@
 		font-size: 1.25rem;
 		font-weight: 700;
 		letter-spacing: -0.02em;
+	}
+
+	.logo-sep {
+		margin: 0 0.25rem;
+		color: var(--color-text-muted);
+		font-weight: 300;
+	}
+
+	.logo-badge {
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: var(--color-accent);
 	}
 
 	.nav-links {
