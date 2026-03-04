@@ -26,7 +26,7 @@ checksum = "sha256:8041854a882583ad5263466736c9c8c68c74b1a35754ab770d23343f94752
 
 [build]
 requires = ["glibc", "libmnl", "libelf"]
-makedepends = ["gcc", "pkg-config", "bison", "flex", "libmnl-devel", "libelf-devel", "libcap-devel", "iptables-devel"]
+makedepends = ["gcc", "pkgconf", "bison", "flex", "libmnl:devel", "elfutils:devel", "libcap:devel"]
 
 configure = """
 # iproute2 uses a simple config script, not autoconf

@@ -24,7 +24,7 @@ signature = "https://ftp.gnu.org/gnu/binutils/binutils-%(version)s.tar.xz.sig"
 
 [build]
 requires = []
-makedepends = ["texinfo", "zlib-devel"]
+makedepends = ["texinfo", "zlib:devel"]
 
 configure = """
 ../src/binutils-%(version)s/configure \

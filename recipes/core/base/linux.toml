@@ -26,7 +26,7 @@ signature = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.
 
 [build]
 requires = ["linux-headers"]
-makedepends = ["gcc", "binutils", "bc", "bison", "flex", "libelf-devel", "openssl-devel", "perl"]
+makedepends = ["gcc", "binutils", "bison", "flex", "elfutils:devel", "openssl:devel", "perl"]
 
 configure = """
 # Start with a default config for x86_64

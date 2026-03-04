@@ -29,7 +29,7 @@ signature = "https://ftp.gnu.org/gnu/glibc/glibc-%(version)s.tar.xz.sig"
 
 [build]
 requires = ["linux-headers"]
-makedepends = ["gcc-pass1", "binutils", "texinfo", "gawk", "bison", "python3"]
+makedepends = ["gcc-pass1", "binutils", "texinfo", "gawk", "bison", "python"]
 
 # glibc has strict requirements about the build environment
 # Must be built out-of-tree
@@ -41,7 +41,7 @@ ln -sfv ../lib/ld-linux-x86-64.so.2 %(destdir)s/lib64 2>/dev/null || true
     --prefix=/usr \
     --build=$(../src/glibc-%(version)s/scripts/config.guess) \
     --host=%(target)s \
-    --with-headers=%(stage1_sysroot)s/usr/include \
+    --with-headers=%(sysroot)s/usr/include \
     --disable-nscd \
     --disable-timezone-tools \
     --enable-kernel=5.15 \

@@ -25,7 +25,7 @@ checksum = "sha256:3330d873f0fceb5560b89a7dc14e4f3288bbd880e96903ed9b50ec2b5799e
 
 [build]
 requires = ["glibc", "ncurses", "zlib"]
-makedepends = ["gcc", "pkg-config", "libcap-ng-devel", "pam-devel", "libudev-devel"]
+makedepends = ["gcc", "pkgconf", "libcap:devel", "linux-pam:devel"]
 
 configure = """
 ./configure \

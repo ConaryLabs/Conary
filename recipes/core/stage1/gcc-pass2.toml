@@ -50,7 +50,7 @@ extract_to = "isl"
 
 [build]
 requires = ["glibc", "binutils"]
-makedepends = ["gcc-pass1", "texinfo", "gawk", "bison", "flex", "zlib-devel"]
+makedepends = ["gcc-pass1", "texinfo", "gawk", "bison", "flex", "zlib:devel"]
 
 # Full configure with C and C++ support, threading, shared libs
 configure = """
@@ -66,7 +66,7 @@ esac
     --build=$(../src/gcc-%(version)s/config.guess) \
     --host=%(target)s \
     --target=%(target)s \
-    --with-sysroot=%(stage1_sysroot)s \
+    --with-sysroot=%(sysroot)s \
     --enable-languages=c,c++ \
     --enable-default-pie \
     --enable-default-ssp \

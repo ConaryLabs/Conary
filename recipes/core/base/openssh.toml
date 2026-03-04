@@ -25,7 +25,7 @@ signature = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(vers
 
 [build]
 requires = ["glibc", "openssl", "zlib"]
-makedepends = ["gcc", "pkg-config", "openssl-devel", "zlib-devel", "pam-devel", "libselinux-devel", "audit-libs-devel"]
+makedepends = ["gcc", "pkgconf", "openssl:devel", "zlib:devel", "linux-pam:devel"]
 
 configure = """
 ./configure \

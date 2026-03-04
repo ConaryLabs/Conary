@@ -5,14 +5,14 @@
 # Update these versions and re-generate recipes as needed.
 # All Stage 1 recipes reference these versions for consistency.
 #
-# Last updated: 2026-01-17
+# Last updated: 2026-03-03
 
 [toolchain]
-# Core toolchain versions (latest stable as of Jan 2026)
+# Core toolchain versions (latest stable as of Mar 2026)
 gcc = "15.2.0"
-glibc = "2.42"
-binutils = "2.45.1"
-linux = "6.18"
+glibc = "2.43"
+binutils = "2.46"
+linux = "6.19.5"
 
 # GCC companion libraries
 gmp = "6.3.0"
@@ -33,21 +33,21 @@ stage1_prefix = "/conary/stage1"
 sysroot = "/conary/sysroot/stage1"
 
 [base]
-# Base system packages (latest stable as of Jan 2026)
-coreutils = "9.9"
+# Base system packages (latest stable as of Mar 2026)
+coreutils = "9.10"
 bash = "5.3"
 util-linux = "2.41.3"
-systemd = "257.9"
-iproute2 = "6.15.0"
-openssh = "10.1p1"
+systemd = "259.2"
+iproute2 = "6.19.0"
+openssh = "10.2p1"
 
 [libs]
-# Core libraries (latest stable as of Jan 2026)
+# Core libraries (latest stable as of Mar 2026)
 
 # Compression
-zlib = "1.3.1"
+zlib = "1.3.2"
 xz = "5.6.4"
-zstd = "1.5.6"
+zstd = "1.5.7"
 
 # Text/Terminal
 ncurses = "6.6"
@@ -65,11 +65,11 @@ dbus = "1.16.2"
 kmod = "34"
 
 [dev]
-# Development tools (latest stable as of Jan 2026)
+# Development tools (latest stable as of Mar 2026)
 
 # Build systems
 make = "4.4.1"
-cmake = "4.2.1"
+cmake = "4.2.3"
 ninja = "1.13.1"
 meson = "1.7.0"
 
@@ -86,13 +86,13 @@ flex = "2.6.4"
 
 # Languages
 perl = "5.42.0"
-python = "3.14.2"
+python = "3.14.3"
 
 # Internationalization
 gettext = "0.26"
 
 [text]
-# Text processing tools (latest stable as of Jan 2026)
+# Text processing tools (latest stable as of Mar 2026)
 grep = "3.12"
 sed = "4.9"
 gawk = "5.3.2"
@@ -103,7 +103,7 @@ findutils = "4.10.0"
 file = "5.46"
 
 [archive]
-# Compression/archiving tools (latest stable as of Jan 2026)
+# Compression/archiving tools (latest stable as of Mar 2026)
 tar = "1.35"
 gzip = "1.13"
 bzip2 = "1.0.8"
@@ -111,29 +111,29 @@ cpio = "2.15"
 # Note: zstd and xz are in [libs] section
 
 [net]
-# Networking tools (latest stable as of Jan 2026)
+# Networking tools (latest stable as of Mar 2026)
 curl = "8.18.0"
 wget2 = "2.2.1"
 ca-certificates = "2026-01"  # Mozilla bundle date
 
 [vcs]
-# Version control (latest stable as of Jan 2026)
+# Version control (latest stable as of Mar 2026)
 git = "2.53.0"
 
 [sys]
-# System utilities (latest stable as of Jan 2026)
+# System utilities (latest stable as of Mar 2026)
 procps-ng = "4.1.0"
 psmisc = "24.0"
 shadow = "4.16.0"
 sudo = "1.9.18"
 
 [editors]
-# Text editors (latest stable as of Jan 2026)
+# Text editors (latest stable as of Mar 2026)
 vim = "9.2"
 nano = "8.0"
 
 [boot]
-# Boot tools (latest stable as of Jan 2026)
+# Boot tools (latest stable as of Mar 2026)
 grub = "2.14"
 efibootmgr = "19"
 efivar = "39"

@@ -25,7 +25,7 @@ signature = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz.sig"
 
 [build]
 requires = ["glibc"]
-makedepends = ["gcc", "gettext", "gmp-devel", "libcap-devel", "acl-devel", "attr-devel"]
+makedepends = ["gcc", "gettext", "libcap:devel"]
 
 configure = """
 ./configure \

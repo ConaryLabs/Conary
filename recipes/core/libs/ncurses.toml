@@ -24,7 +24,7 @@ checksum = "sha256:355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749f
 
 [build]
 requires = ["glibc"]
-makedepends = ["gcc", "pkg-config"]
+makedepends = ["gcc", "pkgconf"]
 
 configure = """
 ./configure \

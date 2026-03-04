@@ -24,7 +24,7 @@ checksum = "sha256:21dbcec6e01dd578f14789eac9024a18941e6f2702a05cf91b28c232eeb26
 
 [build]
 requires = ["glibc"]
-makedepends = ["gcc", "meson", "ninja", "pkg-config", "flex", "bison"]
+makedepends = ["gcc", "meson", "ninja", "pkgconf", "flex", "bison"]
 
 configure = """
 meson setup build \
