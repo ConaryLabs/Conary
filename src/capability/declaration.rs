@@ -251,6 +251,8 @@ pub enum SyscallProfile {
     SystemDaemon,
     /// Container/sandbox (restricted set)
     Container,
+    /// Package scriptlets (broad allowlist, dangerous syscalls excluded)
+    Scriptlet,
 }
 
 impl SyscallProfile {
@@ -263,6 +265,7 @@ impl SyscallProfile {
             "gui-app" | "gui" => Some(Self::GuiApp),
             "system-daemon" | "daemon" => Some(Self::SystemDaemon),
             "container" | "sandbox" => Some(Self::Container),
+            "scriptlet" => Some(Self::Scriptlet),
             _ => None,
         }
     }
@@ -276,6 +279,7 @@ impl SyscallProfile {
             Self::GuiApp => GUI_APP_SYSCALLS,
             Self::SystemDaemon => SYSTEM_DAEMON_SYSCALLS,
             Self::Container => CONTAINER_SYSCALLS,
+            Self::Scriptlet => SCRIPTLET_SYSCALLS,
         }
     }
 }
@@ -632,6 +636,131 @@ static CONTAINER_SYSCALLS: &[&str] = &[
     "clone",
     "clone3",
     "wait4",
+];
+
+/// Broad allowlist for package scriptlets.
+///
+/// Covers typical needs of install/remove scripts (file I/O, process management,
+/// networking, IPC, signals) while excluding dangerous syscalls:
+/// - ptrace, process_vm_readv, process_vm_writev (process debugging)
+/// - mount, umount2, pivot_root (filesystem namespace manipulation)
+/// - reboot, kexec_load, kexec_file_load (system reboot)
+/// - init_module, finit_module, delete_module (kernel modules)
+/// - acct, swapon, swapoff (system administration)
+/// - bpf (BPF program loading)
+/// - perf_event_open, userfaultfd (kernel interfaces)
+static SCRIPTLET_SYSCALLS: &[&str] = &[
+    // File I/O
+    "read",
+    "write",
+    "open",
+    "close",
+    "stat",
+    "fstat",
+    "lstat",
+    "openat",
+    "newfstatat",
+    "statx",
+    "access",
+    "pread64",
+    "pwrite64",
+    "lseek",
+    "getdents64",
+    // File management
+    "mkdir",
+    "rmdir",
+    "unlink",
+    "rename",
+    "link",
+    "symlink",
+    "readlink",
+    "chmod",
+    "fchmod",
+    "chown",
+    "fchown",
+    // Memory
+    "mmap",
+    "mprotect",
+    "munmap",
+    "brk",
+    // Process management
+    "clone",
+    "clone3",
+    "fork",
+    "execve",
+    "exit",
+    "exit_group",
+    "wait4",
+    "waitid",
+    "getpid",
+    "getuid",
+    "getgid",
+    "geteuid",
+    "getegid",
+    "setuid",
+    "setgid",
+    "setgroups",
+    "prctl",
+    "arch_prctl",
+    "set_tid_address",
+    "set_robust_list",
+    "setsid",
+    "umask",
+    "kill",
+    // Signals
+    "rt_sigaction",
+    "sigaction",
+    "rt_sigprocmask",
+    "sigaltstack",
+    // I/O multiplexing
+    "poll",
+    "select",
+    "pselect6",
+    "epoll_create",
+    "epoll_create1",
+    "epoll_ctl",
+    "epoll_wait",
+    "epoll_pwait",
+    // Pipes and IPC
+    "pipe",
+    "pipe2",
+    "dup",
+    "dup2",
+    "socket",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "accept4",
+    "sendto",
+    "recvfrom",
+    "sendmsg",
+    "recvmsg",
+    "shutdown",
+    "setsockopt",
+    "getsockopt",
+    "getsockname",
+    "getpeername",
+    "eventfd",
+    "eventfd2",
+    "shmat",
+    "shmdt",
+    "shmget",
+    "shmctl",
+    "memfd_create",
+    // Terminal and descriptor control
+    "ioctl",
+    "fcntl",
+    "flock",
+    // Directory
+    "chdir",
+    "fchdir",
+    "chroot",
+    // Random
+    "getrandom",
+    // Threading
+    "futex",
+    "rseq",
 ];
 
 #[cfg(test)]

@@ -14,8 +14,9 @@ use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus}
 use crate::db::models::{Changeset, DependencyEntry, Trove};
 use axum::{
     Router,
-    extract::{Extension, Path, Query, State},
-    http::StatusCode,
+    extract::{Extension, Path, Query, Request, State},
+    http::{Method, StatusCode},
+    middleware,
     response::{
         IntoResponse, Json, Response,
         sse::{Event, KeepAlive, Sse},
@@ -175,6 +176,26 @@ fn require_auth(creds: &Option<PeerCredentials>, action: Action) -> Result<(), A
             ))))
         }
     }
+}
+
+/// Auth gate middleware for defense-in-depth
+///
+/// Rejects POST/PUT/DELETE requests without valid credentials at the router level.
+/// Uses `Action::Install` (requires root/admin/polkit) so that a new mutating
+/// endpoint missing its own `require_auth()` call is still protected.
+/// Individual handlers still check their specific action permissions.
+async fn auth_gate_middleware(
+    Extension(creds): Extension<Option<PeerCredentials>>,
+    request: Request,
+    next: middleware::Next,
+) -> Result<Response, ApiError> {
+    if request.method() == Method::POST
+        || request.method() == Method::PUT
+        || request.method() == Method::DELETE
+    {
+        require_auth(&creds, Action::Install)?;
+    }
+    Ok(next.run(request).await)
 }
 
 // =============================================================================
@@ -516,6 +537,8 @@ fn build_v1_router() -> Router<SharedState> {
         .route("/system/gc", post(gc_handler))
         // Global event stream
         .route("/events", get(events_handler))
+        // Defense-in-depth: reject mutating requests without credentials
+        .layer(middleware::from_fn(auth_gate_middleware))
 }
 
 // =============================================================================

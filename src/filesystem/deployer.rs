@@ -12,9 +12,13 @@
 
 use crate::error::Result;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
+
+/// Monotonic counter for unique temp file names (prevents races during parallel deployments)
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 use super::CasStore;
 
@@ -119,12 +123,18 @@ impl FileDeployer {
         // Get CAS path for this content
         let cas_path = self.cas.hash_to_path(hash);
 
-        if !cas_path.exists() {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Content not found in CAS: {}", hash),
-            )));
-        }
+        // Open the CAS file first — serves as existence check AND holds a reference
+        // to prevent inode reclaim between check and hardlink (TOCTOU fix)
+        let cas_file = fs::File::open(&cas_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Content not found in CAS: {}", hash),
+                ))
+            } else {
+                crate::Error::Io(e)
+            }
+        })?;
 
         // Compute target path with traversal validation
         let target_path = self.safe_target_path(path)?;
@@ -134,18 +144,21 @@ impl FileDeployer {
             fs::create_dir_all(parent)?;
         }
 
-        // Remove existing file if present (hardlink requires target not to exist)
-        if target_path.exists() {
-            fs::remove_file(&target_path)?;
+        // Remove existing file if present (hardlink requires target not to exist).
+        // Ignore NotFound to avoid a TOCTOU race on the target path.
+        match fs::remove_file(&target_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
 
-        // Try hardlink first, fall back to copy
+        // Try hardlink first, fall back to copy from the already-open file handle
         let method = if self.try_hardlink(&cas_path, &target_path) {
             "hardlink"
         } else {
-            // Hardlink failed, fall back to copy
+            // Hardlink failed, fall back to copy from the open fd
             debug!("Hardlink failed for {}, falling back to copy", path);
-            self.copy_from_cas(hash, &target_path)?;
+            self.copy_from_cas_fd(&cas_file, &target_path)?;
             "copy"
         };
 
@@ -169,15 +182,21 @@ impl FileDeployer {
         fs::hard_link(source, target).is_ok()
     }
 
-    /// Copy file content from CAS to target (fallback when hardlink fails)
-    fn copy_from_cas(&self, hash: &str, target_path: &Path) -> Result<()> {
-        let content = self.cas.retrieve(hash)?;
-
-        // Write atomically
-        let temp_path = target_path.with_extension("conary-tmp");
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(&content)?;
-        file.sync_all()?;
+    /// Copy file content from an open CAS file handle to target
+    ///
+    /// Used as fallback when hardlink fails. Reads from the already-open fd
+    /// rather than re-opening by hash, avoiding a second TOCTOU window.
+    fn copy_from_cas_fd(&self, source: &fs::File, target_path: &Path) -> Result<()> {
+        let temp_name = format!(
+            ".conary-tmp.{}.{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let temp_path = target_path.with_file_name(temp_name);
+        let mut target = fs::File::create(&temp_path)?;
+        let mut reader: &fs::File = source;
+        std::io::copy(&mut reader, &mut target)?;
+        target.sync_all()?;
 
         // Atomic rename
         fs::rename(&temp_path, target_path)?;

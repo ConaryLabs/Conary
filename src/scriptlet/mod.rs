@@ -34,6 +34,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -398,7 +399,11 @@ impl ScriptletExecutor {
         result
     }
 
-    /// Execute scriptlet using chroot (requires root)
+    /// Execute scriptlet using native chroot + seccomp (requires root)
+    ///
+    /// Uses `pre_exec` to chroot and apply seccomp in the child process,
+    /// instead of spawning the external `chroot` command. This enables
+    /// syscall filtering via seccomp-BPF for defense-in-depth.
     fn execute_with_chroot(
         &self,
         phase: &str,
@@ -410,20 +415,24 @@ impl ScriptletExecutor {
         // Script path relative to chroot
         let script_in_chroot = script_path.strip_prefix(&self.root).unwrap_or(script_path);
         let script_in_chroot = format!("/{}", script_in_chroot.display());
+        let root = self.root.clone();
+
+        // Build seccomp BPF filter in parent process (avoids allocation after fork)
+        let bpf_filter = build_scriptlet_seccomp();
+        let seccomp_enabled = bpf_filter.is_some();
 
         debug!(
-            "Executing in chroot {}: {} {} {:?}",
+            "Executing in chroot {}: {} {} {:?} (seccomp: {})",
             self.root.display(),
             interpreter,
             script_in_chroot,
-            args
+            args,
+            if seccomp_enabled { "enabled" } else { "unavailable" }
         );
 
-        // Build command: chroot <root> <interpreter> <script> <args>
-        let mut cmd = Command::new("chroot");
-        cmd.arg(&self.root)
-            .arg(interpreter)
-            .arg(&script_in_chroot)
+        // Use interpreter directly with pre_exec for native chroot + seccomp
+        let mut cmd = Command::new(interpreter);
+        cmd.arg(&script_in_chroot)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -433,19 +442,72 @@ impl ScriptletExecutor {
             cmd.env(*key, *value);
         }
 
+        // Safety: pre_exec runs between fork and exec in the child process.
+        // All operations (chroot, chdir, prctl, seccomp) are async-signal-safe.
+        unsafe {
+            cmd.pre_exec(move || {
+                // 1. chroot into the target root
+                nix::unistd::chroot(&root).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("chroot failed: {e}"),
+                    )
+                })?;
+                nix::unistd::chdir("/").map_err(|e| {
+                    std::io::Error::other(format!("chdir failed: {e}"))
+                })?;
+
+                // 2. Set NO_NEW_PRIVS (required for unprivileged seccomp)
+                let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // 3. Apply seccomp filter (warn mode — log violations, don't kill)
+                if let Some(ref filter) = bpf_filter
+                    && seccompiler::apply_filter(filter).is_err()
+                {
+                    // Log failure but don't prevent execution (warn mode).
+                    // Use raw write of a static string — no heap allocation,
+                    // safe after fork in a multi-threaded process.
+                    const MSG: &[u8] = b"[conary] seccomp filter application failed\n";
+                    let _ = libc::write(2, MSG.as_ptr().cast(), MSG.len());
+                }
+
+                Ok(())
+            });
+        }
+
         let mut child = cmd.spawn().map_err(|e| {
-            Error::ScriptletError(format!("Failed to spawn chroot for scriptlet: {}", e))
+            Error::ScriptletError(format!("Failed to spawn scriptlet in chroot: {e}"))
         })?;
 
-        let context = format!(" (chroot: {})", self.root.display());
+        let context = format!(
+            " (chroot: {}, seccomp: {})",
+            self.root.display(),
+            if seccomp_enabled { "enabled" } else { "unavailable" }
+        );
+
+        // Take stdout/stderr handles before waiting. After wait_timeout reaps
+        // the child, the pipes get EOF so read_to_end returns immediately.
+        // This avoids calling wait_with_output() which would double-wait (ECHILD).
+        let mut stdout_handle = child.stdout.take();
+        let mut stderr_handle = child.stderr.take();
 
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
-                let output = child.wait_with_output()?;
+                let mut stdout_bytes = Vec::new();
+                let mut stderr_bytes = Vec::new();
+                if let Some(ref mut out) = stdout_handle {
+                    let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
+                }
+                if let Some(ref mut err) = stderr_handle {
+                    let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
+                }
                 log_script_output(
                     phase,
-                    &String::from_utf8_lossy(&output.stdout),
-                    &String::from_utf8_lossy(&output.stderr),
+                    &String::from_utf8_lossy(&stdout_bytes),
+                    &String::from_utf8_lossy(&stderr_bytes),
                 );
                 check_scriptlet_status(phase, status, &context)
             }
@@ -496,13 +558,24 @@ impl ScriptletExecutor {
             .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
 
+        // Take handles before waiting — drain AFTER child exits to avoid double-wait.
+        let mut stdout_handle = child.stdout.take();
+        let mut stderr_handle = child.stderr.take();
+
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
-                let output = child.wait_with_output()?;
+                let mut stdout_bytes = Vec::new();
+                let mut stderr_bytes = Vec::new();
+                if let Some(ref mut out) = stdout_handle {
+                    let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
+                }
+                if let Some(ref mut err) = stderr_handle {
+                    let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
+                }
                 log_script_output(
                     phase,
-                    &String::from_utf8_lossy(&output.stdout),
-                    &String::from_utf8_lossy(&output.stderr),
+                    &String::from_utf8_lossy(&stdout_bytes),
+                    &String::from_utf8_lossy(&stderr_bytes),
                 );
                 check_scriptlet_status(phase, status, "")
             }
@@ -632,6 +705,37 @@ pub fn phase_from_string(s: &str) -> Option<ScriptletPhase> {
         "post-transaction" => Some(ScriptletPhase::PostTransaction),
         "trigger" => Some(ScriptletPhase::Trigger),
         _ => None,
+    }
+}
+
+/// Build a seccomp BPF filter for scriptlet execution
+///
+/// Uses the Scriptlet profile in Warn mode (log violations, don't kill).
+/// Returns `None` if seccomp is not supported on this kernel.
+fn build_scriptlet_seccomp() -> Option<seccompiler::BpfProgram> {
+    use crate::capability::SyscallCapabilities;
+    use crate::capability::enforcement::EnforcementMode;
+    use crate::capability::enforcement::seccomp_enforce;
+
+    if !seccomp_enforce::check_seccomp_support() {
+        return None;
+    }
+
+    let caps = SyscallCapabilities {
+        profile: Some("scriptlet".to_string()),
+        allow: Vec::new(),
+        deny: Vec::new(),
+    };
+
+    match seccomp_enforce::build_seccomp_filter(&caps, EnforcementMode::Warn) {
+        Ok(bpf) => {
+            info!("Built seccomp filter for scriptlet execution (warn mode)");
+            Some(bpf)
+        }
+        Err(e) => {
+            warn!("Failed to build scriptlet seccomp filter: {e}");
+            None
+        }
     }
 }
 
