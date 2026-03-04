@@ -830,7 +830,60 @@ mod tests {
             SyscallProfile::parse("network-server"),
             Some(SyscallProfile::NetworkServer)
         );
+        assert_eq!(
+            SyscallProfile::parse("scriptlet"),
+            Some(SyscallProfile::Scriptlet)
+        );
         assert_eq!(SyscallProfile::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_scriptlet_syscalls_content() {
+        let syscalls = SyscallProfile::Scriptlet.allowed_syscalls();
+
+        // Must be non-empty
+        assert!(
+            !syscalls.is_empty(),
+            "Scriptlet profile must define allowed syscalls"
+        );
+
+        // Must contain critical syscalls needed by install/remove scripts
+        let required = ["read", "write", "execve", "clone", "fork"];
+        for name in &required {
+            assert!(
+                syscalls.contains(name),
+                "Scriptlet profile must include '{}' syscall",
+                name
+            );
+        }
+
+        // Must NOT contain dangerous syscalls
+        let forbidden = ["ptrace", "kexec_load", "init_module", "bpf", "reboot"];
+        for name in &forbidden {
+            assert!(
+                !syscalls.contains(name),
+                "Scriptlet profile must not include dangerous '{}' syscall",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_scriptlet_profile_toml_parse_and_validate() {
+        let toml = r#"
+            version = 1
+            rationale = "Package with post-install scriptlet"
+
+            [syscalls]
+            profile = "scriptlet"
+        "#;
+
+        let cap: CapabilityDeclaration = toml::from_str(toml).unwrap();
+        assert_eq!(cap.syscalls.profile, Some("scriptlet".to_string()));
+        assert!(
+            cap.validate().is_ok(),
+            "A declaration with profile='scriptlet' must validate successfully"
+        );
     }
 
     #[test]

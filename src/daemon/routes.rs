@@ -2473,4 +2473,77 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+
+    // -- Auth gate middleware: PUT without auth = 403 -------------------------
+
+    #[tokio::test]
+    async fn test_auth_gate_blocks_put_without_credentials() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .method("PUT")
+            .uri("/v1/transactions/some-id")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "PUT without credentials should be blocked by auth gate middleware"
+        );
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 403);
+    }
+
+    // -- Auth gate middleware: DELETE without auth = 403 -----------------------
+
+    #[tokio::test]
+    async fn test_auth_gate_blocks_delete_without_credentials() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        let request = axum::http::Request::builder()
+            .method("DELETE")
+            .uri("/v1/transactions/some-id")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "DELETE without credentials should be blocked by auth gate middleware"
+        );
+
+        let json = body_json(response).await;
+        assert_eq!(json["status"], 403);
+    }
+
+    // -- Auth gate middleware: GET passes without auth -------------------------
+
+    #[tokio::test]
+    async fn test_auth_gate_allows_get_without_credentials() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, None);
+
+        // GET requests should pass through the middleware even without credentials
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET without credentials should pass through auth gate middleware"
+        );
+    }
 }

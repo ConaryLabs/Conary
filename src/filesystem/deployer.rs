@@ -850,6 +850,106 @@ mod tests {
     }
 
     #[test]
+    fn test_copy_from_cas_fd_copies_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Store content in CAS and open the file handle
+        let content = b"copy fallback test content";
+        let hash = deployer.cas().store(content).unwrap();
+        let cas_path = deployer.cas().hash_to_path(&hash);
+        let cas_file = fs::File::open(&cas_path).unwrap();
+
+        // Use copy_from_cas_fd directly
+        let target_path = install_root.join("copy_test.txt");
+        deployer
+            .copy_from_cas_fd(&cas_file, &target_path)
+            .unwrap();
+
+        // Verify content matches
+        let copied = fs::read(&target_path).unwrap();
+        assert_eq!(
+            content,
+            copied.as_slice(),
+            "Content copied via copy_from_cas_fd must match original"
+        );
+    }
+
+    #[test]
+    fn test_deploy_file_nonexistent_hash_returns_cas_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Deploy with a hash that does not exist in CAS
+        let bogus_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let result = deployer.deploy_file("/usr/bin/ghost", bogus_hash, 0o755);
+
+        assert!(result.is_err(), "Deploying a nonexistent hash must fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Content not found in CAS"),
+            "Error should mention 'Content not found in CAS', got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_deploy_file_overwrites_existing() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        // Store two different contents
+        let content_v1 = b"version 1";
+        let hash_v1 = deployer.cas().store(content_v1).unwrap();
+
+        let content_v2 = b"version 2";
+        let hash_v2 = deployer.cas().store(content_v2).unwrap();
+
+        // Deploy v1, then overwrite with v2
+        deployer
+            .deploy_file("/usr/bin/app", &hash_v1, 0o755)
+            .unwrap();
+        deployer
+            .deploy_file("/usr/bin/app", &hash_v2, 0o755)
+            .unwrap();
+
+        // Verify final content is v2
+        let target_path = install_root.join("usr/bin/app");
+        let deployed = fs::read(&target_path).unwrap();
+        assert_eq!(content_v2, deployed.as_slice());
+    }
+
+    #[test]
+    fn test_deploy_file_to_new_path_succeeds() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        let content = b"fresh deploy";
+        let hash = deployer.cas().store(content).unwrap();
+
+        // Deploy to a path that never had a file (NotFound on remove is tolerated)
+        deployer
+            .deploy_file("/opt/new/app", &hash, 0o644)
+            .unwrap();
+
+        let target_path = install_root.join("opt/new/app");
+        assert!(target_path.exists());
+        assert_eq!(content, fs::read(&target_path).unwrap().as_slice());
+    }
+
+    #[test]
     fn test_symlink_target_many_dotdots_rejected() {
         let temp_dir = TempDir::new().unwrap();
         let install_root = temp_dir.path().join("root");
