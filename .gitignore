@@ -22,6 +22,8 @@ Thumbs.db
 # Claude Code
 .mcp.json
 CLAUDE.local.md
+.claude/settings.local.json
+.claude/*.local.md
 
 # Bootstrap build artifacts
 /bootstrap/
