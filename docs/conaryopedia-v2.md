@@ -10,17 +10,31 @@ The [original Conaryopedia](conaryopedia.md) documented the rPath-era Conary (20
 
 ## Table of Contents
 
-1. [Core Concepts](#1-core-concepts)
-   - [Troves](#11-troves)
-   - [Changesets](#12-changesets)
-   - [Components](#13-components)
-   - [Labels](#14-labels)
-   - [Flavors](#15-flavors)
-   - [Versions](#16-versions)
-   - [Content-Addressable Storage](#17-content-addressable-storage)
-   - [System State](#18-system-state)
-   - [Dependencies](#19-dependencies)
-   - [Collections](#110-collections)
+**1. [Core Concepts](#1-core-concepts)**
+- [1.1 Troves](#11-troves) -- [1.2 Changesets](#12-changesets) -- [1.3 Components](#13-components) -- [1.4 Labels](#14-labels) -- [1.5 Flavors](#15-flavors) -- [1.6 Versions](#16-versions) -- [1.7 Content-Addressable Storage](#17-content-addressable-storage) -- [1.8 System State](#18-system-state) -- [1.9 Dependencies](#19-dependencies) -- [1.10 Collections](#110-collections)
+
+**2. [System Management](#2-system-management)**
+- [2.1 Initialization](#21-initialization) -- [2.2 Installing Packages](#22-installing-packages) -- [2.3 Removing Packages](#23-removing-packages) -- [2.4 Updating Packages](#24-updating-packages) -- [2.5 Searching and Listing](#25-searching-and-listing) -- [2.6 Dependency Queries](#26-dependency-queries) -- [2.7 Pinning](#27-pinning) -- [2.8 Orphan Cleanup](#28-orphan-cleanup) -- [2.9 System Adoption](#29-system-adoption) -- [2.10 System State and Rollback](#210-system-state-and-rollback) -- [2.11 Changeset History](#211-changeset-history) -- [2.12 Integrity Verification](#212-integrity-verification) -- [2.13 Repository Management](#213-repository-management) -- [2.14 Configuration File Management](#214-configuration-file-management) -- [2.15 Garbage Collection](#215-garbage-collection) -- [2.16 Labels](#216-labels) -- [2.17 Triggers](#217-triggers) -- [2.18 Redirects](#218-redirects) -- [2.19 SBOM Generation](#219-sbom-generation) -- [2.20 Shell Completions](#220-shell-completions)
+
+**3. [Declarative System Model](#3-declarative-system-model)**
+- [3.1 The Model File](#31-the-model-file) -- [3.2 Diff](#32-diff-see-what-would-change) -- [3.3 Apply](#33-apply-sync-system-to-model) -- [3.4 Check](#34-check-drift-detection) -- [3.5 Snapshot](#35-snapshot-capture-current-state) -- [3.6 Derived Packages](#36-derived-packages) -- [3.7 Remote Includes](#37-remote-includes) -- [3.8 Lockfiles](#38-lockfiles) -- [3.9 Remote Diff](#39-remote-diff) -- [3.10 Publishing](#310-publishing) -- [3.11 Automation](#311-automation) -- [3.12 Federation in the Model](#312-federation-in-the-model) -- [3.13 Workflow Summary](#313-workflow-summary)
+
+**4. [CCS Package Format](#4-ccs-package-format)**
+- [4.1 Package Structure](#41-package-structure) -- [4.2 The Manifest](#42-the-manifest-ccstoml) -- [4.3 Building Packages](#43-building-packages) -- [4.4 Build Policies](#44-build-policies) -- [4.5 Installing CCS Packages](#45-installing-ccs-packages) -- [4.6 Signing and Verification](#46-signing-and-verification) -- [4.7 Inspecting Packages](#47-inspecting-packages) -- [4.8 OCI Export](#48-oci-export) -- [4.9 Ephemeral Environments](#49-ephemeral-environments) -- [4.10 Enhancement](#410-enhancement) -- [4.11 Lockfiles](#411-lockfiles) -- [4.12 Provenance](#412-provenance-package-dna)
+
+**5. [Recipe System](#5-recipe-system)**
+- [5.1 Culinary Terminology](#51-culinary-terminology) -- [5.2 Recipe Format](#52-recipe-format) -- [5.3 The Cook Command](#53-the-cook-command) -- [5.4 Hermetic Build Architecture](#54-hermetic-build-architecture) -- [5.5 Kitchen Configuration](#55-kitchen-configuration) -- [5.6 Build Phases](#56-build-phases-in-detail) -- [5.7 Container Isolation](#57-container-isolation) -- [5.8 Cross-Compilation](#58-cross-compilation-support) -- [5.9 Bootstrap Stages](#59-bootstrap-stages) -- [5.10 Build Provenance](#510-build-provenance-capture) -- [5.11 Build Caching](#511-build-caching) -- [5.12 Dependency Graph](#512-dependency-graph) -- [5.13 Bootstrap Plans](#513-bootstrap-plans) -- [5.14 PKGBUILD Conversion](#514-pkgbuild-conversion) -- [5.15 Source Management](#515-source-management)
+
+**6. [Remi Server](#6-remi-server)**
+- [6.1 Architecture Overview](#61-architecture-overview) -- [6.2 Configuration](#62-toml-configuration) -- [6.3 Conversion Pipeline](#63-on-demand-conversion-pipeline) -- [6.4 Chunk Storage](#64-content-addressed-chunk-storage) -- [6.5 LRU Eviction](#65-lru-cache-eviction) -- [6.6 Bloom Filter](#66-bloom-filter-dos-protection) -- [6.7 Pull-Through Caching](#67-pull-through-caching-and-request-coalescing) -- [6.8 Chunk Endpoints](#68-chunk-serving-endpoints) -- [6.9 R2/CDN](#69-r2cdn-integration) -- [6.10 Sparse Index](#610-sparse-http-index) -- [6.11 Search](#611-full-text-search) -- [6.12 OCI Distribution](#612-oci-distribution-spec-v2) -- [6.13 Security](#613-security) -- [6.14 Negative Cache](#614-negative-cache) -- [6.15 Job Management](#615-job-management) -- [6.16 Analytics](#616-analytics-and-metrics) -- [6.17 Delta Manifests](#617-delta-manifests) -- [6.18 Pre-Warming](#618-pre-warming-pipeline) -- [6.19 Federated Index](#619-federated-sparse-index) -- [6.20 Remi Lite](#620-remi-lite-zero-config-lan-proxy) -- [6.21 Index Signing](#621-index-generation-and-signing) -- [6.22 Deployment](#622-deployment) -- [6.23 API Reference](#623-complete-api-reference)
+
+**7. [Security and Trust](#7-security-and-trust)**
+- [7.1 Capability Declarations](#71-capability-declarations) -- [7.2 Capability Inference](#72-capability-inference) -- [7.3 Capability Enforcement](#73-capability-enforcement) -- [7.4 Capability-Based Resolution](#74-capability-based-dependency-resolution) -- [7.5 Capability Audit](#75-capability-audit) -- [7.6 Container Sandboxing](#76-container-sandboxing) -- [7.7 Package DNA](#77-package-dna-provenance) -- [7.8 TUF Supply Chain Trust](#78-tuf-supply-chain-trust) -- [7.9 Hermetic Build Security](#79-hermetic-build-security) -- [7.10 Security Architecture Summary](#710-security-architecture-summary)
+
+**8. [Advanced Topics](#chapter-8----advanced-topics)**
+- [8.1 Bootstrap](#81-bootstrap-building-an-os-from-nothing) -- [8.2 CAS Federation](#82-cas-federation-distributed-content-sharing) -- [8.3 Delta Updates](#83-delta-updates-binary-diffs) -- [8.4 System Model](#84-system-model-declarative-os-state) -- [8.5 Recipe System](#85-recipe-system-building-from-source) -- [8.6 Automated Maintenance](#86-automated-maintenance) -- [8.7 Transaction Engine](#87-transaction-engine-crash-safe-operations) -- [8.8 Putting It All Together](#88-putting-it-all-together)
+
+[Conclusion](#conclusion)
 
 ---
 
