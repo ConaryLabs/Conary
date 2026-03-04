@@ -70,6 +70,7 @@ impl PeerCredentials {
                 return Err(io::Error::last_os_error());
             }
 
+            #[allow(clippy::unnecessary_cast)]
             Ok(PeerCredentials {
                 pid: cred.pid as u32,
                 uid: cred.uid as u32,

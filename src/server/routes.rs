@@ -562,6 +562,7 @@ fn check_disk_space(path: &std::path::Path, min_bytes: u64) -> bool {
         unsafe {
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(path_cstr.as_ptr(), &mut stat) == 0 {
+                #[allow(clippy::unnecessary_cast)]
                 let free_bytes = stat.f_bavail as u64 * stat.f_bsize as u64;
                 return free_bytes >= min_bytes;
             }
