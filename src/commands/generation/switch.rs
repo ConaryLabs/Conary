@@ -1,20 +1,21 @@
 // src/commands/generation/switch.rs
-//! Atomic generation switching via renameat2(RENAME_EXCHANGE)
+//! Generation switching via composefs mounts
+//!
+//! Replaces the old renameat2-based directory exchange with composefs
+//! mount-based switching. The EROFS image is mounted via composefs,
+//! /usr is bind-mounted read-only, and /etc uses an overlayfs.
 
 use super::metadata::{current_link, generation_path, GenerationMetadata};
 use anyhow::{Context, Result, anyhow};
-use std::ffi::CString;
-use std::path::Path;
+use std::process::Command;
 use tracing::{info, warn};
 
-/// Top-level directories to swap during a live generation switch
-const SWAP_DIRS: &[&str] = &["usr", "etc"];
-
-/// Switch the live system to the specified generation using atomic directory exchanges.
+/// Switch the live system to the specified generation using composefs mounts.
 ///
-/// For each directory in `SWAP_DIRS`, attempts an atomic `renameat2(RENAME_EXCHANGE)`
-/// between the generation directory and the live root. Falls back to a non-atomic
-/// rename sequence on failure.
+/// 1. Mount the new generation's EROFS image via composefs
+/// 2. Bind-mount /usr from the composefs tree (read-only)
+/// 3. Rebuild /etc overlay with new composefs lower
+/// 4. Update /conary/current symlink
 pub fn switch_live(gen_number: i64) -> Result<()> {
     let gen_dir = generation_path(gen_number);
     if !gen_dir.exists() {
@@ -24,159 +25,100 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ));
     }
 
-    let _metadata = GenerationMetadata::read_from(&gen_dir)
+    let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
-    let mut exchanged: Vec<(&str, bool)> = Vec::new(); // (dir_name, used_atomic)
-
-    for dir in SWAP_DIRS {
-        let gen_path = gen_dir.join(dir);
-        let live_path = Path::new("/").join(dir);
-
-        if !gen_path.exists() {
-            warn!(
-                "Generation path {} does not exist, skipping",
-                gen_path.display()
-            );
-            continue;
-        }
-        if !live_path.exists() {
-            warn!(
-                "Live path {} does not exist, skipping",
-                live_path.display()
-            );
-            continue;
-        }
-
-        let swap_result = match renameat2_exchange(&gen_path, &live_path) {
-            Ok(()) => {
-                info!("Exchanged {} atomically", dir);
-                Ok(true) // used atomic
-            }
-            Err(e) => {
-                warn!(
-                    "renameat2 RENAME_EXCHANGE failed for {}: {e}, trying fallback",
-                    dir
-                );
-                fallback_rename(&gen_path, &live_path, dir)
-                    .with_context(|| format!("Fallback rename failed for {dir}"))
-                    .map(|()| false) // used fallback
-            }
-        };
-
-        match swap_result {
-            Ok(used_atomic) => exchanged.push((dir, used_atomic)),
-            Err(e) => {
-                // Roll back already-exchanged directories using the same mechanism
-                for (prev_dir, was_atomic) in exchanged.iter().rev() {
-                    let prev_gen = gen_dir.join(prev_dir);
-                    let prev_live = Path::new("/").join(prev_dir);
-                    let rb_result = if *was_atomic {
-                        renameat2_exchange(&prev_gen, &prev_live)
-                    } else {
-                        fallback_rename(&prev_gen, &prev_live, prev_dir)
-                    };
-                    if let Err(rb_err) = rb_result {
-                        warn!(
-                            "CRITICAL: Failed to rollback {prev_dir} during switch abort: {rb_err}"
-                        );
-                    } else {
-                        info!("Rolled back {prev_dir} exchange");
-                    }
-                }
-                return Err(e);
-            }
-        }
-    }
-
-    update_current_symlink(gen_number)
-        .context("Failed to update current generation symlink")?;
-
-    let dirs_list: String = exchanged.iter().map(|(d, _)| *d).collect::<Vec<_>>().join(", ");
-    info!("Switched to generation {gen_number} (exchanged: {dirs_list})");
-    println!("Switched to generation {gen_number} (exchanged: {dirs_list})");
-    println!("Reboot recommended for full consistency.");
-
-    Ok(())
-}
-
-/// Atomically exchange two paths using the `renameat2` syscall with `RENAME_EXCHANGE`.
-fn renameat2_exchange(a: &Path, b: &Path) -> Result<()> {
-    let a_cstr = CString::new(a.as_os_str().as_encoded_bytes())
-        .context("Path contains null byte")?;
-    let b_cstr = CString::new(b.as_os_str().as_encoded_bytes())
-        .context("Path contains null byte")?;
-
-    /// renameat2(2) flag: atomically exchange two paths.
-    const RENAME_EXCHANGE: u32 = 2;
-
-    #[allow(unsafe_code)]
-    let ret = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            a_cstr.as_ptr(),
-            libc::AT_FDCWD,
-            b_cstr.as_ptr(),
-            RENAME_EXCHANGE,
-        )
-    };
-
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "renameat2 RENAME_EXCHANGE failed: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
-}
-
-/// Non-atomic fallback: move live to `.conary-old`, move gen into place,
-/// move old into gen dir. Restores backup on step 2 failure.
-fn fallback_rename(gen_path: &Path, live_path: &Path, dir_name: &str) -> Result<()> {
-    let backup_path = live_path
-        .parent()
-        .unwrap_or(Path::new("/"))
-        .join(format!("{dir_name}.conary-old"));
-
-    // Step 1: move live -> backup
-    std::fs::rename(live_path, &backup_path).with_context(|| {
-        format!(
-            "Failed to move {} to {}",
-            live_path.display(),
-            backup_path.display()
-        )
-    })?;
-
-    // Step 2: move gen -> live
-    if let Err(e) = std::fs::rename(gen_path, live_path) {
-        // Restore backup on failure
-        warn!("Restoring backup after failed rename: {e}");
-        std::fs::rename(&backup_path, live_path).with_context(|| {
-            format!(
-                "CRITICAL: Failed to restore backup from {}",
-                backup_path.display()
-            )
-        })?;
+    let erofs_img = gen_dir.join("root.erofs");
+    if !erofs_img.exists() {
         return Err(anyhow!(
-            "Failed to move {} to {}: {e}",
-            gen_path.display(),
-            live_path.display()
+            "EROFS image not found at {} (format: {})",
+            erofs_img.display(),
+            metadata.format
         ));
     }
 
-    // Step 3: move backup -> gen dir (complete the exchange)
-    std::fs::rename(&backup_path, gen_path).with_context(|| {
-        format!(
-            "Failed to move backup {} to {}",
-            backup_path.display(),
-            gen_path.display()
-        )
-    })?;
+    let cas_dir = "/conary/objects";
+    let staging = "/conary/mnt-new";
 
-    info!("Exchanged {dir_name} via fallback rename");
+    // Step 1: Mount new generation's composefs at staging point
+    std::fs::create_dir_all(staging)
+        .context("Failed to create composefs staging directory")?;
+
+    // Try with verity_check first, fall back without
+    let mount_opts_verity = format!("basedir={cas_dir},verity_check=1");
+    let mount_opts_plain = format!("basedir={cas_dir}");
+
+    let mounted = run_mount_composefs(&erofs_img.to_string_lossy(), staging, &mount_opts_verity)
+        .or_else(|_| {
+            warn!("composefs mount with verity_check failed, retrying without");
+            run_mount_composefs(&erofs_img.to_string_lossy(), staging, &mount_opts_plain)
+        })
+        .context("Failed to mount composefs image")?;
+
+    if !mounted {
+        return Err(anyhow!("composefs mount command failed"));
+    }
+
+    // Step 2: Bind-mount /usr from composefs tree (read-only)
+    let staging_usr = format!("{staging}/usr");
+    run_command("mount", &["--bind", &staging_usr, "/usr"])
+        .context("Failed to bind-mount /usr from composefs")?;
+    run_command("mount", &["-o", "remount,ro", "/usr"])
+        .context("Failed to remount /usr read-only")?;
+
+    info!("Bind-mounted /usr from generation {gen_number} (read-only)");
+
+    // Step 3: Rebuild /etc overlay with new lower
+    let staging_etc = format!("{staging}/etc");
+    // Unmount existing /etc overlay (may fail if busy, that's ok)
+    let _ = run_command("umount", &["/etc"]);
+
+    std::fs::create_dir_all("/conary/etc-state/upper")
+        .context("Failed to create /etc overlay upper dir")?;
+    std::fs::create_dir_all("/conary/etc-state/work")
+        .context("Failed to create /etc overlay work dir")?;
+
+    let etc_opts = format!(
+        "lowerdir={staging_etc},upperdir=/conary/etc-state/upper,workdir=/conary/etc-state/work"
+    );
+    match run_command("mount", &["-t", "overlay", "overlay", "/etc", "-o", &etc_opts]) {
+        Ok(()) => info!("Mounted /etc overlay with composefs lower"),
+        Err(e) => {
+            warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
+            // Non-fatal — /etc is still readable from the old generation
+        }
+    }
+
+    // Step 4: Update current symlink
+    update_current_symlink(gen_number)
+        .context("Failed to update current generation symlink")?;
+
+    info!("Switched to generation {gen_number} (composefs)");
+    println!("Switched to generation {gen_number}. Reboot recommended for full consistency.");
+
     Ok(())
+}
+
+/// Mount a composefs image at the given mountpoint.
+fn run_mount_composefs(image: &str, mountpoint: &str, opts: &str) -> Result<bool> {
+    let status = Command::new("mount")
+        .args(["-t", "composefs", image, mountpoint, "-o", opts])
+        .status()
+        .context("Failed to execute mount command")?;
+    Ok(status.success())
+}
+
+/// Run a simple command, returning Ok on success.
+fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(cmd)
+        .args(args)
+        .status()
+        .with_context(|| format!("Failed to execute {cmd}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("{cmd} exited with status {status}"))
+    }
 }
 
 /// Atomically update the `/conary/current` symlink to point to the given generation.
