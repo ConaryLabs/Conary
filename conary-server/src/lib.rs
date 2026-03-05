@@ -1,2 +1,6 @@
 // conary-server/src/lib.rs
-//! Remi package server and conaryd daemon.
+//! Remi package server, federation, and conaryd daemon.
+
+pub mod daemon;
+pub mod federation;
+pub mod server;

@@ -16,9 +16,9 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio-util", "dep:tower-http", "dep:tower", "dep:filetime", "dep:async-trait", "dep:futures", "dep:dashmap", "dep:parking_lot", "dep:mdns-sd", "dep:flume", "dep:rust-s3", "dep:tantivy", "conary-core/server"]
-daemon = ["server", "dep:sd-notify", "dep:axum-extra", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-stream"]
-polkit = ["dep:zbus"]
+server = ["dep:conary-server", "conary-core/server"]
+daemon = ["server"]
+polkit = ["conary-server/polkit"]
 # Experimental features not ready for production use (AI commands, etc.)
 experimental = []
 
@@ -72,41 +72,14 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 tar = "0.4"
 flate2 = "1.0"
 
-# Server dependencies (feature-gated) -- stay here until Phase 2
-axum = { version = "0.7", optional = true }
+# Server crate (feature-gated)
+conary-server = { path = "conary-server", optional = true }
+
+# Async runtime (needed by main.rs)
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"], optional = true }
-tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"], optional = true }
-tower = { version = "0.5", optional = true }
-filetime = { version = "0.2", optional = true }
-async-trait = { version = "0.1", optional = true }
-futures = { version = "0.3", optional = true }
 
-# Federation (CAS sharing across machines)
-dashmap = { version = "6.0", optional = true }
-parking_lot = { version = "0.12", optional = true }
-mdns-sd = { version = "0.11", optional = true }
-flume = { version = "0.11", optional = true }
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-
-# Object storage (S3-compatible, for Cloudflare R2)
-rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["tokio-rustls-tls"] }
-
-# Full-text search engine (embedded)
-tantivy = { version = "0.22", optional = true }
-
-# Daemon (feature-gated)
-sd-notify = { version = "0.4", optional = true }
-axum-extra = { version = "0.9", features = ["typed-header"], optional = true }
-hyper = { version = "1.4", features = ["server", "http1"], optional = true }
-hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"], optional = true }
-http-body-util = { version = "0.1", optional = true }
-tokio-stream = { version = "0.1", features = ["sync"], optional = true }
-fs2 = "0.4"
+# Used directly in commands/
 nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
-
-# PolicyKit integration (optional)
-zbus = { version = "4.0", optional = true }
 
 [dev-dependencies]
 

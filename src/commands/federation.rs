@@ -464,7 +464,7 @@ pub fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> R
 /// Scan for peers on the local network using mDNS
 #[cfg(feature = "server")]
 pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
-    use conary::federation::{MdnsDiscovery, PeerTier};
+    use conary_server::federation::{MdnsDiscovery, PeerTier};
     use std::time::Duration;
 
     println!("Scanning for Conary CAS peers on the local network...");

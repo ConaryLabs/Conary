@@ -53,6 +53,25 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
 
+# Deps used directly by moved modules (also in conary-core)
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "1.0"
+sha2 = "0.10"
+tempfile = "3.10"
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"] }
+base64 = "0.22"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+fs2 = "0.4"
+nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
+libc = "0.2"
+log = "0.4"
+rand = "0.8"
+regex = "1.10"
+toml = "0.8"
+uuid = { version = "1.0", features = ["v4"] }
+walkdir = "2.5"
+hex = "0.4"
+
 [features]
 default = []
 polkit = ["dep:zbus"]

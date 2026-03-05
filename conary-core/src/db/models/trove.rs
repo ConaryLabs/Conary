@@ -297,7 +297,7 @@ impl Trove {
     }
 
     /// Convert a database row to a Trove
-    pub(crate) fn from_row(row: &Row) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let type_str: String = row.get(3)?;
         let trove_type = type_str.parse::<TroveType>().map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(

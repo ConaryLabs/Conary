@@ -318,7 +318,7 @@ fn main() -> Result<()> {
                 distro,
                 sign_key,
             } => {
-                use conary::server::{IndexGenConfig, generate_indices};
+                use conary_server::server::{IndexGenConfig, generate_indices};
 
                 let config = IndexGenConfig {
                     db_path: db.db_path,
@@ -357,7 +357,7 @@ fn main() -> Result<()> {
                 pattern,
                 dry_run,
             } => {
-                use conary::server::{PrewarmConfig, run_prewarm};
+                use conary_server::server::{PrewarmConfig, run_prewarm};
 
                 let config = PrewarmConfig {
                     db_path: db.db_path,
@@ -406,7 +406,7 @@ fn main() -> Result<()> {
                 chunk_ttl_days,
             } => {
                 use anyhow::Context;
-                use conary::server::{ServerConfig, run_server};
+                use conary_server::server::{ServerConfig, run_server};
                 use std::path::PathBuf;
 
                 let config = ServerConfig {
@@ -1468,7 +1468,7 @@ fn main() -> Result<()> {
             tcp,
             foreground: _,
         }) => {
-            use conary::daemon::{DaemonConfig, run_daemon};
+            use conary_server::daemon::{DaemonConfig, run_daemon};
             use std::path::PathBuf;
 
             let config = DaemonConfig {
@@ -1501,7 +1501,7 @@ fn main() -> Result<()> {
             offline,
             no_advertise,
         }) => {
-            use conary::server::{ProxyConfig, run_proxy};
+            use conary_server::server::{ProxyConfig, run_proxy};
             use std::path::PathBuf;
 
             let config = ProxyConfig {
@@ -1539,7 +1539,7 @@ fn main() -> Result<()> {
             init,
             validate,
         }) => {
-            use conary::server::{RemiConfig, run_server_from_config};
+            use conary_server::server::{RemiConfig, run_server_from_config};
             use std::path::PathBuf;
 
             // Check if only --init was provided (before moving values)
