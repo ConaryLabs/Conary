@@ -23,16 +23,31 @@ use tracing::{debug, info};
 
 /// Critical system packages that should not be converted.
 /// Defense-in-depth: even if the client doesn't check, the server refuses.
+///
+/// This list MUST stay in sync with `src/commands/install/blocklist.rs`.
 fn is_critical_system_package(name: &str) -> bool {
     const BLOCKED: &[&str] = &[
-        "glibc", "glibc-common", "libc6", "gcc-libs",
-        "systemd", "systemd-libs", "libsystemd0",
-        "pam", "linux-pam", "libpam-modules",
-        "openssl-libs", "libssl3", "sudo", "polkit",
-        "coreutils", "util-linux", "shadow-utils",
-        "ca-certificates",
+        // Core C runtime
+        "glibc", "glibc-common", "glibc-minimal-langpack", "glibc-all-langpacks",
+        "glibc-devel", "libc6", "libc6-dev", "libc-bin", "gcc-libs",
+        // Dynamic linker
+        "ld-linux", "binutils",
+        // Init system
+        "systemd", "systemd-libs", "systemd-udev", "systemd-resolved", "libsystemd0",
+        // Authentication
+        "pam", "linux-pam", "libpam-modules", "libpam-runtime", "shadow-utils",
+        // Core utilities
+        "util-linux", "util-linux-core", "coreutils",
+        // Crypto libraries
+        "openssl-libs", "openssl", "libssl3", "libssl3t64", "libssl1.1", "libcrypto",
+        // Kernel interface
+        "linux-api-headers", "kernel-headers", "linux-libc-dev",
+        // Privilege escalation
+        "sudo", "polkit", "polkit-libs",
+        // NSS/DNS
+        "nss-softokn", "nspr", "ca-certificates",
     ];
-    BLOCKED.iter().any(|&b| name == b)
+    BLOCKED.contains(&name)
 }
 
 /// Result of a server-side conversion

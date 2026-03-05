@@ -219,6 +219,15 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         component_selection.display()
     );
 
+    // Block installation of critical system packages in takeover mode
+    if dep_mode == DepMode::Takeover && blocklist::is_blocked(&package_name) {
+        return Err(anyhow::anyhow!(
+            "Package '{}' is on the critical system blocklist and cannot be taken over. \
+             These packages (glibc, systemd, etc.) must remain managed by the system package manager.",
+            package_name
+        ));
+    }
+
     // Check if the package is adopted from the system PM
     {
         let conn = conary::db::open(db_path)

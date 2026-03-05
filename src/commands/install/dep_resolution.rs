@@ -54,10 +54,21 @@ pub fn resolve_missing_deps(
     let mut plan = DepResolutionPlan::default();
 
     for dep in missing {
-        // 1. Check blocklist first -- these are never touched
+        // 1. Check blocklist first -- these are never replaced, but must be present
         if blocklist::is_blocked(&dep.name) {
-            debug!("Dependency '{}' is on the blocklist, skipping", dep.name);
-            plan.blocked.push(dep.name.clone());
+            // Verify the blocked package is actually installed on the system
+            let is_tracked = Trove::find_by_name(conn, &dep.name)
+                .map(|t| !t.is_empty())
+                .unwrap_or(false);
+            let is_on_system = is_tracked || system_pm::is_system_package_installed(&dep.name);
+
+            if is_on_system {
+                debug!("Dependency '{}' is blocked and present on system", dep.name);
+                plan.blocked.push(dep.name.clone());
+            } else {
+                debug!("Dependency '{}' is blocked but NOT present on system", dep.name);
+                plan.unresolvable.push(dep.clone());
+            }
             continue;
         }
 
