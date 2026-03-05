@@ -60,7 +60,7 @@
 				with no upstream changes required.
 			</p>
 			<p>
-				Under the hood, Conary uses content-addressable storage (SHA-256 + Blake3) for
+				Under the hood, Conary uses content-addressable storage (SHA-256 + XXH128) for
 				file-level deduplication, a SAT-based dependency resolver (via resolvo), zstd-compressed
 				binary deltas for efficient updates, and a journal-based transaction engine that
 				guarantees crash safety.
@@ -110,7 +110,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>
-					<span class="tech-value">SHA-256, Blake3, XXH128</span>
+					<span class="tech-value">SHA-256, XXH128</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Compression</span>
@@ -131,7 +131,7 @@
 			<h2>Contributing</h2>
 			<p>
 				Conary is open source and welcomes contributions. The codebase is well-structured
-				with 1,200+ tests, comprehensive CI (GitHub Actions with clippy, test, and release
+				with 1,800+ tests, comprehensive CI (GitHub Actions with clippy, test, and release
 				workflows), and good-first-issue labels for newcomers.
 			</p>
 			<div class="about-links">

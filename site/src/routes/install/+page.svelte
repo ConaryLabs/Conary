@@ -123,7 +123,7 @@
 		<!-- Build from source -->
 		<div class="install-block animate-in" style="--stagger: 7">
 			<h2>Build from Source</h2>
-			<p class="install-note">Requires Rust 1.92+ and a C compiler.</p>
+			<p class="install-note">Requires Rust 1.93+ and a C compiler.</p>
 			<div class="terminal">
 				<div class="terminal-header">
 					<span class="terminal-dot" aria-hidden="true"></span>

@@ -142,9 +142,9 @@
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary model add nginx postgresql redis</span>
+					<span class="t-cmd">conary model diff</span>
 				</div>
-				<div class="terminal-line t-output t-success">System model updated. 3 packages added.</div>
+				<div class="terminal-line t-output">3 packages to install, 0 to remove</div>
 			</div>
 		</div>
 	</div>
