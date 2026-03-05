@@ -1,0 +1,11 @@
+[package]
+name = "conary-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+authors = ["Conary Contributors"]
+description = "Core library for the Conary package manager"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Will be populated in Task 2
