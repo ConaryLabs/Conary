@@ -1,22 +1,29 @@
 # tests/integration/remi/containers/Containerfile.ubuntu-noble
 # Ubuntu Noble (24.04) container for Remi integration testing
 #
-# DISABLED: Ubuntu Noble has glibc 2.39 which is older than the Fedora 43
-# build host (glibc 2.41). Binary compatibility requires either:
-#   - Building on Ubuntu (or older glibc)
-#   - Using musl target (cargo build --target x86_64-unknown-linux-musl)
-#   - Remi metadata synced for Ubuntu/Debian repos
-#
-# Enable with: ./run.sh --distro ubuntu-noble
+# Modes:
+#   binary  - copies pre-built binary (requires glibc-compatible build)
+#   package - installs from DEB via apt (recommended: avoids glibc mismatch)
 
 FROM docker.io/library/ubuntu:24.04
+
+ARG INSTALL_MODE=binary
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY conary /usr/local/bin/conary
-RUN chmod +x /usr/local/bin/conary
+# Copy all conary* files from build context (binary or package)
+COPY conary* /tmp/install/
+
+# Install: DEB package if present, otherwise raw binary
+RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1; then \
+        apt-get update && apt-get install -y /tmp/install/*.deb && rm -rf /var/lib/apt/lists/*; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
 
 COPY runner/ /opt/remi-tests/
 RUN chmod +x /opt/remi-tests/*.sh
@@ -26,6 +33,6 @@ RUN mkdir -p /var/lib/conary /results
 ENV DISTRO=ubuntu-noble
 ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
-ENV CONARY_BIN=/usr/local/bin/conary
+ENV CONARY_BIN=/usr/bin/conary
 
 CMD ["/opt/remi-tests/test-runner.sh"]

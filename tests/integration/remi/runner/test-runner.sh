@@ -9,16 +9,45 @@ source "$SCRIPT_DIR/lib.sh"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-CONARY="${CONARY_BIN:-/usr/local/bin/conary}"
+CONARY="${CONARY_BIN:-/usr/bin/conary}"
 DB_PATH="${DB_PATH:-/var/lib/conary/conary.db}"
 REMI_ENDPOINT="https://packages.conary.io"
-REMI_DISTRO="fedora"
-REPO_NAME="fedora-remi"
+
+# Derive Remi distro identifier from container DISTRO env var
+# DISTRO values: fedora43, arch, ubuntu-noble → Remi distros: fedora, arch, ubuntu
+case "${DISTRO:-fedora43}" in
+    fedora*)    REMI_DISTRO="fedora" ;;
+    arch*)      REMI_DISTRO="arch"   ;;
+    ubuntu*)    REMI_DISTRO="ubuntu" ;;
+    debian*)    REMI_DISTRO="debian" ;;
+    *)          REMI_DISTRO="fedora" ;;
+esac
+REPO_NAME="${REMI_DISTRO}-remi"
+
 # Remi-native sync: repo URL is the Remi endpoint itself.
 # No separate upstream URL needed - metadata comes from /v1/{distro}/metadata.
 REPO_URL="$REMI_ENDPOINT"
-TEST_PACKAGE="which"
-TEST_BINARY="/usr/bin/which"
+
+# Per-distro test packages (must exist in that distro's Remi metadata)
+case "$REMI_DISTRO" in
+    ubuntu|debian)
+        TEST_PACKAGE="patch"
+        TEST_BINARY="/usr/bin/patch"
+        TEST_PACKAGE_2="nano"
+        TEST_BINARY_2="/usr/bin/nano"
+        TEST_PACKAGE_3="jq"
+        TEST_BINARY_3="/usr/bin/jq"
+        ;;
+    *)
+        # Fedora, Arch — these packages exist in both repos
+        TEST_PACKAGE="which"
+        TEST_BINARY="/usr/bin/which"
+        TEST_PACKAGE_2="tree"
+        TEST_BINARY_2="/usr/bin/tree"
+        TEST_PACKAGE_3="jq"
+        TEST_BINARY_3="/usr/bin/jq"
+        ;;
+esac
 
 export DISTRO="${DISTRO:-fedora43}"
 export RESULTS_DIR="${RESULTS_DIR:-/results}"
@@ -30,6 +59,7 @@ echo ""
 echo "════════════════════════════════════════════════════"
 echo "  Remi Integration Tests"
 echo "  Distro:   $DISTRO"
+echo "  Remi repo: $REPO_NAME ($REMI_DISTRO)"
 echo "  Endpoint: $REMI_ENDPOINT"
 echo "  Binary:   $CONARY"
 echo "  DB:       $DB_PATH"
@@ -73,6 +103,7 @@ test_repo_add() {
     "$CONARY" repo add "$REPO_NAME" "$REPO_URL" \
         --db-path "$DB_PATH" \
         --default-strategy remi \
+        --remi-endpoint "$REMI_ENDPOINT" \
         --remi-distro "$REMI_DISTRO" \
         --no-gpg-check \
         2>&1
@@ -105,7 +136,7 @@ run_test "T04" "repo_sync" 300 test_repo_sync
 # If sync failed, skip package operation tests
 if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_SYNC" ]; then
     echo ""
-    echo "Repo sync failed - skipping package operation tests (T05-T12)"
+    echo "Repo sync failed - skipping package operation tests (T05-T24)"
     set_fatal
 fi
 
@@ -209,6 +240,250 @@ test_verify_removed() {
 }
 
 run_test "T12" "verify_removed" 10 test_verify_removed
+
+# ── T13: Version Check ──────────────────────────────────────────────────────
+
+test_version_check() {
+    local output
+    output=$("$CONARY" --version 2>&1)
+    assert_output_contains "conary" "$output"
+}
+
+run_test "T13" "version_check" 10 test_version_check
+
+# ── T14: Reinstall Which ────────────────────────────────────────────────────
+
+test_reinstall_which() {
+    "$CONARY" install "$TEST_PACKAGE" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --no-deps \
+        --sandbox never \
+        2>&1
+}
+
+_FAILS_BEFORE_REINSTALL=$_FAIL_COUNT
+run_test "T14" "reinstall_which" 300 test_reinstall_which
+
+# If reinstall failed, skip tests that depend on having which installed
+if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_REINSTALL" ]; then
+    echo ""
+    echo "Reinstall failed - skipping dependent tests (T15-T17, T22-T24)"
+    _REINSTALL_FAILED=1
+else
+    _REINSTALL_FAILED=0
+fi
+
+# ── T15: Package Info ───────────────────────────────────────────────────────
+
+test_package_info() {
+    local output
+    output=$("$CONARY" list "$TEST_PACKAGE" --info --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "$TEST_PACKAGE" "$output"
+    assert_output_contains "Version" "$output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T15" "package_info" "skipped due to T14 failure"
+else
+    run_test "T15" "package_info" 30 test_package_info
+fi
+
+# ── T16: List Files ─────────────────────────────────────────────────────────
+
+test_list_files() {
+    local output
+    output=$("$CONARY" list "$TEST_PACKAGE" --files --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "$TEST_BINARY" "$output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T16" "list_files" "skipped due to T14 failure"
+else
+    run_test "T16" "list_files" 30 test_list_files
+fi
+
+# ── T17: Path Ownership ────────────────────────────────────────────────────
+
+test_path_ownership() {
+    local output
+    output=$("$CONARY" list --path "$TEST_BINARY" --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "$TEST_PACKAGE" "$output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T17" "path_ownership" "skipped due to T14 failure"
+else
+    run_test "T17" "path_ownership" 30 test_path_ownership
+fi
+
+# ── T18: Install Tree ──────────────────────────────────────────────────────
+
+test_install_tree() {
+    "$CONARY" install "$TEST_PACKAGE_2" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --no-deps \
+        --sandbox never \
+        2>&1
+}
+
+_FAILS_BEFORE_TREE=$_FAIL_COUNT
+run_test "T18" "install_tree" 300 test_install_tree
+
+# If tree install failed, skip T19
+if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_TREE" ]; then
+    _TREE_FAILED=1
+else
+    _TREE_FAILED=0
+fi
+
+# ── T19: Verify Tree Files ─────────────────────────────────────────────────
+
+test_verify_tree_files() {
+    assert_file_exists "$TEST_BINARY_2"
+    assert_file_executable "$TEST_BINARY_2"
+}
+
+if [ "$_TREE_FAILED" -eq 1 ]; then
+    record_skip "T19" "verify_tree_files" "skipped due to T18 failure"
+else
+    run_test "T19" "verify_tree_files" 10 test_verify_tree_files
+fi
+
+# ── T20: Adopt Single Package ──────────────────────────────────────────────
+
+test_adopt_single_package() {
+    "$CONARY" system adopt curl --db-path "$DB_PATH" 2>&1
+}
+
+_FAILS_BEFORE_ADOPT=$_FAIL_COUNT
+run_test "T20" "adopt_single_package" 60 test_adopt_single_package
+
+# If adopt failed, skip T21
+if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_ADOPT" ]; then
+    _ADOPT_FAILED=1
+else
+    _ADOPT_FAILED=0
+fi
+
+# ── T21: Adopt Status ──────────────────────────────────────────────────────
+
+test_adopt_status() {
+    local output
+    output=$("$CONARY" system adopt --status --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "Conary Adoption Status" "$output"
+    assert_output_contains "Adopted" "$output"
+}
+
+if [ "$_ADOPT_FAILED" -eq 1 ]; then
+    record_skip "T21" "adopt_status" "skipped due to T20 failure"
+else
+    run_test "T21" "adopt_status" 30 test_adopt_status
+fi
+
+# ── T22: Pin Package ───────────────────────────────────────────────────────
+
+test_pin_package() {
+    "$CONARY" pin "$TEST_PACKAGE" --db-path "$DB_PATH" 2>&1
+    # Verify pin was applied
+    local query_output
+    query_output=$("$CONARY" list "$TEST_PACKAGE" --info --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "Pinned      : yes" "$query_output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T22" "pin_package" "skipped due to T14 failure"
+else
+    run_test "T22" "pin_package" 30 test_pin_package
+fi
+
+# ── T23: Unpin Package ─────────────────────────────────────────────────────
+
+test_unpin_package() {
+    "$CONARY" unpin "$TEST_PACKAGE" --db-path "$DB_PATH" 2>&1
+    # Verify pin was removed
+    local query_output
+    query_output=$("$CONARY" list "$TEST_PACKAGE" --info --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "Pinned      : no" "$query_output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T23" "unpin_package" "skipped due to T14 failure"
+else
+    run_test "T23" "unpin_package" 30 test_unpin_package
+fi
+
+# ── T24: Changeset History ─────────────────────────────────────────────────
+
+test_changeset_history() {
+    local output
+    output=$("$CONARY" system history --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "Changeset" "$output"
+}
+
+if [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T24" "changeset_history" "skipped due to T14 failure"
+else
+    run_test "T24" "changeset_history" 30 test_changeset_history
+fi
+
+# ── T25: Install Package With Dependencies ──────────────────────────────────
+
+test_install_dep_package() {
+    "$CONARY" install "$TEST_PACKAGE_3" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --no-deps \
+        --sandbox never \
+        2>&1
+}
+
+_FAILS_BEFORE_DEP=$_FAIL_COUNT
+run_test "T25" "install_dep_package" 300 test_install_dep_package
+
+# If dep package install failed, skip T26-T27
+if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_DEP" ]; then
+    _DEP_FAILED=1
+else
+    _DEP_FAILED=0
+fi
+
+# ── T26: Verify Dep Package Files ──────────────────────────────────────────
+
+test_verify_dep_files() {
+    assert_file_exists "$TEST_BINARY_3"
+}
+
+if [ "$_DEP_FAILED" -eq 1 ]; then
+    record_skip "T26" "verify_dep_files" "skipped due to T25 failure"
+else
+    run_test "T26" "verify_dep_files" 10 test_verify_dep_files
+fi
+
+# ── T27: Multiple Packages Coexist ─────────────────────────────────────────
+
+test_multi_package_coexist() {
+    local output
+    output=$("$CONARY" list --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "$TEST_PACKAGE" "$output"
+    assert_output_contains "$TEST_PACKAGE_2" "$output"
+    assert_output_contains "$TEST_PACKAGE_3" "$output"
+}
+
+if [ "$_DEP_FAILED" -eq 1 ] || [ "$_REINSTALL_FAILED" -eq 1 ]; then
+    record_skip "T27" "multi_package_coexist" "skipped due to prior install failure"
+else
+    run_test "T27" "multi_package_coexist" 10 test_multi_package_coexist
+fi
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+echo ""
+echo "[CLEANUP] Removing test packages..."
+"$CONARY" remove "$TEST_PACKAGE" --db-path "$DB_PATH" --no-scripts 2>/dev/null || true
+"$CONARY" remove "$TEST_PACKAGE_2" --db-path "$DB_PATH" --no-scripts 2>/dev/null || true
+"$CONARY" remove "$TEST_PACKAGE_3" --db-path "$DB_PATH" --no-scripts 2>/dev/null || true
 
 # ── Finalize ──────────────────────────────────────────────────────────────────
 

@@ -1,18 +1,27 @@
 # tests/integration/remi/containers/Containerfile.arch
 # Arch Linux container for Remi integration testing
 #
-# DISABLED: Remi metadata not yet synced for Arch repos.
-# Arch has rolling glibc so binary compatibility should work
-# once metadata is available.
-#
-# Enable with: ./run.sh --distro arch
+# Modes:
+#   binary  - copies pre-built binary (Arch rolling glibc is compatible)
+#   package - installs from pkg.tar.zst via pacman
 
 FROM docker.io/library/archlinux:latest
 
+ARG INSTALL_MODE=binary
+
 RUN pacman -Syu --noconfirm ca-certificates curl && pacman -Scc --noconfirm
 
-COPY conary /usr/local/bin/conary
-RUN chmod +x /usr/local/bin/conary
+# Copy all conary* files from build context (binary or package)
+COPY conary* /tmp/install/
+
+# Install: pkg.tar.zst if present, otherwise raw binary
+RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.pkg.tar.zst 1>/dev/null 2>&1; then \
+        pacman -U --noconfirm /tmp/install/*.pkg.tar.zst; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
 
 COPY runner/ /opt/remi-tests/
 RUN chmod +x /opt/remi-tests/*.sh
@@ -22,6 +31,6 @@ RUN mkdir -p /var/lib/conary /results
 ENV DISTRO=arch
 ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
-ENV CONARY_BIN=/usr/local/bin/conary
+ENV CONARY_BIN=/usr/bin/conary
 
 CMD ["/opt/remi-tests/test-runner.sh"]

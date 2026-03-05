@@ -59,3 +59,13 @@ gha-creds-*.json
 
 # Server credentials
 deploy/.credentials.toml
+
+# RPM build artifacts
+packaging/rpm/rpmbuild/
+packaging/rpm/output/
+packaging/ccs/stage/
+packaging/ccs/output/
+packaging/deb/output/
+packaging/deb/build/
+packaging/arch/output/
+vendor/

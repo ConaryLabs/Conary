@@ -1,15 +1,27 @@
 # tests/integration/remi/containers/Containerfile.fedora43
 # Minimal Fedora 43 container for Remi integration testing
 #
-# Build context: tests/integration/remi/
-# Binary is built on the host (Fedora 43, glibc 2.41) and copied in.
+# Modes:
+#   binary  (default) - copies pre-built binary directly
+#   package           - installs from RPM via dnf
 
 FROM registry.fedoraproject.org/fedora:43
 
+ARG INSTALL_MODE=binary
+
 RUN dnf install -y ca-certificates curl && dnf clean all
 
-COPY conary /usr/local/bin/conary
-RUN chmod +x /usr/local/bin/conary
+# Copy all conary* files from build context (binary or package)
+COPY conary* /tmp/install/
+
+# Install: RPM package if present, otherwise raw binary
+RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.rpm 1>/dev/null 2>&1; then \
+        dnf install -y /tmp/install/*.rpm; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
 
 COPY runner/ /opt/remi-tests/
 RUN chmod +x /opt/remi-tests/*.sh
@@ -19,6 +31,6 @@ RUN mkdir -p /var/lib/conary /results
 ENV DISTRO=fedora43
 ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
-ENV CONARY_BIN=/usr/local/bin/conary
+ENV CONARY_BIN=/usr/bin/conary
 
 CMD ["/opt/remi-tests/test-runner.sh"]

@@ -4,11 +4,13 @@
 #
 # Usage:
 #   ./tests/integration/remi/run.sh [--build] [--distro fedora43] [--binary path/to/conary]
+#   ./tests/integration/remi/run.sh --distro ubuntu-noble --package packaging/deb/output/conary_0.1.0-1_amd64.deb
 #
 # Options:
 #   --build         Build conary binary before testing (cargo build)
 #   --distro NAME   Distro to test (default: fedora43; also: ubuntu-noble, arch)
 #   --binary PATH   Path to pre-built conary binary (default: target/debug/conary)
+#   --package PATH  Path to native package (.rpm/.deb/.pkg.tar.zst) to install in container
 #   --no-cache      Rebuild container image from scratch
 #   --keep          Keep results volume after run
 #   --help          Show this help
@@ -24,6 +26,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 DISTRO="fedora43"
 BINARY=""
+PACKAGE=""
 DO_BUILD=0
 NO_CACHE=""
 KEEP_RESULTS=0
@@ -42,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --binary)
             BINARY="$2"
+            shift 2
+            ;;
+        --package)
+            PACKAGE="$2"
             shift 2
             ;;
         --no-cache)
@@ -74,21 +81,6 @@ if [ ! -f "$CONTAINERFILE" ]; then
     exit 1
 fi
 
-# Warn about disabled distros
-case "$DISTRO" in
-    ubuntu-noble)
-        echo "[WARNING] Ubuntu Noble support is experimental."
-        echo "  Binary built on Fedora 43 (glibc 2.41) may not run on Ubuntu Noble (glibc 2.39)."
-        echo "  Consider building with --target x86_64-unknown-linux-musl."
-        echo ""
-        ;;
-    arch)
-        echo "[WARNING] Arch Linux support is experimental."
-        echo "  Remi metadata not yet synced for Arch repos."
-        echo ""
-        ;;
-esac
-
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
 if ! command -v podman &>/dev/null; then
@@ -96,46 +88,68 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
-# ── Build binary ──────────────────────────────────────────────────────────────
+# ── Determine install mode ───────────────────────────────────────────────────
 
-if [ "$DO_BUILD" -eq 1 ]; then
-    echo "[*] Building conary binary..."
-    (cd "$PROJECT_ROOT" && cargo build 2>&1)
-    echo "[*] Build complete"
-    echo ""
-fi
-
-# Resolve binary path
-if [ -z "$BINARY" ]; then
-    BINARY="$PROJECT_ROOT/target/debug/conary"
-fi
-
-if [ ! -f "$BINARY" ]; then
-    echo "Conary binary not found at: $BINARY" >&2
-    echo "Build first with --build or specify path with --binary" >&2
-    exit 1
-fi
-
-echo "[*] Using binary: $BINARY"
-echo "[*] Binary size: $(du -h "$BINARY" | cut -f1)"
-echo ""
-
-# ── Prepare build context ────────────────────────────────────────────────────
-
-# Podman build context is the remi test directory.
-# We copy the binary into it temporarily.
 BUILD_CONTEXT="$SCRIPT_DIR"
-BINARY_COPY="$BUILD_CONTEXT/conary"
+INSTALL_MODE="binary"
+CLEANUP_FILES=()
 
 cleanup() {
-    rm -f "$BINARY_COPY"
+    for f in "${CLEANUP_FILES[@]}"; do
+        rm -f "$f"
+    done
     if [ "$KEEP_RESULTS" -eq 0 ]; then
         podman volume rm "conary-test-results-${DISTRO}" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
 
-cp "$BINARY" "$BINARY_COPY"
+if [ -n "$PACKAGE" ]; then
+    # ── Package mode: install native package in container ────────────────
+    INSTALL_MODE="package"
+
+    if [ ! -f "$PACKAGE" ]; then
+        echo "Package file not found: $PACKAGE" >&2
+        exit 1
+    fi
+
+    PKG_BASENAME="$(basename "$PACKAGE")"
+    cp "$PACKAGE" "$BUILD_CONTEXT/$PKG_BASENAME"
+    CLEANUP_FILES+=("$BUILD_CONTEXT/$PKG_BASENAME")
+
+    echo "Building $DISTRO (package mode)"
+    echo "[*] Using package: $PACKAGE"
+    echo "[*] Package size: $(du -h "$PACKAGE" | cut -f1)"
+    echo ""
+else
+    # ── Binary mode: copy pre-built binary into container ────────────────
+    if [ "$DO_BUILD" -eq 1 ]; then
+        echo "[*] Building conary binary..."
+        (cd "$PROJECT_ROOT" && cargo build 2>&1)
+        echo "[*] Build complete"
+        echo ""
+    fi
+
+    if [ -z "$BINARY" ]; then
+        BINARY="$PROJECT_ROOT/target/debug/conary"
+    fi
+
+    if [ ! -f "$BINARY" ]; then
+        echo "Conary binary not found at: $BINARY" >&2
+        echo "Build first with --build or specify path with --binary" >&2
+        exit 1
+    fi
+
+    cp "$BINARY" "$BUILD_CONTEXT/conary"
+    # Strip debug symbols to reduce size (podman COPY fails on very large files)
+    strip "$BUILD_CONTEXT/conary" 2>/dev/null || true
+    CLEANUP_FILES+=("$BUILD_CONTEXT/conary")
+
+    echo "Building $DISTRO (binary mode)"
+    echo "[*] Using binary: $BINARY"
+    echo "[*] Binary size: $(du -h "$BUILD_CONTEXT/conary" | cut -f1) (stripped)"
+    echo ""
+fi
 
 # ── Build container image ────────────────────────────────────────────────────
 
@@ -144,6 +158,7 @@ echo "[*] Building container image: $IMAGE_NAME"
 
 podman build \
     $NO_CACHE \
+    --build-arg "INSTALL_MODE=$INSTALL_MODE" \
     -t "$IMAGE_NAME" \
     -f "$CONTAINERFILE" \
     "$BUILD_CONTEXT" 2>&1
