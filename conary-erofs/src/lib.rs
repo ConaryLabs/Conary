@@ -9,3 +9,4 @@ pub mod chunk;
 pub mod dirent;
 pub mod inode;
 pub mod superblock;
+pub mod xattr;
