@@ -106,8 +106,6 @@ jobs:
 
           # Standalone Remi server and conaryd daemon
           cargo build --release -p conary-server
-          cp target/release/remi target/release/remi
-          cp target/release/conaryd target/release/conaryd
 
       - name: Generate checksums
         run: |

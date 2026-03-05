@@ -47,7 +47,7 @@ pub use mdns::{DiscoveredPeer, MdnsDiscovery, MdnsEvent};
 pub use peer::{Peer, PeerId, PeerRegistry, PeerScore};
 pub use router::{HierarchicalSelection, RendezvousRouter};
 
-use conary_core::error::{Error, Result};
+use conary_core::{Error, Result};
 use conary_core::hash::verify_sha256;
 use conary_core::repository::chunk_fetcher::{ChunkFetcher, LocalCacheFetcher};
 use async_trait::async_trait;

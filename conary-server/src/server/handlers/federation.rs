@@ -21,7 +21,7 @@ pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> impl In
     let db_path = { state.read().await.config.db_path.clone() };
 
     let result =
-        tokio::task::spawn_blocking(move || -> conary_core::error::Result<Vec<DirectoryPeer>> {
+        tokio::task::spawn_blocking(move || -> conary_core::Result<Vec<DirectoryPeer>> {
             let conn = conary_core::db::open(&db_path)?;
             let mut stmt = conn.prepare(
                 "SELECT id, endpoint, tier FROM federation_peers

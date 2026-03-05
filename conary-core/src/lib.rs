@@ -16,7 +16,7 @@ pub mod db;
 pub mod delta;
 pub mod dependencies;
 pub mod derived;
-pub mod error;
+mod error;
 pub mod filesystem;
 pub mod flavor;
 pub mod hash;

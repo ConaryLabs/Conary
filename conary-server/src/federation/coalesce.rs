@@ -8,7 +8,7 @@
 //! This prevents the "thundering herd" problem and reduces bandwidth
 //! when many machines request the same chunk simultaneously.
 
-use conary_core::error::{Error, Result};
+use conary_core::{Error, Result};
 use dashmap::DashMap;
 use std::future::Future;
 use std::sync::Arc;

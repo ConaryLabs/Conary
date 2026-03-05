@@ -17,7 +17,6 @@ categories = ["command-line-utilities"]
 [features]
 default = []
 server = ["dep:conary-server", "conary-core/server"]
-daemon = ["server"]
 polkit = ["conary-server/polkit"]
 # Experimental features not ready for production use (AI commands, etc.)
 experimental = []

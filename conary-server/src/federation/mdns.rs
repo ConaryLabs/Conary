@@ -34,7 +34,7 @@
 
 use super::config::PeerTier;
 use super::peer::{Peer, PeerId};
-use conary_core::error::{Error, Result};
+use conary_core::{Error, Result};
 use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
 use std::net::IpAddr;
