@@ -10,3 +10,4 @@ pub mod boot;
 pub mod switch;
 pub mod commands;
 pub mod takeover;
+pub mod composefs;
