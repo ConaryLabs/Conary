@@ -67,5 +67,5 @@ Tell Claude: "Run the full-cycle-team" or "Full cycle [area]"
 
 ## Scoping
 
-- "Full cycle the daemon subsystem" -> all 3 phases focus on src/daemon/
+- "Full cycle the daemon subsystem" -> all 3 phases focus on conary-server/src/daemon/
 - "Full cycle recent changes" -> focus on files changed in last N commits

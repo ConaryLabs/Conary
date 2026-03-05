@@ -15,7 +15,7 @@ Launch a team of 4 domain experts to review code. All agents are strictly read-o
 
 **Weakness:** Can be overly focused on theoretical purity. Needs to weigh "architecturally ideal" against "pragmatically sufficient."
 
-**Focus:** Module boundaries (db/, repository/, resolver/, filesystem/, ccs/, daemon/, federation/, server/, trust/, model/, capability/), dependency flow between modules, leaky abstractions, coupling patterns, database schema fitness (SQLite v36), state machine correctness in transaction engine, feature-gate isolation (server, daemon). Server handler patterns: shared helpers in `handlers/mod.rs` (json_response, serialize_json, SUPPORTED_DISTROS, find_repository_for_distro), response consistency, middleware layering in `routes.rs`.
+**Focus:** Module boundaries (db/, repository/, resolver/, filesystem/, ccs/, daemon/, federation/, server/, trust/, model/, capability/), dependency flow between modules, leaky abstractions, coupling patterns, database schema fitness (SQLite v44), state machine correctness in transaction engine, feature-gate isolation (server). Server handler patterns: shared helpers in `handlers/mod.rs` (json_response, serialize_json, SUPPORTED_DISTROS, find_repository_for_distro), response consistency, middleware layering in `routes.rs`.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for git/structure inspection)
 
@@ -63,15 +63,15 @@ The team will:
 ## Scoping
 
 By default, agents review the entire codebase. You can scope the review:
-- "Expert review the daemon subsystem" -> agents focus on src/daemon/
+- "Expert review the daemon subsystem" -> agents focus on conary-server/src/daemon/
 - "Expert review the last 5 commits" -> agents focus on recent changes
 - "Expert review the transaction engine" -> agents focus on src/transaction/
 
 ## Project Context
 
 - Rust 2024 edition, 1.92+, SQLite database-first
-- Build: `cargo build` (default), `--features server` (Remi), `--features daemon` (conaryd)
-- Test: `cargo test --features daemon` (1150+ tests total)
-- Lint: `cargo clippy --features server -- -D warnings` (also check with `--features daemon`)
+- Build: `cargo build` (default), `--features server` (Remi), `--features server` (conaryd)
+- Test: `cargo test --features server` (1800+ tests total)
+- Lint: `cargo clippy --features server -- -D warnings` (also check with `--features server`)
 - Conventions: file headers (`// src/path.rs`), thiserror, no emojis, clippy-clean
-- Server handlers: shared helpers in `src/server/handlers/mod.rs`, axum extractors, `spawn_blocking` for DB queries
+- Server handlers: shared helpers in `conary-server/src/server/handlers/mod.rs`, axum extractors, `spawn_blocking` for DB queries

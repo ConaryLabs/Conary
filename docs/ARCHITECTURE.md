@@ -77,122 +77,138 @@ other labels or repositories.
 
 ## Module Map
 
+The project is a Cargo workspace with 4 crates:
+
 ```
-src/
-+-- main.rs              Entry point, CLI dispatch
-+-- lib.rs               Public API surface
-+-- cli/                 Clap command definitions
-+-- commands/            Command implementations
-|   +-- install/         Install pipeline (resolve, prepare, execute)
-|   +-- model.rs         System model operations
-|   +-- trust.rs         TUF trust management
-|   +-- cook.rs          Recipe cooking
-|   +-- derived.rs       Derived package creation
-|   +-- adopt/           System adoption
-+-- db/                  Database layer
-|   +-- schema.rs        Schema v44, migration dispatcher
-|   +-- migrations.rs    All 44 migration functions
-|   +-- models/          ORM-style model structs
-+-- transaction/         Crash-safe atomic operations
-|   +-- journal.rs       Append-only recovery journal
-|   +-- planner.rs       VFS preflight conflict detection
-|   +-- recovery.rs      Roll-forward/roll-back recovery
-+-- resolver/            Dependency resolution
-|   +-- graph.rs         Directed dependency graph
-|   +-- engine.rs        Resolution algorithm
-|   +-- sat.rs           SAT-based conflict resolution
-|   +-- plan.rs          Resolution plan output
-+-- repository/          Remote package sources
-|   +-- metadata.rs      Index parsing (RPM repodata, DEB Packages, Arch DB)
-|   +-- remi.rs          Remi client (CCS chunk fetcher)
-|   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
-|   +-- mirror_health.rs Mirror health scoring
-|   +-- mirror_selector.rs Ranked mirror selection
-|   +-- metalink.rs      Metalink XML parser
-|   +-- substituter.rs   Content substituter chain
-|   +-- resolution.rs    Per-package routing strategies
-+-- filesystem/          Storage layer
-|   +-- cas.rs           Content-addressable store (SHA-256 keyed)
-|   +-- vfs/             Virtual filesystem tree (arena allocator)
-|   +-- deployer.rs      CAS-to-filesystem file deployment
-+-- packages/            Format parsers
-|   +-- rpm.rs           RPM parser
-|   +-- deb.rs           DEB parser
-|   +-- arch.rs          Arch parser
-|   +-- common.rs        Unified PackageMetadata
-+-- ccs/                 Native package format
-|   +-- builder.rs       CCS package builder
-|   +-- manifest.rs      CBOR manifest with Merkle tree
-|   +-- signing.rs       Ed25519 signing
-|   +-- lockfile.rs      ccs.lock dependency pinning
-|   +-- convert/         Legacy-to-CCS conversion
-|   +-- enhancement/     Retroactive CCS hook application
-|   +-- export/          OCI image export
-|   +-- hooks/           systemd, tmpfiles, sysctl, user/group, alternatives
-|   +-- policy.rs        Build policy engine
-+-- model/               Declarative system state
-|   +-- parser.rs        TOML model file parser
-|   +-- diff.rs          Current vs desired state diff
-|   +-- remote.rs        Remote collection fetching
-|   +-- lockfile.rs      Model lockfile for remote includes
-|   +-- signing.rs       Ed25519 collection signing
-+-- recipe/              Source-based package building
-|   +-- kitchen/         Build environment (cook, fetch, provenance)
-|   +-- parser.rs        TOML recipe parser
-|   +-- graph.rs         Multi-recipe build ordering
-|   +-- cache.rs         Build artifact cache
-|   +-- pkgbuild.rs      Arch PKGBUILD converter
-+-- trust/               TUF supply chain trust
-|   +-- client.rs        TUF metadata fetch and verification
-|   +-- metadata.rs      TUF metadata types (root, timestamp, snapshot, targets)
-|   +-- ceremony.rs      Root key ceremony
-|   +-- verify.rs        Signature verification
-+-- capability/          Package capability system
-|   +-- declaration.rs   Capability declarations (network, fs, syscalls)
-|   +-- enforcement/     Landlock (filesystem) + seccomp-BPF (syscalls)
-|   +-- inference/       Heuristic capability detection
-|   +-- resolver.rs      Capability-aware dependency resolution
-+-- provenance/          Package DNA tracking
-|   +-- source.rs        Source provenance (URL, VCS, checksums)
-|   +-- build.rs         Build provenance (compiler, flags, env)
-|   +-- signature.rs     Signature provenance
-|   +-- content.rs       Content integrity
-|   +-- slsa.rs          SLSA attestation generation
-+-- federation/          CAS peer-to-peer distribution (server feature)
-|   +-- peer.rs          Peer registry and scoring
-|   +-- router.rs        Hierarchical chunk routing
-|   +-- manifest.rs      Signed chunk manifests
-|   +-- circuit.rs       Circuit breaker for failing peers
-|   +-- coalesce.rs      Request deduplication
-|   +-- mdns.rs          LAN peer discovery
-+-- server/              Remi server (server feature)
-|   +-- routes.rs        Public + admin Axum routers
-|   +-- handlers/        HTTP handlers (chunks, packages, OCI, TUF, etc.)
-|   +-- conversion.rs    On-demand legacy-to-CCS conversion
-|   +-- r2.rs            Cloudflare R2 storage backend
-|   +-- lite.rs          Remi Lite LAN proxy
-|   +-- analytics.rs     Download event recording
-|   +-- bloom.rs         Bloom filter for chunk existence
-|   +-- security.rs      Rate limiting and IP banning
-|   +-- federated_index.rs  Merged sparse index from upstream peers
-|   +-- delta_manifests.rs  Pre-computed version deltas
-|   +-- prewarm.rs       Background package pre-conversion
-+-- daemon/              conaryd local daemon (daemon feature)
-|   +-- routes.rs        REST API endpoints
-|   +-- jobs.rs          Priority job queue with SQLite persistence
-|   +-- client.rs        CLI forwarding client with SSE
-|   +-- socket.rs        Unix socket + TCP listener
-|   +-- auth.rs          SO_PEERCRED peer authentication
-|   +-- systemd.rs       Socket activation and watchdog
-+-- bootstrap/           System bootstrap from scratch
-+-- automation/          Automated maintenance (security, orphans)
-+-- container/           Namespace isolation for scriptlets
-+-- trigger/             Post-install trigger system
-+-- components/          File-to-component classification
-+-- compression/         Unified decompression (gzip, xz, zstd)
-+-- delta/               Binary delta generation and application
-+-- version/             Version parsing and comparison
-+-- hash.rs              Multi-algorithm hashing (SHA-256, Blake3, XXH128)
+conary/                  Root crate -- CLI binary
++-- src/
+    +-- main.rs          Entry point, CLI dispatch
+    +-- cli/             Clap command definitions
+    +-- commands/        Command implementations
+        +-- install/     Install pipeline (resolve, prepare, execute)
+        +-- model.rs     System model operations
+        +-- trust.rs     TUF trust management
+        +-- cook.rs      Recipe cooking
+        +-- derived.rs   Derived package creation
+        +-- adopt/       System adoption
+
+conary-core/             Core library crate
++-- src/
+    +-- lib.rs           Public API surface
+    +-- db/              Database layer
+    |   +-- schema.rs    Schema v44, migration dispatcher
+    |   +-- migrations.rs All 44 migration functions
+    |   +-- models/      ORM-style model structs
+    +-- transaction/     Crash-safe atomic operations
+    |   +-- journal.rs   Append-only recovery journal
+    |   +-- planner.rs   VFS preflight conflict detection
+    |   +-- recovery.rs  Roll-forward/roll-back recovery
+    +-- resolver/        Dependency resolution
+    |   +-- graph.rs     Directed dependency graph
+    |   +-- engine.rs    Resolution algorithm
+    |   +-- sat.rs       SAT-based conflict resolution
+    |   +-- plan.rs      Resolution plan output
+    +-- repository/      Remote package sources
+    |   +-- metadata.rs  Index parsing (RPM repodata, DEB Packages, Arch DB)
+    |   +-- remi.rs      Remi client (CCS chunk fetcher)
+    |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
+    |   +-- mirror_health.rs Mirror health scoring
+    |   +-- mirror_selector.rs Ranked mirror selection
+    |   +-- metalink.rs  Metalink XML parser
+    |   +-- substituter.rs Content substituter chain
+    |   +-- resolution.rs Per-package routing strategies
+    +-- filesystem/      Storage layer
+    |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
+    |   +-- vfs/         Virtual filesystem tree (arena allocator)
+    |   +-- deployer.rs  CAS-to-filesystem file deployment
+    +-- packages/        Format parsers
+    |   +-- rpm.rs       RPM parser
+    |   +-- deb.rs       DEB parser
+    |   +-- arch.rs      Arch parser
+    |   +-- common.rs    Unified PackageMetadata
+    +-- ccs/             Native package format
+    |   +-- builder.rs   CCS package builder
+    |   +-- manifest.rs  CBOR manifest with Merkle tree
+    |   +-- signing.rs   Ed25519 signing
+    |   +-- lockfile.rs  ccs.lock dependency pinning
+    |   +-- convert/     Legacy-to-CCS conversion
+    |   +-- enhancement/ Retroactive CCS hook application
+    |   +-- export/      OCI image export
+    |   +-- hooks/       systemd, tmpfiles, sysctl, user/group, alternatives
+    |   +-- policy.rs    Build policy engine
+    +-- model/           Declarative system state
+    |   +-- parser.rs    TOML model file parser
+    |   +-- diff.rs      Current vs desired state diff
+    |   +-- remote.rs    Remote collection fetching
+    |   +-- lockfile.rs  Model lockfile for remote includes
+    |   +-- signing.rs   Ed25519 collection signing
+    +-- recipe/          Source-based package building
+    |   +-- kitchen/     Build environment (cook, fetch, provenance)
+    |   +-- parser.rs    TOML recipe parser
+    |   +-- graph.rs     Multi-recipe build ordering
+    |   +-- cache.rs     Build artifact cache
+    |   +-- pkgbuild.rs  Arch PKGBUILD converter
+    +-- trust/           TUF supply chain trust
+    |   +-- client.rs    TUF metadata fetch and verification
+    |   +-- metadata.rs  TUF metadata types (root, timestamp, snapshot, targets)
+    |   +-- ceremony.rs  Root key ceremony
+    |   +-- verify.rs    Signature verification
+    +-- capability/      Package capability system
+    |   +-- declaration.rs Capability declarations (network, fs, syscalls)
+    |   +-- enforcement/ Landlock (filesystem) + seccomp-BPF (syscalls)
+    |   +-- inference/   Heuristic capability detection
+    |   +-- resolver.rs  Capability-aware dependency resolution
+    +-- provenance/      Package DNA tracking
+    |   +-- source.rs    Source provenance (URL, VCS, checksums)
+    |   +-- build.rs     Build provenance (compiler, flags, env)
+    |   +-- signature.rs Signature provenance
+    |   +-- content.rs   Content integrity
+    |   +-- slsa.rs      SLSA attestation generation
+    +-- bootstrap/       System bootstrap from scratch
+    +-- automation/      Automated maintenance (security, orphans)
+    +-- container/       Namespace isolation for scriptlets
+    +-- trigger/         Post-install trigger system
+    +-- components/      File-to-component classification
+    +-- compression/     Unified decompression (gzip, xz, zstd)
+    +-- delta/           Binary delta generation and application
+    +-- version/         Version parsing and comparison
+    +-- hash.rs          Multi-algorithm hashing (SHA-256, XXH128)
+
+conary-erofs/            EROFS image builder for composefs
++-- src/
+    +-- lib.rs           EROFS filesystem image generation
+
+conary-server/           Remi server + conaryd (feature-gated: --features server)
++-- src/
+    +-- server/          Remi server
+    |   +-- routes.rs    Public + admin Axum routers
+    |   +-- handlers/    HTTP handlers (chunks, packages, OCI, TUF, etc.)
+    |   +-- conversion.rs On-demand legacy-to-CCS conversion
+    |   +-- r2.rs        Cloudflare R2 storage backend
+    |   +-- lite.rs      Remi Lite LAN proxy
+    |   +-- analytics.rs Download event recording
+    |   +-- bloom.rs     Bloom filter for chunk existence
+    |   +-- security.rs  Rate limiting and IP banning
+    |   +-- federated_index.rs Merged sparse index from upstream peers
+    |   +-- delta_manifests.rs Pre-computed version deltas
+    |   +-- prewarm.rs   Background package pre-conversion
+    +-- daemon/          conaryd local daemon
+    |   +-- routes.rs    REST API endpoints
+    |   +-- jobs.rs      Priority job queue with SQLite persistence
+    |   +-- client.rs    CLI forwarding client with SSE
+    |   +-- socket.rs    Unix socket + TCP listener
+    |   +-- auth.rs      SO_PEERCRED peer authentication
+    |   +-- systemd.rs   Socket activation and watchdog
+    +-- federation/      CAS peer-to-peer distribution
+    |   +-- peer.rs      Peer registry and scoring
+    |   +-- router.rs    Hierarchical chunk routing
+    |   +-- manifest.rs  Signed chunk manifests
+    |   +-- circuit.rs   Circuit breaker for failing peers
+    |   +-- coalesce.rs  Request deduplication
+    |   +-- mdns.rs      LAN peer discovery
+    +-- bin/
+        +-- remi.rs      Remi server binary entry point
+        +-- conaryd.rs   conaryd daemon binary entry point
 ```
 
 ## Data Flow: Package Installation
@@ -311,16 +327,15 @@ Federation / Daemon:
 
 The codebase uses Cargo feature flags to keep the client binary lean:
 
-| Feature  | Modules Enabled              | Binary     |
-|----------|------------------------------|------------|
-| (none)   | Core client                  | `conary`   |
-| server   | server/, federation/         | `conary`   |
-| daemon   | daemon/                      | `conary`   |
+| Feature  | Effect                                       | Binaries           |
+|----------|----------------------------------------------|--------------------|
+| (none)   | Client CLI only                              | `conary`           |
+| server   | Links `conary-server` crate                  | `conary` + `remi` + `conaryd` |
+| polkit   | PolicyKit auth in conaryd (requires `server`) | `conaryd`          |
 
 Build examples:
 - `cargo build` -- client only
-- `cargo build --features server` -- with Remi server
-- `cargo build --features daemon` -- with conaryd daemon
+- `cargo build --features server` -- with Remi server + conaryd daemon
 
 ## Key Design Decisions
 

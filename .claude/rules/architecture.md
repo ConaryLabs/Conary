@@ -1,11 +1,19 @@
----
-paths:
-  - "src/**"
----
-
 # Conary Architecture Reference
 
+## Workspace Structure
+
+4-crate workspace: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS), `conary-server` (Remi + conaryd). Feature gate: `--features server` enables `conary-server`.
+
 ## Key Modules
+
+### conary (root) -- CLI binary
+
+| Module | Purpose |
+|--------|---------|
+| `src/cli/` | CLI definitions |
+| `src/commands/` | Command implementations |
+
+### conary-core -- Core library
 
 | Module | Purpose |
 |--------|---------|
@@ -28,15 +36,20 @@ paths:
 | `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
 | `src/model/` | System Model - declarative OS state |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
-| `src/server/` | Remi server (feature-gated: `--features server`) |
-| `src/cli/` | CLI definitions |
-| `src/commands/` | Command implementations |
 | `src/recipe/` | Recipe system for building packages from source |
 | `src/capability/` | Capability declarations - audit, enforcement, inference |
 | `src/provenance/` | Package DNA / full provenance tracking |
 | `src/trust/` | TUF supply chain trust |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system (8-stage pipeline) |
+| `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
+
+### conary-erofs -- EROFS image builder for composefs
+
+### conary-server -- Remi + conaryd (feature-gated: `--features server`)
+
+| Module | Purpose |
+|--------|---------|
+| `src/server/` | Remi server (feature-gated: `--features server`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
-| `src/daemon/` | conaryd daemon (feature-gated: `--features daemon`) |
-| `src/hash.rs` | Multi-algorithm hashing (SHA-256, Blake3, XXH128) |
+| `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |

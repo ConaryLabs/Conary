@@ -29,16 +29,16 @@ Launch a team of 4 release engineers to prepare a Conary release. Each agent cov
 **Tools:** Read-only + Bash for git log/diff (Glob, Grep, Read, Bash)
 
 ### Pike -- Build Matrix Validator
-**Personality:** The person who runs the build 47 times on 3 platforms before saying "it's clean." Believes that "it works on my machine" is the beginning of the conversation, not the end. Methodical, slightly paranoid. "Did you run clippy with ALL features enabled? Did you test with daemon AND server? Did you check that the release binary actually starts?" Won't sign off until every combination is verified.
+**Personality:** The person who runs the build 47 times on 3 platforms before saying "it's clean." Believes that "it works on my machine" is the beginning of the conversation, not the end. Methodical, slightly paranoid. "Did you run clippy with ALL features enabled? Did you test with --features server? Did you check that the release binary actually starts?" Won't sign off until every combination is verified.
 
 **Weakness:** Can spend too long on edge-case build configurations that no user will hit. Should focus on the matrix that CI actually runs plus the three release binary variants.
 
 **Focus:**
-- Run full build matrix: `cargo build`, `cargo build --features server`, `cargo build --features daemon`, `cargo build --release`
+- Run full build matrix: `cargo build`, `cargo build --features server`, `cargo build --features server`, `cargo build --release`
 - Run `cargo fmt -- --check` (formatting)
 - Run `cargo clippy --all-targets --all-features -- -D warnings` (lints)
 - Run `cargo test` (base tests)
-- Run `cargo test --features daemon` (full test suite)
+- Run `cargo test --features server` (full test suite)
 - Run `cargo test --doc` (doc tests)
 - Verify release binary starts: `target/release/conary --version`
 - Check for dependency advisories: `cargo audit` (if cargo-audit is installed)
@@ -109,8 +109,8 @@ The team produces a checklist covering:
 - [ ] Version number determined (semver-correct)
 - [ ] `Cargo.toml` version updated
 - [ ] `CHANGELOG.md` updated with all changes since last release
-- [ ] All builds pass (default, server, daemon, release)
-- [ ] All tests pass (base + daemon features)
+- [ ] All builds pass (default, server, release)
+- [ ] All tests pass (base + server features)
 - [ ] Clippy clean with all features
 - [ ] No security advisories (`cargo audit`)
 - [ ] Release notes drafted

@@ -8,10 +8,8 @@ then `recall("architecture")` and `recall("progress")` before making changes.
 
 ```bash
 cargo build                              # Client-only (default, use for dev)
-cargo build --features server            # With Remi server
-cargo build --features daemon            # With conaryd daemon
-cargo test                               # All tests (1,200+ total)
-cargo test --features daemon             # Include daemon tests
+cargo build --features server            # With Remi server + conaryd daemon
+cargo test                               # All tests (1,800+ total)
 cargo clippy -- -D warnings              # Lint
 ```
 
@@ -28,7 +26,7 @@ IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
 
 **No Emojis**: Use text markers: `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]`.
 
-**Rust Standards**: Edition 2024, Rust 1.92, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
+**Rust Standards**: Edition 2024, Rust 1.93, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
 
 ## Architecture Glossary
 

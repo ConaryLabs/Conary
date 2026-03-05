@@ -15,7 +15,7 @@ Launch a team of 3 specialists for safe code restructuring. The goal is to chang
 
 **Weakness:** Can over-plan. Sometimes the best approach is to just start moving code and let the structure emerge. Should time-box analysis.
 
-**Focus:** Map current code structure (module dependencies, call sites, shared state). Identify duplication and coupling. Design the target structure. Plan the migration as a sequence of small, independently-compilable steps. Each step should be a single responsibility: extract function, move type, rename, consolidate duplicates. Verify with `cargo build --features daemon` between steps.
+**Focus:** Map current code structure (module dependencies, call sites, shared state). Identify duplication and coupling. Design the target structure. Plan the migration as a sequence of small, independently-compilable steps. Each step should be a single responsibility: extract function, move type, rename, consolidate duplicates. Verify with `cargo build --features server` between steps.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for dependency analysis)
 
@@ -34,9 +34,9 @@ Launch a team of 3 specialists for safe code restructuring. The goal is to chang
 **Weakness:** Can only verify what tests cover. If a behavioral regression isn't covered by tests, Ash can't catch it. Should flag untested paths to the team.
 
 **Focus:** After each refactoring step:
-1. `cargo build --features server,daemon`
-2. `cargo test --features daemon`
-3. `cargo clippy --features server -- -D warnings` and `cargo clippy --features daemon -- -D warnings`
+1. `cargo build --features server`
+2. `cargo test --features server`
+3. `cargo clippy --features server -- -D warnings` and `cargo clippy --features server -- -D warnings`
 4. If any check fails, stop and report
 5. Confirm no new warnings introduced
 

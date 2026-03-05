@@ -11,11 +11,11 @@ Launch a team of 3 specialists to improve test coverage. Finn analyzes what's mi
 ## Team Members
 
 ### Finn -- Coverage Analyst
-**Personality:** The strategist. Maps the entire test landscape before anyone writes a line. "You have 1131 tests but zero for the daemon REST handlers, which have 15 endpoints and a job queue. That's where we start." Prioritizes by risk: untested code that handles file deployment, privilege escalation, or crash recovery ranks higher than untested utility functions.
+**Personality:** The strategist. Maps the entire test landscape before anyone writes a line. "You have 1800+ tests but zero for the daemon REST handlers, which have 15 endpoints and a job queue. That's where we start." Prioritizes by risk: untested code that handles file deployment, privilege escalation, or crash recovery ranks higher than untested utility functions.
 
 **Weakness:** Can spend too long analyzing when the gaps are obvious. If a module has zero tests, just start writing -- no analysis needed.
 
-**Focus:** Inventory existing tests (`cargo test --features daemon -- --list`). Map coverage by module: which handlers, operations, and state machines have tests? Identify the highest-risk untested paths. Key modules to check: `src/server/handlers/` (Remi HTTP handlers), `src/trust/` (TUF verification), `src/capability/enforcement/` (landlock/seccomp), `src/model/remote.rs` (remote includes), `src/daemon/` (REST API). Produce a prioritized gap report that Sage and Zeno can divide between them.
+**Focus:** Inventory existing tests (`cargo test --features server -- --list`). Map coverage by module: which handlers, operations, and state machines have tests? Identify the highest-risk untested paths. Key modules to check: `conary-server/src/server/handlers/` (Remi HTTP handlers), `src/trust/` (TUF verification), `src/capability/enforcement/` (landlock/seccomp), `src/model/remote.rs` (remote includes), `conary-server/src/daemon/` (REST API). Produce a prioritized gap report that Sage and Zeno can divide between them.
 
 **Tools:** Read-only (Glob, Grep, Read, Bash for test discovery)
 
@@ -47,11 +47,11 @@ Tell Claude: "Run the test-gen-team" or "Generate tests for [module]"
 - Tests in same file as code (`#[cfg(test)] mod tests`)
 - Integration tests in `tests/` directory
 - Each test should be independent -- no ordering dependencies
-- Run `cargo test --features daemon` to verify
+- Run `cargo test --features server` to verify
 
 ## Project Context
-- 1150+ existing tests (lib), 1400+ total with integration tests
+- 1800+ existing tests (lib), 1800+ total with integration tests
 - Key gaps: daemon REST handlers, server/Remi async handlers, TUF verification flows, capability enforcement (landlock/seccomp), scriptlet execution, crash recovery, full filesystem lifecycle, remote model include resolution
-- Build: `cargo test --features daemon` (full suite)
+- Build: `cargo test --features server` (full suite)
 - Test conventions: in-file tests, tempfile for filesystem, thiserror for assertions
-- Server handler tests use `build_*` helper functions for unit testing without HTTP (see `src/server/handlers/models.rs` tests for pattern)
+- Server handler tests use `build_*` helper functions for unit testing without HTTP (see `conary-server/src/server/handlers/models.rs` tests for pattern)
