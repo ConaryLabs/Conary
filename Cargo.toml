@@ -23,6 +23,9 @@ polkit = ["dep:zbus"]
 experimental = []
 
 [dependencies]
+# EROFS image builder for composefs
+conary-erofs = { path = "conary-erofs" }
+
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
