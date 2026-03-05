@@ -1,0 +1,48 @@
+# packaging/ccs/ccs.toml
+#
+# CCS manifest for the Conary package manager itself.
+# Used to build the self-update CCS package served from Remi.
+
+[package]
+name = "conary"
+version = "0.1.0"
+description = "Modern package manager with atomic operations, rollback, and delta updates"
+license = "MIT OR Apache-2.0"
+homepage = "https://conary.io"
+repository = "https://github.com/ConaryLabs/Conary"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[package.authors]
+maintainers = ["Conary Contributors <contributors@conary.io>"]
+
+[provides]
+capabilities = ["package-manager", "conary"]
+binaries = ["/usr/bin/conary"]
+
+[requires]
+capabilities = ["glibc"]
+packages = [
+    { name = "openssl-libs", version = ">=3.0" },
+    { name = "xz-libs" },
+]
+
+[components]
+default = ["runtime", "doc", "config"]
+
+[hooks]
+
+[[hooks.directories]]
+path = "/etc/conary"
+mode = "0755"
+
+[[hooks.directories]]
+path = "/var/lib/conary"
+mode = "0755"
+
+[config]
+files = []
+noreplace = true

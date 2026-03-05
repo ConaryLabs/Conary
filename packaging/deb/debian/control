@@ -1,0 +1,14 @@
+Source: conary
+Section: admin
+Priority: optional
+Maintainer: Conary Contributors <contributors@conary.io>
+Build-Depends: debhelper-compat (= 13), libssl-dev, liblzma-dev, pkg-config
+Standards-Version: 4.6.2
+Homepage: https://github.com/ConaryLabs/Conary
+
+Package: conary
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Modern package manager with atomic operations and delta updates
+ Conary brings atomic transactions, automatic rollback, and delta updates
+ to Linux systems. Works alongside existing package managers (DNF, APT, pacman).

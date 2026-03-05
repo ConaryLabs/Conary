@@ -1,0 +1,20 @@
+# packaging/rpm/Containerfile.build
+#
+# Fedora 43 build container for Conary RPMs.
+# Includes Rust toolchain and all build dependencies.
+
+FROM registry.fedoraproject.org/fedora:43
+
+RUN dnf install -y \
+        rust >= 1.93 \
+        cargo >= 1.93 \
+        rpm-build \
+        openssl-devel \
+        xz-devel \
+        pkg-config \
+        gcc \
+    && dnf clean all
+
+RUN mkdir -p /rpmbuild/{BUILD,RPMS,SRPMS,SOURCES,SPECS} /output
+
+WORKDIR /rpmbuild

@@ -1,0 +1,26 @@
+# packaging/arch/Containerfile.build
+#
+# Arch Linux build container for Conary packages.
+# Uses rustup for toolchain management.
+
+FROM docker.io/library/archlinux:latest
+
+RUN pacman -Syu --noconfirm && \
+    pacman -S --noconfirm \
+        base-devel \
+        openssl \
+        xz \
+        pkg-config \
+        rustup && \
+    pacman -Scc --noconfirm
+
+RUN rustup default stable
+
+# makepkg refuses to run as root; create a build user
+RUN useradd -m builder && \
+    echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+RUN mkdir -p /build /output && chown builder:builder /build /output
+
+USER builder
+WORKDIR /build

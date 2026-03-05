@@ -1,0 +1,12 @@
+#!/bin/sh
+# packaging/deb/debian/postinst
+
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = "configure" ]; then
+    # Initialize the Conary database and seed default repos (including Remi CCS proxy).
+    # Safe to re-run: add_repository checks uniqueness.
+    /usr/bin/conary system init 2>/dev/null || true
+fi

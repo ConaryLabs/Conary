@@ -1,0 +1,28 @@
+# packaging/deb/Containerfile.build
+#
+# Ubuntu Noble (24.04) build container for Conary DEBs.
+# Uses rustup for a current toolchain (distro Rust is too old for MSRV 1.93).
+
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        dpkg-dev \
+        debhelper \
+        libssl-dev \
+        liblzma-dev \
+        pkg-config \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install rustup with stable toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN mkdir -p /build /output
+
+WORKDIR /build
