@@ -14,6 +14,30 @@
 
 <section class="about-section">
 	<div class="container about-content">
+		<div class="about-block animate-in" style="--stagger: 2">
+			<h2>Origins</h2>
+			<p>
+				Conary takes its name and core philosophy from the
+				<a href="https://en.wikipedia.org/wiki/Conary_(package_manager)" target="_blank" rel="noopener noreferrer">original Conary package manager</a>
+				developed at <strong>rPath</strong> in the mid-2000s. That project -- led by Erik Troan
+				and Matt Wilson, both former Red Hat engineers -- pioneered ideas that were years ahead of
+				the mainstream: content-addressable storage for packages, repository-level binary diffs,
+				a SAT-based dependency resolver, and atomic rollback of system state.
+			</p>
+			<p>
+				rPath's Conary proved these concepts worked in production, but it was written in Python 2
+				and tied to rPath's own Linux distribution (rPath Linux / Foresight Linux). When rPath was
+				acquired by SAS in 2011, the project went dormant. The ideas, however, remained sound.
+			</p>
+			<p>
+				This project is a ground-up reimplementation in Rust -- not a fork or a port. The original
+				source is long gone from active development, but the design principles endure: treat the
+				filesystem as a content store, make every operation atomic and reversible, and resolve
+				dependencies correctly the first time. We carry the name forward as a tribute to the
+				engineering that got there first.
+			</p>
+		</div>
+
 		<div class="about-block animate-in" style="--stagger: 3">
 			<h2>The Problem</h2>
 			<p>
@@ -26,7 +50,7 @@
 			</p>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 4">
+		<div class="about-block animate-in" style="--stagger: 5">
 			<h2>The Approach</h2>
 			<p>
 				Conary doesn't ask upstream maintainers to change anything. It works with existing
@@ -43,7 +67,7 @@
 			</p>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 5">
+		<div class="about-block animate-in" style="--stagger: 6">
 			<h2>Architecture</h2>
 			<div class="arch-grid">
 				<div class="arch-item">
@@ -73,7 +97,7 @@
 			</div>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 6">
+		<div class="about-block animate-in" style="--stagger: 7">
 			<h2>Tech Stack</h2>
 			<div class="tech-list">
 				<div class="tech-item">
@@ -103,7 +127,7 @@
 			</div>
 		</div>
 
-		<div class="about-block animate-in" style="--stagger: 7">
+		<div class="about-block animate-in" style="--stagger: 8">
 			<h2>Contributing</h2>
 			<p>
 				Conary is open source and welcomes contributions. The codebase is well-structured
@@ -170,6 +194,17 @@
 	.about-block p strong {
 		color: var(--color-text);
 		font-weight: 500;
+	}
+
+	.about-block p a {
+		color: var(--color-accent);
+		text-decoration: none;
+		border-bottom: 1px solid transparent;
+		transition: border-color 0.15s;
+	}
+
+	.about-block p a:hover {
+		border-bottom-color: var(--color-accent);
 	}
 
 	.arch-grid {
