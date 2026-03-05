@@ -82,15 +82,28 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
         .kernel_version
         .as_deref()
         .unwrap_or("none");
-    let size = dir_size_bytes(&gen_dir);
 
     println!("Generation {gen_number}");
     println!("  Status:   {status}");
+    println!("  Format:   {}", if meta.format.is_empty() { "reflink" } else { &meta.format });
     println!("  Created:  {}", meta.created_at);
     println!("  Packages: {}", meta.package_count);
     println!("  Kernel:   {kernel}");
     println!("  Summary:  {}", meta.summary);
-    println!("  Size:     {}", format_bytes(size));
+
+    // Show EROFS-specific info if available
+    if let Some(erofs_size) = meta.erofs_size {
+        println!("  Image:    {} (root.erofs)", format_bytes(erofs_size as u64));
+    } else {
+        let size = dir_size_bytes(&gen_dir);
+        println!("  Size:     {}", format_bytes(size));
+    }
+    if let Some(cas_refs) = meta.cas_objects_referenced {
+        println!("  CAS refs: {cas_refs}");
+    }
+    if meta.fsverity_enabled {
+        println!("  Verity:   enabled");
+    }
 
     Ok(())
 }
@@ -187,7 +200,7 @@ pub fn cmd_generation_gc(keep: usize) -> Result<()> {
     }
 
     println!(
-        "Collected {removed_count} generation(s), apparent size {}. Actual space freed depends on reflink sharing.",
+        "Collected {removed_count} generation(s), {}. CAS objects shared across generations are preserved.",
         format_bytes(freed_bytes)
     );
 
