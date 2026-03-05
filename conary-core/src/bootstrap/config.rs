@@ -111,6 +111,9 @@ pub struct BootstrapConfig {
 
     /// Enable verbose output
     pub verbose: bool,
+
+    /// Skip checksum verification (development only -- not for production)
+    pub skip_verify: bool,
 }
 
 impl Default for BootstrapConfig {
@@ -130,6 +133,7 @@ impl Default for BootstrapConfig {
             seed_url: None,
             seed_checksum: None,
             verbose: false,
+            skip_verify: false,
         }
     }
 }
@@ -173,6 +177,12 @@ impl BootstrapConfig {
     /// Use a custom crosstool-ng config
     pub fn with_crosstool_config(mut self, path: impl Into<PathBuf>) -> Self {
         self.crosstool_config = Some(path.into());
+        self
+    }
+
+    /// Skip checksum verification (development only -- not for production)
+    pub fn with_skip_verify(mut self, skip: bool) -> Self {
+        self.skip_verify = skip;
         self
     }
 
@@ -281,6 +291,18 @@ mod tests {
         assert_eq!(config.binutils_version, "2.45");
         assert_eq!(config.kernel_version, "6.16.1");
         assert_eq!(config.crosstool_version, "1.28.0");
+    }
+
+    #[test]
+    fn test_skip_verify_default_false() {
+        let config = BootstrapConfig::new();
+        assert!(!config.skip_verify);
+    }
+
+    #[test]
+    fn test_skip_verify_builder() {
+        let config = BootstrapConfig::new().with_skip_verify(true);
+        assert!(config.skip_verify);
     }
 
     #[test]

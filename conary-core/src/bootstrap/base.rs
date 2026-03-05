@@ -687,12 +687,22 @@ impl BaseBuilder {
         let pkg_name = &self.packages[idx].name;
         let expected = &recipe.source.checksum;
 
+        // Reject placeholder checksums unless skip_verify is enabled
         if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
-            warn!(
-                "  Skipping checksum verification for {} (placeholder)",
-                pkg_name
-            );
-            return Ok(());
+            if self.config.skip_verify {
+                warn!(
+                    "  Skipping placeholder checksum (--skip-verify enabled): {}",
+                    expected
+                );
+                return Ok(());
+            }
+            return Err(BaseError::SourceFetchFailed(
+                pkg_name.clone(),
+                format!(
+                    "Recipe has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
+                    expected
+                ),
+            ));
         }
 
         let (algo, hash) = expected.split_once(':').ok_or_else(|| {
