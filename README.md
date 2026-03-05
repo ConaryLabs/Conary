@@ -6,7 +6,7 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux package manager that handles RPM, DEB, and Arch packages with atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 1,800+ tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 1,800+ tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -14,13 +14,46 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 ## Why Conary
 
-**Atomic operations.** Every install, remove, and update is a changeset -- an all-or-nothing transaction. If something fails, your system stays exactly as it was. Rollback is not an afterthought; it is core to how the system works.
+**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Switch between complete system states live, without rebooting. Every generation is a self-contained snapshot -- rollback means switching a mount, not undoing thousands of file operations.
+
+```bash
+conary system generation build --summary "After nginx setup"
+conary system generation list
+conary system generation switch 2
+conary system generation rollback
+```
+
+**Atomic operations.** Every install, remove, and update is a changeset -- an all-or-nothing transaction. If something fails, your system stays exactly as it was. Rollback is not an afterthought; it is core to how the system works. Generations extend this further: the entire system state is atomic.
+
+```bash
+conary install nginx postgresql redis
+conary system state list
+conary system state rollback 5
+```
 
 **Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
 
-**68,000+ packages on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes required -- every package from Fedora, Arch, and Ubuntu is available immediately.
+```bash
+conary install ./package.rpm
+conary install ./package.deb
+conary install ./package.pkg.tar.zst
+```
 
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
+
+```bash
+conary model diff     # What needs to change?
+conary model apply    # Make it so
+conary model check    # Drift detection (CI/CD friendly, uses exit codes)
+```
+
+**68,000+ packages on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes required -- every package from Fedora, Arch, and Ubuntu is available immediately.
+
+```bash
+conary repo add remi https://packages.conary.io
+conary repo sync
+conary install nginx
+```
 
 **100K+ lines of Rust, 1,800+ tests, database schema v44.** This is not a prototype.
 
@@ -30,9 +63,13 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 | Capability | apt/dnf | pacman | Nix | Conary |
 |---|---|---|---|---|
+| Immutable generations | No | No | Yes (generations) | Yes (EROFS + composefs) |
 | Atomic transactions | No | No | Yes | Yes |
-| Rollback to any state | No | No | Yes (generations) | Yes (snapshots) |
+| Rollback to any state | No | No | Yes (generations) | Yes (snapshots + generations) |
+| System takeover | No | No | No | Yes |
+| Bootstrap from scratch | No | No | Yes | Yes |
 | Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
+| Derived packages | No | No | Yes (overlays) | Yes |
 | Component model (install :devel only) | No | Split packages | No | Automatic |
 | Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
 | Content-addressable storage | No | No | Yes | Yes |
@@ -45,9 +82,9 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 | Mature ecosystem | Yes | Yes | Yes | No (early) |
 | Package count | 60K+ | 15K+ | 100K+ | Via conversion |
 
-Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
+Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, immutable system images, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
 
-The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early.
+The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations are a recent addition and are under active development.
 
 ---
 
@@ -77,11 +114,41 @@ conary query whatprovides libc.so.6
 
 # Adopt packages already on the system
 conary system adopt --system     # Track everything installed by RPM/APT
+
+# Build a generation from current system state
+conary system generation build --summary "Initial setup"
+conary system generation list
+conary system generation switch 1
 ```
 
 ---
 
 ## Features
+
+### System Generations
+
+Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Switch between generations live without rebooting -- the active generation is swapped atomically. Old generations can be garbage collected to reclaim space.
+
+Requires Linux 6.2+ with composefs support.
+
+```bash
+conary system generation build --summary "Post-update"
+conary system generation list        # Show all generations
+conary system generation switch 3    # Switch to generation 3
+conary system generation rollback    # Revert to previous generation
+conary system generation gc --keep 3 # Keep only the 3 most recent
+conary system generation info 2      # Detailed info about generation 2
+```
+
+### System Takeover
+
+Convert an existing Linux installation into a Conary-managed system. Takeover scans installed packages (RPM, DEB, or Arch), adopts them into Conary's database, optionally converts them to CCS via Remi, and builds an initial generation. This is how you adopt Conary on a running system without reinstalling.
+
+```bash
+conary system takeover --dry-run     # Preview what would happen
+conary system takeover               # Full system adoption
+conary system takeover --skip-conversion  # Adopt without CCS conversion
+```
 
 ### Atomic Transactions
 
@@ -156,6 +223,33 @@ Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, 
 ```bash
 conary install nginx:runtime      # Binaries only
 conary install openssl:devel      # Headers and libs for building
+```
+
+### Bootstrap System
+
+Build a complete Conary-managed Linux system from scratch. The bootstrap pipeline has four stages: Stage 0 builds a cross-compilation toolchain, Stage 1 builds a self-hosted toolchain, Base builds core system packages, and Image produces a bootable disk image. Targets x86_64, aarch64, and riscv64.
+
+```bash
+conary bootstrap init --target x86_64
+conary bootstrap check              # Verify prerequisites
+conary bootstrap stage0             # Cross-compilation toolchain
+conary bootstrap stage1             # Self-hosted toolchain
+conary bootstrap base               # Core system packages
+conary bootstrap image --format raw # Bootable disk image
+conary bootstrap status             # Progress report
+conary bootstrap resume             # Resume from last checkpoint
+```
+
+### Derived Packages
+
+Create custom variants of existing packages with patches and file overrides, without rebuilding from source. Derived packages track their parent and can be flagged as stale when the parent is updated.
+
+```bash
+conary derive create my-nginx --from nginx
+conary derive patch my-nginx fix-config.patch
+conary derive override my-nginx /etc/nginx/nginx.conf --source ./custom.conf
+conary derive build my-nginx
+conary derive stale              # List derived packages needing rebuild
 ```
 
 <details>
@@ -247,16 +341,61 @@ conary capability enforce nginx       # Apply restrictions
 
 </details>
 
+<details>
+<summary><strong>Configuration Management</strong></summary>
+
+Track, diff, backup, and restore configuration files across package updates. Conary records which config files belong to which packages and detects local modifications. Backup and restore operations are tied to the database so you can see the full history of changes.
+
+```bash
+conary config list                   # Show modified config files
+conary config list nginx --all       # All config files for a package
+conary config diff /etc/nginx/nginx.conf  # Diff against package version
+conary config backup /etc/nginx/nginx.conf
+conary config restore /etc/nginx/nginx.conf
+conary config check                  # Check all config file status
+```
+
+</details>
+
+<details>
+<summary><strong>Package Provenance and SBOM</strong></summary>
+
+Full supply chain metadata for every package. Provenance tracks where a package came from, how it was built, and what it contains. SBOM generation produces standard formats for auditing. Includes SLSA attestation support for verifying build integrity.
+
+```bash
+conary provenance show nginx         # Origin, build info, signatures
+conary provenance verify nginx       # Verify signatures and attestations
+conary provenance diff nginx openssl # Compare provenance between packages
+conary system sbom nginx --format spdx  # Generate SBOM
+```
+
+</details>
+
+<details>
+<summary><strong>Trigger System</strong></summary>
+
+Automatic post-transaction actions with DAG-based ordering. 10+ built-in triggers handle common system maintenance: ldconfig (shared library cache), depmod (kernel modules), fc-cache (fonts), update-mime-database, update-desktop-database, gtk-update-icon-cache, glib-compile-schemas, systemd-related reloads, and more. Triggers fire based on file path patterns and can be enabled, disabled, or extended with custom triggers.
+
+```bash
+conary system trigger list           # Show all triggers
+conary system trigger show ldconfig  # Trigger details
+conary system trigger enable NAME    # Enable a trigger
+conary system trigger disable NAME   # Disable a trigger
+```
+
+</details>
+
 ---
 
 ## Architecture
 
-Conary is structured around a few core concepts:
+Conary is a system manager structured around a few core concepts:
 
 | Concept | Description |
 |---------|-------------|
 | **Trove** | The universal unit -- packages, components, and collections are all troves |
 | **Changeset** | An atomic transition from one system state to another |
+| **Generation** | An immutable EROFS image of a complete system state |
 | **Flavor** | Build variations (architecture, feature flags): `[ssl, !debug, is: x86_64]` |
 | **Label** | Package provenance: `repository@namespace:tag` |
 | **CAS** | Content-addressable storage for all file data |
@@ -337,9 +476,19 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v44). A production Remi server is running at packages.conary.io.
+**Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v44). System generations (EROFS + composefs), system takeover, and the bootstrap pipeline are implemented. A production Remi server is running at packages.conary.io.
 
 See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
+
+---
+
+## What's Next
+
+- Shell integration (direnv-style)
+- P2P chunk distribution plugins
+- Multi-version package support
+- VFS component merging
+- Full repository server with version control
 
 ---
 
