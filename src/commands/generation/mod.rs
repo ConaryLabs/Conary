@@ -9,4 +9,6 @@ pub mod builder;
 #[allow(unused)]
 pub mod metadata;
 #[allow(unused)]
+pub mod boot;
+#[allow(unused)]
 pub mod switch;
