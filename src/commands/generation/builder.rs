@@ -8,7 +8,7 @@ use super::metadata::{
 use anyhow::{Context, Result, anyhow};
 use conary::db::models::{FileEntry, StateEngine, Trove};
 use conary::db::paths::objects_dir;
-use conary::filesystem::{CasStore, FileDeployer};
+use conary::filesystem::FileDeployer;
 use conary::filesystem::reflink::supports_reflinks;
 use tracing::{debug, info, warn};
 

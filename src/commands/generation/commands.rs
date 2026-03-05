@@ -122,11 +122,16 @@ pub fn cmd_generation_gc(keep: usize) -> Result<()> {
 
     all_numbers.sort();
 
-    // Build the keep set: current + gc_roots + last N generations
+    // Build the keep set: current + booted + gc_roots + last N generations
     let mut keep_set = std::collections::HashSet::new();
 
     if let Some(cur) = current {
         keep_set.insert(cur);
+    }
+
+    // Protect the currently-booted generation (may differ from current)
+    if let Some(booted) = booted_generation() {
+        keep_set.insert(booted);
     }
 
     for root in &gc_roots {
@@ -182,11 +187,24 @@ pub fn cmd_generation_gc(keep: usize) -> Result<()> {
     }
 
     println!(
-        "Collected {removed_count} generation(s), freed {}.",
+        "Collected {removed_count} generation(s), apparent size {}. Actual space freed depends on reflink sharing.",
         format_bytes(freed_bytes)
     );
 
     Ok(())
+}
+
+/// Read the currently-booted generation from `/proc/cmdline`.
+///
+/// Returns `None` if no `conary.generation=N` parameter is present.
+fn booted_generation() -> Option<i64> {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
+    cmdline
+        .split_whitespace()
+        .find(|p| p.starts_with("conary.generation="))?
+        .strip_prefix("conary.generation=")?
+        .parse()
+        .ok()
 }
 
 /// Read GC root entries from the gc-roots directory.

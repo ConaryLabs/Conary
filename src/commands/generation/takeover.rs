@@ -21,6 +21,7 @@ use tracing::{info, warn};
 pub struct TakeoverPlan {
     pub already_tracked: Vec<String>,
     pub to_adopt: Vec<String>,
+    #[allow(dead_code)] // Reserved for future CCS conversion from Remi
     pub to_convert: Vec<String>,
     pub blocked: Vec<String>,
     pub total_system_packages: usize,

@@ -493,14 +493,28 @@ fn main() -> Result<()> {
                 cli::GenerationCommands::Rollback => {
                     let current = commands::generation::switch::current_generation()?
                         .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
-                    if current <= 1 {
-                        return Err(anyhow::anyhow!("Cannot rollback from generation 1"));
+
+                    // Find the highest generation below current that actually exists
+                    let gen_dir = commands::generation::metadata::generations_dir();
+                    let mut candidates: Vec<i64> = Vec::new();
+                    if gen_dir.exists() {
+                        for entry in std::fs::read_dir(&gen_dir)? {
+                            let entry = entry?;
+                            if let Ok(n) = entry.file_name().to_string_lossy().parse::<i64>() && n < current {
+                                candidates.push(n);
+                            }
+                        }
                     }
-                    commands::generation::switch::switch_live(current - 1)?;
-                    if let Err(e) = commands::generation::boot::write_boot_entry(current - 1) {
+                    candidates.sort();
+                    let previous = candidates.last().ok_or_else(|| {
+                        anyhow::anyhow!("No previous generation to roll back to")
+                    })?;
+
+                    commands::generation::switch::switch_live(*previous)?;
+                    if let Err(e) = commands::generation::boot::write_boot_entry(*previous) {
                         eprintln!("Boot entry skipped: {}", e);
                     }
-                    println!("Rolled back to generation {}", current - 1);
+                    println!("Rolled back to generation {previous}");
                     Ok(())
                 }
                 cli::GenerationCommands::Gc { keep } => {

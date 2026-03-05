@@ -48,10 +48,10 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
             continue;
         }
 
-        match renameat2_exchange(&gen_path, &live_path) {
+        let swap_result = match renameat2_exchange(&gen_path, &live_path) {
             Ok(()) => {
                 info!("Exchanged {} atomically", dir);
-                exchanged.push(*dir);
+                Ok(())
             }
             Err(e) => {
                 warn!(
@@ -59,8 +59,26 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
                     dir
                 );
                 fallback_rename(&gen_path, &live_path, dir)
-                    .with_context(|| format!("Fallback rename failed for {dir}"))?;
-                exchanged.push(*dir);
+                    .with_context(|| format!("Fallback rename failed for {dir}"))
+            }
+        };
+
+        match swap_result {
+            Ok(()) => exchanged.push(*dir),
+            Err(e) => {
+                // Roll back already-exchanged directories to restore consistency
+                for prev_dir in exchanged.iter().rev() {
+                    let prev_gen = gen_dir.join(prev_dir);
+                    let prev_live = Path::new("/").join(prev_dir);
+                    if let Err(rb_err) = renameat2_exchange(&prev_gen, &prev_live) {
+                        warn!(
+                            "CRITICAL: Failed to rollback {prev_dir} during switch abort: {rb_err}"
+                        );
+                    } else {
+                        info!("Rolled back {prev_dir} exchange");
+                    }
+                }
+                return Err(e);
             }
         }
     }
@@ -83,7 +101,9 @@ fn renameat2_exchange(a: &Path, b: &Path) -> Result<()> {
     let b_cstr = CString::new(b.as_os_str().as_encoded_bytes())
         .context("Path contains null byte")?;
 
-    // RENAME_EXCHANGE = 2
+    /// renameat2(2) flag: atomically exchange two paths.
+    const RENAME_EXCHANGE: u32 = 2;
+
     #[allow(unsafe_code)]
     let ret = unsafe {
         libc::syscall(
@@ -92,7 +112,7 @@ fn renameat2_exchange(a: &Path, b: &Path) -> Result<()> {
             a_cstr.as_ptr(),
             libc::AT_FDCWD,
             b_cstr.as_ptr(),
-            2u32,
+            RENAME_EXCHANGE,
         )
     };
 

@@ -68,7 +68,7 @@ pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
          linux      /vmlinuz-{kernel_version}\n\
          initrd     /initramfs-{kernel_version}.img\n\
          options    {options}\n\
-         sort-key   conary\n\
+         sort-key   conary-{gen_number:04}\n\
          machine-id {machine_id}\n",
         date = metadata.created_at,
     );
