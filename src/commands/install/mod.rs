@@ -2,14 +2,20 @@
 //! Package installation commands
 
 mod batch;
+mod blocklist;
 mod conversion;
+mod dep_mode;
+mod dep_resolution;
 mod dependencies;
 mod execute;
 mod prepare;
 mod resolve;
 mod scriptlets;
+mod system_pm;
 
 pub use batch::{BatchInstaller, prepare_package_for_batch};
+pub use blocklist::is_blocked as is_package_blocked;
+pub use dep_mode::DepMode;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
@@ -76,6 +82,10 @@ pub struct InstallOptions<'a> {
     pub no_capture: bool,
     /// Force install even for adopted packages
     pub force: bool,
+    /// Dependency handling mode: satisfy, adopt, takeover
+    pub dep_mode: DepMode,
+    /// Skip confirmation prompts
+    pub yes: bool,
 }
 
 pub(super) fn run_triggers(
@@ -116,6 +126,7 @@ pub(super) fn run_triggers(
 
 /// Check if missing dependencies can be satisfied by tracked packages.
 /// Prints status and returns error if any dependencies cannot be satisfied.
+#[allow(dead_code)]
 fn report_provides_check(
     conn: &rusqlite::Connection,
     missing: &[conary::resolver::MissingDependency],
@@ -179,6 +190,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         convert_to_ccs,
         no_capture,
         force,
+        dep_mode,
+        yes,
     } = opts;
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) =
@@ -389,126 +402,216 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             ));
         }
 
-        // Handle missing dependencies
+        // Handle missing dependencies with dep-mode awareness
         if !plan.missing.is_empty() {
             info!("Found {} missing dependencies", plan.missing.len());
 
-            // Try to find missing deps in repositories
-            let missing_names: Vec<String> = plan.missing.iter().map(|m| m.name.clone()).collect();
+            // Dep-mode-aware resolution
+            let dep_plan =
+                dep_resolution::resolve_missing_deps(&conn, &plan.missing, dep_mode);
 
-            match repository::resolve_dependencies_transitive(&conn, &missing_names, 10) {
-                Ok(to_download) => {
-                    if !to_download.is_empty() {
-                        if dry_run {
-                            println!("Would install {} missing dependencies:", to_download.len());
-                        } else {
-                            println!("Installing {} missing dependencies:", to_download.len());
+            // Report blocked packages
+            if !dep_plan.blocked.is_empty() {
+                println!(
+                    "  Blocked (critical system packages): {}",
+                    dep_plan.blocked.join(", ")
+                );
+            }
+
+            // Report satisfied packages
+            for (name, reason) in &dep_plan.satisfied {
+                debug!("Dependency {} satisfied: {}", name, reason);
+            }
+            if !dep_plan.satisfied.is_empty() {
+                println!(
+                    "  {} dependencies satisfied by system",
+                    dep_plan.satisfied.len()
+                );
+            }
+
+            // Confirmation prompt for non-trivial dependency installs
+            let total_changes = dep_plan.to_install.len() + dep_plan.to_adopt.len();
+            if total_changes > 0 && !dry_run && !yes {
+                println!();
+                print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
+                use std::io::Write;
+                std::io::stdout().flush()?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let input = input.trim().to_lowercase();
+                if input == "n" || input == "no" {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            // Handle auto-adoption (adopt mode)
+            if !dep_plan.to_adopt.is_empty() && !dry_run {
+                println!(
+                    "  Auto-adopting {} system dependencies:",
+                    dep_plan.to_adopt.len()
+                );
+                for name in &dep_plan.to_adopt {
+                    println!("    {}", name);
+                }
+                // Use the adopt subsystem
+                if let Err(e) =
+                    crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)
+                {
+                    warn!("Failed to auto-adopt dependencies: {}", e);
+                    // Non-fatal -- deps are still on the system
+                }
+            } else if !dep_plan.to_adopt.is_empty() {
+                println!(
+                    "  Would auto-adopt {} system dependencies:",
+                    dep_plan.to_adopt.len()
+                );
+                for name in &dep_plan.to_adopt {
+                    println!("    {}", name);
+                }
+            }
+
+            // Handle packages that need to be installed from repos
+            if !dep_plan.to_install.is_empty() {
+                let dep_names: Vec<String> =
+                    dep_plan.to_install.iter().map(|d| d.name.clone()).collect();
+
+                if dry_run {
+                    println!(
+                        "  Would install {} dependencies from Remi:",
+                        dep_names.len()
+                    );
+                    // Validate that deps are actually resolvable even in dry-run
+                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
+                    {
+                        Ok(to_download) => {
+                            for name in &dep_names {
+                                println!("    {}", name);
+                            }
+                            if to_download.is_empty() {
+                                println!("  (all dependencies already available locally)");
+                            }
                         }
-                        for (dep_name, pkg) in &to_download {
-                            println!("  {} ({})", dep_name, pkg.package.version);
+                        Err(e) => {
+                            for name in &dep_names {
+                                println!("    {} (resolution pending)", name);
+                            }
+                            println!(
+                                "  [WARN] Dependency resolution check failed: {}",
+                                e
+                            );
                         }
+                    }
+                } else {
+                    println!("  Installing {} dependencies:", dep_names.len());
+                    for name in &dep_names {
+                        println!("    {}", name);
+                    }
 
-                        if !dry_run {
-                            progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
-                            let temp_dir = TempDir::new()?;
-                            let keyring_dir = keyring_dir(db_path);
-                            match repository::download_dependencies(
-                                &to_download,
-                                temp_dir.path(),
-                                Some(&keyring_dir),
-                            ) {
-                                Ok(downloaded) => {
-                                    // Use batch installer for atomic dependency installation
-                                    // This ensures all dependencies are installed in a single
-                                    // transaction - if any fails, all are rolled back.
-                                    let parent_name = pkg.name().to_string();
-                                    let mut prepared_packages =
-                                        Vec::with_capacity(downloaded.len());
+                    // Use existing transitive resolution and batch install
+                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
+                    {
+                        Ok(to_download) => {
+                            if !to_download.is_empty() {
+                                progress
+                                    .set_phase(pkg.name(), InstallPhase::InstallingDeps);
+                                let temp_dir = TempDir::new()?;
+                                let keyring_dir = keyring_dir(db_path);
+                                let downloaded = repository::download_dependencies(
+                                    &to_download,
+                                    temp_dir.path(),
+                                    Some(&keyring_dir),
+                                )?;
 
-                                    // Prepare all dependencies
-                                    for (dep_name, dep_path) in &downloaded {
-                                        progress.set_status(&format!(
-                                            "Preparing dependency: {}",
-                                            dep_name
-                                        ));
-                                        info!("Preparing dependency: {}", dep_name);
-                                        let reason = format!("Required by {}", parent_name);
-                                        match prepare_package_for_batch(
-                                            dep_path,
-                                            db_path,
-                                            &reason,
-                                            allow_downgrade,
-                                        ) {
-                                            Ok(prepared) => {
-                                                prepared_packages.push(prepared);
-                                            }
-                                            Err(e) => {
-                                                // Check for "already installed" error
-                                                let err_str = e.to_string();
-                                                if err_str.contains("already installed") {
-                                                    info!(
-                                                        "Dependency {} already installed, skipping",
-                                                        dep_name
-                                                    );
-                                                    continue;
-                                                }
-                                                return Err(anyhow::anyhow!(
-                                                    "Failed to prepare dependency {}: {}",
-                                                    dep_name,
-                                                    e
-                                                ));
-                                            }
+                                let parent_name = pkg.name().to_string();
+                                let mut prepared_packages =
+                                    Vec::with_capacity(downloaded.len());
+
+                                for (dep_name, dep_path) in &downloaded {
+                                    progress.set_status(&format!(
+                                        "Preparing dependency: {}",
+                                        dep_name
+                                    ));
+                                    let reason = format!("Required by {}", parent_name);
+                                    match prepare_package_for_batch(
+                                        dep_path,
+                                        db_path,
+                                        &reason,
+                                        allow_downgrade,
+                                    ) {
+                                        Ok(prepared) => {
+                                            prepared_packages.push(prepared);
                                         }
-                                    }
-
-                                    // Install all dependencies atomically
-                                    if !prepared_packages.is_empty() {
-                                        progress.set_status(&format!(
-                                            "Installing {} dependencies atomically...",
-                                            prepared_packages.len()
-                                        ));
-                                        info!(
-                                            "Installing {} dependencies atomically",
-                                            prepared_packages.len()
-                                        );
-
-                                        let installer = BatchInstaller::new(
-                                            db_path,
-                                            root,
-                                            sandbox_mode,
-                                            no_scripts,
-                                        );
-
-                                        if let Err(e) = installer.install_batch(prepared_packages) {
+                                        Err(e) => {
+                                            if e.to_string().contains("already installed") {
+                                                info!(
+                                                    "Dependency {} already installed, skipping",
+                                                    dep_name
+                                                );
+                                                continue;
+                                            }
                                             return Err(anyhow::anyhow!(
-                                                "Failed to install dependencies atomically: {}",
+                                                "Failed to prepare dependency {}: {}",
+                                                dep_name,
                                                 e
                                             ));
                                         }
-
-                                        println!(
-                                            "  [OK] Installed {} dependencies atomically",
-                                            downloaded.len()
-                                        );
                                     }
                                 }
-                                Err(e) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Failed to download dependencies: {}",
-                                        e
-                                    ));
+
+                                if !prepared_packages.is_empty() {
+                                    let installer = BatchInstaller::new(
+                                        db_path,
+                                        root,
+                                        sandbox_mode,
+                                        no_scripts,
+                                    );
+                                    installer.install_batch(prepared_packages)?;
+                                    println!(
+                                        "  [OK] Installed {} dependencies",
+                                        downloaded.len()
+                                    );
                                 }
                             }
                         }
-                    } else {
-                        // Dependencies not found in Conary repos - check provides table
-                        report_provides_check(&conn, &plan.missing, pkg.name())?;
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Failed to resolve dependencies from repositories: {}",
+                                e
+                            ));
+                        }
                     }
                 }
-                Err(e) => {
-                    debug!("Repository lookup failed: {}", e);
-                    // Check provides table for dependencies
-                    report_provides_check(&conn, &plan.missing, pkg.name())?;
+            }
+
+            // Check for unresolvable dependencies
+            if !dep_plan.unresolvable.is_empty() {
+                // Last resort: check provides table
+                let (satisfied, still_missing) =
+                    check_provides_dependencies(&conn, &dep_plan.unresolvable);
+                if !satisfied.is_empty() {
+                    for (name, provider, _) in &satisfied {
+                        println!("  {} provided by {}", name, provider);
+                    }
+                }
+                if !still_missing.is_empty() {
+                    eprintln!("\nUnresolvable dependencies:");
+                    for dep in &still_missing {
+                        eprintln!(
+                            "  {} (required by: {})",
+                            dep.name,
+                            dep.required_by.join(", ")
+                        );
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Cannot install {}: {} unresolvable dependencies\n\
+                         Hint: Use --dep-mode adopt to auto-adopt system packages\n\
+                         Hint: Use --dep-mode takeover to install CCS versions from Remi\n\
+                         Hint: Use --no-deps to skip dependency checking",
+                        pkg.name(),
+                        still_missing.len()
+                    ));
                 }
             }
         } else {

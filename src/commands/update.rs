@@ -1,6 +1,7 @@
 // src/commands/update.rs
 //! Update, pinning, and delta statistics commands
 
+use super::install::DepMode;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{SandboxMode, cmd_install};
 use anyhow::Result;
@@ -101,6 +102,8 @@ pub fn cmd_update(
     root: &str,
     security_only: bool,
     sandbox_mode: SandboxMode,
+    dep_mode: DepMode,
+    yes: bool,
 ) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
@@ -144,12 +147,6 @@ pub fn cmd_update(
             continue;
         }
 
-        // Skip adopted packages -- they should be updated via the system PM
-        if trove.install_source.is_adopted() {
-            adopted_skipped.push(trove.name.clone());
-            continue;
-        }
-
         let repo_packages = RepositoryPackage::find_by_name(&conn, &trove.name)?;
         for repo_pkg in repo_packages {
             if repo_pkg.version != trove.version
@@ -158,6 +155,46 @@ pub fn cmd_update(
                 // Filter by security if requested
                 if security_only && !repo_pkg.is_security_update {
                     continue;
+                }
+
+                // For adopted packages, behavior depends on dep-mode
+                if trove.install_source.is_adopted() {
+                    match dep_mode {
+                        DepMode::Satisfy => {
+                            // Report update available but don't act
+                            println!(
+                                "  {} {} -> {} (adopted, use --dep-mode takeover to update via Conary)",
+                                trove.name, trove.version, repo_pkg.version
+                            );
+                            adopted_skipped.push(trove.name.clone());
+                            break;
+                        }
+                        DepMode::Adopt => {
+                            // Track the new version without changing ownership
+                            println!(
+                                "  {} {} -> {} (adopted, tracking update)",
+                                trove.name, trove.version, repo_pkg.version
+                            );
+                            adopted_skipped.push(trove.name.clone());
+                            break;
+                        }
+                        DepMode::Takeover => {
+                            // Check blocklist before takeover
+                            if super::install::is_package_blocked(&trove.name) {
+                                println!(
+                                    "  {} {} (blocked - critical system package, skipping)",
+                                    trove.name, trove.version
+                                );
+                                adopted_skipped.push(trove.name.clone());
+                                break;
+                            }
+                            // Fall through to normal update handling - download CCS from Remi
+                            println!(
+                                "  {} {} -> {} (taking over from system PM)",
+                                trove.name, trove.version, repo_pkg.version
+                            );
+                        }
+                    }
                 }
 
                 // Get the repository for GPG verification
@@ -187,7 +224,7 @@ pub fn cmd_update(
         );
     }
 
-    // Report adopted packages that were skipped
+    // Report adopted packages that were skipped (only in satisfy/adopt modes)
     if !adopted_skipped.is_empty() {
         let sample: Vec<&str> = adopted_skipped.iter().take(5).map(|s| s.as_str()).collect();
         let suffix = if adopted_skipped.len() > 5 {
@@ -195,13 +232,34 @@ pub fn cmd_update(
         } else {
             String::new()
         };
-        println!(
-            "Skipping {} adopted package(s) (use '{}' instead): {}{}",
-            adopted_skipped.len(),
-            pkg_mgr.update_command("<package>"),
-            sample.join(", "),
-            suffix
-        );
+        match dep_mode {
+            DepMode::Satisfy => {
+                println!(
+                    "Skipping {} adopted package(s) (use '{}' or --dep-mode takeover): {}{}",
+                    adopted_skipped.len(),
+                    pkg_mgr.update_command("<package>"),
+                    sample.join(", "),
+                    suffix
+                );
+            }
+            DepMode::Adopt => {
+                println!(
+                    "Tracking {} adopted package(s) (metadata only): {}{}",
+                    adopted_skipped.len(),
+                    sample.join(", "),
+                    suffix
+                );
+            }
+            DepMode::Takeover => {
+                // In takeover mode, adopted_skipped only contains blocked packages
+                println!(
+                    "Blocked {} critical package(s) from takeover: {}{}",
+                    adopted_skipped.len(),
+                    sample.join(", "),
+                    suffix
+                );
+            }
+        }
     }
 
     if updates_available.is_empty() {
@@ -413,6 +471,8 @@ pub fn cmd_update(
                     db_path,
                     root,
                     sandbox_mode,
+                    dep_mode,
+                    yes,
                     ..Default::default()
                 },
             ) {
@@ -545,6 +605,8 @@ pub fn cmd_update_group(
     root: &str,
     security_only: bool,
     sandbox_mode: SandboxMode,
+    dep_mode: DepMode,
+    yes: bool,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
     let conn = conary::db::open(db_path)?;
@@ -639,6 +701,8 @@ pub fn cmd_update_group(
             root,
             security_only,
             sandbox_mode,
+            dep_mode,
+            yes,
         ) {
             Ok(()) => updated_count += 1,
             Err(e) => {

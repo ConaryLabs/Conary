@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use std::io;
+use std::str::FromStr;
 
 mod cli;
 mod commands;
@@ -43,8 +44,11 @@ fn main() -> Result<()> {
             no_capture,
             skip_optional,
             force,
+            dep_mode,
+            yes,
         }) => {
             let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
+            let dep_mode = commands::DepMode::from_str(&dep_mode)?;
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
@@ -74,6 +78,8 @@ fn main() -> Result<()> {
                         convert_to_ccs,
                         no_capture,
                         force,
+                        dep_mode,
+                        yes,
                     },
                 )
             }
@@ -104,8 +110,11 @@ fn main() -> Result<()> {
             common,
             security,
             sandbox,
+            dep_mode,
+            yes,
         }) => {
             let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
+            let dep_mode = commands::DepMode::from_str(&dep_mode)?;
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
@@ -117,6 +126,8 @@ fn main() -> Result<()> {
                     &common.root,
                     security,
                     sandbox_mode,
+                    dep_mode,
+                    yes,
                 );
             }
             commands::cmd_update(
@@ -125,6 +136,8 @@ fn main() -> Result<()> {
                 &common.root,
                 security,
                 sandbox_mode,
+                dep_mode,
+                yes,
             )
         }
 

@@ -156,6 +156,18 @@ pub enum Commands {
         /// Force install even if the package is adopted from the system package manager
         #[arg(long)]
         force: bool,
+
+        /// How to handle dependencies: satisfy (default), adopt, takeover
+        ///
+        /// satisfy:  dependencies on disk satisfy requirements without changes
+        /// adopt:    auto-adopt system dependencies into Conary tracking
+        /// takeover: download CCS versions from Remi and fully own dependencies
+        #[arg(long, default_value = "satisfy")]
+        dep_mode: String,
+
+        /// Assume yes to all prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Remove an installed package
@@ -198,6 +210,14 @@ pub enum Commands {
         /// Scriptlet sandbox mode: auto, always, never
         #[arg(long, default_value = "never")]
         sandbox: String,
+
+        /// How to handle dependencies: satisfy (default), adopt, takeover
+        #[arg(long, default_value = "satisfy")]
+        dep_mode: String,
+
+        /// Assume yes to all prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Search for packages in repositories

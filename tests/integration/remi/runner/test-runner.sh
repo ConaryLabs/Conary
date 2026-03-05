@@ -477,6 +477,127 @@ else
     run_test "T27" "multi_package_coexist" 10 test_multi_package_coexist
 fi
 
+# ── T28: Install With --dep-mode satisfy ─────────────────────────────────────
+
+test_dep_mode_satisfy() {
+    # Install a package with --dep-mode satisfy (default).
+    # Deps that exist on the system should satisfy requirements without error.
+    local output exit_code
+    output=$("$CONARY" install "$TEST_PACKAGE" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --dep-mode satisfy \
+        --yes \
+        --sandbox never \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    # Remove first so the package is clean for later tests
+    "$CONARY" remove "$TEST_PACKAGE" --db-path "$DB_PATH" --no-scripts 2>/dev/null || true
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo "install with --dep-mode satisfy failed (exit $exit_code): $output" >&2
+        return 1
+    fi
+}
+
+run_test "T28" "dep_mode_satisfy" 300 test_dep_mode_satisfy
+
+# ── T29: Install With --dep-mode adopt ───────────────────────────────────────
+
+test_dep_mode_adopt() {
+    # Install a package with --dep-mode adopt.
+    # System deps should be auto-adopted.
+    local output exit_code
+    output=$("$CONARY" install "$TEST_PACKAGE_2" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --dep-mode adopt \
+        --yes \
+        --sandbox never \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo "install with --dep-mode adopt failed (exit $exit_code): $output" >&2
+        return 1
+    fi
+    assert_file_exists "$TEST_BINARY_2"
+}
+
+run_test "T29" "dep_mode_adopt" 300 test_dep_mode_adopt
+
+# ── T30: Install With --dep-mode takeover ────────────────────────────────────
+
+test_dep_mode_takeover() {
+    # Install a package with --dep-mode takeover.
+    # Deps should be downloaded from Remi as CCS.
+    local output exit_code
+    output=$("$CONARY" install "$TEST_PACKAGE_3" \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --dep-mode takeover \
+        --yes \
+        --sandbox never \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo "install with --dep-mode takeover failed (exit $exit_code): $output" >&2
+        return 1
+    fi
+    assert_file_exists "$TEST_BINARY_3"
+}
+
+run_test "T30" "dep_mode_takeover" 300 test_dep_mode_takeover
+
+# ── T31: Blocklisted Package Refused ─────────────────────────────────────────
+
+test_blocklist_enforced() {
+    # Attempting to install a blocklisted package with --dep-mode takeover
+    # should either refuse or treat it as satisfied-by-system.
+    # We verify by checking that glibc does NOT appear as a Conary-owned install.
+    local output exit_code
+    output=$("$CONARY" install glibc \
+        --db-path "$DB_PATH" \
+        --no-scripts \
+        --dep-mode takeover \
+        --yes \
+        --sandbox never \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    # The install should fail (blocklisted) or succeed but not actually
+    # overlay glibc. Check that glibc is NOT in Conary's installed list.
+    local list_output
+    list_output=$("$CONARY" list --db-path "$DB_PATH" 2>&1)
+    if echo "$list_output" | grep -qw "glibc"; then
+        echo "glibc should not be in Conary's installed list (blocklist violation)" >&2
+        return 1
+    fi
+    return 0
+}
+
+run_test "T31" "blocklist_enforced" 60 test_blocklist_enforced
+
+# ── T32: Update With Adopted Packages ────────────────────────────────────────
+
+test_update_with_adopted() {
+    # Adopt a package, then run update. Should not skip adopted packages.
+    "$CONARY" system adopt curl --db-path "$DB_PATH" 2>/dev/null || true
+
+    local output exit_code
+    output=$("$CONARY" update \
+        --db-path "$DB_PATH" \
+        --dep-mode satisfy \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    # Update should not crash and should acknowledge adopted packages
+    if [ "$exit_code" -ne 0 ]; then
+        echo "update with adopted packages failed (exit $exit_code): $output" >&2
+        return 1
+    fi
+    return 0
+}
+
+run_test "T32" "update_with_adopted" 120 test_update_with_adopted
+
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 echo ""

@@ -37,6 +37,9 @@ pub struct PackageEntry {
     pub version: String,
     /// Whether this package has been converted to CCS
     pub converted: bool,
+    /// Dependency names (from native repo metadata)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<String>>,
 }
 
 /// GET /v1/:distro/metadata
@@ -118,10 +121,14 @@ fn build_metadata(
         .iter()
         .map(|pkg| {
             let key = format!("{}:{}", pkg.name, pkg.version);
+            let dependencies = pkg.dependencies.as_ref().and_then(|deps_json| {
+                serde_json::from_str::<Vec<String>>(deps_json).ok()
+            });
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
                 converted: converted_set.contains(&key),
+                dependencies,
             }
         })
         .collect();

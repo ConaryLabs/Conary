@@ -186,6 +186,7 @@ struct RemiPackageEntry {
     version: String,
     #[allow(dead_code)]
     converted: bool,
+    dependencies: Option<Vec<String>>,
 }
 
 /// Synchronize repository directly from a Remi metadata API
@@ -247,6 +248,9 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
                 download_url,
             );
             pkg.architecture = Some("x86_64".to_string());
+            pkg.dependencies = entry.dependencies.map(|deps| {
+                serde_json::to_string(&deps).unwrap_or_default()
+            });
             Some(pkg)
         })
         .collect();

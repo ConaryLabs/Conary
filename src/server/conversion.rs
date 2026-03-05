@@ -21,6 +21,20 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
+/// Critical system packages that should not be converted.
+/// Defense-in-depth: even if the client doesn't check, the server refuses.
+fn is_critical_system_package(name: &str) -> bool {
+    const BLOCKED: &[&str] = &[
+        "glibc", "glibc-common", "libc6", "gcc-libs",
+        "systemd", "systemd-libs", "libsystemd0",
+        "pam", "linux-pam", "libpam-modules",
+        "openssl-libs", "libssl3", "sudo", "polkit",
+        "coreutils", "util-linux", "shadow-utils",
+        "ca-certificates",
+    ];
+    BLOCKED.iter().any(|&b| name == b)
+}
+
 /// Result of a server-side conversion
 #[derive(Debug)]
 pub struct ServerConversionResult {
@@ -93,6 +107,14 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
     ) -> Result<ServerConversionResult> {
+        // Refuse to convert critical system packages
+        if is_critical_system_package(package_name) {
+            return Err(anyhow!(
+                "Refusing to convert critical system package '{}'",
+                package_name
+            ));
+        }
+
         info!(
             "Converting package: {}:{} (version: {:?})",
             distro, package_name, version
@@ -1435,5 +1457,24 @@ mod tests {
         assert!(service.find_package(&conn, "fedora", "vim", None).is_ok());
         assert!(service.find_package(&conn, "ubuntu", "vim", None).is_ok());
         assert!(service.find_package(&conn, "debian", "vim", None).is_ok());
+    }
+
+    #[test]
+    fn test_critical_packages_blocked() {
+        assert!(is_critical_system_package("glibc"));
+        assert!(is_critical_system_package("systemd"));
+        assert!(is_critical_system_package("openssl-libs"));
+        assert!(is_critical_system_package("sudo"));
+        assert!(is_critical_system_package("coreutils"));
+        assert!(is_critical_system_package("ca-certificates"));
+    }
+
+    #[test]
+    fn test_normal_packages_not_blocked() {
+        assert!(!is_critical_system_package("nginx"));
+        assert!(!is_critical_system_package("tree"));
+        assert!(!is_critical_system_package("curl"));
+        assert!(!is_critical_system_package("jq"));
+        assert!(!is_critical_system_package("vim"));
     }
 }
