@@ -14,14 +14,14 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
 
-**100K+ lines of Rust, 1,300+ tests, database schema v44.** This is not a prototype.
+**100K+ lines of Rust, 1,800+ tests, database schema v44.** This is not a prototype.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Build from source (requires Rust 1.92+)
+# Build from source (requires Rust 1.93+)
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build
@@ -261,8 +261,8 @@ conary server --bind 0.0.0.0:8080 --data-dir /var/lib/remi
 A local daemon that provides a REST API for package operations over a Unix socket, with SSE event streaming for real-time progress. Integrates with systemd for socket activation and watchdog support.
 
 ```bash
-# Build with daemon support
-cargo build --features daemon
+# Build with server + daemon support
+cargo build --features server
 
 # Run the daemon
 conary daemon
@@ -288,13 +288,12 @@ conary federation stats --days 7      # Bandwidth savings report
 
 ## Building
 
-Requires Rust 1.92+ (edition 2024).
+Requires Rust 1.93+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
 
 ```bash
 cargo build                          # Client only (default)
-cargo build --features server        # With Remi server
-cargo build --features daemon        # With daemon (includes server)
-cargo test                           # Run all tests (~1,300 tests)
+cargo build --features server        # With Remi server + conaryd daemon
+cargo test                           # Run all tests (~1,800 tests)
 cargo clippy -- -D warnings          # Lint check
 ```
 
@@ -309,7 +308,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.2.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,300+ tests passing (schema v44). A production Remi server is running at packages.conary.io.
+**Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v44). A production Remi server is running at packages.conary.io.
 
 See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 

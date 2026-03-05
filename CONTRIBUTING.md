@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Prerequisites
 
-- **Rust 1.92+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.93+** (edition 2024) -- install via [rustup](https://rustup.rs/)
 - **SQLite** development headers (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora/RHEL)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
@@ -40,26 +40,20 @@ git remote add upstream https://github.com/ConaryLabs/Conary.git
 # Debug build (default, fast compilation)
 cargo build
 
-# With Remi server support
+# With Remi server + conaryd daemon
 cargo build --features server
-
-# With conaryd daemon support (includes server)
-cargo build --features daemon
 
 # Release build (optimized, slower to compile)
 cargo build --release
 ```
 
-Note: the `daemon` feature implies `server`, so `--features daemon` includes all server functionality.
+The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
 
 ## Running Tests
 
 ```bash
 # All library + integration tests
 cargo test
-
-# Include daemon tests
-cargo test --features daemon
 
 # Run a specific test module
 cargo test --test database
@@ -100,11 +94,11 @@ cargo test
 
 ### Rust Specifics
 
-- Edition 2024, minimum supported Rust version 1.92
+- Edition 2024, minimum supported Rust version 1.93
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling
-- Feature-gate optional functionality: server code behind `--features server`, daemon code behind `--features daemon`
+- Feature-gate optional functionality: server and daemon code behind `--features server`
 
 ### Commit Messages
 
@@ -112,7 +106,16 @@ Write clear, descriptive commit messages. Use the imperative mood in the subject
 
 ## Module Overview
 
-The codebase is organized into focused modules under `src/`. Here is a summary to help you find what you are looking for:
+The project is a Cargo workspace with 4 crates:
+
+**`conary`** (root) -- CLI binary
+
+| Module | Purpose |
+|--------|---------|
+| `src/cli/` | CLI definitions and argument parsing |
+| `src/commands/` | Command implementations |
+
+**`conary-core`** -- Core library
 
 | Module | Purpose |
 |--------|---------|
@@ -131,21 +134,24 @@ The codebase is organized into focused modules under `src/`. Here is a summary t
 | `src/flavor/` | Build variation specifications |
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations with journal-based recovery |
-| `src/model/` | System Model -- declarative OS state (parser, diff, state capture, remote includes, publishing) |
-| `src/ccs/` | CCS native package format (builder, policy engine, OCI export, lockfile, redirects) |
-| `src/server/` | Remi server -- on-demand CCS conversion proxy (feature-gated) |
-| `src/cli/` | CLI definitions and argument parsing |
-| `src/commands/` | Command implementations |
-| `src/commands/install/` | Package installation pipeline (resolve, prepare, execute) |
-| `src/recipe/` | Recipe system for building packages from source (hermetic builds, PKGBUILD conversion) |
-| `src/capability/` | Capability declarations (network, filesystem, syscalls) -- audit, enforcement, inference |
-| `src/provenance/` | Package DNA and full provenance tracking (source, build, signatures, content) |
+| `src/model/` | System Model -- declarative OS state |
+| `src/ccs/` | CCS native package format (builder, policy engine, OCI export) |
+| `src/recipe/` | Recipe system for building packages from source |
+| `src/capability/` | Capability declarations -- audit, enforcement, inference |
+| `src/provenance/` | Package DNA and full provenance tracking |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
-| `src/federation/` | CAS federation -- peer discovery, chunk routing, manifests, mTLS, mDNS |
-| `src/daemon/` | conaryd daemon -- REST API, SSE events, job queue, systemd integration (feature-gated) |
-| `src/hash/` | Hashing utilities for file integrity |
-| `src/progress/` | Progress reporting for long-running operations |
+| `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
+
+**`conary-erofs`** -- EROFS image builder for composefs integration
+
+**`conary-server`** -- Remi server + conaryd daemon (feature-gated: `--features server`)
+
+| Module | Purpose |
+|--------|---------|
+| `src/server/` | Remi on-demand CCS conversion proxy |
+| `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
+| `src/federation/` | CAS federation -- peer discovery, chunk routing, mTLS, mDNS |
 
 ## Pull Request Process
 
@@ -196,7 +202,7 @@ Conary has a few core design principles that inform how contributions should be 
 - **Database-first**: SQLite is the single source of truth for all package state. Do not introduce config files, caches outside the database, or in-memory-only state for data that should persist.
 - **Content-addressable storage**: Files are stored by hash, enabling deduplication and efficient delta updates.
 - **Atomic transactions**: Package operations use journaled changesets for crash safety. Partial installs should never leave the system in a broken state.
-- **Feature-gated compilation**: Server (`--features server`) and daemon (`--features daemon`) functionality are behind Cargo feature flags to keep the default binary lean.
+- **Feature-gated compilation**: Server and daemon functionality live in the `conary-server` crate, enabled via `--features server` to keep the default binary lean.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.
 

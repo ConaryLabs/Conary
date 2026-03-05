@@ -31,7 +31,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Prometheus metrics export at `/v1/admin/metrics/prometheus`
 - Podman-based integration test harness
 
-#### conaryd Daemon (feature-gated: `--features daemon`)
+#### conaryd Daemon (feature-gated: `--features server`)
 - Local REST API for package operations over Unix socket (`/run/conary/conaryd.sock`)
 - Optional TCP listener for remote management
 - SO_PEERCRED peer credential authentication with permission checking
@@ -230,7 +230,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Legacy install code path (replaced by unified pipeline)
 - Duplicate archive extraction logic (centralized in compression module)
 
-## [0.1.0] - 2025-06-01
+## [0.0.1] - 2025-06-01
 
 ### Added
 

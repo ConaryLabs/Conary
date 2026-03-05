@@ -40,8 +40,7 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.1.x   | Yes       |
 
 Only the latest release receives security updates. We recommend always running the most recent version.
 

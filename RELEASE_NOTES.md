@@ -4,7 +4,7 @@
 
 The first tagged release of Conary, a modern package manager with atomic transactions, multi-format support, and declarative system state. Written in Rust, backed by SQLite.
 
-This release represents 10 months of development: 274 commits, 100,000+ lines of Rust, 44 schema migrations, and 1,200+ passing tests. Every subsystem described below is implemented and tested.
+This release represents 10 months of development: 274 commits, 100,000+ lines of Rust, 44 schema migrations, and 1,800+ passing tests. Every subsystem described below is implemented and tested.
 
 ---
 
@@ -121,7 +121,7 @@ conary server --bind 0.0.0.0:8080 --data-dir /var/lib/remi
 
 ### conaryd Daemon
 
-Local REST API for package operations over Unix socket with SSE event streaming. Build with `--features daemon`.
+Local REST API for package operations over Unix socket with SSE event streaming. Build with `--features server`.
 
 - SO_PEERCRED authentication with permission checking
 - Persistent job queue in SQLite (survives daemon restart)
@@ -130,7 +130,7 @@ Local REST API for package operations over Unix socket with SSE event streaming.
 - CLI auto-forwarding: commands detect and forward to daemon when available
 
 ```bash
-cargo build --features daemon
+cargo build --features server
 conary daemon
 ```
 
@@ -256,7 +256,7 @@ No migration needed. Run `conary system init` to create a fresh database.
 
 ## Installation
 
-Requires **Rust 1.92+** (edition 2024).
+Requires **Rust 1.93+** (edition 2024).
 
 ```bash
 # Build from source
@@ -264,11 +264,8 @@ git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build
 
-# With server support
+# With Remi server + conaryd daemon
 cargo build --features server
-
-# With daemon support
-cargo build --features daemon
 
 # Initialize and start using
 conary system init
