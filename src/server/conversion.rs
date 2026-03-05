@@ -229,11 +229,12 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
     ) -> Result<RepositoryPackage> {
-        // Map distro to repository name pattern
+        // Map distro to repository name pattern.
+        // Match both bare name (e.g. "fedora") and suffixed (e.g. "fedora-43").
         let repo_pattern = match distro {
-            "arch" => "arch-%",
-            "fedora" => "fedora-%",
-            "ubuntu" | "debian" => "ubuntu-%",
+            "arch" => "arch%",
+            "fedora" => "fedora%",
+            "ubuntu" | "debian" => "ubuntu%",
             _ => return Err(anyhow!("Unknown distribution: {}", distro)),
         };
 

@@ -18,6 +18,12 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
 
     let default_repos = [
         (
+            "remi",
+            "https://packages.conary.io",
+            110,
+            "Conary Remi (CCS)",
+        ),
+        (
             "arch-core",
             "https://geo.mirror.pkgbuild.com/core/os/x86_64",
             100,

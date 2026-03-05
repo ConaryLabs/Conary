@@ -81,31 +81,34 @@ fn build_metadata(
 ) -> Result<RepositoryMetadata, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Find repository for this distro
-    // Try by default_strategy_distro first, then by name pattern
-    let repository = find_repository_for_distro(&conn, distro)?;
+    // Find all repositories for this distro (e.g. arch-core + arch-extra)
+    let repositories = find_repositories_for_distro(&conn, distro)?;
 
-    let (repo_id, last_sync) = match repository {
-        Some(repo) => (repo.id, repo.last_sync),
-        None => {
-            // No repository configured for this distro - return empty metadata
-            return Ok(RepositoryMetadata {
-                id: format!("conary-{}", distro),
-                distro: distro.to_string(),
-                last_sync: None,
-                package_count: 0,
-                converted_count: 0,
-                packages: vec![],
-            });
+    if repositories.is_empty() {
+        return Ok(RepositoryMetadata {
+            id: format!("conary-{}", distro),
+            distro: distro.to_string(),
+            last_sync: None,
+            package_count: 0,
+            converted_count: 0,
+            packages: vec![],
+        });
+    }
+
+    // Use the most recent last_sync across all matching repos
+    let last_sync = repositories
+        .iter()
+        .filter_map(|r| r.last_sync.as_ref())
+        .max()
+        .cloned();
+
+    // Aggregate packages from all matching repos
+    let mut repo_packages = Vec::new();
+    for repo in &repositories {
+        if let Some(id) = repo.id {
+            repo_packages.extend(RepositoryPackage::find_by_repository(&conn, id)?);
         }
-    };
-
-    // Get all packages from the repository
-    let repo_packages = if let Some(id) = repo_id {
-        RepositoryPackage::find_by_repository(&conn, id)?
-    } else {
-        vec![]
-    };
+    }
 
     // Build a set of converted package identities for fast lookup
     let converted_set = build_converted_set(&conn, distro)?;
@@ -139,7 +142,7 @@ fn build_metadata(
 }
 
 /// Alias to shared implementation in handlers/mod.rs
-use super::find_repository_for_distro;
+use super::find_repositories_for_distro;
 
 /// Build a set of "name:version" keys for converted packages
 fn build_converted_set(conn: &Connection, distro: &str) -> Result<HashSet<String>, anyhow::Error> {

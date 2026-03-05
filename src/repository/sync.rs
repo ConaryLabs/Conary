@@ -8,6 +8,7 @@
 use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -226,10 +227,16 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
+    // Deduplicate by (name, version, arch) — Remi metadata may contain duplicates
+    let mut seen = HashSet::new();
     let repo_packages: Vec<RepositoryPackage> = response
         .packages
         .into_iter()
-        .map(|entry| {
+        .filter_map(|entry| {
+            let key = (entry.name.clone(), entry.version.clone(), "x86_64".to_string());
+            if !seen.insert(key) {
+                return None;
+            }
             let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
             let mut pkg = RepositoryPackage::new(
                 repo_id,
@@ -240,7 +247,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
                 download_url,
             );
             pkg.architecture = Some("x86_64".to_string());
-            pkg
+            Some(pkg)
         })
         .collect();
 

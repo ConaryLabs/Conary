@@ -62,25 +62,49 @@ pub fn json_response(json: String, cache_max_age: u32) -> Response {
 /// Find a repository configured for the given distro
 ///
 /// Tries `default_strategy_distro` first, then falls back to name matching.
+/// Returns the first match only (used by conversion endpoints).
 pub fn find_repository_for_distro(
     conn: &Connection,
     distro: &str,
 ) -> Result<Option<Repository>, anyhow::Error> {
-    let repos = Repository::list_enabled(conn)?;
+    let all = find_repositories_for_distro(conn, distro)?;
+    Ok(all.into_iter().next())
+}
 
-    // Prefer exact match on default_strategy_distro
+/// Find all repositories configured for the given distro
+///
+/// Returns repos with matching `default_strategy_distro` first,
+/// then any with matching names. Used by the metadata endpoint to
+/// aggregate packages across all repos for a distro (e.g. arch-core + arch-extra).
+pub fn find_repositories_for_distro(
+    conn: &Connection,
+    distro: &str,
+) -> Result<Vec<Repository>, anyhow::Error> {
+    let repos = Repository::list_enabled(conn)?;
+    let mut matched = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    // First pass: exact match on default_strategy_distro
     for repo in &repos {
         if repo.default_strategy_distro.as_deref() == Some(distro) {
-            return Ok(Some(repo.clone()));
+            if let Some(id) = repo.id {
+                seen_ids.insert(id);
+            }
+            matched.push(repo.clone());
         }
     }
 
-    // Fall back to name-based matching
+    // Second pass: name-based matching (skip already matched)
     for repo in &repos {
+        if let Some(id) = repo.id {
+            if seen_ids.contains(&id) {
+                continue;
+            }
+        }
         if repo.name.starts_with(distro) || repo.name.contains(distro) {
-            return Ok(Some(repo.clone()));
+            matched.push(repo.clone());
         }
     }
 
-    Ok(None)
+    Ok(matched)
 }
