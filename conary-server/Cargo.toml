@@ -1,0 +1,66 @@
+[package]
+name = "conary-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+authors = ["Conary Contributors"]
+description = "Remi package server and conaryd daemon for Conary"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+conary-core = { path = "../conary-core", features = ["server"] }
+
+# Web framework
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"] }
+tower = "0.5"
+
+# Server utilities
+filetime = "0.2"
+async-trait = "0.1"
+futures = "0.3"
+dashmap = "6.0"
+parking_lot = "0.12"
+
+# Service discovery
+mdns-sd = "0.11"
+flume = "0.11"
+
+# Object storage
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+
+# Full-text search
+tantivy = "0.22"
+
+# Daemon dependencies
+sd-notify = "0.4"
+axum-extra = { version = "0.9", features = ["typed-header"] }
+hyper = { version = "1.4", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
+http-body-util = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# PolicyKit (optional)
+zbus = { version = "4.0", optional = true }
+
+# Shared deps needed directly by server code
+anyhow = "1.0"
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+url = "2.5"
+
+[features]
+default = []
+polkit = ["dep:zbus"]
+
+[[bin]]
+name = "remi"
+path = "src/bin/remi.rs"
+
+[[bin]]
+name = "conaryd"
+path = "src/bin/conaryd.rs"

@@ -1110,6 +1110,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "conary-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "chrono",
+ "conary-core",
+ "dashmap",
+ "filetime",
+ "flume",
+ "futures",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "mdns-sd",
+ "parking_lot",
+ "rust-s3",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "conary-core", "conary-erofs"]
+members = [".", "conary-core", "conary-erofs", "conary-server"]
 resolver = "3"
 
 [package]
