@@ -2,7 +2,7 @@
 
 *Released 2026-03-03*
 
-The first tagged release of Conary, a modern package manager with atomic transactions, multi-format support, and declarative system state. Written in Rust, backed by SQLite.
+The first tagged release of Conary, a modern system manager with immutable generations, atomic transactions, multi-format support, and declarative system state. Written in Rust, backed by SQLite.
 
 This release represents 10 months of development: 274 commits, 100,000+ lines of Rust, 44 schema migrations, and 1,800+ passing tests. Every subsystem described below is implemented and tested.
 
@@ -94,6 +94,67 @@ conary system state list             # List all snapshots
 conary system state diff 5 8         # What changed between 5 and 8?
 conary system state restore 5        # Revert to snapshot 5
 conary system state prune --keep 10  # Clean up old snapshots
+```
+
+### System Generations
+
+Atomic, immutable filesystem snapshots using EROFS images and Linux composefs. Build a generation from current system state and switch between generations live, without rebooting.
+
+```bash
+conary generation build --summary "Post-update snapshot"
+conary generation list
+conary generation switch 2
+conary generation rollback
+conary generation gc --keep 3
+```
+
+Requires Linux 6.2+ with composefs support (`CONFIG_EROFS_FS`).
+
+### System Takeover
+
+Adopt an entire existing Linux system into Conary management. Analyzes all installed RPM/DEB/pacman packages, plans the adoption strategy, and atomically takes over the system with an initial generation.
+
+```bash
+conary system takeover --dry-run    # Preview what will happen
+conary system takeover              # Execute takeover
+```
+
+### Bootstrap System
+
+Build a complete Conary-managed system from scratch using a staged pipeline. Supports x86_64, aarch64, and riscv64 targets.
+
+```bash
+conary bootstrap init --target x86_64
+conary bootstrap check                  # Verify prerequisites
+conary bootstrap stage0                 # Cross-compilation toolchain
+conary bootstrap stage1                 # Self-hosted toolchain
+conary bootstrap base                   # Core system packages
+conary bootstrap image --format qcow2   # Bootable image
+conary bootstrap status                 # Progress report
+```
+
+### Derived Packages
+
+Create custom variants of existing packages with patches and file overrides. Derived packages track their parent and can be rebuilt when the parent updates.
+
+```bash
+conary derive create my-nginx --from nginx
+conary derive patch my-nginx security-fix.patch
+conary derive override my-nginx /etc/nginx/nginx.conf --source ./my-nginx.conf
+conary derive build my-nginx
+conary derive stale                     # List outdated derived packages
+```
+
+### Configuration Management
+
+Track, diff, backup, and restore system configuration files. Honors `noreplace` flags from RPM/DEB to preserve user modifications during upgrades.
+
+```bash
+conary config list                       # Show modified configs
+conary config diff /etc/nginx/nginx.conf # Compare against package version
+conary config backup /path              # Create backup
+conary config restore /path             # Restore from backup
+conary config check                     # Status of all config files
 ```
 
 ### Component Model
@@ -193,10 +254,8 @@ conary query sbom nginx     # CycloneDX 1.5 SBOM export
 - **Collections** -- Group packages for bulk operations (`conary collection create web-stack --members nginx,postgresql,redis`)
 - **Labels and Federation** -- Route packages through label chains with delegation and cycle detection
 - **Trigger system** -- 10 built-in triggers (ldconfig, systemd-reload, fc-cache, etc.) with DAG-ordered execution
-- **Configuration management** -- Track, diff, backup, and restore config files with `noreplace` support
 - **Security-only updates** -- `conary update --security` to apply only security patches
 - **Package pinning** -- Prevent specific packages from being updated or removed
-- **System adoption** -- Scan and track packages already installed by RPM/APT
 - **Sandboxed scriptlets** -- Package install scripts run in namespace isolation with resource limits
 - **Shell completions** -- Bash, Zsh, Fish, PowerShell
 - **Dry run mode** -- Preview any destructive operation before executing
@@ -299,7 +358,6 @@ cargo build --release
 
 ## What's Next
 
-- **Atomic filesystem updates** using `renameat2(RENAME_EXCHANGE)` for instant, zero-downtime directory swaps
 - **Shell integration** for automatic environment activation when entering project directories (direnv-style)
 - **P2P chunk distribution** plugins (IPFS, BitTorrent DHT) as optional transport backends
 - **Multi-version package support** for keeping multiple versions of pinned packages (e.g., kernel)
