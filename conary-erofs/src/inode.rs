@@ -128,7 +128,10 @@ impl InodeInfo {
         let size_u32 = self.size as u32;
         buf[off..off + 4].copy_from_slice(&size_u32.to_le_bytes());
         off += 4;
-        // i_reserved (u32) — zero
+        // i_mtime (u32) — lower 32 bits of mtime
+        #[allow(clippy::cast_possible_truncation)]
+        let mtime_u32 = self.mtime as u32;
+        buf[off..off + 4].copy_from_slice(&mtime_u32.to_le_bytes());
         off += 4;
         // i_u (u32)
         buf[off..off + 4].copy_from_slice(&self.union_value.to_le_bytes());
@@ -171,7 +174,10 @@ impl InodeInfo {
         // i_mode (u16)
         buf[off..off + 2].copy_from_slice(&self.mode.to_le_bytes());
         off += 2;
-        // i_reserved (u16) — zero
+        // i_nb (u16) — nlink lower 16 bits (union erofs_inode_i_nb)
+        #[allow(clippy::cast_possible_truncation)]
+        let nb_u16 = self.nlink as u16;
+        buf[off..off + 2].copy_from_slice(&nb_u16.to_le_bytes());
         off += 2;
         // i_size (u64)
         buf[off..off + 8].copy_from_slice(&self.size.to_le_bytes());
@@ -394,5 +400,48 @@ mod tests {
         // i_mtime_nsec at offset 40 (u32)
         let mtime_nsec = u32::from_le_bytes(buf[40..44].try_into().unwrap());
         assert_eq!(mtime_nsec, 123_456_789);
+    }
+
+    #[test]
+    fn compact_inode_mtime_written() {
+        let mut inode = test_inode();
+        inode.mtime = 1_700_000_000;
+
+        let mut buf = Vec::new();
+        inode.write_compact(&mut buf).unwrap();
+
+        // i_mtime at offset 0x0C (u32) — lower 32 bits
+        let mtime = u32::from_le_bytes(buf[0x0C..0x10].try_into().unwrap());
+        assert_eq!(mtime, 1_700_000_000_u32, "compact inode must write i_mtime at offset 0x0C");
+    }
+
+    #[test]
+    fn compact_inode_nlink_at_offset_06() {
+        let mut inode = test_inode();
+        inode.nlink = 42;
+
+        let mut buf = Vec::new();
+        inode.write_compact(&mut buf).unwrap();
+
+        // i_nb at offset 0x06 (u16)
+        let nlink = u16::from_le_bytes(buf[0x06..0x08].try_into().unwrap());
+        assert_eq!(nlink, 42, "compact inode must write i_nb (nlink) at offset 0x06");
+    }
+
+    #[test]
+    fn extended_inode_nb_at_offset_06() {
+        let mut inode = test_inode();
+        inode.nlink = 5;
+
+        let mut buf = Vec::new();
+        inode.write_extended(&mut buf).unwrap();
+
+        // i_nb at offset 0x06 (u16)
+        let nb = u16::from_le_bytes(buf[0x06..0x08].try_into().unwrap());
+        assert_eq!(nb, 5, "extended inode must write i_nb at offset 0x06");
+
+        // i_nlink at offset 0x2C (u32)
+        let nlink = u32::from_le_bytes(buf[0x2C..0x30].try_into().unwrap());
+        assert_eq!(nlink, 5, "extended inode must write i_nlink at offset 0x2C");
     }
 }

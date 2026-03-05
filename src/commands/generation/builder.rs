@@ -53,8 +53,7 @@ pub fn build_generation(
     })?;
 
     // Step 5: Build EROFS image
-    let mut builder = conary_erofs::builder::ErofsBuilder::new()
-        .compression(conary_erofs::compress::Compression::Lz4);
+    let mut builder = conary_erofs::builder::ErofsBuilder::new();
 
     // Add root directory
     builder.add_directory("/", 0o755, 0, 0);
@@ -121,7 +120,11 @@ pub fn build_generation(
     // Step 9: Enable fs-verity on CAS objects (if supported)
     if caps.fsverity {
         debug!("fs-verity supported, enabling on CAS objects");
-        // TODO: Wire up fs-verity enablement (Task 16)
+        let (enabled, already, errors) =
+            conary::filesystem::fsverity::enable_fsverity_on_cas(&obj_dir);
+        info!(
+            "fs-verity: {enabled} newly enabled, {already} already enabled, {errors} errors"
+        );
     } else {
         debug!(
             "fs-verity not supported on CAS filesystem, skipping"

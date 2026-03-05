@@ -38,7 +38,15 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     let cas_dir = "/conary/objects";
+    let old_mnt = "/conary/mnt";
     let staging = "/conary/mnt-new";
+
+    // Step 0: Unmount old composefs mount if present
+    if std::path::Path::new(old_mnt).exists()
+        && let Err(e) = run_command("umount", &[old_mnt])
+    {
+        warn!("Failed to unmount old composefs at {old_mnt}: {e}");
+    }
 
     // Step 1: Mount new generation's composefs at staging point
     std::fs::create_dir_all(staging)
@@ -60,8 +68,8 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)
-    let staging_usr = format!("{staging}/usr");
-    run_command("mount", &["--bind", &staging_usr, "/usr"])
+    let mnt_usr = format!("{staging}/usr");
+    run_command("mount", &["--bind", &mnt_usr, "/usr"])
         .context("Failed to bind-mount /usr from composefs")?;
     run_command("mount", &["-o", "remount,ro", "/usr"])
         .context("Failed to remount /usr read-only")?;
@@ -89,7 +97,13 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         }
     }
 
-    // Step 4: Update current symlink
+    // Step 4: Move staging mount to permanent mount point
+    std::fs::create_dir_all(old_mnt)
+        .context("Failed to create permanent composefs mount dir")?;
+    run_command("mount", &["--move", staging, old_mnt])
+        .context("Failed to move composefs mount to permanent location")?;
+
+    // Step 5: Update current symlink
     update_current_symlink(gen_number)
         .context("Failed to update current generation symlink")?;
 
