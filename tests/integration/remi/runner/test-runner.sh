@@ -640,6 +640,45 @@ test_generation_gc_empty() {
 
 run_test "T35" "generation_gc_empty" 10 test_generation_gc_empty
 
+# ── T36: Generation Info Shows Composefs Format ───────────────────────────
+
+test_generation_info_format() {
+    # This test only runs if a generation exists (requires root + composefs)
+    local output exit_code
+    output=$("$CONARY" system generation info 1 --db-path "$DB_PATH" 2>&1) && exit_code=0 || exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+        # If generation 1 exists, verify composefs format is shown
+        assert_output_contains "Format.*composefs\|format.*composefs" "$output"
+    else
+        # Expected: no generation exists yet
+        assert_output_contains "does not exist\|not found" "$output"
+    fi
+}
+
+run_test "T36" "generation_info_format" 10 test_generation_info_format
+
+# ── T37: Takeover Dry Run Reports Composefs ───────────────────────────────
+
+test_takeover_composefs_format() {
+    local output exit_code
+    output=$("$CONARY" system takeover \
+        --db-path "$DB_PATH" \
+        --dry-run \
+        --skip-conversion \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+        # Dry run should mention composefs or EROFS
+        assert_output_contains "composefs\|EROFS\|erofs\|DRY RUN" "$output"
+    else
+        # Expected: requires root or composefs not available
+        assert_output_contains "root\|Root\|privilege\|omposefs\|6.2" "$output"
+    fi
+}
+
+run_test "T37" "takeover_composefs_format" 60 test_takeover_composefs_format
+
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 echo ""
