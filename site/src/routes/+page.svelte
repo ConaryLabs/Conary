@@ -10,12 +10,12 @@
 	<div class="container hero-inner">
 		<h1 class="hero-title animate-in" style="--stagger: 0">Conary</h1>
 		<p class="hero-tagline animate-in" style="--stagger: 2">
-			The cross-distribution package manager
+			One package manager for every Linux distro
 		</p>
 		<p class="hero-desc animate-in" style="--stagger: 3">
-			Unified package management across Fedora, Arch, and Ubuntu with
-			content-addressable storage, atomic transactions, and on-demand
-			format conversion.
+			Install RPM, DEB, and Arch packages with the same tool.
+			Atomic transactions mean your system never breaks mid-update.
+			68,000+ packages available today -- no upstream changes required.
 		</p>
 		<div class="hero-actions animate-in" style="--stagger: 5">
 			<a href="/install" class="btn btn-primary">Get Started</a>
@@ -38,13 +38,13 @@
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">100%</span>
-			<span class="stat-label">Atomic</span>
+			<span class="stat-value">1,800+</span>
+			<span class="stat-label">Tests</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">CAS</span>
-			<span class="stat-label">Backed</span>
+			<span class="stat-value">100K+</span>
+			<span class="stat-label">Lines of Rust</span>
 		</div>
 	</div>
 </section>
@@ -169,51 +169,51 @@
 				<tbody>
 					<tr>
 						<td class="feature-name">Cross-distribution</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">CAS storage</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check yes"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check yes" aria-label="Yes"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">Binary deltas</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check partial"></span></td>
-						<td><span class="check partial"></span></td>
-						<td><span class="check no"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check partial" aria-label="Partial"></span></td>
+						<td><span class="check partial" aria-label="Partial"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">Atomic transactions</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check yes"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check yes" aria-label="Yes"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">Declarative system model</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check yes"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check yes" aria-label="Yes"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">On-demand conversion</td>
-						<td class="highlight"><span class="check yes"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
-						<td><span class="check no"></span></td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 				</tbody>
 			</table>

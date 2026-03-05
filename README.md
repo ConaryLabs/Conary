@@ -1,6 +1,12 @@
 # Conary
 
-A modern package manager with atomic transactions, multi-format support, and declarative system state. Written in Rust, backed by SQLite.
+[![CI](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![v0.1.0](https://img.shields.io/badge/version-0.1.0-orange.svg)](RELEASE_NOTES.md)
+
+**Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
+
+A cross-distribution Linux package manager that handles RPM, DEB, and Arch packages with atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 1,800+ tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -12,16 +18,43 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 **Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
 
+**68,000+ packages on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes required -- every package from Fedora, Arch, and Ubuntu is available immediately.
+
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
 
 **100K+ lines of Rust, 1,800+ tests, database schema v44.** This is not a prototype.
 
 ---
 
+## How It Compares
+
+| Capability | apt/dnf | pacman | Nix | Conary |
+|---|---|---|---|---|
+| Atomic transactions | No | No | Yes | Yes |
+| Rollback to any state | No | No | Yes (generations) | Yes (snapshots) |
+| Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
+| Component model (install :devel only) | No | Split packages | No | Automatic |
+| Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
+| Content-addressable storage | No | No | Yes | Yes |
+| Hermetic builds | No | No | Yes | Yes |
+| Dev shells | No | No | Yes | Yes |
+| OCI container export | No | No | Yes | Yes |
+| Capability enforcement (landlock/seccomp) | No | No | No | Yes |
+| Scriptlet sandboxing | No | No | N/A | Yes |
+| Single binary, no daemon required | Yes | Yes | No | Yes |
+| Mature ecosystem | Yes | Yes | Yes | No (early) |
+| Package count | 60K+ | 15K+ | 100K+ | Via conversion |
+
+Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
+
+The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early.
+
+---
+
 ## Quick Start
 
 ```bash
-# Build from source (requires Rust 1.93+)
+# Build from source (requires Rust 1.93+, Linux only)
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build
@@ -71,15 +104,6 @@ conary install ./package.deb
 conary install ./package.pkg.tar.zst
 ```
 
-### Component Model
-
-Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`. Install only what you need.
-
-```bash
-conary install nginx:runtime      # Binaries only
-conary install openssl:devel      # Headers and libs for building
-```
-
 ### Declarative System Model
 
 Define desired system state in TOML. Conary computes what needs to change and applies it atomically.
@@ -104,27 +128,6 @@ conary model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
-### CCS Native Package Format
-
-Conary's native format uses content-addressable chunked storage, CBOR manifests with Merkle tree verification, and Ed25519 signatures. Packages can be exported to OCI container images.
-
-```bash
-conary ccs build .                   # Build from ccs.toml
-conary ccs sign package.ccs          # Ed25519 signatures
-conary ccs verify package.ccs        # Verify integrity
-conary ccs export package --format oci  # Export to container image
-```
-
-### Recipe System
-
-Build packages from source using TOML recipe files in isolated, network-blocked build environments. Hermetic builds use PID, UTS, IPC, and network namespaces with dependency-hash cache invalidation.
-
-```bash
-conary cook nginx.recipe.toml                # Build from recipe
-conary cook --hermetic nginx.recipe.toml     # Maximum isolation
-conary cook --fetch-only nginx.recipe.toml   # Pre-fetch for offline build
-```
-
 ### Content-Addressable Storage
 
 Files are stored by SHA-256 hash with automatic deduplication. Content-defined chunking (FastCDC) enables cross-package deduplication and implicit delta updates -- if the client has 48 of 50 chunks, it downloads only 2.
@@ -146,7 +149,44 @@ conary query whatprovides libc.so.6 # Capability lookup
 conary deptree nginx                # Full dependency tree
 ```
 
-### Dev Shells
+### Component Model
+
+Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`. Install only what you need.
+
+```bash
+conary install nginx:runtime      # Binaries only
+conary install openssl:devel      # Headers and libs for building
+```
+
+<details>
+<summary><strong>CCS Native Package Format</strong></summary>
+
+Conary's native format uses content-addressable chunked storage, CBOR manifests with Merkle tree verification, and Ed25519 signatures. Packages can be exported to OCI container images.
+
+```bash
+conary ccs build .                   # Build from ccs.toml
+conary ccs sign package.ccs          # Ed25519 signatures
+conary ccs verify package.ccs        # Verify integrity
+conary ccs export package --format oci  # Export to container image
+```
+
+</details>
+
+<details>
+<summary><strong>Recipe System and Hermetic Builds</strong></summary>
+
+Build packages from source using TOML recipe files in isolated, network-blocked build environments. Hermetic builds use PID, UTS, IPC, and network namespaces with dependency-hash cache invalidation.
+
+```bash
+conary cook nginx.recipe.toml                # Build from recipe
+conary cook --hermetic nginx.recipe.toml     # Maximum isolation
+conary cook --fetch-only nginx.recipe.toml   # Pre-fetch for offline build
+```
+
+</details>
+
+<details>
+<summary><strong>Dev Shells</strong></summary>
 
 Temporary environments without permanent installation -- similar to `nix shell`.
 
@@ -155,7 +195,10 @@ conary ccs shell python,nodejs   # Spawn a shell with packages available
 conary ccs run gcc -- make       # One-shot command execution
 ```
 
-### Collections
+</details>
+
+<details>
+<summary><strong>Collections</strong></summary>
 
 Group packages into named sets for bulk operations.
 
@@ -165,7 +208,10 @@ conary install @web-stack
 conary update-group web-stack    # Update all members atomically
 ```
 
-### Labels and Federation
+</details>
+
+<details>
+<summary><strong>Labels and Federation</strong></summary>
 
 Route packages through label chains with delegation. Inspired by the original Conary's label system for tracking package provenance.
 
@@ -175,7 +221,10 @@ conary query label add fedora@f43:stable
 conary query label delegate local@devel:main fedora@f43:stable
 ```
 
-### Sandboxed Scriptlets
+</details>
+
+<details>
+<summary><strong>Sandboxed Scriptlets</strong></summary>
 
 Package install scripts run in namespace isolation with resource limits. Dangerous scripts are detected automatically.
 
@@ -184,7 +233,10 @@ conary install pkg --sandbox=always   # Force sandboxing
 conary install pkg --sandbox=never    # Trust the scripts
 ```
 
-### Capability Enforcement
+</details>
+
+<details>
+<summary><strong>Capability Enforcement</strong></summary>
 
 Packages declare their runtime capabilities. Landlock restricts filesystem access; seccomp-bpf restricts syscalls.
 
@@ -193,30 +245,7 @@ conary capability audit nginx         # Show declared capabilities
 conary capability enforce nginx       # Apply restrictions
 ```
 
----
-
-## How It Compares
-
-| Capability | apt/dnf | pacman | Nix | Conary |
-|---|---|---|---|---|
-| Atomic transactions | No | No | Yes | Yes |
-| Rollback to any state | No | No | Yes (generations) | Yes (snapshots) |
-| Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
-| Component model (install :devel only) | No | Split packages | No | Automatic |
-| Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
-| Content-addressable storage | No | No | Yes | Yes |
-| Hermetic builds | No | No | Yes | Yes |
-| Dev shells | No | No | Yes | Yes |
-| OCI container export | No | No | Yes | Yes |
-| Capability enforcement (landlock/seccomp) | No | No | No | Yes |
-| Scriptlet sandboxing | No | No | N/A | Yes |
-| Single binary, no daemon required | Yes | Yes | No | Yes |
-| Mature ecosystem | Yes | Yes | Yes | No (early) |
-| Package count | 60K+ | 15K+ | 100K+ | Via conversion |
-
-Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
-
-The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early.
+</details>
 
 ---
 
@@ -240,7 +269,7 @@ For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 ## Remi Server
 
-Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync.
+Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync. This is how Conary delivers 68,000+ packages on day one without requiring any upstream changes.
 
 A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
@@ -328,6 +357,14 @@ See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 | [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md) | Scriptlet sandboxing and isolation |
 
 For CLI reference: `conary --help` or `man conary` (man pages are auto-generated during build).
+
+---
+
+## Community
+
+- **[GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)** -- Questions, ideas, and general conversation
+- **[Good First Issues](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** -- Starter tasks for new contributors
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** -- Development setup and guidelines
 
 ---
 

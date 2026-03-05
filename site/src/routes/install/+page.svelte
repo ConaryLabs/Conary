@@ -14,116 +14,14 @@
 
 <section class="install-section">
 	<div class="container">
-		<!-- Quick install -->
-		<div class="install-block animate-in" style="--stagger: 3">
-			<h2>Quick Install</h2>
-			<p class="install-note">
-				The recommended way to install Conary. Works on all supported distributions.
-			</p>
-			<div class="terminal">
-				<div class="terminal-header">
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-title">terminal</span>
-				</div>
-				<div class="terminal-body">
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">curl -fsSL https://conary.io/install.sh | sh</span>
-					</div>
-				</div>
-			</div>
-			<p class="install-hint">
-				Or, if you prefer to inspect before running:
-			</p>
-			<div class="terminal">
-				<div class="terminal-header">
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-dot" aria-hidden="true"></span>
-					<span class="terminal-title">terminal</span>
-				</div>
-				<div class="terminal-body">
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">curl -fsSL https://conary.io/install.sh -o install.sh</span>
-					</div>
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">less install.sh</span>
-					</div>
-					<div class="terminal-line">
-						<span class="t-prompt">$</span>
-						<span class="t-cmd">sh install.sh</span>
-					</div>
-				</div>
-			</div>
-		</div>
-
-		<!-- Distro-specific -->
-		<div class="install-block animate-in" style="--stagger: 5">
-			<h2>Distribution Packages</h2>
-			<p class="install-note">Native packages for each supported distribution.</p>
-
-			<div class="distro-cards">
-				<div class="distro-card distro-fedora">
-					<div class="distro-badge">Fedora</div>
-					<div class="terminal compact">
-						<div class="terminal-body">
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">sudo dnf install conary-release</span>
-							</div>
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">sudo dnf install conary</span>
-							</div>
-						</div>
-					</div>
-					<p class="distro-note">Fedora 39+ / RHEL 9+</p>
-				</div>
-
-				<div class="distro-card distro-arch">
-					<div class="distro-badge">Arch Linux</div>
-					<div class="terminal compact">
-						<div class="terminal-body">
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">pacman -S conary</span>
-							</div>
-						</div>
-					</div>
-					<p class="distro-note">Available in the AUR</p>
-				</div>
-
-				<div class="distro-card distro-ubuntu">
-					<div class="distro-badge">Ubuntu / Debian</div>
-					<div class="terminal compact">
-						<div class="terminal-body">
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">curl -fsSL https://conary.io/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/conary.gpg</span>
-							</div>
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">echo "deb [signed-by=/etc/apt/keyrings/conary.gpg] https://apt.conary.io stable main" | sudo tee /etc/apt/sources.list.d/conary.list</span>
-							</div>
-							<div class="terminal-line">
-								<span class="t-prompt">$</span>
-								<span class="t-cmd">sudo apt update && sudo apt install conary</span>
-							</div>
-						</div>
-					</div>
-					<p class="distro-note">Ubuntu 22.04+ / Debian 12+</p>
-				</div>
-			</div>
-		</div>
-
 		<!-- Build from source -->
-		<div class="install-block animate-in" style="--stagger: 7">
+		<div class="install-block animate-in" style="--stagger: 3">
 			<h2>Build from Source</h2>
-			<p class="install-note">Requires Rust 1.93+ and a C compiler.</p>
+			<p class="install-note">
+				Requires Rust 1.93+, SQLite development headers, and Linux.
+				Conary uses Linux-specific kernel APIs (namespaces, landlock, seccomp)
+				and does not currently build on macOS or Windows.
+			</p>
 			<div class="terminal">
 				<div class="terminal-header">
 					<span class="terminal-dot" aria-hidden="true"></span>
@@ -190,6 +88,28 @@
 					<div class="terminal-line t-output">Resolving dependencies...</div>
 					<div class="terminal-line t-output">Installing 1 package (156 KB)</div>
 					<div class="terminal-line t-output t-success">Transaction complete.</div>
+				</div>
+			</div>
+		</div>
+		<!-- Distribution packages (coming soon) -->
+		<div class="install-block animate-in" style="--stagger: 11">
+			<h2>Distribution Packages</h2>
+			<p class="install-note">
+				Native packages for Fedora, Arch, and Ubuntu/Debian are planned.
+				For now, build from source above.
+			</p>
+			<div class="distro-cards coming-soon">
+				<div class="distro-card distro-fedora">
+					<div class="distro-badge">Fedora <span class="soon-tag">Coming Soon</span></div>
+					<p class="distro-note">Fedora 39+ / RHEL 9+</p>
+				</div>
+				<div class="distro-card distro-arch">
+					<div class="distro-badge">Arch Linux <span class="soon-tag">Coming Soon</span></div>
+					<p class="distro-note">AUR package</p>
+				</div>
+				<div class="distro-card distro-ubuntu">
+					<div class="distro-badge">Ubuntu / Debian <span class="soon-tag">Coming Soon</span></div>
+					<p class="distro-note">Ubuntu 22.04+ / Debian 12+</p>
 				</div>
 			</div>
 		</div>
@@ -334,6 +254,19 @@
 		color: var(--color-text-muted);
 		margin-top: 0.75rem;
 		margin-bottom: 0;
+	}
+
+	.coming-soon .distro-card {
+		opacity: 0.5;
+	}
+
+	.soon-tag {
+		font-size: 0.6875rem;
+		font-weight: 500;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		margin-left: 0.5rem;
 	}
 
 	@media (max-width: 768px) {

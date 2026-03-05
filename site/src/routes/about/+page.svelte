@@ -7,7 +7,7 @@
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">About Conary</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			A cross-distribution package manager built from the ground up in Rust.
+			Reviving a visionary 2005 design with 100K lines of modern Rust.
 		</p>
 	</div>
 </section>
@@ -137,6 +137,8 @@
 			<div class="about-links">
 				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer" class="btn btn-outline">GitHub</a>
 				<a href="https://github.com/ConaryLabs/Conary/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Contributing Guide</a>
+				<a href="https://github.com/ConaryLabs/Conary/discussions" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Discussions</a>
+				<a href="https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22" target="_blank" rel="noopener noreferrer" class="btn btn-outline">Good First Issues</a>
 			</div>
 		</div>
 	</div>

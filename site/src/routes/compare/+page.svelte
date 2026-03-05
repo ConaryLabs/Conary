@@ -31,91 +31,91 @@
 					<tbody>
 						<tr>
 							<td class="feature-name">Cross-distribution</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check partial" aria-label="Partial"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Content-addressable storage</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check yes"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Binary delta updates</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check partial"></span></td>
-							<td><span class="check partial"></span></td>
-							<td><span class="check no"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check partial" aria-label="Partial"></span></td>
+							<td><span class="check partial" aria-label="Partial"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Atomic transactions</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check yes"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Declarative system model</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check yes"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">On-demand format conversion</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">File-level deduplication</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check yes"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Rollback / undo</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check partial"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check yes"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check partial" aria-label="Partial"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">SAT-based resolution</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check yes"></span></td>
-							<td><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
-							<td><span class="check no"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Uses existing upstream repos</td>
-							<td class="highlight"><span class="check yes"></span></td>
-							<td><span class="check yes"></span></td>
-							<td><span class="check yes"></span></td>
-							<td><span class="check yes"></span></td>
-							<td><span class="check no"></span></td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 					</tbody>
 				</table>
 			</div>
 			<div class="legend animate-in" style="--stagger: 4">
-				<span class="legend-item"><span class="check yes"></span> Yes</span>
-				<span class="legend-item"><span class="check partial"></span> Partial</span>
-				<span class="legend-item"><span class="check no"></span> No</span>
+				<span class="legend-item"><span class="check yes" aria-label="Yes"></span> Yes</span>
+				<span class="legend-item"><span class="check partial" aria-label="Partial"></span> Partial</span>
+				<span class="legend-item"><span class="check no" aria-label="No"></span> No</span>
 			</div>
 		</div>
 
@@ -178,8 +178,35 @@
 			</div>
 		</div>
 
+		<div class="details" style="margin-top: 1.25rem;">
+			<div class="detail-card animate-in" style="--stagger: 9">
+				<h2>vs. Flatpak / Snap</h2>
+				<p>
+					Flatpak and Snap solve cross-distribution distribution for desktop applications
+					using containerized runtimes. Conary is a system package manager -- it manages
+					the base OS packages, libraries, and services that Flatpak apps depend on.
+					They are complementary, not competing.
+				</p>
+			</div>
+
+			<div class="detail-card animate-in" style="--stagger: 10">
+				<h2>Where Conary Is Still Early</h2>
+				<p>
+					Conary is a 0.1.0 release. apt, dnf, and pacman have decades of battle-testing,
+					ecosystem integration, and institutional trust. Nix has a large and active community
+					building custom packages.
+				</p>
+				<p>
+					Conary bridges the package gap through Remi (on-demand conversion of upstream
+					packages), but native CCS packages are still few. The community is small.
+					We believe the architecture is sound -- but we are asking for early adopters
+					and contributors, not production deployments.
+				</p>
+			</div>
+		</div>
+
 		<!-- CTA -->
-		<div class="compare-cta animate-in" style="--stagger: 9">
+		<div class="compare-cta animate-in" style="--stagger: 11">
 			<p>Ready to try it?</p>
 			<a href="/install" class="btn btn-primary">Install Conary</a>
 		</div>

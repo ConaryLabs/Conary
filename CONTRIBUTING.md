@@ -19,9 +19,19 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 ### Prerequisites
 
 - **Rust 1.93+** (edition 2024) -- install via [rustup](https://rustup.rs/)
-- **SQLite** development headers (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora/RHEL)
+- **SQLite** development headers (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora/RHEL, `sqlite` on Arch)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
+
+### Your First Contribution
+
+Not sure where to start? Look for issues labeled [`good first issue`](https://github.com/ConaryLabs/Conary/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). These are scoped to be completable in a single session and don't require deep knowledge of the codebase.
+
+Good first contributions include:
+- Adding or improving unit tests (look for modules with low coverage)
+- Fixing clippy warnings or improving error messages
+- Documentation improvements in doc comments
+- Small bug fixes in package parsers
 
 ### Fork and Clone
 
@@ -208,7 +218,7 @@ Before proposing significant architectural changes, please open an issue to disc
 
 ## Getting Help
 
-If you have questions about contributing, feel free to open a discussion or issue on the [GitHub repository](https://github.com/ConaryLabs/Conary). We are happy to help newcomers find their way around the codebase.
+If you have questions about contributing, feel free to start a thread in [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) or open an issue on the [GitHub repository](https://github.com/ConaryLabs/Conary). We are happy to help newcomers find their way around the codebase.
 
 ## License
 
