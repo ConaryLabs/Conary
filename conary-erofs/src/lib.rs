@@ -5,6 +5,7 @@
 //! Supports compression (LZ4, LZMA), inline data, tail packing,
 //! and chunk-based external file references.
 
+pub mod builder;
 pub mod chunk;
 pub mod compress;
 pub mod dirent;
