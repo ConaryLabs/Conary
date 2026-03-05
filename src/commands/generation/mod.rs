@@ -12,3 +12,5 @@ pub mod metadata;
 pub mod boot;
 #[allow(unused)]
 pub mod switch;
+#[allow(unused)]
+pub mod commands;
