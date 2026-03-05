@@ -12,6 +12,7 @@
 
 mod cas;
 mod deployer;
+pub mod fsverity;
 pub mod path;
 pub mod reflink;
 pub mod vfs;
