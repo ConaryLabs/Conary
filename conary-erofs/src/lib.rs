@@ -5,5 +5,6 @@
 //! Supports compression (LZ4, LZMA), inline data, tail packing,
 //! and chunk-based external file references.
 
+pub mod dirent;
 pub mod inode;
 pub mod superblock;
