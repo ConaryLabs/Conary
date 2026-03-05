@@ -5,19 +5,19 @@
 //! Commands for tracking, diffing, and managing configuration files.
 
 use anyhow::Result;
-use conary::db::paths::objects_dir;
+use conary_core::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
 
-use conary::db::models::{ConfigBackup, ConfigFile, ConfigStatus, Trove};
-use conary::filesystem::CasStore;
+use conary_core::db::models::{ConfigBackup, ConfigFile, ConfigStatus, Trove};
+use conary_core::filesystem::CasStore;
 
 /// List configuration files
 ///
 /// With no arguments, lists all modified config files.
 /// With a package name, lists all config files for that package.
 pub fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     if let Some(pkg_name) = package {
         // List config files for a specific package
@@ -91,7 +91,7 @@ pub fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Resul
 
 /// Show diff between installed config file and package version
 pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
@@ -158,7 +158,7 @@ pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
 
 /// Backup a config file to CAS
 pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
@@ -199,7 +199,7 @@ pub fn cmd_config_restore(
     root: &str,
     backup_id: Option<i64>,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;
@@ -255,7 +255,7 @@ pub fn cmd_config_restore(
 
 /// Check and update status of config files
 pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let configs = if let Some(pkg_name) = package {
         let troves = Trove::find_by_name(&conn, pkg_name)?;
@@ -322,7 +322,7 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
 
 /// Show backups for a config file
 pub fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
         .ok_or_else(|| anyhow::anyhow!("Config file '{}' is not tracked", path))?;

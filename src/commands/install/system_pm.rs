@@ -1,7 +1,7 @@
 // src/commands/install/system_pm.rs
 //! System package manager query helpers for dependency resolution
 
-use conary::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use tracing::debug;
 
 /// Check if a package is installed via the system package manager

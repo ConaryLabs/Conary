@@ -53,7 +53,7 @@ pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
     cmd_collection_list, cmd_collection_remove_member, cmd_collection_show,
 };
-pub use conary::scriptlet::SandboxMode;
+pub use conary_core::scriptlet::SandboxMode;
 pub use config::{
     cmd_config_backup, cmd_config_backups, cmd_config_check, cmd_config_diff, cmd_config_list,
     cmd_config_restore,
@@ -119,11 +119,11 @@ pub use update::{
 };
 
 use anyhow::Result;
-use conary::packages::PackageFormat;
-use conary::packages::arch::ArchPackage;
-use conary::packages::deb::DebPackage;
-use conary::packages::rpm::RpmPackage;
-use conary::packages::traits::ScriptletPhase;
+use conary_core::packages::PackageFormat;
+use conary_core::packages::arch::ArchPackage;
+use conary_core::packages::deb::DebPackage;
+use conary_core::packages::rpm::RpmPackage;
+use conary_core::packages::traits::ScriptletPhase;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
@@ -296,7 +296,7 @@ pub(crate) fn create_state_snapshot(
     changeset_id: i64,
     summary: &str,
 ) -> Result<()> {
-    use conary::db::models::StateEngine;
+    use conary_core::db::models::StateEngine;
     use tracing::{info, warn};
 
     let engine = StateEngine::new(conn);

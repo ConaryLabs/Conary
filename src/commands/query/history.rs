@@ -8,8 +8,8 @@ use anyhow::Result;
 
 /// Show changeset history
 pub fn cmd_history(db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
-    let changesets = conary::db::models::Changeset::list_all(&conn)?;
+    let conn = conary_core::db::open(db_path)?;
+    let changesets = conary_core::db::models::Changeset::list_all(&conn)?;
 
     if changesets.is_empty() {
         println!("No changeset history.");

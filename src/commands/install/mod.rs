@@ -35,19 +35,19 @@ use super::create_state_snapshot;
 use super::progress::{InstallPhase, InstallProgress};
 use super::{PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
-use conary::components::{
+use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
-use conary::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
-use conary::db::paths::keyring_dir;
-use conary::dependencies::LanguageDepDetector;
-use conary::repository;
-use conary::resolver::Resolver;
-use conary::scriptlet::SandboxMode;
-use conary::transaction::{
+use conary_core::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
+use conary_core::db::paths::keyring_dir;
+use conary_core::dependencies::LanguageDepDetector;
+use conary_core::repository;
+use conary_core::resolver::Resolver;
+use conary_core::scriptlet::SandboxMode;
+use conary_core::transaction::{
     PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
 };
-use conary::version::RpmVersion;
+use conary_core::version::RpmVersion;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -94,7 +94,7 @@ pub(super) fn run_triggers(
     changeset_id: i64,
     file_paths: &[String],
 ) {
-    let trigger_executor = conary::trigger::TriggerExecutor::new(conn, root);
+    let trigger_executor = conary_core::trigger::TriggerExecutor::new(conn, root);
 
     let triggered = trigger_executor
         .record_triggers(changeset_id, file_paths)
@@ -129,7 +129,7 @@ pub(super) fn run_triggers(
 #[allow(dead_code)]
 fn report_provides_check(
     conn: &rusqlite::Connection,
-    missing: &[conary::resolver::MissingDependency],
+    missing: &[conary_core::resolver::MissingDependency],
     package_name: &str,
 ) -> Result<()> {
     let (satisfied, unsatisfied) = check_provides_dependencies(conn, missing);
@@ -230,14 +230,14 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Check if the package is adopted from the system PM
     {
-        let conn = conary::db::open(db_path)
+        let conn = conary_core::db::open(db_path)
             .context("Failed to open package database for adoption check")?;
 
-        if let Some(existing) = conary::db::models::Trove::find_one_by_name(&conn, &package_name)?
+        if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
             && existing.install_source.is_adopted()
         {
             if !force {
-                let pkg_mgr = conary::packages::SystemPackageManager::detect();
+                let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
                 return Err(anyhow::anyhow!(
                     "Package '{}' is adopted from {}. Use 'conary system adopt --takeover {}' \
                      to take full ownership, or use '--force' to override.",
@@ -256,18 +256,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Check if the package is already installed as a dependency - if so, promote it
     // This must happen before we try to download, as we may not need to do anything else
     {
-        let conn = conary::db::open(db_path)
+        let conn = conary_core::db::open(db_path)
             .context("Failed to open package database for promotion check")?;
 
-        if let Some(existing) = conary::db::models::Trove::find_one_by_name(&conn, &package_name)?
-            && existing.install_reason == conary::db::models::InstallReason::Dependency
+        if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+            && existing.install_reason == conary_core::db::models::InstallReason::Dependency
         {
             // Check if we're requesting a specific version that differs
             let needs_version_change = version.as_ref().is_some_and(|v| v != &existing.version);
 
             // Promote to explicit
             let reason = selection_reason.unwrap_or("Explicitly installed by user");
-            conary::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
+            conary_core::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
             println!("Promoted {} from dependency to explicit", package_name);
 
             // If same version (or no version specified), we're done
@@ -359,7 +359,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
     }
 
-    let mut conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let mut conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Build dependency edges from the package
     let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
@@ -954,7 +954,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // DB transaction with tx_uuid for crash recovery
     let tx_uuid = txn.uuid().to_string();
-    let db_result = conary::db::transaction(&mut conn, |tx| {
+    let db_result = conary_core::db::transaction(&mut conn, |tx| {
         // Create changeset with tx_uuid for crash recovery
         let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
         let changeset_id = changeset.insert(tx)?;
@@ -963,7 +963,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             && let Some(old_id) = old_trove.id
         {
             info!("Removing old version {} before upgrade", old_trove.version);
-            conary::db::models::Trove::delete(tx, old_id)?;
+            conary_core::db::models::Trove::delete(tx, old_id)?;
         }
 
         let mut trove = pkg.to_trove();
@@ -1005,7 +1005,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             // Look up the component ID for this file
             let component_id = path_to_component.get(path.as_str()).copied();
 
-            let mut file_entry = conary::db::models::FileEntry::new(
+            let mut file_entry = conary_core::db::models::FileEntry::new(
                 path.clone(),
                 hash.clone(),
                 *size,
@@ -1024,7 +1024,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
 
         for dep in pkg.dependencies() {
-            let mut dep_entry = conary::db::models::DependencyEntry::new(
+            let mut dep_entry = conary_core::db::models::DependencyEntry::new(
                 trove_id,
                 dep.name.clone(),
                 None, // depends_on_version is for resolved version, not constraint

@@ -6,7 +6,7 @@
 //! automatic detection of existing project metadata.
 
 use anyhow::{Context, Result};
-use conary::ccs::CcsManifest;
+use conary_core::ccs::CcsManifest;
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory

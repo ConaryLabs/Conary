@@ -9,7 +9,7 @@ use std::path::Path;
 
 /// Generate an Ed25519 signing key pair
 pub fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -> Result<()> {
-    use conary::ccs::SigningKeyPair;
+    use conary_core::ccs::SigningKeyPair;
 
     let private_path = Path::new(output).with_extension("private");
     let public_path = Path::new(output).with_extension("public");
@@ -65,7 +65,7 @@ pub fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -> Resu
 
 /// Sign a CCS package with an Ed25519 key
 pub fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>) -> Result<()> {
-    use conary::ccs::signing::SigningKeyPair;
+    use conary_core::ccs::signing::SigningKeyPair;
     use flate2::Compression;
     use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;

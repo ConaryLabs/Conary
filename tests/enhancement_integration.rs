@@ -5,14 +5,14 @@
 //! provenance, and subpackage relationships to already-installed converted
 //! packages.
 
-use conary::ccs::enhancement::context::ConvertedPackageInfo;
-use conary::ccs::enhancement::runner::EnhancementOptions;
-use conary::ccs::enhancement::{
+use conary_core::ccs::enhancement::context::ConvertedPackageInfo;
+use conary_core::ccs::enhancement::runner::EnhancementOptions;
+use conary_core::ccs::enhancement::{
     ENHANCEMENT_VERSION, EnhancementPriority, EnhancementResult_, EnhancementRunner,
     EnhancementStatus, EnhancementType, EnhancementWindowStatus, check_enhancement_window,
     get_pending_by_priority, schedule_for_enhancement,
 };
-use conary::db;
+use conary_core::db;
 use rusqlite::params;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;

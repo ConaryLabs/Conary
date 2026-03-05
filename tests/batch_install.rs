@@ -8,8 +8,8 @@
 //! 3. Rollback works correctly when installation fails
 //! 4. All packages share a single changeset
 
-use conary::db;
-use conary::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
+use conary_core::db;
+use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
 use tempfile::TempDir;
 
 /// Create a minimal test database
@@ -127,7 +127,7 @@ fn test_batch_install_rollback_removes_all() {
     let mut conn = db::open(&db_path).unwrap();
 
     // Start a transaction that will fail
-    let result: Result<(), conary::Error> = db::transaction(&mut conn, |tx| {
+    let result: Result<(), conary_core::Error> = db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new("Install failing batch".to_string());
         let changeset_id = changeset.insert(tx)?;
 
@@ -141,7 +141,7 @@ fn test_batch_install_rollback_removes_all() {
         pkg1.insert(tx)?;
 
         // Second package "fails" (we simulate this by returning an error)
-        Err(conary::Error::InitError(
+        Err(conary_core::Error::InitError(
             "Simulated installation failure".to_string(),
         ))
     });
@@ -264,14 +264,14 @@ fn test_batch_preserves_dependency_reasons() {
         let mut dep = Trove::new("libfoo".to_string(), "1.0".to_string(), TroveType::Package);
         dep.installed_by_changeset_id = Some(changeset_id);
         dep.selection_reason = Some("Required by myapp".to_string());
-        dep.install_reason = conary::db::models::InstallReason::Dependency;
+        dep.install_reason = conary_core::db::models::InstallReason::Dependency;
         dep.insert(tx)?;
 
         // Main package with explicit reason
         let mut app = Trove::new("myapp".to_string(), "2.0".to_string(), TroveType::Package);
         app.installed_by_changeset_id = Some(changeset_id);
         app.selection_reason = Some("Explicitly installed by user".to_string());
-        app.install_reason = conary::db::models::InstallReason::Explicit;
+        app.install_reason = conary_core::db::models::InstallReason::Explicit;
         app.insert(tx)?;
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
@@ -284,7 +284,7 @@ fn test_batch_preserves_dependency_reasons() {
     assert_eq!(libfoo.len(), 1);
     assert_eq!(
         libfoo[0].install_reason,
-        conary::db::models::InstallReason::Dependency
+        conary_core::db::models::InstallReason::Dependency
     );
     assert_eq!(
         libfoo[0].selection_reason,
@@ -295,7 +295,7 @@ fn test_batch_preserves_dependency_reasons() {
     assert_eq!(myapp.len(), 1);
     assert_eq!(
         myapp[0].install_reason,
-        conary::db::models::InstallReason::Explicit
+        conary_core::db::models::InstallReason::Explicit
     );
 }
 

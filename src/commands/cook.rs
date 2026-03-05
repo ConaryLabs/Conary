@@ -3,7 +3,7 @@
 //! Cook command - build packages from recipes
 
 use anyhow::{Context, Result};
-use conary::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_recipe};
+use conary_core::recipe::{Kitchen, KitchenConfig, parse_recipe_file, validate_recipe};
 use std::path::{Path, PathBuf};
 use tracing::info;
 

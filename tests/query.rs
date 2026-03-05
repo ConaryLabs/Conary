@@ -4,12 +4,12 @@
 
 mod common;
 
-use conary::db;
+use conary_core::db;
 use tempfile::NamedTempFile;
 
 #[test]
 fn test_query_packages() {
-    use conary::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -50,7 +50,7 @@ fn test_query_packages() {
 
 #[test]
 fn test_history_shows_operations() {
-    use conary::db::models::{Changeset, ChangesetStatus};
+    use conary_core::db::models::{Changeset, ChangesetStatus};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -85,7 +85,7 @@ fn test_history_shows_operations() {
 /// Test whatprovides query capability
 #[test]
 fn test_whatprovides_query() {
-    use conary::db::models::{ProvideEntry, Trove, TroveType};
+    use conary_core::db::models::{ProvideEntry, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -144,7 +144,7 @@ fn test_whatprovides_query() {
 /// Test package query operations (equivalent to cmd_query)
 #[test]
 fn test_query_operations() {
-    use conary::db::models::{FileEntry, Trove};
+    use conary_core::db::models::{FileEntry, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -185,7 +185,7 @@ fn test_query_operations() {
 /// Test dependency query operations (equivalent to cmd_depends/cmd_rdepends)
 #[test]
 fn test_dependency_queries() {
-    use conary::db::models::{DependencyEntry, ProvideEntry, Trove};
+    use conary_core::db::models::{DependencyEntry, ProvideEntry, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -218,7 +218,7 @@ fn test_dependency_queries() {
 /// Test changeset history (equivalent to cmd_history)
 #[test]
 fn test_changeset_history() {
-    use conary::db::models::{Changeset, ChangesetStatus};
+    use conary_core::db::models::{Changeset, ChangesetStatus};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -249,7 +249,7 @@ fn test_changeset_history() {
 /// Test whatprovides functionality
 #[test]
 fn test_whatprovides_operations() {
-    use conary::db::models::ProvideEntry;
+    use conary_core::db::models::ProvideEntry;
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -280,7 +280,7 @@ fn test_whatprovides_operations() {
 /// Test dependency tree building
 #[test]
 fn test_dependency_tree() {
-    use conary::db::models::{DependencyEntry, Trove};
+    use conary_core::db::models::{DependencyEntry, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -310,7 +310,7 @@ fn test_dependency_tree() {
 /// Test what-breaks analysis (reverse dependency check)
 #[test]
 fn test_what_breaks_analysis() {
-    use conary::db::models::{DependencyEntry, Trove};
+    use conary_core::db::models::{DependencyEntry, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();

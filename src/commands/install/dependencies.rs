@@ -14,12 +14,12 @@ use super::resolve::check_provides_dependencies;
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use crate::commands::{SandboxMode, cmd_install};
 use anyhow::{Context, Result};
-use conary::db::paths::keyring_dir;
-use conary::packages::PackageFormat;
-use conary::packages::traits::DependencyType;
-use conary::repository;
-use conary::resolver::{DependencyEdge, ResolutionPlan, Resolver};
-use conary::version::{RpmVersion, VersionConstraint};
+use conary_core::db::paths::keyring_dir;
+use conary_core::packages::PackageFormat;
+use conary_core::packages::traits::DependencyType;
+use conary_core::repository;
+use conary_core::resolver::{DependencyEdge, ResolutionPlan, Resolver};
+use conary_core::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use tracing::{debug, info};
@@ -197,7 +197,7 @@ fn handle_downloadable_deps(
 fn check_provides_fallback(
     conn: &Connection,
     pkg: &dyn PackageFormat,
-    missing: &[conary::resolver::MissingDependency],
+    missing: &[conary_core::resolver::MissingDependency],
 ) -> Result<()> {
     let (satisfied, unsatisfied) = check_provides_dependencies(conn, missing);
 

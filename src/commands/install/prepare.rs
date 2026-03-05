@@ -3,12 +3,12 @@
 
 use super::PackageFormatType;
 use anyhow::{Context, Result};
-use conary::components::ComponentType;
-use conary::packages::PackageFormat;
-use conary::packages::arch::ArchPackage;
-use conary::packages::deb::DebPackage;
-use conary::packages::rpm::RpmPackage;
-use conary::version::RpmVersion;
+use conary_core::components::ComponentType;
+use conary_core::packages::PackageFormat;
+use conary_core::packages::arch::ArchPackage;
+use conary_core::packages::deb::DebPackage;
+use conary_core::packages::rpm::RpmPackage;
+use conary_core::version::RpmVersion;
 use rusqlite::Connection;
 use std::path::Path;
 use tracing::{info, warn};
@@ -50,9 +50,9 @@ pub enum UpgradeCheck {
     /// Fresh install - no existing package
     FreshInstall,
     /// Upgrade from an older version (boxed to reduce enum size)
-    Upgrade(Box<conary::db::models::Trove>),
+    Upgrade(Box<conary_core::db::models::Trove>),
     /// Downgrade to an older version (when --allow-downgrade is used)
-    Downgrade(Box<conary::db::models::Trove>),
+    Downgrade(Box<conary_core::db::models::Trove>),
 }
 
 /// Check if package is already installed and determine upgrade status
@@ -61,7 +61,7 @@ pub fn check_upgrade_status(
     pkg: &dyn PackageFormat,
     allow_downgrade: bool,
 ) -> Result<UpgradeCheck> {
-    let existing = conary::db::models::Trove::find_by_name(conn, pkg.name())?;
+    let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
 
     for trove in &existing {
         if trove.architecture == pkg.architecture().map(|s: &str| s.to_string()) {

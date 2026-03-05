@@ -11,9 +11,9 @@
 //! Files are deployed via hardlinks when possible (zero additional disk space).
 
 use anyhow::Result;
-use conary::db::models::{FileEntry, Trove};
-use conary::db::paths::objects_dir;
-use conary::filesystem::FileDeployer;
+use conary_core::db::models::{FileEntry, Trove};
+use conary_core::db::paths::objects_dir;
+use conary_core::filesystem::FileDeployer;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
@@ -30,7 +30,7 @@ pub fn cmd_restore(
         package_name, force, dry_run
     );
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Find the package
     let troves = Trove::find_by_name(&conn, package_name)?;
@@ -173,7 +173,7 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
         dry_run
     );
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Set up deployer
     let objects_dir = objects_dir(db_path);

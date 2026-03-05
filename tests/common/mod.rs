@@ -2,8 +2,8 @@
 
 //! Shared test utilities and helpers for integration tests.
 
-use conary::db;
-use conary::db::models::{
+use conary_core::db;
+use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, ProvideEntry, Trove,
     TroveType,
 };

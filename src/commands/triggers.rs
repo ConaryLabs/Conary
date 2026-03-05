@@ -3,12 +3,12 @@
 //! Trigger management commands
 
 use anyhow::Result;
-use conary::db::models::{Trigger, TriggerDependency};
+use conary_core::db::models::{Trigger, TriggerDependency};
 use tracing::info;
 
 /// List all triggers
 pub fn cmd_trigger_list(db_path: &str, show_disabled: bool, show_builtin_only: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let triggers = if show_builtin_only {
         Trigger::list_builtin(&conn)?
@@ -53,7 +53,7 @@ pub fn cmd_trigger_list(db_path: &str, show_disabled: bool, show_builtin_only: b
 
 /// Show details of a specific trigger
 pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
@@ -87,7 +87,7 @@ pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
 
 /// Enable a trigger
 pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
@@ -109,7 +109,7 @@ pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
 
 /// Disable a trigger
 pub fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
@@ -138,7 +138,7 @@ pub fn cmd_trigger_add(
     priority: Option<i32>,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Check if already exists
     if Trigger::find_by_name(&conn, name)?.is_some() {
@@ -169,7 +169,7 @@ pub fn cmd_trigger_add(
 
 /// Remove a custom trigger (built-in triggers cannot be removed)
 pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
@@ -197,7 +197,7 @@ pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
 
 /// Run pending triggers for a changeset (useful for manual re-runs)
 pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // If no changeset specified, get the most recent one
     let cs_id = if let Some(id) = changeset_id {
@@ -209,7 +209,7 @@ pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> 
 
     println!("Running triggers for changeset {}...", cs_id);
 
-    let executor = conary::trigger::TriggerExecutor::new(&conn, std::path::Path::new(root));
+    let executor = conary_core::trigger::TriggerExecutor::new(&conn, std::path::Path::new(root));
     let results = executor.execute_pending(cs_id)?;
 
     if results.total() == 0 {

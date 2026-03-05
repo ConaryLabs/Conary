@@ -6,7 +6,7 @@
 //! including generation of legacy format packages.
 
 use anyhow::{Context, Result};
-use conary::ccs::{CcsBuilder, CcsManifest, builder, legacy};
+use conary_core::ccs::{CcsBuilder, CcsManifest, builder, legacy};
 use std::path::Path;
 
 /// Build a CCS package from a manifest

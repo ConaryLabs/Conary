@@ -6,11 +6,11 @@
 //! and stale file entries.
 
 use anyhow::Result;
-use conary::packages::rpm_query;
+use conary_core::packages::rpm_query;
 
 /// Check for conflicts between tracked packages and files
 pub fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     println!("Checking for conflicts...\n");
 

@@ -16,9 +16,9 @@
 
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
-use conary::db::models::{ProvideEntry, Redirect};
-use conary::db::paths::keyring_dir;
-use conary::repository::{PackageSource, ResolutionOptions, resolve_package};
+use conary_core::db::models::{ProvideEntry, Redirect};
+use conary_core::db::paths::keyring_dir;
+use conary_core::repository::{PackageSource, ResolutionOptions, resolve_package};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -106,7 +106,7 @@ pub fn resolve_package_path(
     info!("Searching repositories for package: {}", package);
     progress.set_status("Searching repositories...");
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check for package redirects (renames, obsoletes, etc.)
     let resolved_name = resolve_redirects(&conn, package, version);
@@ -259,10 +259,10 @@ fn convert_source_to_resolved(
 #[allow(clippy::type_complexity)]
 pub fn check_provides_dependencies(
     conn: &Connection,
-    missing: &[conary::resolver::MissingDependency],
+    missing: &[conary_core::resolver::MissingDependency],
 ) -> (
     Vec<(String, String, Option<String>)>,
-    Vec<conary::resolver::MissingDependency>,
+    Vec<conary_core::resolver::MissingDependency>,
 ) {
     let mut satisfied = Vec::new();
     let mut unsatisfied = Vec::new();

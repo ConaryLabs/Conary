@@ -4,13 +4,13 @@
 
 mod common;
 
-use conary::db;
+use conary_core::db;
 use tempfile::NamedTempFile;
 
 /// Test that the classifier correctly categorizes files into components
 #[test]
 fn test_component_classifier_categorization() {
-    use conary::components::{ComponentClassifier, ComponentType};
+    use conary_core::components::{ComponentClassifier, ComponentType};
     use std::path::Path;
 
     // :devel files
@@ -92,7 +92,7 @@ fn test_component_classifier_categorization() {
 /// Test that default components are correctly identified
 #[test]
 fn test_default_component_types() {
-    use conary::components::ComponentType;
+    use conary_core::components::ComponentType;
 
     // Default components (installed by default)
     assert!(
@@ -119,7 +119,7 @@ fn test_default_component_types() {
 /// Test scriptlet gating: scriptlets only run when :runtime or :lib is installed
 #[test]
 fn test_scriptlet_gating() {
-    use conary::components::{ComponentType, should_run_scriptlets};
+    use conary_core::components::{ComponentType, should_run_scriptlets};
 
     // Scriptlets SHOULD run when :runtime or :lib is present
     assert!(
@@ -162,7 +162,7 @@ fn test_scriptlet_gating() {
 /// Smoke test: Simulate devel-only installation and verify correct behavior
 #[test]
 fn test_devel_only_install_smoke_test() {
-    use conary::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
+    use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
     use std::collections::HashSet;
 
     // Simulate a package with files in all component types
@@ -275,7 +275,7 @@ fn test_devel_only_install_smoke_test() {
 /// Test default installation behavior (runtime + lib + config only)
 #[test]
 fn test_default_install_excludes_devel_and_doc() {
-    use conary::components::{ComponentClassifier, ComponentType};
+    use conary_core::components::{ComponentClassifier, ComponentType};
     use std::collections::HashSet;
 
     // Simulate a package
@@ -342,8 +342,8 @@ fn test_default_install_excludes_devel_and_doc() {
 /// Test component selection with database (full integration)
 #[test]
 fn test_component_selective_install_database() {
-    use conary::components::{ComponentClassifier, ComponentType};
-    use conary::db::models::{Changeset, ChangesetStatus, Component, FileEntry, Trove, TroveType};
+    use conary_core::components::{ComponentClassifier, ComponentType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, Component, FileEntry, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -430,7 +430,7 @@ fn test_component_selective_install_database() {
 /// Test component listing (equivalent to cmd_list_components)
 #[test]
 fn test_component_listing() {
-    use conary::db::models::{Component, Trove};
+    use conary_core::db::models::{Component, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();

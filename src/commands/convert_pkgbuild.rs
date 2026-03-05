@@ -3,7 +3,7 @@
 //! Convert PKGBUILD to Recipe command
 
 use anyhow::{Context, Result};
-use conary::recipe::pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};
+use conary_core::recipe::pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};
 use std::fs;
 use std::io::Write;
 use std::path::Path;

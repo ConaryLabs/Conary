@@ -6,7 +6,7 @@
 //! 2. Accuracy against known packages
 //! 3. Memory usage for binary analysis
 
-use conary::capability::inference::{
+use conary_core::capability::inference::{
     BinaryAnalyzer, Confidence, HeuristicInferrer, InferenceOptions, PackageFile,
     PackageMetadataRef, WellKnownProfiles, infer_capabilities,
 };

@@ -471,7 +471,7 @@ fn main() -> Result<()> {
                     commands::generation::commands::cmd_generation_list()
                 }
                 cli::GenerationCommands::Build { summary, db } => {
-                    let conn = conary::db::open(&db.db_path)?;
+                    let conn = conary_core::db::open(&db.db_path)?;
                     let gen_number =
                         commands::generation::builder::build_generation(&conn, &db.db_path, &summary)?;
                     println!("Generation {} built.", gen_number);

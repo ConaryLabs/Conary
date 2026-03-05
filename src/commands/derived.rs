@@ -6,17 +6,17 @@
 //! of existing packages with patches and file overrides.
 
 use anyhow::Result;
-use conary::db::paths::objects_dir;
+use conary_core::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
 
-use conary::db::models::{
+use conary_core::db::models::{
     DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy,
 };
 
 /// List all derived packages
 pub fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let derived = DerivedPackage::list_all(&conn)?;
 
@@ -68,7 +68,7 @@ pub fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
 
 /// Show details of a derived package
 pub fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
@@ -144,7 +144,7 @@ pub fn cmd_derive_create(
     description: Option<&str>,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Check if already exists
     if DerivedPackage::find_by_name(&conn, name)?.is_some() {
@@ -193,7 +193,7 @@ pub fn cmd_derive_patch(
     strip_level: Option<i32>,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
@@ -204,7 +204,7 @@ pub fn cmd_derive_patch(
 
     // Read patch content
     let patch_content = std::fs::read(patch_file)?;
-    let patch_hash = conary::hash::sha256(&patch_content);
+    let patch_hash = conary_core::hash::sha256(&patch_content);
     let patch_name = Path::new(patch_file)
         .file_name()
         .and_then(|n| n.to_str())
@@ -222,7 +222,7 @@ pub fn cmd_derive_patch(
 
     // Store patch content in CAS
     let objects_dir = objects_dir(db_path);
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
     cas.store(&patch_content)?;
 
     info!("Added patch '{}' to derived package '{}'", patch_name, name);
@@ -242,7 +242,7 @@ pub fn cmd_derive_override(
     permissions: Option<u32>,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
@@ -262,11 +262,11 @@ pub fn cmd_derive_override(
     if let Some(source) = source_file {
         // Replace file
         let content = std::fs::read(source)?;
-        let source_hash = conary::hash::sha256(&content);
+        let source_hash = conary_core::hash::sha256(&content);
 
         // Store content in CAS
         let objects_dir = objects_dir(db_path);
-        let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+        let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
         cas.store(&content)?;
 
         let mut ov = DerivedOverride::new_replace(derived_id, target_path.to_string(), source_hash);
@@ -291,13 +291,13 @@ pub fn cmd_derive_override(
 
 /// Build a derived package
 pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let mut derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
 
     // Check parent is installed
-    let parent_installed = conary::db::models::Trove::find_by_name(&conn, &derived.parent_name)?;
+    let parent_installed = conary_core::db::models::Trove::find_by_name(&conn, &derived.parent_name)?;
     if parent_installed.is_empty() {
         return Err(anyhow::anyhow!(
             "Parent package '{}' is not installed. Install it first.",
@@ -307,7 +307,7 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
 
     // Get CAS
     let objects_dir = objects_dir(db_path);
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
     println!(
         "Building derived package '{}' from '{}'...",
@@ -315,7 +315,7 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
     );
 
     // Build the derived package
-    let result = conary::derived::build_from_definition(&conn, &derived, &cas);
+    let result = conary_core::derived::build_from_definition(&conn, &derived, &cas);
 
     match result {
         Ok(build_result) => {
@@ -346,7 +346,7 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
 
 /// Delete a derived package
 pub fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
@@ -362,7 +362,7 @@ pub fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
 
 /// List stale derived packages (parent was updated)
 pub fn cmd_derive_stale(db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let stale = DerivedPackage::find_by_status(&conn, DerivedStatus::Stale)?;
 
@@ -388,7 +388,7 @@ pub fn cmd_derive_stale(db_path: &str) -> Result<()> {
 /// (Called internally when parent packages are updated)
 #[allow(dead_code)]
 pub fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let count = DerivedPackage::mark_stale(&conn, parent_name)?;
 

@@ -5,13 +5,13 @@
 //! Shows statistics about adopted and tracked packages.
 
 use anyhow::Result;
-use conary::db::models::{InstallReason, InstallSource, Trove};
-use conary::packages::SystemPackageManager;
+use conary_core::db::models::{InstallReason, InstallSource, Trove};
+use conary_core::packages::SystemPackageManager;
 use std::path::PathBuf;
 
 /// Show adoption status
 pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let troves = Trove::list_all(&conn)?;
 
@@ -60,14 +60,14 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let pkg_mgr = SystemPackageManager::detect();
     let (system_count, mgr_name) = if pkg_mgr.is_available() {
         let count = match pkg_mgr {
-            SystemPackageManager::Rpm => conary::packages::rpm_query::list_installed_packages()
+            SystemPackageManager::Rpm => conary_core::packages::rpm_query::list_installed_packages()
                 .map(|p| p.len())
                 .unwrap_or(0),
-            SystemPackageManager::Dpkg => conary::packages::dpkg_query::list_installed_packages()
+            SystemPackageManager::Dpkg => conary_core::packages::dpkg_query::list_installed_packages()
                 .map(|p| p.len())
                 .unwrap_or(0),
             SystemPackageManager::Pacman => {
-                conary::packages::pacman_query::list_installed_packages()
+                conary_core::packages::pacman_query::list_installed_packages()
                     .map(|p| p.len())
                     .unwrap_or(0)
             }

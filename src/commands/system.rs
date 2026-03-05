@@ -3,17 +3,17 @@
 
 use super::TroveSnapshot;
 use anyhow::Result;
-use conary::db::paths::objects_dir;
+use conary_core::db::paths::objects_dir;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
-    conary::db::init(db_path)?;
+    conary_core::db::init(db_path)?;
     println!("Database initialized successfully at: {}", db_path);
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     info!("Adding default repositories...");
 
     let default_repos = [
@@ -56,7 +56,7 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
     ];
 
     for (name, url, priority, desc) in default_repos {
-        match conary::repository::add_repository(
+        match conary_core::repository::add_repository(
             &conn,
             name.to_string(),
             url.to_string(),
@@ -76,22 +76,22 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
 pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
-    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
-    let changeset = conary::db::models::Changeset::find_by_id(&conn, changeset_id)?
+    let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)?
         .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
 
-    if changeset.status == conary::db::models::ChangesetStatus::RolledBack {
+    if changeset.status == conary_core::db::models::ChangesetStatus::RolledBack {
         return Err(anyhow::anyhow!(
             "Changeset {} is already rolled back",
             changeset_id
         ));
     }
-    if changeset.status == conary::db::models::ChangesetStatus::Pending {
+    if changeset.status == conary_core::db::models::ChangesetStatus::Pending {
         return Err(anyhow::anyhow!(
             "Cannot rollback pending changeset {}",
             changeset_id
@@ -120,7 +120,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         let troves = {
             let mut stmt = tx.prepare(
                 "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since
@@ -139,7 +139,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                             )),
                         )
                     })?,
-                    None => conary::db::models::InstallSource::File,
+                    None => conary_core::db::models::InstallSource::File,
                 };
                 let reason_str: Option<String> = row.get(9)?;
                 let install_reason = match reason_str {
@@ -153,7 +153,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                             )),
                         )
                     })?,
-                    None => conary::db::models::InstallReason::Explicit,
+                    None => conary_core::db::models::InstallReason::Explicit,
                 };
                 let trove_type_str: String = row.get(3)?;
                 let trove_type = trove_type_str.parse().map_err(|e| {
@@ -171,7 +171,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                 let selection_reason: Option<String> = row.get(12).unwrap_or(None);
                 let label_id: Option<i64> = row.get(13).unwrap_or(None);
                 let orphan_since: Option<String> = row.get(14).unwrap_or(None);
-                Ok(conary::db::models::Trove {
+                Ok(conary_core::db::models::Trove {
                     id: Some(row.get(0)?),
                     name: row.get(1)?,
                     version: row.get(2)?,
@@ -193,12 +193,12 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         };
 
         if troves.is_empty() {
-            return Err(conary::Error::InitError(
+            return Err(conary_core::Error::InitError(
                 "No troves found for this changeset.".to_string(),
             ));
         }
 
-        let mut rollback_changeset = conary::db::models::Changeset::new(format!(
+        let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
@@ -206,12 +206,12 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
         for trove in &troves {
             if let Some(trove_id) = trove.id {
-                conary::db::models::Trove::delete(tx, trove_id)?;
+                conary_core::db::models::Trove::delete(tx, trove_id)?;
                 println!("Removed {} version {}", trove.name, trove.version);
             }
         }
 
-        rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+        rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
 
         tx.execute(
             "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
@@ -247,8 +247,8 @@ fn rollback_removal(
     changeset_id: i64,
     snapshot_json: &str,
     conn: &mut rusqlite::Connection,
-    deployer: &conary::filesystem::FileDeployer,
-    changeset: &conary::db::models::Changeset,
+    deployer: &conary_core::filesystem::FileDeployer,
+    changeset: &conary_core::db::models::Changeset,
 ) -> Result<()> {
     info!("Rolling back removal changeset: {}", changeset_id);
 
@@ -260,27 +260,27 @@ fn rollback_removal(
 
     let file_count = snapshot.files.len();
 
-    conary::db::transaction(conn, |tx| {
+    conary_core::db::transaction(conn, |tx| {
         // Create rollback changeset
-        let mut rollback_changeset = conary::db::models::Changeset::new(format!(
+        let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
         let rollback_changeset_id = rollback_changeset.insert(tx)?;
 
         // Restore the trove
-        let install_source: conary::db::models::InstallSource =
+        let install_source: conary_core::db::models::InstallSource =
             snapshot.install_source.parse().map_err(|e| {
-                conary::Error::InitError(format!(
+                conary_core::Error::InitError(format!(
                     "Invalid install_source in snapshot '{}': {}",
                     snapshot.install_source, e
                 ))
             })?;
 
-        let mut trove = conary::db::models::Trove::new_with_source(
+        let mut trove = conary_core::db::models::Trove::new_with_source(
             snapshot.name.clone(),
             snapshot.version.clone(),
-            conary::db::models::TroveType::Package,
+            conary_core::db::models::TroveType::Package,
             install_source,
         );
         trove.architecture = snapshot.architecture.clone();
@@ -291,7 +291,7 @@ fn rollback_removal(
 
         // Restore file entries
         for file in &snapshot.files {
-            let mut file_entry = conary::db::models::FileEntry::new(
+            let mut file_entry = conary_core::db::models::FileEntry::new(
                 file.path.clone(),
                 file.sha256_hash.clone(),
                 file.size,
@@ -311,7 +311,7 @@ fn rollback_removal(
             }
         }
 
-        rollback_changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+        rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
 
         // Mark original changeset as rolled back
         tx.execute(
@@ -353,7 +353,7 @@ fn rollback_removal(
 pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: bool) -> Result<()> {
     info!("Verifying installed files...");
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // If --rpm flag, verify adopted packages against RPM database
     if use_rpm {
@@ -362,10 +362,10 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
 
     let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
-    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
     let files: Vec<(String, String, String)> = if let Some(pkg_name) = package {
-        let troves = conary::db::models::Trove::find_by_name(&conn, &pkg_name)?;
+        let troves = conary_core::db::models::Trove::find_by_name(&conn, &pkg_name)?;
         if troves.is_empty() {
             return Err(anyhow::anyhow!("Package '{}' is not installed", pkg_name));
         }
@@ -373,7 +373,7 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
         let mut all_files = Vec::new();
         for trove in &troves {
             if let Some(trove_id) = trove.id {
-                let trove_files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+                let trove_files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
                 for file in trove_files {
                     all_files.push((file.path, file.sha256_hash, trove.name.clone()));
                 }
@@ -439,13 +439,13 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
     use std::process::Command;
 
     // Check if RPM is available
-    if !conary::packages::rpm_query::is_rpm_available() {
+    if !conary_core::packages::rpm_query::is_rpm_available() {
         return Err(anyhow::anyhow!("RPM is not available on this system"));
     }
 
     // Get adopted packages to verify
     let packages: Vec<String> = if let Some(pkg_name) = package {
-        let troves = conary::db::models::Trove::find_by_name(conn, &pkg_name)?;
+        let troves = conary_core::db::models::Trove::find_by_name(conn, &pkg_name)?;
         if troves.is_empty() {
             return Err(anyhow::anyhow!("Package '{}' is not tracked", pkg_name));
         }
@@ -455,8 +455,8 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
             .filter(|t| {
                 matches!(
                     t.install_source,
-                    conary::db::models::InstallSource::AdoptedTrack
-                        | conary::db::models::InstallSource::AdoptedFull
+                    conary_core::db::models::InstallSource::AdoptedTrack
+                        | conary_core::db::models::InstallSource::AdoptedFull
                 )
             })
             .collect();
@@ -548,7 +548,7 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -
         keep_days, dry_run
     );
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let objects_path = Path::new(objects_dir);
 
     if !objects_path.exists() {

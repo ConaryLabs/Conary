@@ -17,33 +17,33 @@ use tracing::info;
 /// - Custom pattern with * wildcard - e.g., "Required by nginx"
 pub fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
     info!("Querying packages by reason: {:?}", pattern);
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let (troves, filter_desc) = match pattern {
         Some("explicit") | Some("explicitly") => (
-            conary::db::models::Trove::find_explicitly_installed(&conn)?,
+            conary_core::db::models::Trove::find_explicitly_installed(&conn)?,
             "explicitly installed",
         ),
         Some("dependency") | Some("required") | Some("dep") => (
-            conary::db::models::Trove::find_dependencies_installed(&conn)?,
+            conary_core::db::models::Trove::find_dependencies_installed(&conn)?,
             "installed as dependencies",
         ),
         Some("collection") | Some("@") => (
-            conary::db::models::Trove::find_collection_installed(&conn)?,
+            conary_core::db::models::Trove::find_collection_installed(&conn)?,
             "installed via collections",
         ),
         Some(custom) if custom.starts_with("@") => {
             // Pattern like "@server" - find packages from specific collection
             let pattern = format!("Installed via {}", custom);
             (
-                conary::db::models::Trove::find_by_reason(&conn, &pattern)?,
+                conary_core::db::models::Trove::find_by_reason(&conn, &pattern)?,
                 &*format!("installed via {}", custom),
             )
         }
         Some(custom) => {
             // Custom pattern
             (
-                conary::db::models::Trove::find_by_reason(&conn, custom)?,
+                conary_core::db::models::Trove::find_by_reason(&conn, custom)?,
                 custom,
             )
         }
@@ -71,7 +71,7 @@ pub fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
 
 /// Print all packages grouped by their installation reason
 fn print_all_with_reasons(conn: &rusqlite::Connection) -> Result<()> {
-    let all_troves = conary::db::models::Trove::list_all(conn)?;
+    let all_troves = conary_core::db::models::Trove::list_all(conn)?;
 
     // Group by reason
     let mut explicit = Vec::new();

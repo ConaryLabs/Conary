@@ -10,7 +10,7 @@ use anyhow::Result;
 
 /// Query installed packages
 pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Path query mode: find package containing a file
     if let Some(file_path) = &options.path {
@@ -18,9 +18,9 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
     }
 
     let troves = if let Some(pattern) = pattern {
-        conary::db::models::Trove::find_by_name(&conn, pattern)?
+        conary_core::db::models::Trove::find_by_name(&conn, pattern)?
     } else {
-        conary::db::models::Trove::list_all(&conn)?
+        conary_core::db::models::Trove::list_all(&conn)?
     };
 
     if troves.is_empty() {
@@ -62,10 +62,10 @@ fn query_by_path(
     options: &QueryOptions,
 ) -> Result<()> {
     // Try exact match first
-    let file = conary::db::models::FileEntry::find_by_path(conn, file_path)?;
+    let file = conary_core::db::models::FileEntry::find_by_path(conn, file_path)?;
 
     if let Some(file) = file
-        && let Ok(Some(trove)) = conary::db::models::Trove::find_by_id(conn, file.trove_id)
+        && let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(conn, file.trove_id)
     {
         if options.info {
             return show_package_info(conn, &trove, options);
@@ -82,7 +82,7 @@ fn query_by_path(
         format!("%{file_path}%")
     };
 
-    let files = conary::db::models::FileEntry::find_by_path_pattern(conn, &pattern)?;
+    let files = conary_core::db::models::FileEntry::find_by_path_pattern(conn, &pattern)?;
     if files.is_empty() {
         println!("No package owns file matching '{}'", file_path);
         return Ok(());
@@ -100,7 +100,7 @@ fn query_by_path(
 
     println!("Packages owning files matching '{}':", file_path);
     for (trove_id, paths) in &trove_files {
-        if let Ok(Some(trove)) = conary::db::models::Trove::find_by_id(conn, *trove_id) {
+        if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(conn, *trove_id) {
             println!("\n{} {}:", trove.name, trove.version);
             for path in paths {
                 println!("  {}", path);
@@ -114,7 +114,7 @@ fn query_by_path(
 /// Show detailed package information
 fn show_package_info(
     conn: &rusqlite::Connection,
-    trove: &conary::db::models::Trove,
+    trove: &conary_core::db::models::Trove,
     _options: &QueryOptions,
 ) -> Result<()> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
@@ -144,7 +144,7 @@ fn show_package_info(
     println!("Pinned      : {}", if trove.pinned { "yes" } else { "no" });
 
     // Count files
-    let files = conary::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
     println!("Files       : {}", files.len());
 
     // Calculate total size
@@ -152,7 +152,7 @@ fn show_package_info(
     println!("Size        : {}", format_size(total_size));
 
     // Dependencies
-    let deps = conary::db::models::DependencyEntry::find_by_trove(conn, trove_id)?;
+    let deps = conary_core::db::models::DependencyEntry::find_by_trove(conn, trove_id)?;
     if !deps.is_empty() {
         println!("\nDependencies ({}):", deps.len());
         for dep in &deps {
@@ -161,7 +161,7 @@ fn show_package_info(
     }
 
     // Provides
-    let provides = conary::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
+    let provides = conary_core::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
     if !provides.is_empty() {
         println!("\nProvides ({}):", provides.len());
         for p in &provides {
@@ -170,7 +170,7 @@ fn show_package_info(
     }
 
     // Components
-    let components = conary::db::models::Component::find_by_trove(conn, trove_id)?;
+    let components = conary_core::db::models::Component::find_by_trove(conn, trove_id)?;
     if !components.is_empty() {
         println!("\nComponents ({}):", components.len());
         for comp in &components {
@@ -189,11 +189,11 @@ fn show_package_info(
 /// List package files
 fn list_package_files(
     conn: &rusqlite::Connection,
-    trove: &conary::db::models::Trove,
+    trove: &conary_core::db::models::Trove,
     lsl: bool,
 ) -> Result<()> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
-    let files = conary::db::models::FileEntry::list_files_lsl(conn, trove_id)?;
+    let files = conary_core::db::models::FileEntry::list_files_lsl(conn, trove_id)?;
 
     if files.is_empty() {
         println!("No files in package {} {}", trove.name, trove.version);

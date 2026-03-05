@@ -6,8 +6,8 @@
 //! dependency checking, and hook execution.
 
 use anyhow::{Context, Result};
-use conary::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
-use conary::packages::traits::PackageFormat;
+use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
+use conary_core::packages::traits::PackageFormat;
 use std::path::Path;
 
 /// Install a CCS package
@@ -77,9 +77,9 @@ pub fn cmd_ccs_install(
     );
 
     // Step 3: Check for existing installation
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
-    let existing = conary::db::models::Trove::find_by_name(&conn, ccs_pkg.name())?;
+    let existing = conary_core::db::models::Trove::find_by_name(&conn, ccs_pkg.name())?;
     if !existing.is_empty() {
         let old = &existing[0];
         if old.version == ccs_pkg.version() {
@@ -104,9 +104,9 @@ pub fn cmd_ccs_install(
         println!("Checking dependencies...");
         for dep in ccs_pkg.dependencies() {
             let satisfied =
-                conary::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
+                conary_core::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
             if !satisfied {
-                let pkg_exists = conary::db::models::Trove::find_by_name(&conn, &dep.name)?;
+                let pkg_exists = conary_core::db::models::Trove::find_by_name(&conn, &dep.name)?;
                 if pkg_exists.is_empty() {
                     if dry_run {
                         println!("  Missing dependency: {} (would fail)", dep.name);
@@ -214,7 +214,7 @@ pub fn cmd_ccs_install(
         // Register files
         for file in &extracted_files {
             let hash = file.sha256.clone().unwrap_or_default();
-            let mut file_entry = conary::db::models::FileEntry::new(
+            let mut file_entry = conary_core::db::models::FileEntry::new(
                 file.path.clone(),
                 hash,
                 file.size,
@@ -225,7 +225,7 @@ pub fn cmd_ccs_install(
         }
 
         // Create provides entry for the package itself
-        let mut provide = conary::db::models::ProvideEntry::new(
+        let mut provide = conary_core::db::models::ProvideEntry::new(
             trove_id,
             ccs_pkg.name().to_string(),
             Some(ccs_pkg.version().to_string()),
@@ -236,7 +236,7 @@ pub fn cmd_ccs_install(
         for cap in &ccs_pkg.manifest().provides.capabilities {
             if cap != ccs_pkg.name() {
                 let mut cap_provide =
-                    conary::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
+                    conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
                 cap_provide.insert(&tx)?;
             }
         }

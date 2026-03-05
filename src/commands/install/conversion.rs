@@ -7,11 +7,11 @@
 
 use super::PackageFormatType;
 use anyhow::{Context, Result};
-use conary::capability::inference::InferenceOptions;
-use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary::packages::PackageFormat;
-use conary::packages::common::PackageMetadata;
-use conary::scriptlet::SandboxMode;
+use conary_core::capability::inference::InferenceOptions;
+use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::packages::PackageFormat;
+use conary_core::packages::common::PackageMetadata;
+use conary_core::scriptlet::SandboxMode;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tempfile::TempDir;
@@ -59,15 +59,15 @@ pub fn try_convert_to_ccs(
     };
 
     // Open database early to check for existing conversion
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check if already converted (skip re-conversion)
     if let Some(existing) =
-        conary::db::models::ConvertedPackage::find_by_checksum(&conn, &original_checksum)?
+        conary_core::db::models::ConvertedPackage::find_by_checksum(&conn, &original_checksum)?
     {
         if existing.needs_reconversion() {
             info!("Re-converting {} (algorithm upgraded)", pkg.name());
-            conary::db::models::ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
+            conary_core::db::models::ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
         } else {
             // Already converted and up to date
             info!(
@@ -166,7 +166,7 @@ pub fn try_convert_to_ccs(
     }
 
     // Create conversion record
-    let mut converted_pkg = conary::db::models::ConvertedPackage::new(
+    let mut converted_pkg = conary_core::db::models::ConvertedPackage::new(
         conversion_result.original_format.clone(),
         conversion_result.original_checksum.clone(),
         conversion_result.fidelity.level.to_string(),

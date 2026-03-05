@@ -7,17 +7,17 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
-use conary::db;
-use conary::db::models::{CollectionMember, RemoteCollection, Repository, Trove, TroveType};
-use conary::db::models::{
+use conary_core::db;
+use conary_core::db::models::{CollectionMember, RemoteCollection, Repository, Trove, TroveType};
+use conary_core::db::models::{
     DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy,
 };
-use conary::derived::build_from_definition;
-use conary::filesystem::CasStore;
-use conary::hash::sha256;
-use conary::model::parser::SystemModel;
-use conary::model::remote::fetch_remote_collection;
-use conary::model::{
+use conary_core::derived::build_from_definition;
+use conary_core::filesystem::CasStore;
+use conary_core::hash::sha256;
+use conary_core::model::parser::SystemModel;
+use conary_core::model::remote::fetch_remote_collection;
+use conary_core::model::{
     DiffAction, ModelDerivedPackage, ModelDiff, SystemState, capture_current_state, compute_diff,
     compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
 };
@@ -71,7 +71,7 @@ fn compute_model_diff(
 fn collect_lock_data(
     model: &SystemModel,
     conn: &Connection,
-) -> Result<Vec<(String, String, conary::model::remote::CollectionData)>> {
+) -> Result<Vec<(String, String, conary_core::model::remote::CollectionData)>> {
     let mut lock_data = Vec::new();
     for spec in &model.include.models {
         let (name, label) = parse_trove_spec(spec)?;
@@ -79,7 +79,7 @@ fn collect_lock_data(
         if let Some(cached) = RemoteCollection::find_cached(conn, &name, Some(label_str))
             .map_err(|e| anyhow!("Database error: {}", e))?
         {
-            let data: conary::model::remote::CollectionData =
+            let data: conary_core::model::remote::CollectionData =
                 serde_json::from_str(&cached.data_json)
                     .map_err(|e| anyhow!("Corrupt cache entry for '{}': {}", name, e))?;
             lock_data.push((name, label_str.to_string(), data));
@@ -94,16 +94,16 @@ fn collect_lock_data(
 }
 
 fn build_lock_from_data(
-    lock_data: &[(String, String, conary::model::remote::CollectionData)],
+    lock_data: &[(String, String, conary_core::model::remote::CollectionData)],
     model_path: &Path,
-) -> Result<conary::model::lockfile::ModelLock> {
-    let refs: Vec<(String, String, &conary::model::remote::CollectionData)> = lock_data
+) -> Result<conary_core::model::lockfile::ModelLock> {
+    let refs: Vec<(String, String, &conary_core::model::remote::CollectionData)> = lock_data
         .iter()
         .map(|(n, l, d)| (n.clone(), l.clone(), d))
         .collect();
-    let mut lock = conary::model::lockfile::ModelLock::from_resolved(&refs);
+    let mut lock = conary_core::model::lockfile::ModelLock::from_resolved(&refs);
     let model_bytes = std::fs::read(model_path)?;
-    lock.metadata.model_hash = format!("sha256:{}", conary::hash::sha256(&model_bytes));
+    lock.metadata.model_hash = format!("sha256:{}", conary_core::hash::sha256(&model_bytes));
     Ok(lock)
 }
 
@@ -780,7 +780,7 @@ pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> 
         return Ok(());
     }
 
-    let _resolved = conary::model::resolve_includes(&model, &conn)?;
+    let _resolved = conary_core::model::resolve_includes(&model, &conn)?;
 
     let lock_data = collect_lock_data(&model, &conn)?;
     let lock = build_lock_from_data(&lock_data, model_path)?;
@@ -828,7 +828,7 @@ pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
         ));
     }
 
-    let old_lock = conary::model::lockfile::ModelLock::load(&lock_path)?;
+    let old_lock = conary_core::model::lockfile::ModelLock::load(&lock_path)?;
 
     if !model.has_includes() {
         println!("No remote includes to update");
@@ -843,7 +843,7 @@ pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
         }
     }
 
-    let _resolved = conary::model::resolve_includes(&model, &conn)?;
+    let _resolved = conary_core::model::resolve_includes(&model, &conn)?;
 
     let lock_data = collect_lock_data(&model, &conn)?;
     let current_hashes: Vec<(String, String, String)> = lock_data
@@ -918,9 +918,9 @@ pub fn cmd_model_publish(
 
     // Load signing key if provided
     let signing_key = if let Some(key_path) = sign_key_path {
-        let key = conary::model::signing::load_signing_key(Path::new(key_path))
+        let key = conary_core::model::signing::load_signing_key(Path::new(key_path))
             .map_err(|e| anyhow!("Failed to load signing key: {e}"))?;
-        let key_id = conary::model::signing::key_id(&key.verifying_key());
+        let key_id = conary_core::model::signing::key_id(&key.verifying_key());
         println!("  Signing with key: {}", key_id);
         Some(key)
     } else {
@@ -930,12 +930,12 @@ pub fn cmd_model_publish(
     if is_remote {
         // Remote publish via HTTP PUT
         let data =
-            conary::model::remote::build_collection_data_from_model(&model, &group_name, version);
+            conary_core::model::remote::build_collection_data_from_model(&model, &group_name, version);
 
         // Sign if key provided
         if let Some(ref key) = signing_key {
-            let signature = conary::model::signing::sign_collection(&data, key);
-            let key_id = conary::model::signing::key_id(&key.verifying_key());
+            let signature = conary_core::model::signing::sign_collection(&data, key);
+            let key_id = conary_core::model::signing::key_id(&key.verifying_key());
             println!(
                 "  Signed collection ({} bytes, key {})",
                 signature.len(),
@@ -943,7 +943,7 @@ pub fn cmd_model_publish(
             );
 
             // Store signature in cache so the server endpoint can serve it
-            let mut sig_cache = conary::db::models::RemoteCollection::new(
+            let mut sig_cache = conary_core::db::models::RemoteCollection::new(
                 group_name.clone(),
                 Some(repo_name.to_string()),
                 String::new(),
@@ -956,7 +956,7 @@ pub fn cmd_model_publish(
             let _ = sig_cache.upsert(&conn);
         }
 
-        conary::model::remote::publish_remote_collection(repo_url, &data, force)
+        conary_core::model::remote::publish_remote_collection(repo_url, &data, force)
             .map_err(|e| anyhow!("{}", e))?;
 
         let member_count = data.members.len();
@@ -1121,9 +1121,9 @@ mod tests {
 
     #[test]
     fn test_remote_diff_detects_missing() {
-        use conary::db::models::RemoteCollection;
-        use conary::db::schema;
-        use conary::model::SystemState;
+        use conary_core::db::models::RemoteCollection;
+        use conary_core::db::schema;
+        use conary_core::model::SystemState;
         use std::collections::{HashMap, HashSet};
         use tempfile::NamedTempFile;
 
@@ -1163,7 +1163,7 @@ mod tests {
         let state = SystemState {
             installed: HashMap::from([(
                 "nginx".to_string(),
-                conary::model::InstalledPackage {
+                conary_core::model::InstalledPackage {
                     name: "nginx".to_string(),
                     version: "1.24.2".to_string(),
                     architecture: None,
@@ -1176,7 +1176,7 @@ mod tests {
         };
 
         // Fetch the collection from cache
-        let fetched = conary::model::remote::fetch_remote_collection(
+        let fetched = conary_core::model::remote::fetch_remote_collection(
             &conn,
             "group-test",
             "myrepo:stable",

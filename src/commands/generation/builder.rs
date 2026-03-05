@@ -6,8 +6,8 @@ use super::metadata::{
     GenerationMetadata, ROOT_SYMLINKS, generation_path, generations_dir, is_excluded,
 };
 use anyhow::{Context, Result, anyhow};
-use conary::db::models::{FileEntry, StateEngine, Trove};
-use conary::db::paths::objects_dir;
+use conary_core::db::models::{FileEntry, StateEngine, Trove};
+use conary_core::db::paths::objects_dir;
 use std::io::BufWriter;
 use tracing::{debug, info};
 
@@ -121,7 +121,7 @@ pub fn build_generation(
     if caps.fsverity {
         debug!("fs-verity supported, enabling on CAS objects");
         let (enabled, already, errors) =
-            conary::filesystem::fsverity::enable_fsverity_on_cas(&obj_dir);
+            conary_core::filesystem::fsverity::enable_fsverity_on_cas(&obj_dir);
         info!(
             "fs-verity: {enabled} newly enabled, {already} already enabled, {errors} errors"
         );

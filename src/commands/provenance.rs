@@ -25,7 +25,7 @@ use uuid::Uuid;
 use webpki::{EndEntityCert, KeyUsage};
 use x509_cert::der::Decode;
 
-use conary::provenance::{SlsaContext, build_slsa_statement};
+use conary_core::provenance::{SlsaContext, build_slsa_statement};
 
 #[derive(Debug, Error)]
 enum SigstoreCommandError {
@@ -79,7 +79,7 @@ pub fn cmd_provenance_show(
     recursive: bool,
     format: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Parse package@version format
     let (name, version) = parse_package_spec(package);
@@ -109,7 +109,7 @@ pub fn cmd_provenance_show(
 
 /// Verify provenance against transparency log
 pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -214,7 +214,7 @@ pub fn cmd_provenance_diff(
     package2: &str,
     format: &str,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let (name1, version1) = parse_package_spec(package1);
     let (name2, version2) = parse_package_spec(package2);
@@ -284,7 +284,7 @@ pub fn cmd_provenance_find_by_dep(
     version: Option<&str>,
     dna: Option<&str>,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     println!("=== Packages Built With {} ===", dep_name);
     if let Some(v) = version {
@@ -337,7 +337,7 @@ pub fn cmd_provenance_export(
     output: Option<&str>,
     recursive: bool,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -591,7 +591,7 @@ pub fn cmd_provenance_register(
     keyless: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let (name, version) = parse_package_spec(package);
 
     let trove_info = find_trove(&conn, &name, version.as_deref())?;
@@ -658,7 +658,7 @@ pub fn cmd_provenance_audit(
     missing: Option<&str>,
     include_converted: bool,
 ) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     println!("=== Provenance Audit ===");
     println!();

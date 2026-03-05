@@ -9,9 +9,9 @@
 use super::super::create_state_snapshot;
 use super::super::progress::AdoptProgress;
 use anyhow::Result;
-use conary::ccs::builder::{CcsBuilder, write_ccs_package};
-use conary::ccs::manifest::{Capability, CcsManifest, PackageDep, Platform};
-use conary::db::models::{
+use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
+use conary_core::ccs::manifest::{Capability, CcsManifest, PackageDep, Platform};
+use conary_core::db::models::{
     Changeset, ChangesetStatus, ConvertedPackage, DependencyEntry, FileEntry, ProvideEntry, Trove,
 };
 use rayon::prelude::*;
@@ -93,7 +93,7 @@ pub fn cmd_adopt_convert(
     no_chunking: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // 1. Query unconverted adopted troves
     let troves = query_unconverted_adopted(&conn)?;
@@ -176,7 +176,7 @@ pub fn cmd_adopt_convert(
     let mut failed_count: u64 = 0;
     let mut failed_names: Vec<String> = Vec::new();
 
-    let changeset_id = conary::db::transaction(&mut conn, |tx| {
+    let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new("Batch CCS conversion of adopted packages".to_string());
         let cs_id = changeset.insert(tx)?;
 
@@ -403,7 +403,7 @@ fn copy_files_to_temp(files: &[FileEntry], temp_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary::db::models::{InstallSource, TroveType};
+    use conary_core::db::models::{InstallSource, TroveType};
 
     /// Helper to create a minimal trove for testing
     fn make_test_trove(name: &str, version: &str) -> Trove {

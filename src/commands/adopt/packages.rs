@@ -8,11 +8,11 @@ use super::super::create_state_snapshot;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
-use conary::db::models::{
+use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
     TroveType,
 };
-use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -30,7 +30,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         ));
     }
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // Determine install source based on mode
     let install_source = if full {
@@ -46,7 +46,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         .join("objects");
 
     let cas = if full {
-        Some(conary::filesystem::CasStore::new(&objects_dir)?)
+        Some(conary_core::filesystem::CasStore::new(&objects_dir)?)
     } else {
         None
     };
@@ -129,7 +129,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             if full { "full" } else { "track" }
         ));
 
-        let changeset_id = conary::db::transaction(&mut conn, |tx| {
+        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
             let changeset_id = changeset.insert(tx)?;
 
             // Create trove

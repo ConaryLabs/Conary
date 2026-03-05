@@ -122,7 +122,7 @@ fn test_target_root_config_directories() {
 /// Test pristine container configuration for bootstrap
 #[test]
 fn test_pristine_container_config() {
-    use conary::container::ContainerConfig;
+    use conary_core::container::ContainerConfig;
 
     // Test basic pristine config
     let pristine = ContainerConfig::pristine();
@@ -152,7 +152,7 @@ fn test_pristine_container_config() {
 /// Test pristine container for bootstrap builds
 #[test]
 fn test_pristine_for_bootstrap() {
-    use conary::container::ContainerConfig;
+    use conary_core::container::ContainerConfig;
     use std::path::PathBuf;
 
     let config = ContainerConfig::pristine_for_bootstrap(
@@ -213,7 +213,7 @@ fn test_pristine_for_bootstrap() {
 /// Test is_pristine detection with various configurations
 #[test]
 fn test_is_pristine_detection() {
-    use conary::container::{BindMount, ContainerConfig};
+    use conary_core::container::{BindMount, ContainerConfig};
 
     // Start with pristine
     let mut config = ContainerConfig::pristine();

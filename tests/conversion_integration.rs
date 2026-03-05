@@ -9,10 +9,10 @@
 //! - Provenance extraction
 //! - Fidelity tracking
 
-use conary::capability::inference::{Confidence, InferenceOptions};
-use conary::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary::packages::common::PackageMetadata;
-use conary::packages::traits::{
+use conary_core::capability::inference::{Confidence, InferenceOptions};
+use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::packages::common::PackageMetadata;
+use conary_core::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, Scriptlet,
     ScriptletPhase,
 };
@@ -982,7 +982,7 @@ fn test_dependency_conversion() {
             .requires
             .capabilities
             .iter()
-            .any(|c| matches!(c, conary::ccs::manifest::Capability::Versioned { name, .. } if name == "libfoo")),
+            .any(|c| matches!(c, conary_core::ccs::manifest::Capability::Versioned { name, .. } if name == "libfoo")),
         "Versioned runtime dep should become capability"
     );
 
@@ -1002,7 +1002,7 @@ fn test_dependency_conversion() {
             .requires
             .capabilities
             .iter()
-            .any(|c| matches!(c, conary::ccs::manifest::Capability::Versioned { name, .. } if name == "build-tools")),
+            .any(|c| matches!(c, conary_core::ccs::manifest::Capability::Versioned { name, .. } if name == "build-tools")),
         "Build deps should not be in runtime requirements"
     );
     assert!(

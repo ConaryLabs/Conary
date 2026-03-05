@@ -2,7 +2,7 @@
 //! Transaction execution helpers - file deployment and rollback
 
 use anyhow::Result;
-use conary::transaction::{ExtractedFile as TxExtractedFile, FileToRemove};
+use conary_core::transaction::{ExtractedFile as TxExtractedFile, FileToRemove};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use tracing::{info, warn};
@@ -15,8 +15,8 @@ use tracing::{info, warn};
 /// The main install flow now uses TransactionEngine for crash-safe operations.
 #[allow(dead_code)]
 pub fn deploy_files(
-    deployer: &conary::filesystem::FileDeployer,
-    extracted_files: &[conary::packages::traits::ExtractedFile],
+    deployer: &conary_core::filesystem::FileDeployer,
+    extracted_files: &[conary_core::packages::traits::ExtractedFile],
     is_upgrade: bool,
     conn: &Connection,
     pkg_name: &str,
@@ -24,8 +24,8 @@ pub fn deploy_files(
     // Phase 1: Check file conflicts BEFORE any changes
     for file in extracted_files {
         if deployer.file_exists(&file.path) {
-            if let Some(existing) = conary::db::models::FileEntry::find_by_path(conn, &file.path)? {
-                let owner_trove = conary::db::models::Trove::find_by_id(conn, existing.trove_id)?;
+            if let Some(existing) = conary_core::db::models::FileEntry::find_by_path(conn, &file.path)? {
+                let owner_trove = conary_core::db::models::Trove::find_by_id(conn, existing.trove_id)?;
                 if let Some(owner) = owner_trove
                     && owner.name != pkg_name
                 {
@@ -83,7 +83,7 @@ pub fn deploy_files(
 /// Rollback deployed files on failure (legacy - kept for non-transaction code paths)
 #[allow(dead_code)]
 pub fn rollback_deployed_files(
-    deployer: &conary::filesystem::FileDeployer,
+    deployer: &conary_core::filesystem::FileDeployer,
     files: &[(String, String, i64, i32)],
 ) {
     warn!("Rolling back {} deployed files", files.len());
@@ -96,7 +96,7 @@ pub fn rollback_deployed_files(
 
 /// Convert package ExtractedFile to transaction ExtractedFile
 pub fn convert_extracted_files(
-    files: &[conary::packages::traits::ExtractedFile],
+    files: &[conary_core::packages::traits::ExtractedFile],
 ) -> Vec<TxExtractedFile> {
     files
         .iter()
@@ -128,7 +128,7 @@ pub fn get_files_to_remove(
     old_trove_id: i64,
     new_file_paths: &HashSet<&str>,
 ) -> Result<Vec<FileToRemove>> {
-    let old_files = conary::db::models::FileEntry::find_by_trove(conn, old_trove_id)?;
+    let old_files = conary_core::db::models::FileEntry::find_by_trove(conn, old_trove_id)?;
     let mut to_remove = Vec::new();
 
     for old_file in old_files {

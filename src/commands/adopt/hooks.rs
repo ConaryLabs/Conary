@@ -7,7 +7,7 @@
 //! This keeps Conary's tracking database in sync during the hybrid transition period.
 
 use anyhow::Result;
-use conary::packages::SystemPackageManager;
+use conary_core::packages::SystemPackageManager;
 use std::fs;
 use std::path::Path;
 use tracing::info;

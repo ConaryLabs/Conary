@@ -257,7 +257,7 @@ pub fn cmd_federation_add_peer(
     let conn = Connection::open(db_path)?;
 
     // Generate peer ID
-    let id = conary::hash::sha256(url.as_bytes());
+    let id = conary_core::hash::sha256(url.as_bytes());
 
     conn.execute(
         "INSERT INTO federation_peers (id, endpoint, node_name, tier)

@@ -9,8 +9,8 @@
 use super::super::create_state_snapshot;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
-use conary::db::models::{Changeset, ChangesetStatus, InstallSource, Trove};
-use conary::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove};
+use conary_core::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::io::{self, Write};
 use tracing::{info, warn};
 
@@ -38,7 +38,7 @@ pub fn cmd_adopt_takeover(
         ));
     }
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // Collect target packages
     let targets: Vec<Trove> = if system_wide {
@@ -105,7 +105,7 @@ pub fn cmd_adopt_takeover(
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("objects");
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
     let mut changeset = Changeset::new(format!(
         "Takeover {} package(s) from {}",
@@ -137,7 +137,7 @@ pub fn cmd_adopt_takeover(
                 // DB errors are treated conservatively as "has files" to avoid
                 // accidentally deleting file tracking on a transient DB issue.
                 let has_db_files =
-                    match conary::db::models::FileEntry::find_by_trove(&conn, trove_id) {
+                    match conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id) {
                         Ok(f) => !f.is_empty(),
                         Err(e) => {
                             warn!(
@@ -177,7 +177,7 @@ pub fn cmd_adopt_takeover(
     // Step 2: DB transaction — mark as Taken, insert CAS files from pre-captured data.
     // This happens BEFORE PM removal so that if the transaction fails, the PM
     // metadata is untouched and the system is in a consistent state.
-    let changeset_id = conary::db::transaction(&mut conn, |tx| {
+    let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for trove in &targets {
@@ -220,7 +220,7 @@ pub fn cmd_adopt_takeover(
                         true, // full mode -- hardlink into CAS
                         Some(&cas),
                     );
-                    let mut fe = conary::db::models::FileEntry::new(
+                    let mut fe = conary_core::db::models::FileEntry::new(
                         file_path.clone(),
                         hash,
                         *file_size,
@@ -385,7 +385,7 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Vec<FileInf
 
 #[cfg(test)]
 mod tests {
-    use conary::db::models::InstallSource;
+    use conary_core::db::models::InstallSource;
 
     #[test]
     fn test_taken_variant_roundtrip() {

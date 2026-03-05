@@ -4,12 +4,12 @@
 
 use anyhow::{Context, Result};
 #[cfg(feature = "server")]
-use conary::ccs::signing::SigningKeyPair;
-use conary::db;
-use conary::db::models::Repository;
-use conary::trust::ceremony;
-use conary::trust::client::TufClient;
-use conary::trust::metadata::Role;
+use conary_core::ccs::signing::SigningKeyPair;
+use conary_core::db;
+use conary_core::db::models::Repository;
+use conary_core::trust::ceremony;
+use conary_core::trust::client::TufClient;
+use conary_core::trust::metadata::Role;
 use rusqlite::{Connection, params};
 use std::path::Path;
 
@@ -35,7 +35,7 @@ pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     }
 
     let keypair = ceremony::generate_role_key(role, output_dir)?;
-    let (key_id, _) = conary::trust::signing_keypair_to_tuf_key(&keypair);
+    let (key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&keypair);
 
     println!("Generated {role} key pair:");
     println!("  Private key: {output}/{role}.private");
@@ -268,7 +268,7 @@ pub fn cmd_trust_rotate_key(
         |row| row.get(0),
     )?;
 
-    let current_root: conary::trust::Signed<conary::trust::RootMetadata> =
+    let current_root: conary_core::trust::Signed<conary_core::trust::RootMetadata> =
         serde_json::from_str(&root_json)?;
 
     let new_root = ceremony::rotate_key(&current_root, role, &old_key, &new_key, &root_key, 365)?;
@@ -277,7 +277,7 @@ pub fn cmd_trust_rotate_key(
     let new_root_json = serde_json::to_vec(&new_root)?;
     client.bootstrap(&conn, &new_root_json)?;
 
-    let (new_key_id, _) = conary::trust::signing_keypair_to_tuf_key(&new_key);
+    let (new_key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&new_key);
     println!("Key rotation complete for role: {role}");
     println!("New root version: {}", new_root.signed.version);
     println!("New key ID: {new_key_id}");

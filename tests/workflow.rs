@@ -4,15 +4,15 @@
 
 mod common;
 
-use conary::db;
+use conary_core::db;
 use tempfile::NamedTempFile;
 
 #[test]
 #[ignore] // Ignored by default since it requires a real RPM file
 fn test_rpm_install_workflow() {
-    use conary::db::models::{Changeset, ChangesetStatus, FileEntry, Trove};
-    use conary::packages::PackageFormat;
-    use conary::packages::rpm::RpmPackage;
+    use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove};
+    use conary_core::packages::PackageFormat;
+    use conary_core::packages::rpm::RpmPackage;
 
     // This test requires a real RPM file to be present
     // To run: place an RPM file at /tmp/test.rpm and run:
@@ -91,7 +91,7 @@ fn test_rpm_install_workflow() {
 
 #[test]
 fn test_install_and_remove_workflow() {
-    use conary::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -141,7 +141,7 @@ fn test_install_and_remove_workflow() {
 
 #[test]
 fn test_install_and_rollback() {
-    use conary::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -205,7 +205,7 @@ fn test_install_and_rollback() {
 /// Test rollback changeset tracking
 #[test]
 fn test_rollback_tracking() {
-    use conary::db::models::{Changeset, ChangesetStatus, Trove};
+    use conary_core::db::models::{Changeset, ChangesetStatus, Trove};
 
     let (temp_dir, db_path) = common::setup_command_test_db();
     let mut conn = db::open(&db_path).unwrap();

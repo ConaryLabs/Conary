@@ -24,10 +24,10 @@ pub fn cmd_deptree(
         if reverse { "reverse" } else { "forward" },
         package_name
     );
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Verify package exists
-    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
         return Err(anyhow::anyhow!(
             "Package '{}' is not installed",
@@ -116,7 +116,7 @@ fn print_dependency_tree(
     }
 
     // Get dependencies for this package
-    let deps = conary::db::models::DependencyEntry::find_by_trove(ctx.conn, trove_id)?;
+    let deps = conary_core::db::models::DependencyEntry::find_by_trove(ctx.conn, trove_id)?;
 
     // Filter to runtime dependencies only, and only those that are installed
     let mut installed_deps = Vec::new();
@@ -126,7 +126,7 @@ fn print_dependency_tree(
         }
         // Check if this dependency is installed
         if let Ok(dep_troves) =
-            conary::db::models::Trove::find_by_name(ctx.conn, &dep.depends_on_name)
+            conary_core::db::models::Trove::find_by_name(ctx.conn, &dep.depends_on_name)
             && let Some(dep_trove) = dep_troves.first()
         {
             installed_deps.push((dep.depends_on_name.clone(), dep_trove.clone()));
@@ -181,13 +181,13 @@ fn print_reverse_tree(
     }
 
     // Find packages that depend on this one
-    let dependents = conary::db::models::DependencyEntry::find_dependents(ctx.conn, package_name)?;
+    let dependents = conary_core::db::models::DependencyEntry::find_dependents(ctx.conn, package_name)?;
 
     // Get unique package names
     let mut unique_dependents = Vec::new();
     let mut seen_names = HashSet::new();
     for dep in &dependents {
-        if let Ok(Some(trove)) = conary::db::models::Trove::find_by_id(ctx.conn, dep.trove_id)
+        if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(ctx.conn, dep.trove_id)
             && !seen_names.contains(&trove.name)
         {
             seen_names.insert(trove.name.clone());

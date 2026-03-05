@@ -2,12 +2,12 @@
 //! Enhancement command for retroactive CCS feature addition
 
 use anyhow::{Context, Result};
-use conary::ccs::enhancement::context::ConvertedPackageInfo;
-use conary::ccs::enhancement::runner::EnhancementOptions;
-use conary::ccs::enhancement::{
+use conary_core::ccs::enhancement::context::ConvertedPackageInfo;
+use conary_core::ccs::enhancement::runner::EnhancementOptions;
+use conary_core::ccs::enhancement::{
     ENHANCEMENT_VERSION, EnhancementResult_, EnhancementRunner, EnhancementType,
 };
-use conary::db::schema;
+use conary_core::db::schema;
 use rusqlite::Connection;
 use std::path::PathBuf;
 

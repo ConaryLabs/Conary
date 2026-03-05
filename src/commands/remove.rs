@@ -5,8 +5,8 @@ use super::create_state_snapshot;
 use super::progress::{RemovePhase, RemoveProgress};
 use super::{FileSnapshot, TroveSnapshot};
 use anyhow::{Context, Result};
-use conary::db::models::ScriptletEntry;
-use conary::scriptlet::{
+use conary_core::db::models::ScriptletEntry;
+use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
 use std::path::{Path, PathBuf};
@@ -27,8 +27,8 @@ pub fn cmd_remove(
     // Create progress tracker for removal
     let progress = RemoveProgress::new(package_name);
 
-    let mut conn = conary::db::open(db_path).context("Failed to open package database")?;
-    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)
+    let mut conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)
         .with_context(|| format!("Failed to query package '{}'", package_name))?;
 
     if troves.is_empty() {
@@ -83,8 +83,8 @@ pub fn cmd_remove(
             package_name
         );
 
-        let remove_changeset_id = conary::db::transaction(&mut conn, |tx| {
-            let mut changeset = conary::db::models::Changeset::new(format!(
+        let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+            let mut changeset = conary_core::db::models::Changeset::new(format!(
                 "Remove tracking for adopted {}-{}",
                 trove.name, trove.version
             ));
@@ -94,12 +94,12 @@ pub fn cmd_remove(
             tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
             tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
             tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-            conary::db::models::Trove::delete(tx, trove_id)?;
-            changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+            conary_core::db::models::Trove::delete(tx, trove_id)?;
+            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
             Ok(changeset_id)
         })?;
 
-        let pkg_mgr = conary::packages::SystemPackageManager::detect();
+        let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
         println!(
             "Removed '{}' from Conary tracking. Use '{}' to fully uninstall.",
             package_name,
@@ -122,7 +122,7 @@ pub fn cmd_remove(
         );
     }
 
-    let resolver = conary::resolver::Resolver::new(&conn)?;
+    let resolver = conary_core::resolver::Resolver::new(&conn)?;
     let breaking = resolver.check_removal(package_name)?;
 
     if !breaking.is_empty() {
@@ -146,7 +146,7 @@ pub fn cmd_remove(
     }
 
     // Get files BEFORE deleting the trove (cascade delete will remove file records)
-    let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+    let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
     // Get stored scriptlets BEFORE deleting the trove
     let stored_scriptlets = ScriptletEntry::find_by_trove(&conn, trove_id)?;
@@ -194,14 +194,14 @@ pub fn cmd_remove(
     let snapshot_json = serde_json::to_string(&snapshot)?;
 
     // Set up file deployer for actual filesystem operations
-    let objects_dir = conary::db::paths::objects_dir(db_path);
+    let objects_dir = conary_core::db::paths::objects_dir(db_path);
     let install_root = PathBuf::from(root);
-    let deployer = conary::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
     progress.set_phase(RemovePhase::UpdatingDb);
-    let remove_changeset_id = conary::db::transaction(&mut conn, |tx| {
+    let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset =
-            conary::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
+            conary_core::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
         let changeset_id = changeset.insert(tx)?;
 
         // Store snapshot metadata for rollback
@@ -249,8 +249,8 @@ pub fn cmd_remove(
             }
         }
 
-        conary::db::models::Trove::delete(tx, trove_id)?;
-        changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+        conary_core::db::models::Trove::delete(tx, trove_id)?;
+        changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
 
@@ -363,9 +363,9 @@ pub fn cmd_autoremove(
 ) -> Result<()> {
     info!("Finding orphaned packages...");
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
-    let orphans = conary::db::models::Trove::find_orphans(&conn)?;
+    let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
 
     if orphans.is_empty() {
         println!("No orphaned packages found.");

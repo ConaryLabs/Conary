@@ -4,7 +4,7 @@
 //! These tests validate the inference module against actual ELF binaries
 //! from the system to ensure accuracy in real-world scenarios.
 
-use conary::capability::inference::{
+use conary_core::capability::inference::{
     BinaryAnalyzer, HeuristicInferrer, InferenceOptions, PackageFile, PackageMetadataRef,
     WellKnownProfiles, infer_capabilities,
 };
@@ -63,7 +63,7 @@ fn test_wellknown_nginx_profile() {
     assert_eq!(profile.syscall_profile, Some("network-server".to_string()));
 
     // Nginx should have high confidence
-    assert!(profile.confidence.primary >= conary::capability::inference::Confidence::High);
+    assert!(profile.confidence.primary >= conary_core::capability::inference::Confidence::High);
 }
 
 #[test]
@@ -338,7 +338,7 @@ WantedBy=multi-user.target
 
 #[test]
 fn test_confidence_levels() {
-    use conary::capability::inference::Confidence;
+    use conary_core::capability::inference::Confidence;
 
     // Well-known profiles should have high confidence
     let nginx = WellKnownProfiles::lookup("nginx").unwrap();
@@ -364,7 +364,7 @@ fn test_confidence_levels() {
 
 #[test]
 fn test_merge_capabilities() {
-    use conary::capability::inference::{Confidence, InferredCapabilities};
+    use conary_core::capability::inference::{Confidence, InferredCapabilities};
 
     // Test 1: When both have same confidence, ports are merged
     let mut base = InferredCapabilities::default();

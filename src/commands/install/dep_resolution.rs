@@ -8,8 +8,8 @@
 use super::blocklist;
 use super::dep_mode::DepMode;
 use super::system_pm;
-use conary::db::models::Trove;
-use conary::resolver::MissingDependency;
+use conary_core::db::models::Trove;
+use conary_core::resolver::MissingDependency;
 use tracing::debug;
 
 /// A dependency that needs to be installed from a repository
@@ -173,8 +173,8 @@ pub fn resolve_missing_deps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary::db::schema;
-    use conary::version::VersionConstraint;
+    use conary_core::db::schema;
+    use conary_core::version::VersionConstraint;
 
     /// Set up an in-memory database with the full Conary schema
     fn test_db() -> rusqlite::Connection {

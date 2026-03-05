@@ -7,10 +7,10 @@
 
 use super::PackageFormatType;
 use anyhow::Result;
-use conary::components::ComponentType;
-use conary::db::models::ScriptletEntry;
-use conary::packages::traits::{Scriptlet, ScriptletPhase};
-use conary::scriptlet::{
+use conary_core::components::ComponentType;
+use conary_core::db::models::ScriptletEntry;
+use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
+use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
 use rusqlite::Connection;
@@ -201,7 +201,7 @@ pub fn run_old_post_remove(
 /// Scriptlets only run when :runtime or :lib component is being installed.
 #[allow(dead_code)]
 pub fn should_run(installed_components: &[ComponentType]) -> bool {
-    conary::components::should_run_scriptlets(installed_components)
+    conary_core::components::should_run_scriptlets(installed_components)
 }
 
 #[cfg(test)]

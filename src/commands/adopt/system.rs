@@ -7,11 +7,11 @@
 use super::super::create_state_snapshot;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use anyhow::Result;
-use conary::db::models::{
+use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
     ProvideEntry, Trove, TroveType,
 };
-use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
@@ -58,7 +58,7 @@ pub fn cmd_adopt_system(
 
     println!("Detected package manager: {:?}", pkg_mgr);
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // Get list of already-tracked packages to avoid duplicates
     let tracked_packages: std::collections::HashSet<String> = Trove::list_all(&conn)?
@@ -212,7 +212,7 @@ pub fn cmd_adopt_system(
         .join("objects");
 
     let cas = if full {
-        Some(conary::filesystem::CasStore::new(&objects_dir)?)
+        Some(conary_core::filesystem::CasStore::new(&objects_dir)?)
     } else {
         None
     };
@@ -231,7 +231,7 @@ pub fn cmd_adopt_system(
     let mode_label = if full { "Adopting (full)" } else { "Adopting" };
     let mut progress = AdoptProgress::new(total as u64, mode_label);
 
-    let changeset_id = conary::db::transaction(&mut conn, |tx| {
+    let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for (name, version, arch, description) in &installed {
@@ -450,7 +450,7 @@ pub fn compute_file_hash(
     file_digest: Option<&str>,
     link_target: Option<&str>,
     full: bool,
-    cas: Option<&conary::filesystem::CasStore>,
+    cas: Option<&conary_core::filesystem::CasStore>,
 ) -> String {
     // Check if this is a symlink (mode & S_IFMT == S_IFLNK)
     let is_symlink = (file_mode & 0o170000) == 0o120000;

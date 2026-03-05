@@ -6,15 +6,15 @@ use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
 
-use conary::capability::enforcement::{
+use conary_core::capability::enforcement::{
     EnforcementMode, EnforcementPolicy, check_enforcement_support, landlock_enforce,
     seccomp_enforce,
 };
-use conary::capability::{
+use conary_core::capability::{
     CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
 };
-use conary::ccs::manifest::CcsManifest;
-use conary::container::{ContainerConfig, Sandbox};
+use conary_core::ccs::manifest::CcsManifest;
+use conary_core::container::{ContainerConfig, Sandbox};
 
 /// Show declared capabilities for a package
 pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
@@ -545,7 +545,7 @@ fn build_exec_script(command: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary::capability::CapabilityDeclaration;
+    use conary_core::capability::CapabilityDeclaration;
 
     #[test]
     fn test_display_capabilities_text() {

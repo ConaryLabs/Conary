@@ -22,14 +22,14 @@ use super::scriptlets::{
 };
 use super::{PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
-use conary::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
-use conary::db::models::{
+use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
+use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, ProvideEntry, ScriptletEntry, Trove,
 };
-use conary::dependencies::{LanguageDep, LanguageDepDetector};
-use conary::packages::traits::{ExtractedFile, Scriptlet};
-use conary::scriptlet::SandboxMode;
-use conary::transaction::{
+use conary_core::dependencies::{LanguageDep, LanguageDepDetector};
+use conary_core::packages::traits::{ExtractedFile, Scriptlet};
+use conary_core::scriptlet::SandboxMode;
+use conary_core::transaction::{
     FileToRemove, PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
 };
 use rusqlite::Connection;
@@ -72,7 +72,7 @@ pub struct PreparedPackage {
     /// Files extracted from the package (with content for now, will be streamed later)
     pub extracted_files: Vec<ExtractedFile>,
     /// Dependencies declared by the package
-    pub dependencies: Vec<conary::packages::traits::Dependency>,
+    pub dependencies: Vec<conary_core::packages::traits::Dependency>,
     /// Scriptlets from the package
     pub scriptlets: Vec<Scriptlet>,
     /// Why this package is being installed
@@ -97,7 +97,7 @@ impl PreparedPackage {
         let mut trove = Trove::new(
             self.name.clone(),
             self.version.clone(),
-            conary::db::models::TroveType::Package,
+            conary_core::db::models::TroveType::Package,
         );
         trove.architecture = self.architecture.clone();
         trove.description = self.description.clone();
@@ -106,7 +106,7 @@ impl PreparedPackage {
 
         // Mark as dependency if install reason contains "Required by"
         if self.install_reason.starts_with("Required by") {
-            trove.install_reason = conary::db::models::InstallReason::Dependency;
+            trove.install_reason = conary_core::db::models::InstallReason::Dependency;
         }
 
         trove
@@ -174,7 +174,7 @@ impl<'a> BatchInstaller<'a> {
         );
 
         // Open database connection
-        let mut conn = conary::db::open(self.db_path)
+        let mut conn = conary_core::db::open(self.db_path)
             .context("Failed to open package database for batch install")?;
 
         // Create transaction engine
@@ -317,7 +317,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 6: Single DB transaction for ALL packages
         let tx_uuid = txn.uuid().to_string();
-        let db_result = conary::db::transaction(&mut conn, |tx| {
+        let db_result = conary_core::db::transaction(&mut conn, |tx| {
             // Create single changeset for entire batch
             let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
             let changeset_id = changeset.insert(tx)?;
@@ -379,7 +379,7 @@ impl<'a> BatchInstaller<'a> {
 
                     let component_id = path_to_component.get(file.path.as_str()).copied();
 
-                    let mut file_entry = conary::db::models::FileEntry::new(
+                    let mut file_entry = conary_core::db::models::FileEntry::new(
                         file.path.clone(),
                         hash.clone(),
                         file.size,
@@ -598,7 +598,7 @@ impl<'a> BatchInstaller<'a> {
 
         // For upgrades, run old package pre-remove first
         if let Some(ref old_trove) = pkg.old_trove {
-            let conn = conary::db::open(self.db_path)?;
+            let conn = conary_core::db::open(self.db_path)?;
             let old_scriptlets = get_old_package_scriptlets(&conn, old_trove.id)?;
             run_old_pre_remove(
                 Path::new(self.root),
@@ -680,7 +680,7 @@ impl fmt::Display for BatchConflict {
 fn get_old_files_for_upgrade(
     conn: &Connection,
     old_trove: Option<&Trove>,
-    new_files: &[conary::packages::traits::PackageFile],
+    new_files: &[conary_core::packages::traits::PackageFile],
 ) -> Result<Vec<FileToRemove>> {
     if let Some(old_trove) = old_trove
         && let Some(old_id) = old_trove.id
@@ -714,7 +714,7 @@ pub fn prepare_package_for_batch(
     let pkg = parse_package(package_path, format)?;
 
     // Open database
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check for existing installation
     let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg.as_ref(), allow_downgrade)?
@@ -772,14 +772,14 @@ pub fn prepare_package_for_batch(
 /// * `component_filter` - Optional filter for which components to install
 #[allow(dead_code)] // Available for future unification of install paths
 pub fn prepare_from_parsed(
-    pkg: &dyn conary::packages::PackageFormat,
+    pkg: &dyn conary_core::packages::PackageFormat,
     format: PackageFormatType,
     db_path: &str,
     install_reason: &str,
     allow_downgrade: bool,
     component_filter: Option<&[ComponentType]>,
 ) -> Result<PreparedPackage> {
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check for existing installation
     let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg, allow_downgrade)? {
@@ -942,7 +942,7 @@ mod tests {
         assert_eq!(trove.installed_by_changeset_id, Some(42));
         assert_eq!(
             trove.install_reason,
-            conary::db::models::InstallReason::Dependency
+            conary_core::db::models::InstallReason::Dependency
         );
     }
 }

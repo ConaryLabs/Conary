@@ -10,12 +10,12 @@ use anyhow::Result;
 ///
 /// This is similar to `dnf repoquery` or `apt-cache search`.
 pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let packages = if let Some(pattern) = pattern {
-        conary::db::models::RepositoryPackage::search(&conn, pattern)?
+        conary_core::db::models::RepositoryPackage::search(&conn, pattern)?
     } else {
-        conary::db::models::RepositoryPackage::list_all(&conn)?
+        conary_core::db::models::RepositoryPackage::list_all(&conn)?
     };
 
     if packages.is_empty() {
@@ -57,7 +57,7 @@ pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<
 /// Show detailed info for a repository package
 fn show_repo_package_info(
     conn: &rusqlite::Connection,
-    pkg: &conary::db::models::RepositoryPackage,
+    pkg: &conary_core::db::models::RepositoryPackage,
 ) -> Result<()> {
     println!("Name        : {}", pkg.name);
     println!("Version     : {}", pkg.version);
@@ -80,7 +80,7 @@ fn show_repo_package_info(
     println!("URL         : {}", pkg.download_url);
 
     // Check if installed
-    let installed = conary::db::models::Trove::find_by_name(conn, &pkg.name)?;
+    let installed = conary_core::db::models::Trove::find_by_name(conn, &pkg.name)?;
     if let Some(installed_pkg) = installed.first() {
         println!("Status      : Installed ({})", installed_pkg.version);
     } else {

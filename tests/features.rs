@@ -4,7 +4,7 @@
 
 mod common;
 
-use conary::db;
+use conary_core::db;
 use tempfile::NamedTempFile;
 
 // =============================================================================
@@ -14,7 +14,7 @@ use tempfile::NamedTempFile;
 /// Test language-specific dependency detection
 #[test]
 fn test_language_deps_detection() {
-    use conary::dependencies::{DependencyClass, LanguageDepDetector};
+    use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 
     // Simulate a Python package with multiple modules
     let package_files = vec![
@@ -84,7 +84,7 @@ fn test_language_deps_detection() {
 /// Test LanguageDep parsing and formatting
 #[test]
 fn test_language_dep_parsing() {
-    use conary::dependencies::{DependencyClass, LanguageDep};
+    use conary_core::dependencies::{DependencyClass, LanguageDep};
 
     // Test parsing with version constraint
     let dep = LanguageDep::parse("python(requests>=2.0)").unwrap();
@@ -118,10 +118,10 @@ fn test_language_dep_parsing() {
 /// Test language deps stored in database during install
 #[test]
 fn test_language_deps_in_database() {
-    use conary::db::models::{
+    use conary_core::db::models::{
         Changeset, ChangesetStatus, FileEntry, ProvideEntry, Trove, TroveType,
     };
-    use conary::dependencies::LanguageDepDetector;
+    use conary_core::dependencies::LanguageDepDetector;
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -226,7 +226,7 @@ fn test_language_deps_in_database() {
 /// Test InstallReason tracking for autoremove functionality
 #[test]
 fn test_install_reason_tracking() {
-    use conary::db::models::{InstallReason, Trove, TroveType};
+    use conary_core::db::models::{InstallReason, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -271,7 +271,7 @@ fn test_install_reason_tracking() {
 /// Test install reason queries (equivalent to cmd_query_reason)
 #[test]
 fn test_install_reason_queries() {
-    use conary::db::models::{InstallReason, InstallSource, Trove, TroveType};
+    use conary_core::db::models::{InstallReason, InstallSource, Trove, TroveType};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let mut conn = db::open(&db_path).unwrap();
@@ -332,7 +332,7 @@ fn test_install_reason_queries() {
 /// Test collection creation and member management
 #[test]
 fn test_collection_management() {
-    use conary::db::models::{CollectionMember, Trove, TroveType};
+    use conary_core::db::models::{CollectionMember, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -403,7 +403,7 @@ fn test_collection_management() {
 /// Test collection operations (equivalent to cmd_collection_*)
 #[test]
 fn test_collection_operations() {
-    use conary::db::models::{CollectionMember, Trove, TroveType};
+    use conary_core::db::models::{CollectionMember, Trove, TroveType};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let mut conn = db::open(&db_path).unwrap();
@@ -456,7 +456,7 @@ fn test_collection_operations() {
 /// Test state snapshot operations (equivalent to cmd_state_*)
 #[test]
 fn test_state_snapshot_operations() {
-    use conary::db::models::{StateEngine, SystemState};
+    use conary_core::db::models::{StateEngine, SystemState};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -494,7 +494,7 @@ fn test_state_snapshot_operations() {
 /// Test config file tracking (equivalent to config management commands)
 #[test]
 fn test_config_file_tracking() {
-    use conary::db::models::{ConfigFile, ConfigSource, ConfigStatus, Trove};
+    use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus, Trove};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -559,7 +559,7 @@ fn test_config_file_tracking() {
 /// Test derived package creation and basic operations
 #[test]
 fn test_derived_package_creation() {
-    use conary::db::models::{DerivedPackage, DerivedStatus, VersionPolicy};
+    use conary_core::db::models::{DerivedPackage, DerivedStatus, VersionPolicy};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -592,7 +592,7 @@ fn test_derived_package_creation() {
 /// Test derived package patches
 #[test]
 fn test_derived_package_patches() {
-    use conary::db::models::{DerivedPackage, DerivedPatch};
+    use conary_core::db::models::{DerivedPackage, DerivedPatch};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -641,7 +641,7 @@ fn test_derived_package_patches() {
 /// Test derived package file overrides
 #[test]
 fn test_derived_package_overrides() {
-    use conary::db::models::{DerivedOverride, DerivedPackage};
+    use conary_core::db::models::{DerivedOverride, DerivedPackage};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -697,7 +697,7 @@ fn test_derived_package_overrides() {
 /// Test derived package status transitions
 #[test]
 fn test_derived_package_status() {
-    use conary::db::models::{DerivedPackage, DerivedStatus, Trove, TroveType};
+    use conary_core::db::models::{DerivedPackage, DerivedStatus, Trove, TroveType};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -748,7 +748,7 @@ fn test_derived_package_status() {
 /// Test version policy computation
 #[test]
 fn test_derived_version_policy() {
-    use conary::db::models::VersionPolicy;
+    use conary_core::db::models::VersionPolicy;
 
     // Inherit policy
     let inherit = VersionPolicy::Inherit;
@@ -770,7 +770,7 @@ fn test_derived_version_policy() {
 /// Test system model parsing
 #[test]
 fn test_system_model_parsing() {
-    use conary::model::parse_model_file;
+    use conary_core::model::parse_model_file;
     use std::io::Write;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -819,8 +819,8 @@ patches = []
 /// Test system model diff computation
 #[test]
 fn test_system_model_diff() {
-    use conary::model::parse_model_file;
-    use conary::model::{DiffAction, SystemState, compute_diff};
+    use conary_core::model::parse_model_file;
+    use conary_core::model::{DiffAction, SystemState, compute_diff};
     use std::io::Write;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -845,7 +845,7 @@ exclude = ["sendmail"]
     let mut state = SystemState::new();
     state.installed.insert(
         "nginx".to_string(),
-        conary::model::InstalledPackage {
+        conary_core::model::InstalledPackage {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
             architecture: None,
@@ -858,7 +858,7 @@ exclude = ["sendmail"]
     // Also have sendmail installed (should be removed)
     state.installed.insert(
         "sendmail".to_string(),
-        conary::model::InstalledPackage {
+        conary_core::model::InstalledPackage {
             name: "sendmail".to_string(),
             version: "8.0.0".to_string(),
             architecture: None,
@@ -902,8 +902,8 @@ exclude = ["sendmail"]
 /// Test system model diff with derived packages
 #[test]
 fn test_system_model_diff_derived() {
-    use conary::model::parse_model_file;
-    use conary::model::{DiffAction, SystemState, compute_diff};
+    use conary_core::model::parse_model_file;
+    use conary_core::model::{DiffAction, SystemState, compute_diff};
     use std::io::Write;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -933,7 +933,7 @@ patches = []
     let mut state = SystemState::new();
     state.installed.insert(
         "nginx".to_string(),
-        conary::model::InstalledPackage {
+        conary_core::model::InstalledPackage {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
             architecture: None,
@@ -960,7 +960,7 @@ patches = []
 /// Test system model state capture
 #[test]
 fn test_system_model_state_capture() {
-    use conary::model::capture_current_state;
+    use conary_core::model::capture_current_state;
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let conn = db::open(&db_path).unwrap();
@@ -980,8 +980,8 @@ fn test_system_model_state_capture() {
 /// Test system model snapshot to model conversion
 #[test]
 fn test_system_model_snapshot() {
-    use conary::db::models::InstallReason;
-    use conary::model::{capture_current_state, snapshot_to_model};
+    use conary_core::db::models::InstallReason;
+    use conary_core::model::{capture_current_state, snapshot_to_model};
 
     let (_temp_dir, db_path) = common::setup_command_test_db();
     let mut conn = db::open(&db_path).unwrap();
@@ -1014,7 +1014,7 @@ fn test_system_model_snapshot() {
 /// Test repository with content mirror (reference mirror pattern)
 #[test]
 fn test_reference_mirror_creation() {
-    use conary::db::models::Repository;
+    use conary_core::db::models::Repository;
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -1052,7 +1052,7 @@ fn test_reference_mirror_creation() {
 /// Test repository without content mirror (standard pattern)
 #[test]
 fn test_repository_without_content_mirror() {
-    use conary::db::models::Repository;
+    use conary_core::db::models::Repository;
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -1084,7 +1084,7 @@ fn test_repository_without_content_mirror() {
 /// Test multiple repositories with different mirror configurations
 #[test]
 fn test_mixed_mirror_configurations() {
-    use conary::db::models::Repository;
+    use conary_core::db::models::Repository;
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -1130,7 +1130,7 @@ fn test_mixed_mirror_configurations() {
 /// Test repository update preserves content_url
 #[test]
 fn test_repository_update_content_mirror() {
-    use conary::db::models::Repository;
+    use conary_core::db::models::Repository;
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();

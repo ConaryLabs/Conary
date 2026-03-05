@@ -3,13 +3,13 @@
 //! Command implementations for automation system.
 
 use anyhow::Result;
-use conary::automation::{
+use conary_core::automation::{
     AutomationManager, AutomationSummary,
     check::AutomationChecker,
     prompt::{AutomationPrompt, SummaryResponse},
     scheduler::AutomationDaemon,
 };
-use conary::model::{
+use conary_core::model::{
     AutomationCategory, AutomationConfig, DEFAULT_MODEL_PATH, load_model, model_exists,
 };
 use rusqlite::Connection;

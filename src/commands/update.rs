@@ -5,10 +5,10 @@ use super::install::DepMode;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{SandboxMode, cmd_install};
 use anyhow::Result;
-use conary::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
-use conary::db::paths::objects_dir;
-use conary::delta::DeltaApplier;
-use conary::repository::{
+use conary_core::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
+use conary_core::db::paths::objects_dir;
+use conary_core::delta::DeltaApplier;
+use conary_core::repository::{
     self, DownloadOptions, PackageSource, ResolutionOptions, resolve_package,
 };
 use std::path::Path;
@@ -29,7 +29,7 @@ fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Resu
 /// Pin a package to prevent updates and removal
 pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", package_name);
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
     if trove.pinned {
@@ -50,7 +50,7 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 /// Unpin a package to allow updates and removal
 pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", package_name);
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
     if !trove.pinned {
@@ -72,7 +72,7 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
 pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
     info!("Listing pinned packages");
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let pinned = Trove::find_pinned(&conn)?;
 
     if pinned.is_empty() {
@@ -111,7 +111,7 @@ pub fn cmd_update(
         info!("Checking for package updates");
     }
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     let objects_dir = objects_dir(db_path);
     let temp_dir = Path::new(db_path)
@@ -120,7 +120,7 @@ pub fn cmd_update(
         .join("tmp");
     std::fs::create_dir_all(&temp_dir)?;
 
-    let keyring_dir = conary::db::paths::keyring_dir(db_path);
+    let keyring_dir = conary_core::db::paths::keyring_dir(db_path);
 
     let installed_troves = if let Some(pkg_name) = package {
         Trove::find_by_name(&conn, &pkg_name)?
@@ -137,7 +137,7 @@ pub fn cmd_update(
     let mut updates_available: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
     let mut pinned_skipped: Vec<String> = Vec::new();
 
-    let pkg_mgr = conary::packages::SystemPackageManager::detect();
+    let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
     let mut adopted_skipped: Vec<String> = Vec::new();
 
     for trove in &installed_troves {
@@ -332,8 +332,8 @@ pub fn cmd_update(
     let delta_count = delta_updates.len();
     let initial_full_count = full_updates.len();
 
-    let changeset_id = conary::db::transaction(&mut conn, |tx| {
-        let mut changeset = conary::db::models::Changeset::new(format!(
+    let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+        let mut changeset = conary_core::db::models::Changeset::new(format!(
             "Update {} package(s)",
             delta_count + initial_full_count
         ));
@@ -493,7 +493,7 @@ pub fn cmd_update(
         ));
     }
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         let mut stats = DeltaStats::new(changeset_id);
         stats.total_bytes_saved = total_bytes_saved;
         stats.deltas_applied = deltas_applied;
@@ -501,9 +501,9 @@ pub fn cmd_update(
         stats.delta_failures = delta_failures;
         stats.insert(tx)?;
 
-        let mut changeset = conary::db::models::Changeset::find_by_id(tx, changeset_id)?
-            .ok_or_else(|| conary::Error::NotFound("Changeset not found".to_string()))?;
-        changeset.update_status(tx, conary::db::models::ChangesetStatus::Applied)?;
+        let mut changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
+            .ok_or_else(|| conary_core::Error::NotFound("Changeset not found".to_string()))?;
+        changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
 
         Ok(())
     })?;
@@ -524,7 +524,7 @@ pub fn cmd_update(
 pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
     info!("Showing delta update statistics");
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let total_stats = DeltaStats::get_total_stats(&conn)?;
 
     let all_stats = {
@@ -609,19 +609,19 @@ pub fn cmd_update_group(
     yes: bool,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Find the collection
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let collection = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let collection_id = collection
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
         println!("Collection '{}' has no members.", name);

@@ -2,7 +2,7 @@
 
 //! Database initialization, transactions, and core model tests.
 
-use conary::db;
+use conary_core::db;
 use tempfile::NamedTempFile;
 
 #[test]
@@ -83,7 +83,7 @@ fn test_database_pragmas_are_set() {
 
 #[test]
 fn test_full_workflow_with_transaction() {
-    use conary::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -155,7 +155,7 @@ fn test_full_workflow_with_transaction() {
 
 #[test]
 fn test_transaction_rollback_on_error() {
-    use conary::db::models::{Trove, TroveType};
+    use conary_core::db::models::{Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();
@@ -199,7 +199,7 @@ fn test_transaction_rollback_on_error() {
 
 #[test]
 fn test_trove_with_flavors_and_provenance() {
-    use conary::db::models::{Flavor, Provenance, Trove, TroveType};
+    use conary_core::db::models::{Flavor, Provenance, Trove, TroveType};
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();

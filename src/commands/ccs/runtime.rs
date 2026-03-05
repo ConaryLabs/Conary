@@ -18,7 +18,7 @@ pub fn cmd_ccs_export(
     format: &str,
     db_path: &str,
 ) -> Result<()> {
-    use conary::ccs::export::{ExportFormat, export};
+    use conary_core::ccs::export::{ExportFormat, export};
 
     let export_format = ExportFormat::parse(format)
         .ok_or_else(|| anyhow::anyhow!("Unknown export format: {}. Supported: oci", format))?;
@@ -46,7 +46,7 @@ pub fn cmd_ccs_shell(
         packages.join(", ")
     );
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -65,18 +65,18 @@ pub fn cmd_ccs_shell(
     std::fs::create_dir_all(&lib64_dir)?;
 
     // Deploy files from each package to the temp environment
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
     let mut deployed_count = 0;
 
     for pkg_name in packages {
-        let troves = conary::db::models::Trove::find_by_name(&conn, pkg_name)?;
+        let troves = conary_core::db::models::Trove::find_by_name(&conn, pkg_name)?;
         if troves.is_empty() {
             anyhow::bail!("Package '{}' is not installed", pkg_name);
         }
 
         for trove in &troves {
             if let Some(trove_id) = trove.id {
-                let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+                let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
                 for file in &files {
                     // Determine where to put the file in our temp environment
@@ -190,7 +190,7 @@ pub fn cmd_ccs_run(
         );
     }
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -209,16 +209,16 @@ pub fn cmd_ccs_run(
     std::fs::create_dir_all(&lib64_dir)?;
 
     // Find and deploy the package
-    let troves = conary::db::models::Trove::find_by_name(&conn, package)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, package)?;
     if troves.is_empty() {
         anyhow::bail!("Package '{}' is not installed", package);
     }
 
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
     for trove in &troves {
         if let Some(trove_id) = trove.id {
-            let files = conary::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+            let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
             for file in &files {
                 let rel_path = file.path.trim_start_matches('/');

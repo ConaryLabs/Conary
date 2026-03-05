@@ -2,7 +2,7 @@
 //! Collection management commands
 
 use anyhow::Result;
-use conary::scriptlet::SandboxMode;
+use conary_core::scriptlet::SandboxMode;
 use tracing::info;
 
 /// Create a new collection
@@ -13,10 +13,10 @@ pub fn cmd_collection_create(
     db_path: &str,
 ) -> Result<()> {
     info!("Creating collection: {}", name);
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // Check if collection already exists
-    let existing = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let existing = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     if !existing.is_empty() {
         return Err(anyhow::anyhow!(
             "A package or collection named '{}' already exists",
@@ -24,12 +24,12 @@ pub fn cmd_collection_create(
         ));
     }
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         // Create the collection as a trove
-        let mut trove = conary::db::models::Trove::new(
+        let mut trove = conary_core::db::models::Trove::new(
             name.to_string(),
             "1.0".to_string(),
-            conary::db::models::TroveType::Collection,
+            conary_core::db::models::TroveType::Collection,
         );
         trove.description = description.map(|s| s.to_string());
         let collection_id = trove.insert(tx)?;
@@ -37,7 +37,7 @@ pub fn cmd_collection_create(
         // Add members
         for member_name in members {
             let mut member =
-                conary::db::models::CollectionMember::new(collection_id, member_name.clone());
+                conary_core::db::models::CollectionMember::new(collection_id, member_name.clone());
             member.insert(tx)?;
         }
 
@@ -57,7 +57,7 @@ pub fn cmd_collection_create(
 
 /// List all collections
 pub fn cmd_collection_list(db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Find all troves with type 'collection'
     let mut stmt = conn.prepare(
@@ -80,7 +80,7 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
 
     println!("Collections:");
     for (id, name, version, description) in &collections {
-        let members = conary::db::models::CollectionMember::find_by_collection(&conn, *id)?;
+        let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, *id)?;
         print!("  {} v{}", name, version);
         if let Some(desc) = description {
             print!(" - {}", desc);
@@ -94,18 +94,18 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
 
 /// Show details of a collection
 pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     println!("Collection: {} v{}", trove.name, trove.version);
     if let Some(desc) = &trove.description {
@@ -123,7 +123,7 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
         }
 
         // Check if member is installed
-        let installed = conary::db::models::Trove::find_by_name(&conn, &member.member_name)?;
+        let installed = conary_core::db::models::Trove::find_by_name(&conn, &member.member_name)?;
         if installed.is_empty() {
             print!(" [not installed]");
         } else {
@@ -138,27 +138,27 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 /// Add members to a collection
 pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
             // Check if already a member
-            if conary::db::models::CollectionMember::is_member(tx, collection_id, member_name)? {
+            if conary_core::db::models::CollectionMember::is_member(tx, collection_id, member_name)? {
                 println!("  {} is already a member, skipping", member_name);
                 continue;
             }
             let mut member =
-                conary::db::models::CollectionMember::new(collection_id, member_name.clone());
+                conary_core::db::models::CollectionMember::new(collection_id, member_name.clone());
             member.insert(tx)?;
             println!("  Added: {}", member_name);
         }
@@ -172,25 +172,25 @@ pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Resu
 /// Remove members from a collection
 pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Removing members from collection: {}", name);
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
             if let Some(member) =
-                conary::db::models::CollectionMember::find_member(tx, collection_id, member_name)?
+                conary_core::db::models::CollectionMember::find_member(tx, collection_id, member_name)?
             {
                 if let Some(id) = member.id {
-                    conary::db::models::CollectionMember::delete(tx, id)?;
+                    conary_core::db::models::CollectionMember::delete(tx, id)?;
                     println!("  Removed: {}", member_name);
                 }
             } else {
@@ -207,21 +207,21 @@ pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &st
 /// Delete a collection
 pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let trove_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
 
-    conary::db::transaction(&mut conn, |tx| {
+    conary_core::db::transaction(&mut conn, |tx| {
         // Members will be cascade deleted due to FK constraint
-        conary::db::models::Trove::delete(tx, trove_id)?;
+        conary_core::db::models::Trove::delete(tx, trove_id)?;
         Ok(())
     })?;
 
@@ -239,18 +239,18 @@ pub fn cmd_collection_install(
     sandbox_mode: SandboxMode,
 ) -> Result<()> {
     info!("Installing collection: {}", name);
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
-    let troves = conary::db::models::Trove::find_by_name(&conn, name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
         .iter()
-        .find(|t| t.trove_type == conary::db::models::TroveType::Collection)
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
 
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
         println!("Collection '{}' has no members.", name);
@@ -274,7 +274,7 @@ pub fn cmd_collection_install(
             print!(" [optional]");
         }
         // Check if already installed
-        let installed = conary::db::models::Trove::find_by_name(&conn, &member.member_name)?;
+        let installed = conary_core::db::models::Trove::find_by_name(&conn, &member.member_name)?;
         if !installed.is_empty() {
             print!(" (already installed: {})", installed[0].version);
         }
@@ -296,8 +296,8 @@ pub fn cmd_collection_install(
 
     for member in &members_to_install {
         // Re-check if installed (connection was dropped)
-        let conn = conary::db::open(db_path)?;
-        let installed = conary::db::models::Trove::find_by_name(&conn, &member.member_name)?;
+        let conn = conary_core::db::open(db_path)?;
+        let installed = conary_core::db::models::Trove::find_by_name(&conn, &member.member_name)?;
         drop(conn);
 
         if !installed.is_empty() {

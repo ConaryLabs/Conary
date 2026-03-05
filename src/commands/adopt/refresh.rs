@@ -8,10 +8,10 @@
 use super::super::create_state_snapshot;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
-use conary::db::models::{
+use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
 };
-use conary::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use tracing::{debug, warn};
 
 /// Map of package name -> (version, arch, description).
@@ -49,7 +49,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
         ));
     }
 
-    let mut conn = conary::db::open(db_path)?;
+    let mut conn = conary_core::db::open(db_path)?;
 
     // Collect all adopted troves
     let all_troves = Trove::list_all(&conn)?;
@@ -154,7 +154,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("objects");
-    let cas = conary::filesystem::CasStore::new(&objects_dir)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
     let mut changeset = Changeset::new(format!(
         "Refresh adopted packages: {} updated, {} removed",
@@ -164,7 +164,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
     let mut actually_updated = 0u32;
     let mut actually_removed = 0u32;
 
-    let changeset_id = conary::db::transaction(&mut conn, |tx| {
+    let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for (trove, outcome) in &results {

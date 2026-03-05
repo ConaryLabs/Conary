@@ -84,13 +84,13 @@ pub fn cmd_sbom(
         ));
     }
 
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Get packages to include
     let troves = if package_name == "all" {
-        conary::db::models::Trove::list_all(&conn)?
+        conary_core::db::models::Trove::list_all(&conn)?
     } else {
-        let found = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+        let found = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
         if found.is_empty() {
             return Err(anyhow::anyhow!("Package '{}' not found", package_name));
         }
@@ -118,7 +118,7 @@ pub fn cmd_sbom(
 /// Build a CycloneDX BOM from troves
 fn build_cyclonedx_bom(
     conn: &rusqlite::Connection,
-    troves: &[conary::db::models::Trove],
+    troves: &[conary_core::db::models::Trove],
 ) -> Result<cyclonedx::Bom> {
     use chrono::Utc;
     use uuid::Uuid;
@@ -170,7 +170,7 @@ fn build_cyclonedx_bom(
 
 /// Build a Package URL (PURL) for a trove
 /// Format: pkg:conary/name@version?arch=x86_64
-fn build_purl(trove: &conary::db::models::Trove) -> String {
+fn build_purl(trove: &conary_core::db::models::Trove) -> String {
     let mut purl = format!("pkg:conary/{}@{}", trove.name, trove.version);
 
     if let Some(ref arch) = trove.architecture {
@@ -183,7 +183,7 @@ fn build_purl(trove: &conary::db::models::Trove) -> String {
 /// Get SHA256 hashes for package files (aggregate)
 fn get_package_hashes(conn: &rusqlite::Connection, trove_id: i64) -> Result<Vec<cyclonedx::Hash>> {
     // Get unique file hashes from the package
-    let files = conary::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
 
     // Include first non-empty sha256 as a representative hash
     for file in &files {

@@ -2,14 +2,14 @@
 //! System state snapshot management commands
 
 use anyhow::{Context, Result};
-use conary::db::models::{StateDiff, StateEngine, SystemState};
+use conary_core::db::models::{StateDiff, StateEngine, SystemState};
 use tracing::info;
 
 /// List all system states
 pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
     info!("Listing system states...");
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let states = if let Some(n) = limit {
         SystemState::list_recent(&conn, n)?
@@ -57,7 +57,7 @@ pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
 pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
     info!("Showing state {}...", state_number);
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let state = SystemState::find_by_number(&conn, state_number)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", state_number))?;
@@ -103,7 +103,7 @@ pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
 pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<()> {
     info!("Comparing states {} -> {}...", from_state, to_state);
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let from = SystemState::find_by_number(&conn, from_state)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", from_state))?;
@@ -156,7 +156,7 @@ pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<(
 pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Result<()> {
     info!("Restoring to state {}...", state_number);
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let target = SystemState::find_by_number(&conn, state_number)?
         .ok_or_else(|| anyhow::anyhow!("State {} not found", state_number))?;
@@ -228,7 +228,7 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
         return Err(anyhow::anyhow!("Must keep at least 1 state"));
     }
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let all_states = SystemState::list_all(&conn)?;
     let total_count = all_states.len() as i64;
@@ -283,7 +283,7 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
 pub fn cmd_state_create(db_path: &str, summary: &str, description: Option<&str>) -> Result<()> {
     info!("Creating manual state snapshot...");
 
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     let engine = StateEngine::new(&conn);
     let state = engine.create_snapshot(summary, description, None)?;

@@ -8,10 +8,10 @@ use anyhow::Result;
 
 /// List components of an installed package
 pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Find the package
-    let troves = conary::db::models::Trove::find_by_name(&conn, package_name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
         return Err(anyhow::anyhow!(
             "Package '{}' is not installed",
@@ -28,7 +28,7 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
         }
 
         // Get components
-        let components = conary::db::models::Component::find_by_trove(&conn, trove_id)?;
+        let components = conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
 
         if components.is_empty() {
             println!("  Components: (none - legacy install)");
@@ -36,9 +36,9 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
             println!("  Components:");
             for comp in &components {
                 let file_count =
-                    conary::db::models::FileEntry::find_by_component(&conn, comp.id.unwrap_or(0))?
+                    conary_core::db::models::FileEntry::find_by_component(&conn, comp.id.unwrap_or(0))?
                         .len();
-                let default_marker = if conary::components::ComponentType::parse(&comp.name)
+                let default_marker = if conary_core::components::ComponentType::parse(&comp.name)
                     .map(|ct| ct.is_default())
                     .unwrap_or(false)
                 {
@@ -65,10 +65,10 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
 
 /// Query files in a specific component
 pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
-    let conn = conary::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Parse the component spec (e.g., "nginx:lib")
-    let (package_name, component_name) = conary::components::parse_component_spec(component_spec)
+    let (package_name, component_name) = conary_core::components::parse_component_spec(component_spec)
         .ok_or_else(|| {
         anyhow::anyhow!(
             "Invalid component spec '{}'. Expected format: package:component (e.g., nginx:lib)",
@@ -77,7 +77,7 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
     })?;
 
     // Find the package
-    let troves = conary::db::models::Trove::find_by_name(&conn, &package_name)?;
+    let troves = conary_core::db::models::Trove::find_by_name(&conn, &package_name)?;
     if troves.is_empty() {
         return Err(anyhow::anyhow!(
             "Package '{}' is not installed",
@@ -89,7 +89,7 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
         let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
         // Find the component
-        let component = conary::db::models::Component::find_by_trove_and_name(
+        let component = conary_core::db::models::Component::find_by_trove_and_name(
             &conn,
             trove_id,
             &component_name,
@@ -100,7 +100,7 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
                 let comp_id = comp
                     .id
                     .ok_or_else(|| anyhow::anyhow!("Component has no ID"))?;
-                let files = conary::db::models::FileEntry::find_by_component(&conn, comp_id)?;
+                let files = conary_core::db::models::FileEntry::find_by_component(&conn, comp_id)?;
 
                 println!(
                     "{}:{} ({} {})",
@@ -118,7 +118,7 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
             }
             None => {
                 // Check if any components exist
-                let components = conary::db::models::Component::find_by_trove(&conn, trove_id)?;
+                let components = conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
                 if components.is_empty() {
                     println!(
                         "Package '{}' was installed without component tracking (legacy install)",

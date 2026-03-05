@@ -5,7 +5,7 @@
 //! Commands for inspecting package contents and verifying signatures.
 
 use anyhow::{Context, Result};
-use conary::ccs::{InspectedPackage, TrustPolicy, inspector, verify};
+use conary_core::ccs::{InspectedPackage, TrustPolicy, inspector, verify};
 use std::path::Path;
 
 /// Inspect a CCS package

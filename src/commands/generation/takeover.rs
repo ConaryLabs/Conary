@@ -10,8 +10,8 @@ use super::metadata::generations_dir;
 use super::switch::switch_live;
 use crate::commands::install::is_package_blocked;
 use anyhow::{Context, Result, anyhow};
-use conary::db::models::Trove;
-use conary::packages::SystemPackageManager;
+use conary_core::db::models::Trove;
+use conary_core::packages::SystemPackageManager;
 use std::collections::HashSet;
 use std::io::Write;
 use std::process::Command;
@@ -95,7 +95,7 @@ pub fn cmd_system_takeover(
     preflight_checks()?;
 
     // Open database and build the plan
-    let conn = conary::db::open(db_path).context("Failed to open package database")?;
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
     let plan = plan_takeover(&conn)?;
 
     // Print inventory summary
