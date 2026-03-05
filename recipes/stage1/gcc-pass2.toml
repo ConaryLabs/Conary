@@ -1,0 +1,91 @@
+# recipes/stage1/gcc-pass2.toml
+#
+# GCC Pass 2: Full compiler with C/C++ support (LFS 12.4 Chapter 5)
+#
+# This is the second GCC build for Stage 1, with full C and C++ support.
+# Built after glibc is available, this compiler can produce fully linked
+# binaries for the target system.
+#
+# Bootstrap dependency order:
+#   linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2
+
+[package]
+name = "gcc-pass2"
+version = "15.2.0"
+release = "1"
+summary = "GCC pass 2 (full C/C++ compiler)"
+description = """
+Full GNU Compiler Collection for Stage 1 bootstrap. Built after glibc
+is available, this includes C and C++ language support with threading.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://gcc.gnu.org"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
+checksum = "md5:b861b092bf1af683c46a8aa2e689a6fd"
+
+# GCC requires GMP, MPFR, and MPC
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz"
+checksum = "sha256:b67ba0383ef7e0a0ae01f6e6bec0570624ef4c8b656889208d0e3c1c9e1e8ab2"
+extract_to = "mpfr"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+checksum = "sha256:a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+extract_to = "gmp"
+
+[[source.additional]]
+url = "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
+checksum = "sha256:ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
+extract_to = "mpc"
+
+[build]
+requires = ["glibc", "binutils"]
+makedepends = ["gcc-pass1"]
+
+# Setup: extract mpfr, gmp, mpc into gcc source tree
+setup = """
+cd %(source_dir)s && \
+tar -xf %(downloads)s/mpfr-4.2.2.tar.xz && mv -v mpfr-4.2.2 mpfr && \
+tar -xf %(downloads)s/gmp-6.3.0.tar.xz && mv -v gmp-6.3.0 gmp && \
+tar -xf %(downloads)s/mpc-1.3.1.tar.gz && mv -v mpc-1.3.1 mpc
+"""
+
+configure = """
+mkdir -v build && cd build && ../configure \
+    --prefix=/usr \
+    --build=$(../config.guess) \
+    --host=%(target)s \
+    --target=%(target)s \
+    LDFLAGS_FOR_TARGET=-L$PWD/%(target)s/libgcc \
+    --with-build-sysroot=%(sysroot)s \
+    --enable-default-pie \
+    --enable-default-ssp \
+    --disable-nls \
+    --disable-multilib \
+    --disable-libatomic \
+    --disable-libgomp \
+    --disable-libquadmath \
+    --disable-libsanitizer \
+    --disable-libssp \
+    --disable-libvtv \
+    --enable-languages=c,c++
+"""
+
+make = "cd build && make -j%(jobs)s"
+install = "cd build && make DESTDIR=%(destdir)s install"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+tool_prefix = "x86_64-conary-linux-gnu"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+source_dir = "."
+downloads = "."
+jobs = "$(nproc)"

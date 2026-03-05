@@ -1,0 +1,42 @@
+# recipes/stage1/linux-headers.toml
+#
+# Linux kernel headers for Stage 1 toolchain (LFS 12.4 Chapter 5)
+#
+# These headers define the kernel API that glibc uses.
+# No compilation needed - just header installation.
+
+[package]
+name = "linux-headers"
+version = "6.16.1"
+release = "1"
+summary = "Linux kernel headers"
+description = "Linux kernel headers for building the C library"
+license = "GPL-2.0"
+homepage = "https://www.kernel.org"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
+checksum = "sha256:6d7f7870e7f1e1a9a130bb57c68f46500dda18c36f4f057315b0aed6757c4e53"
+
+[build]
+requires = []
+makedepends = []
+
+# Headers installation: clean, generate, prune non-headers, copy
+install = """
+make mrproper
+make headers
+find usr/include -type f ! -name '*.h' -delete
+cp -rv usr/include %(destdir)s/usr/include
+"""
+
+[build.environment]
+ARCH = "%(kernel_arch)s"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+
+[variables]
+kernel_arch = "x86_64"

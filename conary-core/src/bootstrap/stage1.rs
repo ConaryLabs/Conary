@@ -879,4 +879,40 @@ mod tests {
         assert!(err.to_string().contains("gcc"));
         assert!(err.to_string().contains("compile error"));
     }
+
+    #[test]
+    fn test_load_stage1_recipes() {
+        let recipe_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("recipes/stage1");
+        if !recipe_dir.exists() {
+            eprintln!("Skipping test: recipes/stage1 not found");
+            return;
+        }
+        for name in &[
+            "linux-headers",
+            "binutils",
+            "gcc-pass1",
+            "glibc",
+            "gcc-pass2",
+        ] {
+            let path = recipe_dir.join(format!("{name}.toml"));
+            assert!(path.exists(), "Missing recipe: {path:?}");
+            let recipe = crate::recipe::parse_recipe_file(&path).unwrap();
+            assert!(
+                !recipe.package.name.is_empty(),
+                "Empty package name in {name}"
+            );
+            assert!(
+                !recipe.source.checksum.is_empty(),
+                "Empty checksum in {name}"
+            );
+            assert!(
+                !recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
+                    && !recipe.source.checksum.contains("FIXME"),
+                "Placeholder checksum in {name}"
+            );
+        }
+    }
 }

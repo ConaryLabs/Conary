@@ -1,0 +1,50 @@
+# recipes/stage1/binutils.toml
+#
+# GNU Binutils for Stage 1 toolchain (LFS 12.4 Chapter 5)
+#
+# Provides the assembler (as), linker (ld), and other binary utilities.
+
+[package]
+name = "binutils"
+version = "2.45"
+release = "1"
+summary = "GNU binary utilities"
+description = """
+GNU Binutils includes the assembler (as), linker (ld), and other
+utilities for working with object files and executables.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/binutils/"
+
+[source]
+archive = "https://sourceware.org/pub/binutils/releases/binutils-%(version)s.tar.xz"
+checksum = "md5:dee5b4267e0305a99a3c9d6131f45759"
+
+[build]
+requires = []
+makedepends = []
+
+configure = """
+mkdir -v build && cd build && ../configure \
+    --prefix=/usr \
+    --target=%(target)s \
+    --with-sysroot=%(sysroot)s \
+    --disable-nls \
+    --enable-gprofng=no \
+    --disable-werror \
+    --enable-new-dtags \
+    --enable-default-hash-style=gnu
+"""
+
+make = "cd build && make -j%(jobs)s"
+install = "cd build && make DESTDIR=%(destdir)s install"
+
+[cross]
+stage = "stage1"
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+
+[variables]
+target = "x86_64-conary-linux-gnu"
+sysroot = "/conary/sysroot/stage1"
+jobs = "$(nproc)"
