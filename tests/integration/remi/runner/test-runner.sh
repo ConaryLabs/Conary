@@ -598,6 +598,48 @@ test_update_with_adopted() {
 
 run_test "T32" "update_with_adopted" 120 test_update_with_adopted
 
+# ── T33: Generation List (empty) ────────────────────────────────────────────
+
+test_generation_list_empty() {
+    local output
+    output=$("$CONARY" system generation list --db-path "$DB_PATH" 2>&1)
+    # Should not crash, should indicate no generations
+    assert_output_contains "No generations" "$output"
+}
+
+run_test "T33" "generation_list_empty" 10 test_generation_list_empty
+
+# ── T34: System Takeover Dry Run ────────────────────────────────────────────
+
+test_takeover_dry_run() {
+    local output exit_code
+    output=$("$CONARY" system takeover \
+        --db-path "$DB_PATH" \
+        --dry-run \
+        --skip-conversion \
+        2>&1) && exit_code=0 || exit_code=$?
+
+    # Dry run should show inventory (may fail on non-root, that's OK)
+    if [ "$exit_code" -eq 0 ]; then
+        assert_output_contains "DRY RUN" "$output"
+    else
+        # Expected failure: requires root
+        assert_output_contains "root\|Root\|privilege" "$output"
+    fi
+}
+
+run_test "T34" "takeover_dry_run" 60 test_takeover_dry_run
+
+# ── T35: Generation GC (nothing to clean) ──────────────────────────────────
+
+test_generation_gc_empty() {
+    local output
+    output=$("$CONARY" system generation gc --db-path "$DB_PATH" 2>&1)
+    assert_output_contains "Nothing to clean\|No generations" "$output"
+}
+
+run_test "T35" "generation_gc_empty" 10 test_generation_gc_empty
+
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 echo ""
