@@ -4,6 +4,7 @@
 use clap::Subcommand;
 use clap_complete::Shell;
 
+use super::generation::GenerationCommands;
 use super::redirect::RedirectCommands;
 use super::state::StateCommands;
 use super::trigger::TriggerCommands;
@@ -286,6 +287,28 @@ pub enum SystemCommands {
     /// System state snapshots and rollback
     #[command(subcommand)]
     State(StateCommands),
+
+    /// Generation management (build, switch, rollback, gc)
+    #[command(subcommand)]
+    Generation(GenerationCommands),
+
+    /// Convert entire system to Conary-managed generations
+    Takeover {
+        /// Auto-confirm
+        #[arg(long, short)]
+        yes: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip Remi conversion, adopt all packages directly
+        #[arg(long)]
+        skip_conversion: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
 
     /// Trigger management
     #[command(subcommand)]

@@ -465,6 +465,65 @@ fn main() -> Result<()> {
                 } => commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root),
             },
 
+            // Nested: system generation
+            cli::SystemCommands::Generation(gen_cmd) => match gen_cmd {
+                cli::GenerationCommands::List => {
+                    commands::generation::commands::cmd_generation_list()
+                }
+                cli::GenerationCommands::Build { summary, db } => {
+                    let conn = conary::db::open(&db.db_path)?;
+                    let gen_number =
+                        commands::generation::builder::build_generation(&conn, &db.db_path, &summary)?;
+                    println!("Generation {} built.", gen_number);
+                    Ok(())
+                }
+                cli::GenerationCommands::Switch { number, reboot } => {
+                    commands::generation::switch::switch_live(number)?;
+                    if let Err(e) = commands::generation::boot::write_boot_entry(number) {
+                        eprintln!("Boot entry skipped: {}", e);
+                    }
+                    if reboot {
+                        println!("Rebooting...");
+                        std::process::Command::new("systemctl")
+                            .arg("reboot")
+                            .spawn()?;
+                    }
+                    Ok(())
+                }
+                cli::GenerationCommands::Rollback => {
+                    let current = commands::generation::switch::current_generation()?
+                        .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
+                    if current <= 1 {
+                        return Err(anyhow::anyhow!("Cannot rollback from generation 1"));
+                    }
+                    commands::generation::switch::switch_live(current - 1)?;
+                    if let Err(e) = commands::generation::boot::write_boot_entry(current - 1) {
+                        eprintln!("Boot entry skipped: {}", e);
+                    }
+                    println!("Rolled back to generation {}", current - 1);
+                    Ok(())
+                }
+                cli::GenerationCommands::Gc { keep } => {
+                    commands::generation::commands::cmd_generation_gc(keep)
+                }
+                cli::GenerationCommands::Info { number } => {
+                    commands::generation::commands::cmd_generation_info(number)
+                }
+            },
+
+            // System takeover
+            cli::SystemCommands::Takeover {
+                yes,
+                dry_run,
+                skip_conversion,
+                db,
+            } => commands::generation::takeover::cmd_system_takeover(
+                &db.db_path,
+                yes,
+                dry_run,
+                skip_conversion,
+            ),
+
             // Nested: system trigger
             cli::SystemCommands::Trigger(trigger_cmd) => match trigger_cmd {
                 cli::TriggerCommands::List {
