@@ -109,6 +109,30 @@
 							<td><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
+						<tr>
+							<td class="feature-name">Immutable generations</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+						</tr>
+						<tr>
+							<td class="feature-name">System takeover</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+						</tr>
+						<tr>
+							<td class="feature-name">Bootstrap from scratch</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+						</tr>
 					</tbody>
 				</table>
 			</div>
@@ -180,6 +204,19 @@
 
 		<div class="details" style="margin-top: 1.25rem;">
 			<div class="detail-card animate-in" style="--stagger: 9">
+				<h2>vs. NixOS Generations</h2>
+				<p>
+					Both Conary and NixOS support immutable system generations, but the
+					approach differs. NixOS builds generations from Nix expressions in a
+					custom functional language. Conary builds generations from the actual
+					installed package set -- EROFS images verified by composefs and backed
+					by content-addressable storage. Conary generations work with existing
+					RPM/DEB/Arch packages; NixOS requires packages to be rewritten as Nix
+					derivations.
+				</p>
+			</div>
+
+			<div class="detail-card animate-in" style="--stagger: 10">
 				<h2>vs. Flatpak / Snap</h2>
 				<p>
 					Flatpak and Snap solve cross-distribution distribution for desktop applications
@@ -189,7 +226,7 @@
 				</p>
 			</div>
 
-			<div class="detail-card animate-in" style="--stagger: 10">
+			<div class="detail-card animate-in" style="--stagger: 11">
 				<h2>Where Conary Is Still Early</h2>
 				<p>
 					Conary is a 0.1.0 release. apt, dnf, and pacman have decades of battle-testing,
@@ -206,7 +243,7 @@
 		</div>
 
 		<!-- CTA -->
-		<div class="compare-cta animate-in" style="--stagger: 11">
+		<div class="compare-cta animate-in" style="--stagger: 12">
 			<p>Ready to try it?</p>
 			<a href="/install" class="btn btn-primary">Install Conary</a>
 		</div>

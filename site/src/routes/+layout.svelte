@@ -6,6 +6,7 @@
 
 	const navLinks = [
 		{ href: '/', label: 'Home' },
+		{ href: '/features', label: 'Features' },
 		{ href: '/install', label: 'Install' },
 		{ href: '/compare', label: 'Compare' },
 		{ href: '/about', label: 'About' }
@@ -48,6 +49,7 @@
 		<div class="container footer-inner">
 			<div class="footer-links">
 				<a href="/">Home</a>
+				<a href="/features">Features</a>
 				<a href="/install">Install</a>
 				<a href="/compare">Compare</a>
 				<a href="/about">About</a>
@@ -56,7 +58,7 @@
 			</div>
 			<div class="footer-bottom">
 				<span class="footer-prompt">$</span>
-				<span class="footer-text">conary -- the cross-distribution package manager</span>
+				<span class="footer-text">conary -- the cross-distribution system manager</span>
 			</div>
 		</div>
 	</footer>

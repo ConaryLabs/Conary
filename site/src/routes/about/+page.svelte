@@ -7,7 +7,7 @@
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">About Conary</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			Reviving a visionary 2005 design with 100K lines of modern Rust.
+			Reviving a visionary 2005 design -- now with immutable system generations.
 		</p>
 	</div>
 </section>
@@ -93,6 +93,14 @@
 				<div class="arch-item">
 					<h3>System Model</h3>
 					<p>Declarative system configuration. Define desired state, Conary computes and applies the diff.</p>
+				</div>
+				<div class="arch-item">
+					<h3>Generations</h3>
+					<p>Immutable EROFS filesystem images with composefs overlay. Live-switch between verified system states.</p>
+				</div>
+				<div class="arch-item">
+					<h3>Bootstrap</h3>
+					<p>Staged pipeline to build a complete system from scratch. Cross-compiler through bootable image.</p>
 				</div>
 			</div>
 		</div>

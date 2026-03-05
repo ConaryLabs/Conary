@@ -1,6 +1,6 @@
 <svelte:head>
-	<title>Conary - The Cross-Distribution Package Manager</title>
-	<meta name="description" content="Unified package management across Fedora, Arch, and Ubuntu. Content-addressable storage, atomic transactions, and on-demand format conversion." />
+	<title>Conary - The Cross-Distribution System Manager</title>
+	<meta name="description" content="Build immutable system generations from your installed packages. Unified system management across Fedora, Arch, and Ubuntu with atomic transactions and on-demand format conversion." />
 </svelte:head>
 
 <!-- Hero -->
@@ -10,12 +10,13 @@
 	<div class="container hero-inner">
 		<h1 class="hero-title animate-in" style="--stagger: 0">Conary</h1>
 		<p class="hero-tagline animate-in" style="--stagger: 2">
-			One package manager for every Linux distro
+			One system manager for every Linux distro
 		</p>
 		<p class="hero-desc animate-in" style="--stagger: 3">
+			Build immutable system generations from your installed packages.
+			Switch between system states live, without rebooting.
 			Install RPM, DEB, and Arch packages with the same tool.
-			Atomic transactions mean your system never breaks mid-update.
-			68,000+ packages available today -- no upstream changes required.
+			68,000+ packages available today.
 		</p>
 		<div class="hero-actions animate-in" style="--stagger: 5">
 			<a href="/install" class="btn btn-primary">Get Started</a>
@@ -55,41 +56,63 @@
 		<h2 class="section-title animate-in" style="--stagger: 9">Why Conary?</h2>
 		<div class="features-grid">
 			<div class="feature-card animate-in" style="--stagger: 10">
+				<h3>Immutable Generations</h3>
+				<p>
+					EROFS images + composefs overlays. Build, switch, and rollback
+					entire system states without rebooting. Every generation is
+					verified by fs-verity.
+				</p>
+			</div>
+			<div class="feature-card animate-in" style="--stagger: 11">
 				<h3>Cross-Distribution</h3>
 				<p>
 					One tool for Fedora, Arch, and Ubuntu. Install RPM, DEB, or Arch packages
 					with the same commands, the same resolver, the same transaction engine.
 				</p>
 			</div>
-			<div class="feature-card animate-in" style="--stagger: 11">
-				<h3>Content-Addressable Storage</h3>
-				<p>
-					Files are stored by content hash, not by package. Identical files across
-					packages are deduplicated automatically, saving disk space and bandwidth.
-				</p>
-			</div>
 			<div class="feature-card animate-in" style="--stagger: 12">
-				<h3>Binary Deltas</h3>
-				<p>
-					Upgrade packages by downloading only what changed. Zstd-compressed binary
-					diffs between versions cut update sizes by 60-90%.
-				</p>
-			</div>
-			<div class="feature-card animate-in" style="--stagger: 13">
 				<h3>Atomic Transactions</h3>
 				<p>
 					Every install, remove, and upgrade is a crash-safe atomic transaction.
 					Power loss mid-update? Conary recovers automatically on next boot.
 				</p>
 			</div>
+			<div class="feature-card animate-in" style="--stagger: 13">
+				<h3>System Takeover</h3>
+				<p>
+					Adopt an entire existing Linux system into Conary management
+					with a single command. RPM, DEB, or pacman -- all absorbed atomically.
+				</p>
+			</div>
 			<div class="feature-card animate-in" style="--stagger: 14">
+				<h3>Content-Addressable Storage</h3>
+				<p>
+					Files are stored by content hash, not by package. Identical files across
+					packages are deduplicated automatically, saving disk space and bandwidth.
+				</p>
+			</div>
+			<div class="feature-card animate-in" style="--stagger: 15">
+				<h3>Binary Deltas</h3>
+				<p>
+					Upgrade packages by downloading only what changed. Zstd-compressed binary
+					diffs between versions cut update sizes by 60-90%.
+				</p>
+			</div>
+			<div class="feature-card animate-in" style="--stagger: 16">
 				<h3>System Model</h3>
 				<p>
 					Declare the packages your system should have. Conary computes the difference
 					and applies it. Reproducible systems from a single file.
 				</p>
 			</div>
-			<div class="feature-card animate-in" style="--stagger: 15">
+			<div class="feature-card animate-in" style="--stagger: 17">
+				<h3>Bootstrap</h3>
+				<p>
+					Build a complete system from scratch. Staged pipeline from
+					cross-compiler to self-hosted toolchain to bootable image.
+				</p>
+			</div>
+			<div class="feature-card animate-in" style="--stagger: 18">
 				<h3>On-Demand Conversion</h3>
 				<p>
 					Remi, the conversion proxy, transparently converts upstream RPM/DEB/Arch
@@ -103,8 +126,8 @@
 <!-- Terminal demo -->
 <section class="demo">
 	<div class="container">
-		<h2 class="section-title animate-in" style="--stagger: 16">See It in Action</h2>
-		<div class="terminal animate-in" style="--stagger: 17">
+		<h2 class="section-title animate-in" style="--stagger: 19">See It in Action</h2>
+		<div class="terminal animate-in" style="--stagger: 20">
 			<div class="terminal-header">
 				<span class="terminal-dot" aria-hidden="true"></span>
 				<span class="terminal-dot" aria-hidden="true"></span>
@@ -145,6 +168,13 @@
 					<span class="t-cmd">conary model diff</span>
 				</div>
 				<div class="terminal-line t-output">3 packages to install, 0 to remove</div>
+				<div class="terminal-line t-blank"></div>
+				<div class="terminal-line">
+					<span class="t-prompt">$</span>
+					<span class="t-cmd">conary generation build --summary "Added nginx"</span>
+				</div>
+				<div class="terminal-line t-output">Building generation 3...</div>
+				<div class="terminal-line t-output t-success">Generation 3 built (142 packages, 847 MB)</div>
 			</div>
 		</div>
 	</div>
@@ -153,8 +183,8 @@
 <!-- Comparison teaser -->
 <section class="comparison-teaser">
 	<div class="container">
-		<h2 class="section-title animate-in" style="--stagger: 18">How It Compares</h2>
-		<div class="compare-table-wrap animate-in" style="--stagger: 19">
+		<h2 class="section-title animate-in" style="--stagger: 21">How It Compares</h2>
+		<div class="compare-table-wrap animate-in" style="--stagger: 22">
 			<table class="compare-table">
 				<thead>
 					<tr>
@@ -167,6 +197,14 @@
 					</tr>
 				</thead>
 				<tbody>
+					<tr>
+						<td class="feature-name">Immutable generations</td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check yes" aria-label="Yes"></span></td>
+					</tr>
 					<tr>
 						<td class="feature-name">Cross-distribution</td>
 						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
@@ -218,7 +256,7 @@
 				</tbody>
 			</table>
 		</div>
-		<div class="compare-cta animate-in" style="--stagger: 20">
+		<div class="compare-cta animate-in" style="--stagger: 23">
 			<a href="/compare" class="btn btn-outline">Full Comparison</a>
 		</div>
 	</div>
@@ -227,11 +265,11 @@
 <!-- CTA -->
 <section class="cta">
 	<div class="container cta-inner">
-		<h2 class="animate-in" style="--stagger: 21">Ready to get started?</h2>
-		<p class="animate-in" style="--stagger: 22">
-			Install Conary in under a minute and unify your package management.
+		<h2 class="animate-in" style="--stagger: 24">Ready to get started?</h2>
+		<p class="animate-in" style="--stagger: 25">
+			Install Conary in under a minute and unify your system management.
 		</p>
-		<div class="cta-actions animate-in" style="--stagger: 23">
+		<div class="cta-actions animate-in" style="--stagger: 26">
 			<a href="/install" class="btn btn-primary">Install Conary</a>
 			<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer" class="btn btn-outline">View on GitHub</a>
 		</div>
