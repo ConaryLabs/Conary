@@ -8,4 +8,122 @@ description = "Core library for the Conary package manager"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Will be populated in Task 2
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Hashing for file integrity
+sha2 = "0.10"
+md-5 = "0.10"                    # MD5 for DEB package md5sums (legacy format requirement)
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Logging
+tracing = "0.1"
+
+# Package format parsing
+rpm = "0.14"
+
+# Temp files for RPM extraction
+tempfile = "3.10"
+
+# Version parsing and comparison
+semver = "1.0"
+
+# HTTP client for repository downloads
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"] }
+
+# Serialization for repository metadata and CCS manifests
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+ciborium = "0.2"                 # CBOR encoding for binary CCS manifests
+
+# Date/time handling for repository sync timestamps
+chrono = { version = "0.4", features = ["serde"] }
+
+# Delta compression for efficient updates
+zstd = "0.13"
+
+# Content-Defined Chunking for efficient dedup and deltas
+fastcdc = "3.2"
+walkdir = "2.5"                  # Directory traversal for chunk store
+
+# Parallel processing for concurrent downloads
+rayon = "1.8"
+
+# SAT-based dependency resolver
+resolvo = "0.10"
+
+# Progress bars for downloads
+indicatif = "0.17"
+
+# GPG signature verification (pure Rust OpenPGP implementation)
+# Note: Using RustCrypto backend with experimental and variable-time flags
+# This is acceptable for a package manager use case
+sequoia-openpgp = { version = "1.17", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+
+# Repository metadata parsing
+tar = "0.4"                     # Tarball extraction for Arch repos
+flate2 = "1.0"                  # Gzip compression (for Arch, Debian, Fedora)
+xz2 = "0.1"                     # XZ compression (for Arch)
+rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
+quick-xml = "0.31"              # XML parser for Fedora/RPM repodata
+ar = "0.9"                      # AR archive parsing for DEB packages
+wait-timeout = "0.2"            # Subprocess timeout for scriptlet execution
+glob = "0.3.3"
+log = "0.4"                      # Logging facade for transaction module
+
+# Transaction engine dependencies
+uuid = { version = "1.0", features = ["v4"] }
+fs2 = "0.4"                      # File locking for transaction safety
+crc32fast = "1.4"                # Fast CRC32 for journal integrity
+
+# Container isolation for scriptlets (Linux namespaces)
+nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
+libc = "0.2"                    # Low-level syscalls for resource limits
+
+# Ed25519 signatures for CCS package signing
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"                     # Random number generation for key generation
+base64 = "0.22"                  # Base64 encoding for signatures
+hex = "0.4"                      # Hex encoding for chunk hashes
+
+# Regex for scriptlet analysis
+regex = "1.10"
+
+# Enum string conversion macros
+strum = "0.26"
+strum_macros = "0.26"
+
+# Sigstore integration
+sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "sigstore-trust-root", "rustls-tls"] }
+const-oid = "0.9"
+pem = "3.0"
+rustls-pki-types = "1.0"
+webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], default-features = false }
+x509-cert = { version = "0.2", features = ["pem", "std"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# URL parsing for peer endpoints
+url = "2.5"
+
+# Diff output
+diffy = "0.4.2"
+
+# Binary format parsing
+goblin = "0.10.4"
+
+# External command discovery
+which = "8.0.0"
+
+# Platform directories
+dirs = "6.0.0"
+
+# Capability enforcement (landlock filesystem + seccomp syscall filtering)
+landlock = "0.4"
+seccompiler = "0.4"
