@@ -2,6 +2,84 @@
 members = [".", "conary-core", "conary-erofs", "conary-server"]
 resolver = "3"
 
+[workspace.dependencies]
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Hashing
+sha2 = "0.10"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Parallel processing
+rayon = "1.8"
+
+# Progress
+indicatif = "0.17"
+
+# Temp files
+tempfile = "3.10"
+
+# IDs
+uuid = { version = "1.0", features = ["v4"] }
+
+# Encoding
+base64 = "0.22"
+hex = "0.4"
+pem = "3.0"
+
+# HTTP
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"] }
+url = "2.5"
+
+# File system
+walkdir = "2.5"
+glob = "0.3.3"
+libc = "0.2"
+nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
+
+# Sigstore
+sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "sigstore-trust-root", "rustls-tls"] }
+const-oid = "0.9"
+rustls-pki-types = "1.0"
+webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], default-features = false }
+x509-cert = { version = "0.2", features = ["pem", "std"] }
+
+# Archives
+tar = "0.4"
+flate2 = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Crypto
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+
+# Other shared
+fs2 = "0.4"
+log = "0.4"
+regex = "1.10"
+
 [package]
 name = "conary"
 version = "0.1.0"
@@ -29,57 +107,57 @@ conary-core = { path = "conary-core" }
 conary-erofs = { path = "conary-erofs" }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { workspace = true, features = ["cargo"] }
 clap_complete = "4.5"
 
 # Logging (needed directly by main.rs and commands/)
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1.0"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
 
 # Direct imports in commands/
-thiserror = "1.0"
-rusqlite = { version = "0.32", features = ["bundled"] }
-sha2 = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-rayon = "1.8"
-indicatif = "0.17"
-tempfile = "3.10"
-uuid = { version = "1.0", features = ["v4"] }
-base64 = "0.22"
-toml = "0.8"
-hex = "0.4"
-pem = "3.0"
-reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"] }
-url = "2.5"
-walkdir = "2.5"
-glob = "0.3.3"
-libc = "0.2"
+thiserror.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rayon.workspace = true
+indicatif.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+base64.workspace = true
+toml.workspace = true
+hex.workspace = true
+pem.workspace = true
+reqwest.workspace = true
+url.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+libc.workspace = true
 
 # Sigstore verification (used directly in commands/ccs/signing.rs)
-sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "sigstore-trust-root", "rustls-tls"] }
-const-oid = "0.9"
-rustls-pki-types = "1.0"
-webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], default-features = false }
-x509-cert = { version = "0.2", features = ["pem", "std"] }
+sigstore.workspace = true
+const-oid.workspace = true
+rustls-pki-types.workspace = true
+webpki.workspace = true
+x509-cert.workspace = true
 
 # Used in commands/ccs/signing.rs for CCS package building
-tar = "0.4"
-flate2 = "1.0"
+tar.workspace = true
+flate2.workspace = true
 
 # Server crate (feature-gated)
 conary-server = { path = "conary-server", optional = true }
 
 # Async runtime (needed by main.rs)
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 
 # Used directly in commands/
-nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
+nix.workspace = true
 
 [build-dependencies]
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { workspace = true, features = ["cargo"] }
 clap_mangen = "0.2"
 
 [profile.release]

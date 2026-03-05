@@ -12,15 +12,15 @@ conary-core = { path = "../conary-core", features = ["server"] }
 
 # Web framework
 axum = "0.7"
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"] }
 tower = "0.5"
 
 # Server utilities
 filetime = "0.2"
-async-trait = "0.1"
-futures = "0.3"
+async-trait.workspace = true
+futures.workspace = true
 dashmap = "6.0"
 parking_lot = "0.12"
 
@@ -46,35 +46,35 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 zbus = { version = "4.0", optional = true }
 
 # CLI parsing (for binary entry points)
-clap = { version = "4.5", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap.workspace = true
+tracing-subscriber.workspace = true
 
 # Shared deps needed directly by server code
-anyhow = "1.0"
-tracing = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-url = "2.5"
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true
 
 # Deps used directly by moved modules (also in conary-core)
-rusqlite = { version = "0.32", features = ["bundled"] }
-thiserror = "1.0"
-sha2 = "0.10"
-tempfile = "3.10"
-reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"] }
-base64 = "0.22"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-fs2 = "0.4"
-nix = { version = "0.29", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
-libc = "0.2"
-log = "0.4"
-rand = "0.8"
-regex = "1.10"
-toml = "0.8"
-uuid = { version = "1.0", features = ["v4"] }
-walkdir = "2.5"
-hex = "0.4"
+rusqlite.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+fs2.workspace = true
+nix.workspace = true
+libc.workspace = true
+log.workspace = true
+rand.workspace = true
+regex.workspace = true
+toml.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+hex.workspace = true
 
 [features]
 default = []
