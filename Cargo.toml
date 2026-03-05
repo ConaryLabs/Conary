@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "conary-erofs"]
+resolver = "3"
+
 [package]
 name = "conary"
 version = "0.1.0"
