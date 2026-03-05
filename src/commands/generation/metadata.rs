@@ -22,6 +22,18 @@ pub const ROOT_SYMLINKS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationMetadata {
     pub generation: i64,
+    /// "composefs" or "reflink" (for backwards compat with older generations)
+    #[serde(default)]
+    pub format: String,
+    /// Size of the EROFS image in bytes (composefs format only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub erofs_size: Option<i64>,
+    /// Number of CAS objects referenced by the EROFS image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cas_objects_referenced: Option<i64>,
+    /// Whether fs-verity is enabled on CAS objects
+    #[serde(default)]
+    pub fsverity_enabled: bool,
     pub created_at: String,
     pub package_count: i64,
     pub kernel_version: Option<String>,
@@ -67,6 +79,10 @@ pub fn gc_roots_dir() -> PathBuf {
 }
 
 /// Detect kernel version(s) by scanning `gen_dir/usr/lib/modules/` for subdirectories
+///
+/// Used when a generation has a deployed file tree (reflink format).
+/// For composefs generations, use `detect_kernel_version_from_db` in the builder instead.
+#[allow(dead_code)]
 pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
     let modules_dir = gen_dir.join("usr/lib/modules");
     let entries = std::fs::read_dir(modules_dir).ok()?;
@@ -100,6 +116,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let metadata = GenerationMetadata {
             generation: 42,
+            format: "composefs".to_string(),
+            erofs_size: Some(1_048_576),
+            cas_objects_referenced: Some(320),
+            fsverity_enabled: true,
             created_at: "2026-03-04T12:00:00Z".to_string(),
             package_count: 150,
             kernel_version: Some("6.12.1-arch1-1".to_string()),
@@ -110,10 +130,36 @@ mod tests {
         let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
 
         assert_eq!(loaded.generation, 42);
+        assert_eq!(loaded.format, "composefs");
+        assert_eq!(loaded.erofs_size, Some(1_048_576));
+        assert_eq!(loaded.cas_objects_referenced, Some(320));
+        assert!(loaded.fsverity_enabled);
         assert_eq!(loaded.created_at, "2026-03-04T12:00:00Z");
         assert_eq!(loaded.package_count, 150);
         assert_eq!(loaded.kernel_version.as_deref(), Some("6.12.1-arch1-1"));
         assert_eq!(loaded.summary, "installed vim");
+    }
+
+    #[test]
+    fn test_metadata_backwards_compat() {
+        // Old-format metadata without composefs fields should deserialize fine
+        let tmp = TempDir::new().unwrap();
+        let old_json = r#"{
+            "generation": 10,
+            "created_at": "2026-01-01T00:00:00Z",
+            "package_count": 50,
+            "kernel_version": null,
+            "summary": "old generation"
+        }"#;
+        std::fs::write(tmp.path().join(".conary-gen.json"), old_json).unwrap();
+
+        let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
+        assert_eq!(loaded.generation, 10);
+        assert_eq!(loaded.format, ""); // serde(default) gives empty string
+        assert_eq!(loaded.erofs_size, None);
+        assert_eq!(loaded.cas_objects_referenced, None);
+        assert!(!loaded.fsverity_enabled); // serde(default) gives false
+        assert_eq!(loaded.summary, "old generation");
     }
 
     #[test]

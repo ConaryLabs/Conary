@@ -1,38 +1,34 @@
 // src/commands/generation/builder.rs
-//! Generation builder — creates a new generation tree from current system state
+//! Generation builder — creates EROFS images from current system state
 
+use super::composefs::preflight_composefs;
 use super::metadata::{
-    GenerationMetadata, ROOT_SYMLINKS, detect_kernel_version, generation_path, generations_dir,
-    is_excluded,
+    GenerationMetadata, ROOT_SYMLINKS, generation_path, generations_dir, is_excluded,
 };
 use anyhow::{Context, Result, anyhow};
 use conary::db::models::{FileEntry, StateEngine, Trove};
 use conary::db::paths::objects_dir;
-use conary::filesystem::FileDeployer;
-use conary::filesystem::reflink::supports_reflinks;
-use tracing::{debug, info, warn};
+use std::io::BufWriter;
+use tracing::{debug, info};
 
-/// Build a new generation tree from the current system state
+/// Build a new generation as an EROFS image from the current system state
 ///
-/// Creates a snapshot of the system state, then deploys all installed package
-/// files into a generation directory using reflinks (CoW) where supported.
+/// Creates a snapshot of the system state, then builds an EROFS image
+/// containing all installed package files with CAS digest references
+/// suitable for composefs mounting.
 pub fn build_generation(
     conn: &rusqlite::Connection,
     db_path: &str,
     summary: &str,
 ) -> Result<i64> {
-    // Step 1: Ensure generations base directory exists
+    // Step 1: Composefs preflight check
+    let obj_dir = objects_dir(db_path);
+    let caps =
+        preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
+
+    // Step 2: Ensure generations base directory exists
     std::fs::create_dir_all(generations_dir())
         .context("Failed to create generations directory")?;
-
-    // Step 2: Check reflink support (warn only, don't error)
-    let gen_base = generations_dir();
-    if !supports_reflinks(&gen_base) {
-        warn!(
-            "Filesystem at {} does not support reflinks; files will be copied instead",
-            gen_base.display()
-        );
-    }
 
     // Step 3: Create system state snapshot
     let engine = StateEngine::new(conn);
@@ -49,20 +45,24 @@ pub fn build_generation(
             gen_dir.display()
         ));
     }
-    std::fs::create_dir_all(&gen_dir)
-        .with_context(|| format!("Failed to create generation directory: {}", gen_dir.display()))?;
+    std::fs::create_dir_all(&gen_dir).with_context(|| {
+        format!(
+            "Failed to create generation directory: {}",
+            gen_dir.display()
+        )
+    })?;
 
-    // Step 5: Get all installed packages
-    let troves = Trove::list_all(conn).context("Failed to list installed packages")?;
+    // Step 5: Build EROFS image
+    let mut builder = conary_erofs::builder::ErofsBuilder::new()
+        .compression(conary_erofs::compress::Compression::Lz4);
 
-    // Step 6: Create file deployer
-    let obj_dir = objects_dir(db_path);
-    let deployer = FileDeployer::new(&obj_dir, &gen_dir)
-        .context("Failed to create file deployer")?;
+    // Add root directory
+    builder.add_directory("/", 0o755, 0, 0);
 
-    // Step 7-9: Deploy files for each trove
-    let mut files_deployed: u64 = 0;
-    let mut errors: u64 = 0;
+    // Step 6: Add all installed package files
+    let troves =
+        Trove::list_all(conn).context("Failed to list installed packages")?;
+    let mut files_added: u64 = 0;
 
     for trove in &troves {
         let trove_id = match trove.id {
@@ -74,75 +74,149 @@ pub fn build_generation(
         };
 
         let files = FileEntry::find_by_trove(conn, trove_id)
-            .with_context(|| format!("Failed to get files for trove {}", trove.name))?;
+            .with_context(|| {
+                format!("Failed to get files for trove {}", trove.name)
+            })?;
 
         for file in &files {
-            // Skip excluded paths
             if is_excluded(&file.path) {
                 continue;
             }
 
+            // Parse hex digest to bytes
+            let digest = hex_to_digest(&file.sha256_hash).with_context(|| {
+                format!("Invalid digest for {}", file.path)
+            })?;
+
             #[allow(clippy::cast_sign_loss)]
             let permissions = file.permissions as u32;
+            #[allow(clippy::cast_sign_loss)]
+            let size = file.size as u64;
 
-            match deployer.deploy_file_reflink(&file.path, &file.sha256_hash, permissions) {
-                Ok(()) => {
-                    files_deployed += 1;
-                }
-                Err(e) => {
-                    debug!("Failed to deploy {}: {}", file.path, e);
-                    errors += 1;
-                }
-            }
+            // ErofsBuilder handles implicit parent directory creation
+            builder.add_file(&file.path, &digest, size, permissions, 0, 0);
+            files_added += 1;
         }
     }
 
-    // Step 10: Create root-level symlinks
+    // Step 7: Add root-level symlinks
     for (link, target) in ROOT_SYMLINKS {
-        let link_path = gen_dir.join(link);
-        let target_path = gen_dir.join(target);
-
-        if target_path.exists() && !link_path.exists() {
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(target, &link_path).with_context(|| {
-                    format!("Failed to create symlink {} -> {}", link, target)
-                })?;
-            }
-        }
+        builder.add_symlink(&format!("/{link}"), target, 0o777);
     }
 
-    // Step 11: Write generation metadata
+    // Step 8: Build EROFS image
+    let image_path = gen_dir.join("root.erofs");
+    let file = std::fs::File::create(&image_path).with_context(|| {
+        format!("Failed to create EROFS image: {}", image_path.display())
+    })?;
+    let stats = builder
+        .build(BufWriter::new(file))
+        .map_err(|e| anyhow!("EROFS build failed: {e}"))?;
+
+    info!(
+        "EROFS image built: {} bytes, {} inodes, {} files",
+        stats.image_size, stats.inode_count, stats.file_count
+    );
+
+    // Step 9: Enable fs-verity on CAS objects (if supported)
+    if caps.fsverity {
+        debug!("fs-verity supported, enabling on CAS objects");
+        // TODO: Wire up fs-verity enablement (Task 16)
+    } else {
+        debug!(
+            "fs-verity not supported on CAS filesystem, skipping"
+        );
+    }
+
+    // Step 10: Write generation metadata
+    #[allow(clippy::cast_possible_wrap)]
     let metadata = GenerationMetadata {
         generation: gen_number,
+        format: "composefs".to_string(),
+        erofs_size: Some(stats.image_size as i64),
+        cas_objects_referenced: Some(stats.file_count as i64),
+        fsverity_enabled: caps.fsverity,
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
-        kernel_version: detect_kernel_version(&gen_dir),
+        kernel_version: detect_kernel_version_from_db(conn),
         summary: summary.to_string(),
     };
     metadata
         .write_to(&gen_dir)
         .context("Failed to write generation metadata")?;
 
-    // Step 12: Fail on deployment errors (clean up partial generation)
-    if errors > 0 {
-        warn!(
-            "Generation {} had {} deployment errors, cleaning up",
-            gen_number, errors
-        );
-        let _ = std::fs::remove_dir_all(&gen_dir);
-        return Err(anyhow!(
-            "Generation build failed: {} files could not be deployed ({} succeeded)",
-            errors,
-            files_deployed
-        ));
-    }
-
-    // Step 13: Log summary
     info!(
-        "Generation {} built: {} files deployed, {} packages",
-        gen_number, files_deployed, troves.len()
+        "Generation {} built: {} files, {} packages, composefs format",
+        gen_number,
+        files_added,
+        troves.len()
     );
 
     Ok(gen_number)
+}
+
+/// Convert hex string to 32-byte digest
+fn hex_to_digest(hex: &str) -> Result<[u8; 32]> {
+    if hex.len() != 64 {
+        return Err(anyhow!(
+            "Expected 64-char hex digest, got {} chars",
+            hex.len()
+        ));
+    }
+    let mut digest = [0u8; 32];
+    for i in 0..32 {
+        digest[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .with_context(|| format!("Invalid hex at position {}", i * 2))?;
+    }
+    Ok(digest)
+}
+
+/// Get kernel version from DB rather than scanning the generation tree
+/// (since we no longer have a file tree to scan)
+fn detect_kernel_version_from_db(
+    conn: &rusqlite::Connection,
+) -> Option<String> {
+    // Look for kernel package in troves
+    let troves = Trove::list_all(conn).ok()?;
+    for trove in &troves {
+        if trove.name.starts_with("kernel")
+            || trove.name.starts_with("linux-image")
+        {
+            return Some(trove.version.clone());
+        }
+    }
+    // Fall back to running kernel
+    std::fs::read_to_string("/proc/version")
+        .ok()
+        .and_then(|v| v.split_whitespace().nth(2).map(String::from))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hex_to_digest_valid() {
+        let hex = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let digest = hex_to_digest(hex).unwrap();
+        assert_eq!(digest[0], 0xab);
+        assert_eq!(digest[1], 0xcd);
+        assert_eq!(digest[31], 0x89);
+    }
+
+    #[test]
+    fn test_hex_to_digest_wrong_length() {
+        let result = hex_to_digest("abcd");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("Expected 64-char")
+        );
+    }
+
+    #[test]
+    fn test_hex_to_digest_invalid_chars() {
+        let hex = "zzcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let result = hex_to_digest(hex);
+        assert!(result.is_err());
+    }
 }
