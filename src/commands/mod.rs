@@ -12,6 +12,7 @@ mod convert_pkgbuild;
 mod cook;
 mod derived;
 mod federation;
+pub mod generation;
 mod install;
 mod label;
 mod model;
