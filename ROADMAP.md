@@ -144,6 +144,18 @@ Full provenance tracking from source to deployment.
 - [COMPLETE] **Conflict Detection** - Detect file conflicts between packages
 - [COMPLETE] **History Tracking** - Complete audit log of all operations
 
+### System Generations
+
+- [COMPLETE] **EROFS Image Builder** - conary-erofs crate builds immutable filesystem images (LZ4/LZMA)
+- [COMPLETE] **composefs Integration** - Linux 6.2+ overlay with fs-verity verification
+- [COMPLETE] **Generation Build** - Snapshot current state into numbered EROFS generation
+- [COMPLETE] **Generation Switch** - Live-switch to any generation without reboot
+- [COMPLETE] **Generation Rollback** - Switch back to previous generation
+- [COMPLETE] **Generation GC** - Remove old generations (configurable keep count)
+- [COMPLETE] **Generation Info** - Show detailed metadata for any generation
+- [COMPLETE] **System Takeover** - Adopt entire existing system into generation management
+- [COMPLETE] **CLI Commands** - generation list, build, switch, rollback, gc, info; system takeover
+
 ### System Adoption
 
 - [COMPLETE] **Single Package Adoption** - Adopt individual system packages
@@ -478,13 +490,16 @@ Optional xxhash for non-cryptographic use cases.
 
 ### Atomic Filesystem Updates (Inspired by Aeryn OS)
 
-Use atomic operations to swap entire filesystem trees.
+Implemented via system generations using EROFS + composefs.
 
-- [ ] **Staging Directory** - Build complete filesystem tree before deployment
-- [ ] **renameat2 RENAME_EXCHANGE** - Atomic directory swap on Linux
-- [ ] **Content-Addressable /usr** - Deduplicated, immutable /usr trees
-- [ ] **Instant Rollback** - Swap back to previous tree atomically
-- [ ] **Fallback Strategy** - Graceful degradation on non-Linux systems
+- [COMPLETE] **EROFS Image Builder** - conary-erofs crate for building immutable filesystem images
+- [COMPLETE] **composefs Integration** - Linux 6.2+ overlay with fs-verity content verification
+- [COMPLETE] **Generation Build** - Snapshot system state into EROFS generation
+- [COMPLETE] **Generation Switch** - Live-switch to any generation without reboot
+- [COMPLETE] **Generation Rollback** - Switch back to previous generation
+- [COMPLETE] **Generation GC** - Remove old generations
+- [COMPLETE] **System Takeover** - Adopt entire existing system into generation management
+- [ ] **renameat2 RENAME_EXCHANGE** - Atomic directory swap (alternative to composefs on older kernels)
 
 ### Repository Server (Full)
 
@@ -578,10 +593,10 @@ These features from original Conary are not planned for implementation:
 ## Contributing
 
 Contributions welcome. Priority areas:
-1. Atomic filesystem updates (renameat2 RENAME_EXCHANGE)
-2. VFS component merging
-3. Shell integration for dev shells (direnv-style)
-4. P2P chunk distribution plugins
+1. Shell integration for dev shells (direnv-style)
+2. P2P chunk distribution plugins
+3. VFS component merging
+4. Multi-version package support (kernels)
 5. Web interface improvements
 
 See README.md for development setup and CLAUDE.md for coding conventions.
