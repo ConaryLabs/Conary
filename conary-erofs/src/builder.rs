@@ -248,6 +248,9 @@ impl ErofsBuilder {
         let mut cursor = meta_start;
 
         for &(idx, size) in &node_sizes {
+            // Each inode must start on a 32-byte boundary so NID addressing
+            // works correctly: NID = (byte_offset - meta_start) / 32.
+            cursor = align_up(cursor, 32);
             inode_offsets.insert(idx, cursor);
             cursor += size;
         }
@@ -341,6 +344,14 @@ impl ErofsBuilder {
 
         let mut written = meta_start;
         for &(idx, _size) in &node_sizes {
+            // Align to 32-byte boundary (matching offset assignment in phase 3b).
+            let aligned = align_up(written, 32);
+            let pad = aligned - written;
+            if pad > 0 {
+                writer.write_all(&vec![0u8; pad as usize])?;
+                written += pad;
+            }
+
             let node = &arena[idx];
             match &node.kind {
                 NodeKind::Directory { mode, uid, gid } => {
