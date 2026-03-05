@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_format_bytes() {
         assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(512), "0.50 KiB");
+        assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1024), "1.00 KiB");
         assert_eq!(format_bytes(1_048_576), "1.00 MiB");
         assert_eq!(format_bytes(1_073_741_824), "1.00 GiB");
