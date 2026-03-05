@@ -201,18 +201,10 @@ fn preflight_checks() -> Result<()> {
     std::fs::create_dir_all(&gen_dir)
         .context("Failed to create generations directory")?;
 
-    // Check reflink support (advisory only)
-    if !conary::filesystem::reflink::supports_reflinks(&gen_dir) {
-        warn!(
-            "Filesystem at {} does not support reflinks; \
-             generations will use full copies",
-            gen_dir.display()
-        );
-        println!(
-            "[WARN] Reflinks not supported on {}. Generations will use full copies.",
-            gen_dir.display()
-        );
-    }
+    // Check composefs support (uses default CAS path for probe)
+    let default_cas = std::path::PathBuf::from("/conary/objects");
+    super::composefs::preflight_composefs(&default_cas)
+        .context("Composefs preflight failed — requires Linux 6.2+ with composefs support")?;
 
     Ok(())
 }

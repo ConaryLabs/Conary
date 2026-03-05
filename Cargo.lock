@@ -980,6 +980,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "conary-erofs",
  "const-oid",
  "crc32fast",
  "dashmap",
