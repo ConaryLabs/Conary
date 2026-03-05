@@ -19,6 +19,7 @@ use crate::inode::{
 };
 use crate::superblock::{
     Superblock, EROFS_FEATURE_COMPAT_SB_CHKSUM, EROFS_FEATURE_INCOMPAT_CHUNKED_FILE,
+    EROFS_FEATURE_INCOMPAT_DEVICE_TABLE,
 };
 use crate::tail_pack::pack_tail;
 use crate::xattr::build_composefs_xattrs;
@@ -474,7 +475,8 @@ impl ErofsBuilder {
 
         let mut sb = Superblock::new(bs);
         sb.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
-        sb.feature_incompat = EROFS_FEATURE_INCOMPAT_CHUNKED_FILE;
+        sb.feature_incompat =
+            EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
         #[allow(clippy::cast_possible_truncation)]
         {
             sb.root_nid = root_nid as u16;
