@@ -1,47 +1,9 @@
 // src/lib.rs
+//! Compatibility shim -- re-exports conary_core so existing `use conary::` paths work.
 
-//! Conary Package Manager
-//!
-//! Modern package manager with atomic operations, rollback capabilities,
-//! and support for multiple package formats (RPM, DEB, Arch).
-//!
-//! # Architecture
-//!
-//! - Database-first: All state in SQLite, no config files
-//! - Changesets: Atomic transactional operations
-//! - Troves: Hierarchical package units (packages, components, collections)
-//! - Flavors: Build-time variations tracked in metadata
-//! - File-level tracking: SHA-256 hashes, delta updates, conflict detection
+pub use conary_core::*;
 
-pub mod automation;
-pub mod bootstrap;
-pub mod capability;
-pub mod ccs;
-pub mod components;
-pub mod compression;
-pub mod container;
-pub mod db;
-pub mod delta;
-pub mod dependencies;
-pub mod derived;
-mod error;
-pub mod filesystem;
-pub mod flavor;
-pub mod hash;
-pub mod label;
-pub mod model;
-pub mod packages;
-pub mod progress;
-pub mod provenance;
-pub mod recipe;
-pub mod repository;
-pub mod resolver;
-pub mod scriptlet;
-pub mod transaction;
-pub mod trigger;
-pub mod trust;
-pub mod version;
-
+// These modules remain in the root crate (moved to conary-server in Phase 2)
 #[cfg(feature = "server")]
 pub mod federation;
 
@@ -50,55 +12,3 @@ pub mod server;
 
 #[cfg(feature = "daemon")]
 pub mod daemon;
-
-pub use automation::{
-    ActionDecision, ActionStatus, AiSuggestion, AutomationManager, AutomationSummary, PendingAction,
-};
-pub use bootstrap::{
-    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, Stage0Builder, StageManager,
-    TargetArch, Toolchain, ToolchainKind,
-};
-pub use capability::enforcement::{
-    EnforcementError, EnforcementMode, EnforcementPolicy, EnforcementReport, EnforcementSupport,
-    EnforcementWarning,
-};
-pub use capability::{
-    CapabilityDeclaration, CapabilityError, FilesystemCapabilities, NetworkCapabilities,
-    SyscallCapabilities, SyscallProfile,
-};
-pub use components::{ComponentClassifier, ComponentType};
-pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
-pub use error::{Error, Result};
-#[cfg(feature = "server")]
-pub use federation::{
-    CircuitBreaker, CircuitBreakerRegistry, CircuitState, FederatedChunkFetcher, Federation,
-    FederationStats, Peer, PeerId, PeerRegistry, PeerScore, PeerTier, RendezvousRouter,
-    RequestCoalescer,
-};
-pub use flavor::{ArchSpec, FlavorItem, FlavorOp, FlavorSpec, SystemFlavor};
-pub use hash::{Hash, HashAlgorithm, Hasher};
-pub use label::{Label, LabelParseError, LabelPath};
-pub use model::parser::{
-    AiAssistConfig, AiAssistMode, AiFeature, AutomationCategory, AutomationConfig, AutomationMode,
-    FederationConfig, FederationTier, RepairAutomation, RollbackTrigger, SecurityAutomation,
-};
-pub use model::{
-    ApplyOptions, DEFAULT_MODEL_PATH, DiffAction, ModelConfig, ModelDiff, ModelError, SystemModel,
-    SystemState, compute_diff, compute_diff_with_includes_offline, load_model, model_exists,
-    snapshot_to_model,
-};
-pub use progress::{
-    CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
-    SilentProgress,
-};
-pub use provenance::{
-    BuildDependency, BuildProvenance, ComponentHash, ContentProvenance, DnaHash, HostAttestation,
-    PackageDna, PatchInfo, Provenance, ReproducibilityInfo, Signature, SignatureProvenance,
-    SignatureScope, SourceProvenance, TransparencyLog,
-};
-pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
-pub use transaction::{
-    RecoveryOutcome, Transaction, TransactionConfig, TransactionEngine, TransactionPlan,
-    TransactionState,
-};
-pub use trust::TrustError;

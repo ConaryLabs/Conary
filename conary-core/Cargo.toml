@@ -7,6 +7,10 @@ authors = ["Conary Contributors"]
 description = "Core library for the Conary package manager"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+server = ["dep:async-trait", "dep:futures"]
+
 [dependencies]
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -127,3 +131,7 @@ dirs = "6.0.0"
 # Capability enforcement (landlock filesystem + seccomp syscall filtering)
 landlock = "0.4"
 seccompiler = "0.4"
+
+# Server-gated deps (async chunk fetcher)
+async-trait = { version = "0.1", optional = true }
+futures = { version = "0.3", optional = true }
