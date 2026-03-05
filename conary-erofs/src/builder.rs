@@ -9,8 +9,6 @@
 use std::collections::BTreeMap;
 use std::io::{self, Seek, SeekFrom, Write};
 
-use crate::chunk::build_chunk_indexes;
-use crate::compress::Compression;
 use crate::dirent::{pack_directory, DirEntry, EROFS_FT_DIR, EROFS_FT_REG_FILE, EROFS_FT_SYMLINK};
 use crate::inode::{
     nid_from_offset, InodeInfo, EROFS_COMPACT_INODE_SIZE, EROFS_EXTENDED_INODE_SIZE,
@@ -31,7 +29,6 @@ use crate::xattr::build_composefs_xattrs;
 /// block-aligned dirent blocks.
 pub struct ErofsBuilder {
     block_size: u32,
-    compression: Compression,
     entries: Vec<FsEntry>,
 }
 
@@ -121,7 +118,6 @@ impl ErofsBuilder {
     pub fn new() -> Self {
         Self {
             block_size: 4096,
-            compression: Compression::None,
             entries: Vec::new(),
         }
     }
@@ -130,13 +126,6 @@ impl ErofsBuilder {
     #[must_use]
     pub fn block_size(mut self, size: u32) -> Self {
         self.block_size = size;
-        self
-    }
-
-    /// Set the compression algorithm for metadata.
-    #[must_use]
-    pub fn compression(mut self, comp: Compression) -> Self {
-        self.compression = comp;
         self
     }
 
@@ -202,11 +191,8 @@ impl ErofsBuilder {
         //    where the directory data area starts, fill in directory union_values.
 
         // 3a. Compute per-node inode+xattr+tail sizes (without dir block addresses)
-        let chunk_bits = self.block_size.trailing_zeros() as u8;
         let mut node_sizes: Vec<(usize, u64)> = Vec::with_capacity(order.len()); // (arena_idx, total_inode_bytes)
-        let mut file_chunk_data: BTreeMap<usize, (Vec<u8>, u16)> = BTreeMap::new(); // arena_idx -> (chunk_bytes, chunk_format)
         let mut file_xattr_data: BTreeMap<usize, (Vec<u8>, u16)> = BTreeMap::new(); // arena_idx -> (xattr_bytes, xattr_icount)
-        let mut symlink_targets: BTreeMap<usize, String> = BTreeMap::new();
 
         for &idx in &order {
             let node = &arena[idx];
@@ -216,12 +202,11 @@ impl ErofsBuilder {
                     let inode_sz = EROFS_COMPACT_INODE_SIZE as u64;
                     node_sizes.push((idx, inode_sz));
                 }
-                NodeKind::File { digest, size, uid, gid, .. } => {
+                NodeKind::File { digest, size, mode, uid, gid, .. } => {
                     let cas_path = cas_path_from_digest(digest);
                     let (xattr_bytes, xattr_icount) = build_composefs_xattrs(&cas_path);
-                    let (chunk_bytes, chunk_format) = build_chunk_indexes(*size, chunk_bits);
 
-                    let inode = build_file_inode_info(*size, *uid, *gid, chunk_format);
+                    let inode = build_file_inode_info(*size, *mode, *uid, *gid);
                     let inode_sz = if inode.needs_extended() {
                         EROFS_EXTENDED_INODE_SIZE as u64
                     } else {
@@ -230,14 +215,12 @@ impl ErofsBuilder {
 
                     let total = inode_sz + xattr_bytes.len() as u64;
                     file_xattr_data.insert(idx, (xattr_bytes, xattr_icount));
-                    file_chunk_data.insert(idx, (chunk_bytes, chunk_format));
                     node_sizes.push((idx, total));
                 }
                 NodeKind::Symlink { target, .. } => {
                     // Inline the target string
                     let inode_sz = EROFS_COMPACT_INODE_SIZE as u64;
                     let total = inode_sz + target.len() as u64;
-                    symlink_targets.insert(idx, target.clone());
                     node_sizes.push((idx, total));
                 }
             }
@@ -302,22 +285,8 @@ impl ErofsBuilder {
             dir_blocks_map.insert(idx, blocks);
         }
 
-        // After directory data: chunk index area
-        let chunk_data_start = dir_data_cursor;
-        let mut chunk_offsets: BTreeMap<usize, u64> = BTreeMap::new();
-        let mut chunk_cursor = chunk_data_start;
-
-        for &idx in &order {
-            if let Some((chunk_bytes, _)) = file_chunk_data.get(&idx)
-                && !chunk_bytes.is_empty()
-            {
-                chunk_offsets.insert(idx, chunk_cursor);
-                chunk_cursor += chunk_bytes.len() as u64;
-            }
-        }
-
         // Total image size (block-aligned)
-        let total_size = align_up(chunk_cursor, bs64);
+        let total_size = align_up(dir_data_cursor, bs64);
         #[allow(clippy::cast_possible_truncation)]
         let total_blocks = (total_size / bs64) as u32;
 
@@ -381,7 +350,6 @@ impl ErofsBuilder {
                 NodeKind::File { digest: _, size, mode, uid, gid, .. } => {
                     stats.file_count += 1;
                     let (ref xattr_bytes, xattr_icount) = file_xattr_data[&idx];
-                    let (_, chunk_format) = file_chunk_data[&idx];
 
                     let inode = InodeInfo {
                         mode: S_IFREG | (*mode as u16 & 0o7777),
@@ -394,7 +362,7 @@ impl ErofsBuilder {
                         ino: idx as u32,
                         xattr_icount,
                         data_layout: EROFS_INODE_CHUNK_BASED,
-                        union_value: u32::from(chunk_format),
+                        union_value: 0,
                     };
 
                     if inode.needs_extended() {
@@ -449,16 +417,6 @@ impl ErofsBuilder {
                     writer.write_all(blk)?;
                     written += bs64;
                 }
-            }
-        }
-
-        // 4d. Write chunk index data
-        for &idx in &order {
-            if let Some((chunk_bytes, _)) = file_chunk_data.get(&idx)
-                && !chunk_bytes.is_empty()
-            {
-                writer.write_all(chunk_bytes)?;
-                written += chunk_bytes.len() as u64;
             }
         }
 
@@ -668,10 +626,12 @@ fn bfs_order(arena: &[TreeNode], root: usize) -> Vec<usize> {
 }
 
 /// Build an `InodeInfo` for a regular file in chunk-based mode.
+///
+/// Used to determine whether extended inode format is needed (based on uid/gid/size).
 #[allow(clippy::cast_possible_truncation)]
-fn build_file_inode_info(size: u64, uid: u32, gid: u32, chunk_format: u16) -> InodeInfo {
+fn build_file_inode_info(size: u64, mode: u32, uid: u32, gid: u32) -> InodeInfo {
     InodeInfo {
-        mode: S_IFREG | 0o644,
+        mode: S_IFREG | (mode as u16 & 0o7777),
         uid,
         gid,
         size,
@@ -681,7 +641,7 @@ fn build_file_inode_info(size: u64, uid: u32, gid: u32, chunk_format: u16) -> In
         ino: 0,
         xattr_icount: 0,
         data_layout: EROFS_INODE_CHUNK_BASED,
-        union_value: u32::from(chunk_format),
+        union_value: 0,
     }
 }
 

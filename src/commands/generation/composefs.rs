@@ -1,7 +1,5 @@
 // src/commands/generation/composefs.rs
 //! Composefs kernel support detection and preflight checks
-// TODO(generation): Remove once generation builder wires up composefs preflight
-#![allow(dead_code)]
 
 use std::path::Path;
 
@@ -33,18 +31,15 @@ pub fn supports_composefs() -> bool {
 pub fn supports_fsverity(path: &Path) -> bool {
     use std::os::unix::io::AsRawFd;
 
-    // Create a temp file in the target directory
-    let test_path = path.join(".conary-fsverity-test");
-    let file = match std::fs::File::create(&test_path) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
+    // Use a unique temp file name to avoid races
+    let pid = std::process::id();
+    let test_path = path.join(format!(".conary-fsverity-probe-{pid}"));
 
-    // Must close and reopen read-only for fs-verity (file must not be open for writing)
-    drop(file);
-
-    // Write some content first (fs-verity needs non-empty file on some implementations)
-    let _ = std::fs::write(&test_path, b"test");
+    // Write content (fs-verity needs non-empty file on some implementations),
+    // then reopen read-only (fs-verity requires the file not be open for writing)
+    if std::fs::write(&test_path, b"verity-probe").is_err() {
+        return false;
+    }
 
     let file = match std::fs::File::open(&test_path) {
         Ok(f) => f,
@@ -87,6 +82,8 @@ pub fn supports_fsverity(path: &Path) -> bool {
         libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _)
     };
 
+    // Close the file handle before cleanup
+    drop(file);
     let _ = std::fs::remove_file(&test_path);
 
     // Success (0) or EEXIST means fs-verity is supported
