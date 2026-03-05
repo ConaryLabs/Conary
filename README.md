@@ -62,8 +62,8 @@ cargo build
 # Initialize the database
 conary system init
 
-# Add a repository and sync
-conary repo add fedora https://packages.conary.io/fedora/43
+# Add the Remi package server (Fedora, Arch, Ubuntu, Debian)
+conary repo add remi https://packages.conary.io
 conary repo sync
 
 # Install a package

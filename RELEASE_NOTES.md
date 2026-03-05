@@ -14,11 +14,12 @@ This release represents 10 months of development: 274 commits, 100,000+ lines of
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary && cargo build
 conary system init
-conary repo add fedora https://packages.conary.io/fedora/43
+conary repo add remi https://packages.conary.io
+conary repo sync
 conary install nginx
 ```
 
-Requires Rust 1.93+. See the [install page](https://conary.io/install) for details.
+Remi supports Fedora, Arch, Ubuntu, and Debian. Requires Rust 1.93+. See the [install page](https://conary.io/install) for details.
 
 ---
 
