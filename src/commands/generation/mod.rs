@@ -5,4 +5,6 @@
 //! that will consume them in subsequent tasks.
 
 #[allow(unused)]
+pub mod builder;
+#[allow(unused)]
 pub mod metadata;
