@@ -177,6 +177,47 @@ impl FileDeployer {
         Ok(())
     }
 
+    /// Deploy a file from CAS using reflink (CoW clone) with fallback
+    ///
+    /// Attempts a reflink first for copy-on-write efficiency. If the filesystem
+    /// does not support FICLONE, falls back to the standard `deploy_file` method
+    /// (hardlink, then copy).
+    pub fn deploy_file_reflink(&self, path: &str, hash: &str, permissions: u32) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let cas_path = self.cas.hash_to_path(hash);
+        let target_path = self.safe_target_path(path)?;
+
+        // Create parent directories
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Remove existing file if present
+        match fs::remove_file(&target_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+
+        // Try reflink first
+        if super::reflink::reflink_file(&cas_path, &target_path).is_ok() {
+            // Set permissions
+            let perms = fs::Permissions::from_mode(permissions);
+            fs::set_permissions(&target_path, perms)?;
+
+            info!(
+                "Deployed file: {} (hash: {}, mode: {:o}, method: reflink)",
+                path, hash, permissions
+            );
+            return Ok(());
+        }
+
+        // Reflink not supported — fall back to hardlink/copy
+        debug!("Reflink failed for {}, falling back to deploy_file", path);
+        self.deploy_file(path, hash, permissions)
+    }
+
     /// Try to create a hardlink, returns true if successful
     fn try_hardlink(&self, source: &Path, target: &Path) -> bool {
         fs::hard_link(source, target).is_ok()

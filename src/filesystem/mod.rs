@@ -13,6 +13,7 @@
 mod cas;
 mod deployer;
 pub mod path;
+pub mod reflink;
 pub mod vfs;
 
 pub use cas::CasStore;
