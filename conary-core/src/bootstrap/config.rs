@@ -97,6 +97,9 @@ pub struct BootstrapConfig {
     /// binutils version
     pub binutils_version: String,
 
+    /// crosstool-ng version (latest: 1.28.0)
+    pub crosstool_version: String,
+
     /// Path to crosstool-ng config (if using custom)
     pub crosstool_config: Option<PathBuf>,
 
@@ -118,10 +121,11 @@ impl Default for BootstrapConfig {
             stage1_prefix: PathBuf::from("/conary/stage1"),
             sysroot: PathBuf::from("/conary/sysroot"),
             jobs: num_cpus(),
-            kernel_version: "6.18".to_string(),
+            kernel_version: "6.16.1".to_string(),
             gcc_version: "15.2.0".to_string(),
             glibc_version: "2.42".to_string(),
-            binutils_version: "2.45.1".to_string(),
+            binutils_version: "2.45".to_string(),
+            crosstool_version: "1.28.0".to_string(),
             crosstool_config: None,
             seed_url: None,
             seed_checksum: None,
@@ -176,6 +180,30 @@ impl BootstrapConfig {
     pub fn with_seed(mut self, url: impl Into<String>, checksum: impl Into<String>) -> Self {
         self.seed_url = Some(url.into());
         self.seed_checksum = Some(checksum.into());
+        self
+    }
+
+    /// Set the GCC version
+    pub fn with_gcc_version(mut self, version: &str) -> Self {
+        self.gcc_version = version.to_string();
+        self
+    }
+
+    /// Set the glibc version
+    pub fn with_glibc_version(mut self, version: &str) -> Self {
+        self.glibc_version = version.to_string();
+        self
+    }
+
+    /// Set the binutils version
+    pub fn with_binutils_version(mut self, version: &str) -> Self {
+        self.binutils_version = version.to_string();
+        self
+    }
+
+    /// Set the kernel version
+    pub fn with_kernel_version(mut self, version: &str) -> Self {
+        self.kernel_version = version.to_string();
         self
     }
 
@@ -243,6 +271,16 @@ mod tests {
         assert_eq!(config.tools_prefix, PathBuf::from("/opt/cross"));
         assert_eq!(config.jobs, 8);
         assert!(config.verbose);
+    }
+
+    #[test]
+    fn test_lfs_12_4_defaults() {
+        let config = BootstrapConfig::new();
+        assert_eq!(config.gcc_version, "15.2.0");
+        assert_eq!(config.glibc_version, "2.42");
+        assert_eq!(config.binutils_version, "2.45");
+        assert_eq!(config.kernel_version, "6.16.1");
+        assert_eq!(config.crosstool_version, "1.28.0");
     }
 
     #[test]

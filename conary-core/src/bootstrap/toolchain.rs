@@ -69,6 +69,70 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
+    /// Parse version from tool's `--version` output.
+    /// Extracts the first semver-like pattern (X.Y.Z or X.Y).
+    pub fn parse_version_output(output: &str) -> Option<String> {
+        // Use a simple manual parser (no regex dependency needed):
+        // Find first digit sequence that matches X.Y or X.Y.Z
+        let bytes = output.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+        while i < len {
+            if bytes[i].is_ascii_digit() {
+                let start = i;
+                // Eat digits
+                while i < len && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                // Need a dot
+                if i < len && bytes[i] == b'.' {
+                    i += 1;
+                    // Need more digits (minor)
+                    if i < len && bytes[i].is_ascii_digit() {
+                        while i < len && bytes[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                        // Optional .patch
+                        if i < len && bytes[i] == b'.' {
+                            let dot_pos = i;
+                            i += 1;
+                            if i < len && bytes[i].is_ascii_digit() {
+                                while i < len && bytes[i].is_ascii_digit() {
+                                    i += 1;
+                                }
+                                return Some(output[start..i].to_string());
+                            }
+                            return Some(output[start..dot_pos].to_string());
+                        }
+                        return Some(output[start..i].to_string());
+                    }
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Detect glibc version by running the toolchain's ldd --version.
+    pub fn detect_glibc_version(&mut self) {
+        let ldd = self.tool("ldd");
+        if let Ok(output) = std::process::Command::new(&ldd).arg("--version").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout}{stderr}");
+            self.glibc_version = Self::parse_version_output(&combined);
+        }
+    }
+
+    /// Detect binutils version by running ld --version.
+    pub fn detect_binutils_version(&mut self) {
+        let ld = self.tool("ld");
+        if let Ok(output) = std::process::Command::new(&ld).arg("--version").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            self.binutils_version = Self::parse_version_output(&stdout);
+        }
+    }
+
     /// Create a toolchain from an existing prefix
     pub fn from_prefix(prefix: impl AsRef<Path>) -> Result<Self> {
         let prefix = prefix.as_ref().to_path_buf();
@@ -89,15 +153,20 @@ impl Toolchain {
         // Check if static
         let is_static = Self::check_static(&gcc_path);
 
-        Ok(Self {
+        let mut toolchain = Self {
             kind: ToolchainKind::Stage0, // Assume Stage0, caller can override
             path: prefix,
             target,
             gcc_version,
-            glibc_version: None,    // TODO: detect
-            binutils_version: None, // TODO: detect
+            glibc_version: None,
+            binutils_version: None,
             is_static,
-        })
+        };
+
+        toolchain.detect_glibc_version();
+        toolchain.detect_binutils_version();
+
+        Ok(toolchain)
     }
 
     /// Create a toolchain representing the host system
@@ -353,6 +422,43 @@ mod tests {
         // Host tools don't have target prefix
         assert_eq!(toolchain.gcc(), PathBuf::from("/usr/bin/gcc"));
         assert_eq!(toolchain.gxx(), PathBuf::from("/usr/bin/g++"));
+    }
+
+    #[test]
+    fn test_parse_gcc_version() {
+        let output = "gcc (GCC) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.";
+        assert_eq!(
+            Toolchain::parse_version_output(output),
+            Some("15.2.0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_glibc_version() {
+        let output = "ldd (GNU libc) 2.42\nCopyright (C) 2025 Free Software Foundation, Inc.";
+        assert_eq!(
+            Toolchain::parse_version_output(output),
+            Some("2.42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_binutils_version() {
+        let output = "GNU ld (GNU Binutils) 2.45";
+        assert_eq!(
+            Toolchain::parse_version_output(output),
+            Some("2.45".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_version_empty() {
+        assert_eq!(Toolchain::parse_version_output(""), None);
+    }
+
+    #[test]
+    fn test_parse_version_no_version() {
+        assert_eq!(Toolchain::parse_version_output("no version here"), None);
     }
 
     #[test]
