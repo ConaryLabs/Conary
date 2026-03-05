@@ -1,31 +1,31 @@
 # Conary Architecture
 
-This document describes the internal architecture of Conary, a modern package
+This document describes the internal architecture of Conary, a modern system
 manager written in Rust. It covers the major subsystems, their interactions,
 and the data flow for core operations.
 
 ## System Overview
 
 ```
-                            CLI (src/cli/, src/main.rs)
-                                      |
-                    +-----------------+-----------------+
-                    |                 |                 |
-              Commands          Daemon Client      Cook Command
-          (src/commands/)     (src/daemon/client)  (src/commands/cook.rs)
-                    |                 |                 |
-     +--------------+-----+     +----+----+     +------+------+
-     |              |     |     | conaryd |     |   Kitchen   |
-     |              |     |     | daemon  |     | (src/recipe)|
-     |              |     |     +---------+     +-------------+
-     |              |     |
-  Install       Query   Model
-  Remove        Search  Apply/Diff
-  Update        SBOM    Snapshot
-     |              |     |
-     +------+-------+-----+--------+
-            |                      |
-     +------+------+        +-----+------+
+                              CLI (src/cli/, src/main.rs)
+                                        |
+                    +-------------------+-------------------+
+                    |                   |                   |
+              Commands            Daemon Client        Cook Command
+          (src/commands/)       (src/daemon/client)  (src/commands/cook.rs)
+                    |                   |                   |
+  +--------+-------+------+-----------+  +--+------+     +-----+-----+
+  |        |       |      |           |  | conaryd |     |  Kitchen   |
+  |        |       |      |           |  | daemon  |     |(src/recipe)|
+  |        |       |      |           |  +---------+     +-----------+
+  |        |       |      |           |
+Install  Query   Model  Generation  Bootstrap
+Remove   Search  Apply  Build       Stage0/1
+Update   SBOM    Diff   Switch      Base/Image
+  |        |       |      |           |
+  +--------+-------+------+-----------+
+           |                     |
+    +------+------+        +-----+------+
      | Transaction |        |  Resolver  |
      |   Engine    |        | (src/      |
      | (src/       |        |  resolver/)|
@@ -74,6 +74,12 @@ flavors (`is: x86_64`) constrain package selection to compatible platforms.
 Package provenance in `repository@namespace:tag` format. Labels form a
 searchable path with priority ordering and support delegation chains to
 other labels or repositories.
+
+### Derived Package
+
+A package created by modifying an existing package (the parent) with
+patches and file overrides. Derived packages track their parent and
+can be flagged as stale when the parent updates.
 
 ## Module Map
 
@@ -276,6 +282,79 @@ Client                        Remi Server
   |                               |   or redirect to R2 presigned URL
   |  (repeat for each chunk)      |
 ```
+
+## System Generations
+
+Conary can manage the entire system filesystem as immutable, atomic
+generations using EROFS images and Linux composefs.
+
+### Architecture
+
+```
+Current System State
+       |
+  conary generation build
+       |
+  +----+----+
+  | Snapshot |-- Capture all installed troves from SQLite
+  +----+----+
+       |
+  +----+----+
+  |  EROFS   |-- conary-erofs crate builds read-only filesystem image
+  | Builder  |-- LZ4/LZMA compression, inline data, chunk references
+  +----+----+
+       |
+  +----+----+
+  | composefs|-- Linux 6.2+ overlay with fs-verity content verification
+  | Mount    |-- CAS objects referenced by content hash
+  +----+----+
+       |
+  Generation N (immutable, verified)
+```
+
+### Generation Lifecycle
+
+1. **Build**: Snapshot current troves, construct EROFS image from CAS
+2. **Store**: Save generation metadata (number, timestamp, summary, trove list)
+3. **Switch**: Mount new generation via composefs, update boot entries
+4. **Rollback**: Switch back to any previous generation
+5. **GC**: Remove old generations, keeping N most recent
+
+### conary-erofs Crate
+
+Dedicated crate for building EROFS (Enhanced Read-Only File System)
+images. Handles superblock construction, inode layout, directory
+entries, data compression (LZ4, LZMA), extended attributes, and
+chunk-based external file references to the CAS.
+
+### composefs Integration
+
+The composefs driver (Linux 6.2+, `CONFIG_EROFS_FS`) provides:
+- Content-verified overlays using fs-verity
+- Efficient sharing of identical files across generations via CAS
+- Atomic generation switching without unmounting
+
+## Bootstrap Pipeline
+
+Build a complete Conary-managed system from scratch:
+
+```
+Stage 0: Cross-Compiler
+  crosstool-ng -> minimal GCC + binutils for target arch
+       |
+Stage 1: Self-Hosted Toolchain
+  Use Stage 0 to build native GCC, binutils, glibc on target
+       |
+Base System
+  Cook core packages: kernel, systemd, coreutils, bash, networking
+  Install into sysroot, create initial generation
+       |
+Image Generation
+  Build bootable image (raw, qcow2, or ISO) from sysroot
+```
+
+Supports x86_64, aarch64, and riscv64 targets. Each stage has
+checkpoint/resume support for interrupted builds.
 
 ## Database Schema (v44)
 
