@@ -188,7 +188,10 @@ impl Stage0Builder {
         info!("Building Stage 0 toolchain...");
 
         // Strategy 1: Download Seed (Preferred)
-        if self.config.seed_url.is_some() || self.has_local_seed() {
+        let downloads_dir = self.work_dir.join("downloads");
+        std::fs::create_dir_all(&downloads_dir)?;
+        let has_cache = Self::has_cached_seed(&downloads_dir, self.config.triple());
+        if self.config.seed_url.is_some() || has_cache {
             info!("Using Stage 0 seed...");
             self.download_and_install_seed()?;
 
@@ -260,26 +263,55 @@ impl Stage0Builder {
             .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))
     }
 
-    fn has_local_seed(&self) -> bool {
-        // TODO: check for local cached seed
-        false
+    /// Check if a cached seed tarball exists in the downloads directory.
+    pub fn has_cached_seed(downloads_dir: &Path, triple: &str) -> bool {
+        let patterns = [
+            format!("{triple}-seed.tar.xz"),
+            format!("{triple}-seed.tar.gz"),
+            format!("{triple}-seed.tar.bz2"),
+        ];
+        patterns.iter().any(|name| downloads_dir.join(name).exists())
+    }
+
+    /// Find the cached seed path if it exists.
+    pub fn find_cached_seed(downloads_dir: &Path, triple: &str) -> Option<PathBuf> {
+        let patterns = [
+            format!("{triple}-seed.tar.xz"),
+            format!("{triple}-seed.tar.gz"),
+            format!("{triple}-seed.tar.bz2"),
+        ];
+        patterns
+            .iter()
+            .map(|name| downloads_dir.join(name))
+            .find(|p| p.exists())
     }
 
     fn download_and_install_seed(&mut self) -> Result<(), Stage0Error> {
+        let downloads_dir = self.work_dir.join("downloads");
+        std::fs::create_dir_all(&downloads_dir)?;
+        let triple = self.config.triple();
+
+        // Check cache first
+        if let Some(cached) = Self::find_cached_seed(&downloads_dir, triple) {
+            info!("Using cached seed: {}", cached.display());
+            return self.extract_seed(&cached);
+        }
+
+        // Download if not cached
         let url = self.config.seed_url.as_ref().ok_or_else(|| {
             Stage0Error::MissingPrerequisite("No seed URL configured".to_string())
         })?;
 
-        let filename = url.split('/').next_back().unwrap_or("stage0-seed.tar.xz");
-        let target_path = self.work_dir.join(filename);
+        let default_name = format!("{triple}-seed.tar.xz");
+        let filename = url.split('/').next_back().unwrap_or(&default_name);
+        let target_path = downloads_dir.join(filename);
 
-        // Download
         if !target_path.exists() {
             info!("Downloading seed: {}", url);
             let status = Command::new("curl")
                 .args(["-fsSL", "-o", target_path.to_str().unwrap(), url])
                 .status()
-                .map_err(|e| Stage0Error::BuildFailed(format!("Curl failed: {}", e)))?;
+                .map_err(|e| Stage0Error::BuildFailed(format!("Curl failed: {e}")))?;
 
             if !status.success() {
                 return Err(Stage0Error::BuildFailed(
@@ -304,29 +336,43 @@ impl Stage0Builder {
 
             if !computed.eq_ignore_ascii_case(expected) {
                 return Err(Stage0Error::VerificationFailed(format!(
-                    "Checksum mismatch! Expected {}, got {}",
-                    expected, computed
+                    "Checksum mismatch! Expected {expected}, got {computed}"
                 )));
             }
         }
 
-        // Extract
+        self.extract_seed(&target_path)
+    }
+
+    /// Extract a seed tarball to the tools prefix directory.
+    fn extract_seed(&self, seed_path: &Path) -> Result<(), Stage0Error> {
         info!(
             "Extracting seed to {}...",
             self.config.tools_prefix.display()
         );
         std::fs::create_dir_all(&self.config.tools_prefix)?;
 
+        // Determine tar flag from extension
+        let tar_flag = if seed_path.to_string_lossy().ends_with(".tar.xz") {
+            "xJf"
+        } else if seed_path.to_string_lossy().ends_with(".tar.gz") {
+            "xzf"
+        } else if seed_path.to_string_lossy().ends_with(".tar.bz2") {
+            "xjf"
+        } else {
+            "xaf" // auto-detect
+        };
+
         let status = Command::new("tar")
             .args([
-                "xJf",
-                target_path.to_str().unwrap(),
+                tar_flag,
+                seed_path.to_str().unwrap(),
                 "-C",
                 self.config.tools_prefix.to_str().unwrap(),
                 "--strip-components=1",
             ])
             .status()
-            .map_err(|e| Stage0Error::BuildFailed(format!("Tar failed: {}", e)))?;
+            .map_err(|e| Stage0Error::BuildFailed(format!("Tar failed: {e}")))?;
 
         if !status.success() {
             return Err(Stage0Error::BuildFailed(
@@ -502,6 +548,51 @@ mod tests {
         if let Ok(version) = result {
             assert!(!version.is_empty());
         }
+    }
+
+    #[test]
+    fn test_seed_cache_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = dir.path().join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+
+        // No seed file -> false
+        assert!(!Stage0Builder::has_cached_seed(
+            &downloads,
+            "x86_64-conary-linux-gnu"
+        ));
+        assert!(
+            Stage0Builder::find_cached_seed(&downloads, "x86_64-conary-linux-gnu").is_none()
+        );
+
+        // Create a fake seed tarball
+        let seed_path = downloads.join("x86_64-conary-linux-gnu-seed.tar.xz");
+        std::fs::write(&seed_path, b"fake").unwrap();
+
+        // Seed file exists -> true
+        assert!(Stage0Builder::has_cached_seed(
+            &downloads,
+            "x86_64-conary-linux-gnu"
+        ));
+        assert_eq!(
+            Stage0Builder::find_cached_seed(&downloads, "x86_64-conary-linux-gnu"),
+            Some(seed_path),
+        );
+    }
+
+    #[test]
+    fn test_seed_cache_multiple_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = dir.path().join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+
+        // .tar.gz format should also be found
+        let seed_path = downloads.join("aarch64-conary-linux-gnu-seed.tar.gz");
+        std::fs::write(&seed_path, b"fake").unwrap();
+        assert!(Stage0Builder::has_cached_seed(
+            &downloads,
+            "aarch64-conary-linux-gnu"
+        ));
     }
 
     #[test]
