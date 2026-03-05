@@ -14,3 +14,5 @@ pub mod boot;
 pub mod switch;
 #[allow(unused)]
 pub mod commands;
+#[allow(unused)]
+pub mod takeover;
