@@ -10,4 +10,5 @@ pub mod compress;
 pub mod dirent;
 pub mod inode;
 pub mod superblock;
+pub mod tail_pack;
 pub mod xattr;
