@@ -124,15 +124,25 @@ pub fn build_generation(
         .write_to(&gen_dir)
         .context("Failed to write generation metadata")?;
 
-    // Step 12: Log summary
+    // Step 12: Fail on deployment errors (clean up partial generation)
+    if errors > 0 {
+        warn!(
+            "Generation {} had {} deployment errors, cleaning up",
+            gen_number, errors
+        );
+        let _ = std::fs::remove_dir_all(&gen_dir);
+        return Err(anyhow!(
+            "Generation build failed: {} files could not be deployed ({} succeeded)",
+            errors,
+            files_deployed
+        ));
+    }
+
+    // Step 13: Log summary
     info!(
-        "Generation {} built: {} files deployed, {} errors, {} packages",
-        gen_number,
-        files_deployed,
-        errors,
-        troves.len()
+        "Generation {} built: {} files deployed, {} packages",
+        gen_number, files_deployed, troves.len()
     );
 
-    // Step 13: Return generation number
     Ok(gen_number)
 }

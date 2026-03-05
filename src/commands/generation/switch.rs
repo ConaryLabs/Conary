@@ -27,7 +27,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let _metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
-    let mut exchanged = Vec::new();
+    let mut exchanged: Vec<(&str, bool)> = Vec::new(); // (dir_name, used_atomic)
 
     for dir in SWAP_DIRS {
         let gen_path = gen_dir.join(dir);
@@ -51,7 +51,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         let swap_result = match renameat2_exchange(&gen_path, &live_path) {
             Ok(()) => {
                 info!("Exchanged {} atomically", dir);
-                Ok(())
+                Ok(true) // used atomic
             }
             Err(e) => {
                 warn!(
@@ -60,17 +60,23 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
                 );
                 fallback_rename(&gen_path, &live_path, dir)
                     .with_context(|| format!("Fallback rename failed for {dir}"))
+                    .map(|()| false) // used fallback
             }
         };
 
         match swap_result {
-            Ok(()) => exchanged.push(*dir),
+            Ok(used_atomic) => exchanged.push((dir, used_atomic)),
             Err(e) => {
-                // Roll back already-exchanged directories to restore consistency
-                for prev_dir in exchanged.iter().rev() {
+                // Roll back already-exchanged directories using the same mechanism
+                for (prev_dir, was_atomic) in exchanged.iter().rev() {
                     let prev_gen = gen_dir.join(prev_dir);
                     let prev_live = Path::new("/").join(prev_dir);
-                    if let Err(rb_err) = renameat2_exchange(&prev_gen, &prev_live) {
+                    let rb_result = if *was_atomic {
+                        renameat2_exchange(&prev_gen, &prev_live)
+                    } else {
+                        fallback_rename(&prev_gen, &prev_live, prev_dir)
+                    };
+                    if let Err(rb_err) = rb_result {
                         warn!(
                             "CRITICAL: Failed to rollback {prev_dir} during switch abort: {rb_err}"
                         );
@@ -86,7 +92,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     update_current_symlink(gen_number)
         .context("Failed to update current generation symlink")?;
 
-    let dirs_list = exchanged.join(", ");
+    let dirs_list: String = exchanged.iter().map(|(d, _)| *d).collect::<Vec<_>>().join(", ");
     info!("Switched to generation {gen_number} (exchanged: {dirs_list})");
     println!("Switched to generation {gen_number} (exchanged: {dirs_list})");
     println!("Reboot recommended for full consistency.");

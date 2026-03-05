@@ -15,7 +15,9 @@ done
 # Fall back to /conary/current symlink
 if [ -z "$CONARY_GEN" ]; then
     if [ -L /sysroot/conary/current ]; then
-        GEN_DIR=$(readlink -f /sysroot/conary/current)
+        # Resolve symlink relative to /sysroot (target is absolute e.g. /conary/generations/N)
+        RAW_TARGET=$(readlink /sysroot/conary/current)
+        GEN_DIR="/sysroot${RAW_TARGET}"
     else
         exit 0  # No generation system configured
     fi

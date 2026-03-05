@@ -153,7 +153,7 @@ pub fn cmd_system_takeover(
             "[1/4] Adopting {} packages ...",
             plan.to_adopt.len()
         );
-        crate::commands::cmd_adopt(&plan.to_adopt, db_path, false)?;
+        crate::commands::cmd_adopt(&plan.to_adopt, db_path, true)?;
         info!("Adoption complete");
     }
 
