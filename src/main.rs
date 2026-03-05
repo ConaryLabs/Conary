@@ -1461,7 +1461,7 @@ fn main() -> Result<()> {
         // =====================================================================
         // Daemon Command
         // =====================================================================
-        #[cfg(feature = "daemon")]
+        #[cfg(feature = "server")]
         Some(cli::Commands::Daemon {
             db,
             socket,

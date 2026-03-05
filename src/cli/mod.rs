@@ -445,7 +445,7 @@ pub enum Commands {
     ///
     /// The daemon provides a REST API for package operations with
     /// SSE for progress streaming and job queue management.
-    #[cfg(feature = "daemon")]
+    #[cfg(feature = "server")]
     Daemon {
         /// Database path
         #[command(flatten)]
