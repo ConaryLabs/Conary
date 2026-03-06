@@ -61,6 +61,23 @@ Database schema is currently **v45** (40+ tables across 45 migrations). See ROAD
 
 See `.claude/rules/` for detailed tool selection guides and architecture reference.
 
+## Doc Versioning
+
+When modifying files in `docs/`, add or update a YAML frontmatter header:
+
+```yaml
+---
+last_updated: 2026-03-06
+revision: 1
+summary: Brief description of what changed
+---
+```
+
+- `last_updated`: Set to today's date
+- `revision`: Increment on meaningful updates (not typo fixes). Start at 1 for new docs.
+- `summary`: One line describing the most recent change
+- **Excluded files:** ROADMAP.md, CHANGELOG.md, CONTRIBUTING.md, files in `docs/plans/`
+
 ## Agents
 
 Six composable agents, dispatched by `portage`:
