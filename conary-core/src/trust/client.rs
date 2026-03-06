@@ -208,6 +208,12 @@ impl TufClient {
         Ok(())
     }
 
+    /// Maximum size for TUF metadata files (10 MB)
+    ///
+    /// Prevents DoS attacks where a malicious server returns arbitrarily large
+    /// metadata files to exhaust memory.
+    const MAX_TUF_METADATA_SIZE: u64 = 10 * 1024 * 1024;
+
     /// Fetch metadata from the TUF base URL
     fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
         let url = format!("{}/{}", self.tuf_base_url, filename);
@@ -223,9 +229,29 @@ impl TufClient {
             )));
         }
 
+        // Check Content-Length before downloading body
+        if let Some(content_length) = response.content_length()
+            && content_length > Self::MAX_TUF_METADATA_SIZE
+        {
+            return Err(TrustError::FetchError(format!(
+                "TUF metadata {filename} exceeds size limit: {content_length} bytes \
+                 (max {} bytes)",
+                Self::MAX_TUF_METADATA_SIZE
+            )));
+        }
+
         let body = response
             .bytes()
             .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
+
+        // Also check actual body size (Content-Length may be absent or wrong)
+        if body.len() as u64 > Self::MAX_TUF_METADATA_SIZE {
+            return Err(TrustError::FetchError(format!(
+                "TUF metadata {filename} exceeds size limit: {} bytes (max {} bytes)",
+                body.len(),
+                Self::MAX_TUF_METADATA_SIZE
+            )));
+        }
 
         Ok(body.to_vec())
     }

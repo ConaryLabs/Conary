@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
-use tracing::{debug, warn};
+use tracing::debug;
 
 const CONTROL_TAR_NAMES: &[&str] = &[
     "control.tar.gz",
@@ -88,7 +88,11 @@ impl DebPackage {
         match field {
             "Package" => info.name = Some(value.to_string()),
             "Version" => info.version = Some(value.to_string()),
-            "Architecture" => info.architecture = Some(value.to_string()),
+            "Architecture" => {
+                info.architecture = Some(
+                    crate::packages::common::normalize_architecture(value).to_string(),
+                )
+            }
             "Description" => {
                 // Description is the short description (first line)
                 info.description = Some(value.lines().next().unwrap_or(value).to_string())
@@ -131,255 +135,144 @@ impl DebPackage {
         (dep.to_string(), None)
     }
 
-    /// Extract file from AR archive by name
-    fn extract_ar_file(path: &str, filename: &str) -> Result<Vec<u8>> {
+    /// Single-pass extraction of control and data tarballs from the AR archive.
+    fn extract_ar_members(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open DEB file: {}", e)))?;
-
         let mut archive = ar::Archive::new(file);
-
+        let mut control_data: Option<Vec<u8>> = None;
+        let mut data_data: Option<Vec<u8>> = None;
         while let Some(entry) = archive.next_entry() {
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read AR entry: {}", e)))?;
-
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
+            let trimmed = entry_name.trim_end_matches('/');
+            if control_data.is_none() && CONTROL_TAR_NAMES.contains(&trimmed) {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)
+                    .map_err(|e| Error::InitError(format!("Failed to read control tar: {}", e)))?;
+                control_data = Some(buf);
+            } else if data_data.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)
+                    .map_err(|e| Error::InitError(format!("Failed to read data tar: {}", e)))?;
+                data_data = Some(buf);
+            }
+            if control_data.is_some() && data_data.is_some() {
+                break;
+            }
+        }
+        let control = control_data.ok_or_else(|| {
+            Error::InitError("control.tar not found in DEB archive".to_string())
+        })?;
+        let data = data_data.ok_or_else(|| {
+            Error::InitError("data.tar not found in DEB archive".to_string())
+        })?;
+        Ok((control, data))
+    }
 
-            // Match exactly, or with trailing '/' (AR format artifact)
-            if entry_name == filename || entry_name == format!("{}/", filename) {
-                let mut content = Vec::new();
-                entry
-                    .read_to_end(&mut content)
-                    .map_err(|e| Error::InitError(format!("Failed to read AR file: {}", e)))?;
+    /// Parse control file text from an already-extracted control tarball.
+    fn parse_control_tar(control_data: &[u8]) -> Result<String> {
+        let reader = Self::create_tar_decoder(control_data)?;
+        let mut archive = Archive::new(reader);
+        for entry in archive.entries()
+            .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
+        {
+            let mut entry = entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            let entry_path = entry.path()
+                .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
+                .to_string_lossy().to_string();
+            if entry_path == "./control" || entry_path == "control" {
+                let mut content = String::new();
+                entry.read_to_string(&mut content).map_err(|e| {
+                    Error::InitError(format!("Failed to read control file: {}", e))
+                })?;
                 return Ok(content);
             }
         }
-
-        Err(Error::InitError(format!(
-            "File {} not found in DEB archive",
-            filename
-        )))
+        Err(Error::InitError("control file not found in control.tar".to_string()))
     }
 
-    /// Decompress and extract control.tar.* to get control file
-    fn extract_control_file(path: &str) -> Result<String> {
-        for name in CONTROL_TAR_NAMES {
-            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
-                let reader = Self::create_tar_decoder(&tar_data)?;
-                let mut archive = Archive::new(reader);
-
-                // Find control file in tar
-                for entry in archive
-                    .entries()
-                    .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
-                {
-                    let mut entry = entry
-                        .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
-
-                    let entry_path = entry
-                        .path()
-                        .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
-
-                    if entry_path == "./control" || entry_path == "control" {
-                        let mut content = String::new();
-                        entry.read_to_string(&mut content).map_err(|e| {
-                            Error::InitError(format!("Failed to read control file: {}", e))
-                        })?;
-                        return Ok(content);
-                    }
-                }
-            }
+    /// Parse the data tarball to extract the file list.
+    fn parse_data_tar(data_tar_data: &[u8]) -> Result<Vec<PackageFile>> {
+        let reader = Self::create_tar_decoder(data_tar_data)?;
+        let mut archive = Archive::new(reader);
+        let mut files = Vec::new();
+        for entry in archive.entries()
+            .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
+        {
+            let entry = entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            if entry.header().entry_type().is_dir() { continue; }
+            let entry_path = entry.path()
+                .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
+                .to_string_lossy().to_string();
+            let size = entry.header().size()
+                .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
+            let mode = entry.header().mode()
+                .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
+            files.push(PackageFile {
+                path: normalize_path(&entry_path)
+                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                size: size as i64, mode: mode as i32, sha256: None,
+            });
         }
-
-        Err(Error::InitError(
-            "Could not find or extract control file from DEB package".to_string(),
-        ))
+        Ok(files)
     }
 
-    /// Extract maintainer scripts from control.tar.*
-    fn extract_maintainer_scripts(path: &str) -> Vec<Scriptlet> {
+    /// Extract maintainer scripts from already-loaded control tarball data.
+    fn extract_maintainer_scripts_from_data(control_data: &[u8]) -> Vec<Scriptlet> {
         let mut scriptlets = Vec::new();
-
-        for name in CONTROL_TAR_NAMES {
-            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
-                let reader = match Self::create_tar_decoder(&tar_data) {
-                    Ok(r) => r,
-                    Err(_) => continue,
+        let reader = match Self::create_tar_decoder(control_data) { Ok(r) => r, Err(_) => return scriptlets };
+        let mut archive = Archive::new(reader);
+        if let Ok(entries) = archive.entries() {
+            for entry_result in entries {
+                let entry = match entry_result { Ok(e) => e, Err(_) => continue };
+                let entry_path = match entry.path() { Ok(p) => p.to_string_lossy().to_string(), Err(_) => continue };
+                let phase = match entry_path.trim_start_matches("./") {
+                    "preinst" => ScriptletPhase::PreInstall,
+                    "postinst" => ScriptletPhase::PostInstall,
+                    "prerm" => ScriptletPhase::PreRemove,
+                    "postrm" => ScriptletPhase::PostRemove,
+                    _ => continue,
                 };
-                let mut archive = Archive::new(reader);
-
-                // Look for maintainer scripts
-                if let Ok(entries) = archive.entries() {
-                    for entry_result in entries {
-                        let entry = match entry_result {
-                            Ok(e) => e,
-                            Err(e) => {
-                                warn!(
-                                    "Skipping corrupted control archive entry in {}: {}",
-                                    path, e
-                                );
-                                continue;
-                            }
-                        };
-                        let entry_path = match entry.path() {
-                            Ok(p) => p.to_string_lossy().to_string(),
-                            Err(_) => continue,
-                        };
-
-                        // Map script name to phase
-                        let phase = match entry_path.trim_start_matches("./") {
-                            "preinst" => ScriptletPhase::PreInstall,
-                            "postinst" => ScriptletPhase::PostInstall,
-                            "prerm" => ScriptletPhase::PreRemove,
-                            "postrm" => ScriptletPhase::PostRemove,
-                            _ => continue,
-                        };
-
-                        // Read script content
-                        let mut entry = entry;
-                        let mut content = String::new();
-                        if entry.read_to_string(&mut content).is_ok() && !content.is_empty() {
-                            // Detect interpreter from shebang
-                            let interpreter = content
-                                .lines()
-                                .next()
-                                .and_then(|line| line.strip_prefix("#!"))
-                                .map(|s| s.trim().to_string())
-                                .unwrap_or_else(|| "/bin/sh".to_string());
-
-                            scriptlets.push(Scriptlet {
-                                phase,
-                                interpreter,
-                                content,
-                                flags: None,
-                            });
-                        }
-                    }
+                let mut entry = entry;
+                let mut content = String::new();
+                if entry.read_to_string(&mut content).is_ok() && !content.is_empty() {
+                    let interpreter = content.lines().next()
+                        .and_then(|line| line.strip_prefix("#!"))
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| "/bin/sh".to_string());
+                    scriptlets.push(Scriptlet { phase, interpreter, content, flags: None });
                 }
-
-                break;
             }
         }
-
         scriptlets
     }
 
-    /// Extract conffiles list from control.tar.*
-    ///
-    /// Debian packages list config files in a file called `conffiles` in the control archive.
-    /// Each line is a path to a config file. All Debian conffiles preserve user changes
-    /// (like RPM's noreplace behavior).
-    fn extract_conffiles(path: &str) -> Vec<ConfigFileInfo> {
-        for name in CONTROL_TAR_NAMES {
-            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
-                let reader = match Self::create_tar_decoder(&tar_data) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                let mut archive = Archive::new(reader);
-
-                // Look for conffiles
-                if let Ok(entries) = archive.entries() {
-                    for entry_result in entries {
-                        let entry = match entry_result {
-                            Ok(e) => e,
-                            Err(e) => {
-                                warn!(
-                                    "Skipping corrupted control archive entry in {}: {}",
-                                    path, e
-                                );
-                                continue;
-                            }
-                        };
-                        let entry_path = match entry.path() {
-                            Ok(p) => p.to_string_lossy().to_string(),
-                            Err(_) => continue,
-                        };
-
-                        if entry_path.trim_start_matches("./") == "conffiles" {
-                            let mut entry = entry;
-                            let mut content = String::new();
-                            if entry.read_to_string(&mut content).is_ok() {
-                                // Parse conffiles - one path per line
-                                return content
-                                    .lines()
-                                    .filter(|line| !line.is_empty() && line.starts_with('/'))
-                                    .map(|line| ConfigFileInfo {
-                                        path: line.trim().to_string(),
-                                        // Debian conffiles always preserve user changes
-                                        noreplace: true,
-                                        ghost: false,
-                                    })
-                                    .collect();
-                            }
-                        }
+    /// Extract conffiles from already-loaded control tarball data.
+    fn extract_conffiles_from_data(control_data: &[u8]) -> Vec<ConfigFileInfo> {
+        let reader = match Self::create_tar_decoder(control_data) { Ok(r) => r, Err(_) => return Vec::new() };
+        let mut archive = Archive::new(reader);
+        if let Ok(entries) = archive.entries() {
+            for entry_result in entries {
+                let entry = match entry_result { Ok(e) => e, Err(_) => continue };
+                let entry_path = match entry.path() { Ok(p) => p.to_string_lossy().to_string(), Err(_) => continue };
+                if entry_path.trim_start_matches("./") == "conffiles" {
+                    let mut entry = entry;
+                    let mut content = String::new();
+                    if entry.read_to_string(&mut content).is_ok() {
+                        return content.lines()
+                            .filter(|line| !line.is_empty() && line.starts_with('/'))
+                            .map(|line| ConfigFileInfo { path: line.trim().to_string(), noreplace: true, ghost: false })
+                            .collect();
                     }
                 }
-
-                break;
             }
         }
-
         Vec::new()
     }
 
-    /// Extract file list from data.tar.*
-    fn extract_file_list(path: &str) -> Result<Vec<PackageFile>> {
-        for name in DATA_TAR_NAMES {
-            if let Ok(tar_data) = Self::extract_ar_file(path, name) {
-                let reader = Self::create_tar_decoder(&tar_data)?;
-                let mut archive = Archive::new(reader);
-                let mut files = Vec::new();
-
-                for entry in archive
-                    .entries()
-                    .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
-                {
-                    let entry = entry
-                        .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
-
-                    let entry_path = entry
-                        .path()
-                        .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
-
-                    // Skip directories
-                    if entry.header().entry_type().is_dir() {
-                        continue;
-                    }
-
-                    let size = entry
-                        .header()
-                        .size()
-                        .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
-
-                    let mode = entry
-                        .header()
-                        .mode()
-                        .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
-
-                    files.push(PackageFile {
-                        path: normalize_path(&entry_path).map_err(|e| {
-                            Error::InitError(format!("Path normalization failed: {}", e))
-                        })?,
-                        size: size as i64,
-                        mode: mode as i32,
-                        sha256: None,
-                    });
-                }
-
-                return Ok(files);
-            }
-        }
-
-        Err(Error::InitError(
-            "Could not find or extract data.tar from DEB package".to_string(),
-        ))
-    }
-
-    /// Convert dependency list to Dependency structs
+        /// Convert dependency list to Dependency structs
     fn convert_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
             .map(|dep| {
@@ -418,7 +311,10 @@ impl PackageFormat for DebPackage {
         debug!("Parsing Debian package: {}", path);
 
         // Extract and parse control file
-        let control_content = Self::extract_control_file(path)?;
+        let (control_data, data_tar_data) = Self::extract_ar_members(path)?;
+
+        // Parse control file from control tarball
+        let control_content = Self::parse_control_tar(&control_data)?;
         let control = Self::parse_control(&control_content)?;
 
         let name = control.name.ok_or_else(|| {
@@ -430,7 +326,7 @@ impl PackageFormat for DebPackage {
         })?;
 
         // Extract file list
-        let files = Self::extract_file_list(path)?;
+        let files = Self::parse_data_tar(&data_tar_data)?;
 
         // Convert dependencies
         let mut dependencies = Vec::new();
@@ -452,8 +348,8 @@ impl PackageFormat for DebPackage {
         ));
 
         // Extract maintainer scripts and conffiles
-        let scriptlets = Self::extract_maintainer_scripts(path);
-        let config_files = Self::extract_conffiles(path);
+        let scriptlets = Self::extract_maintainer_scripts_from_data(&control_data);
+        let config_files = Self::extract_conffiles_from_data(&control_data);
 
         debug!(
             "Parsed DEB package: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
@@ -521,73 +417,68 @@ impl PackageFormat for DebPackage {
             self.meta.package_path().to_str().ok_or_else(|| {
                 Error::InitError("Package path contains invalid UTF-8".to_string())
             })?;
-        for name in DATA_TAR_NAMES {
-            if let Ok(tar_data) = Self::extract_ar_file(path_str, name) {
-                let reader = Self::create_tar_decoder(&tar_data)?;
-                let mut archive = Archive::new(reader);
-                let mut extracted_files = Vec::new();
+        // Use single-pass AR extraction, then extract files from data tar
+        let (_control_data, data_tar_data) = Self::extract_ar_members(path_str)?;
 
-                for entry in archive
-                    .entries()
-                    .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
-                {
-                    let mut entry = entry
-                        .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+        let reader = Self::create_tar_decoder(&data_tar_data)?;
+        let mut archive = Archive::new(reader);
+        let mut extracted_files = Vec::new();
 
-                    let entry_path = entry
-                        .path()
-                        .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
+        for entry in archive
+            .entries()
+            .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
+        {
+            let mut entry = entry
+                .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
-                    // Skip directories
-                    if entry.header().entry_type().is_dir() {
-                        continue;
-                    }
+            let entry_path = entry
+                .path()
+                .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
+                .to_string_lossy()
+                .to_string();
 
-                    let size = entry
-                        .header()
-                        .size()
-                        .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
-
-                    // Check file size using shared utility
-                    if !check_file_size(&entry_path, size) {
-                        continue;
-                    }
-
-                    let mode = entry
-                        .header()
-                        .mode()
-                        .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
-
-                    // Read file content
-                    let mut content = Vec::new();
-                    entry.read_to_end(&mut content).map_err(|e| {
-                        Error::InitError(format!("Failed to read file content: {}", e))
-                    })?;
-
-                    // Compute SHA-256 using shared utility
-                    let hash = hash::sha256(&content);
-
-                    extracted_files.push(ExtractedFile {
-                        path: normalize_path(&entry_path).map_err(|e| {
-                            Error::InitError(format!("Path normalization failed: {}", e))
-                        })?,
-                        content,
-                        size: size as i64,
-                        mode: mode as i32,
-                        sha256: Some(hash),
-                    });
-                }
-
-                debug!("Extracted {} files from DEB package", extracted_files.len());
-                return Ok(extracted_files);
+            // Skip directories
+            if entry.header().entry_type().is_dir() {
+                continue;
             }
+
+            let size = entry
+                .header()
+                .size()
+                .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
+
+            // Check file size using shared utility
+            if !check_file_size(&entry_path, size) {
+                continue;
+            }
+
+            let mode = entry
+                .header()
+                .mode()
+                .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
+
+            // Read file content
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).map_err(|e| {
+                Error::InitError(format!("Failed to read file content: {}", e))
+            })?;
+
+            // Compute SHA-256 using shared utility
+            let hash = hash::sha256(&content);
+
+            extracted_files.push(ExtractedFile {
+                path: normalize_path(&entry_path).map_err(|e| {
+                    Error::InitError(format!("Path normalization failed: {}", e))
+                })?,
+                content,
+                size: size as i64,
+                mode: mode as i32,
+                sha256: Some(hash),
+            });
         }
 
-        Err(Error::InitError(
-            "Could not find or extract data.tar from DEB package".to_string(),
-        ))
+        debug!("Extracted {} files from DEB package", extracted_files.len());
+        Ok(extracted_files)
     }
 
     fn to_trove(&self) -> Trove {

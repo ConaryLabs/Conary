@@ -77,7 +77,8 @@ impl RulesEngine {
         let mut compiled = Vec::with_capacity(rules.len());
         for rule in rules {
             let name_regex = if let Some(ref pat) = rule.namepat {
-                let re = Regex::new(pat)
+                let anchored = anchor_regex(pat);
+                let re = Regex::new(&anchored)
                     .map_err(|e| Error::ParseError(format!("Invalid regex '{pat}': {e}")))?;
                 Some(re)
             } else {
@@ -195,6 +196,21 @@ impl RulesEngine {
     pub fn rules(&self) -> impl Iterator<Item = &Rule> {
         self.compiled.iter().map(|c| &c.rule)
     }
+}
+
+/// Ensure a regex pattern is anchored at both ends.
+///
+/// Unanchored patterns could match substrings, leading to unexpected
+/// canonical name mappings. This adds `^` and `$` if not already present.
+fn anchor_regex(pat: &str) -> String {
+    let mut result = pat.to_string();
+    if !result.starts_with('^') {
+        result.insert(0, '^');
+    }
+    if !result.ends_with('$') {
+        result.push('$');
+    }
+    result
 }
 
 #[cfg(test)]

@@ -94,9 +94,13 @@ pub fn cmd_system_takeover(
     // Pre-flight safety checks
     preflight_checks()?;
 
-    // Open database and build the plan
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
-    let plan = plan_takeover(&conn)?;
+    // Open database and build the plan, then drop connection so cmd_adopt
+    // can operate on a fresh connection. This prevents stale DB state after
+    // bulk adoption.
+    let plan = {
+        let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+        plan_takeover(&conn)?
+    };
 
     // Print inventory summary
     println!("System inventory:");
@@ -157,8 +161,10 @@ pub fn cmd_system_takeover(
         info!("Adoption complete");
     }
 
-    // Step 2: Build generation
+    // Step 2: Build generation (reopen DB to see all adopted packages)
     println!("[2/4] Building initial generation ...");
+    let conn =
+        conary_core::db::open(db_path).context("Failed to open database for generation build")?;
     let gen_number =
         build_generation(&conn, db_path, "System takeover -- initial generation")?;
     info!("Built generation {gen_number}");

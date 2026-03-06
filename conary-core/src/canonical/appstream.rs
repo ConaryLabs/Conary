@@ -225,12 +225,12 @@ pub fn ingest_appstream(
     distro: &str,
 ) -> Result<usize> {
     // Wrap in a transaction for atomicity and performance (avoids per-statement autocommit)
-    conn.execute_batch("BEGIN")?;
-    let result = ingest_appstream_inner(conn, components, distro);
+    let tx = conn.unchecked_transaction()?;
+    let result = ingest_appstream_inner(&tx, components, distro);
     if result.is_ok() {
-        conn.execute_batch("COMMIT")?;
+        tx.commit()?;
     } else {
-        let _ = conn.execute_batch("ROLLBACK");
+        drop(tx);
     }
     result
 }

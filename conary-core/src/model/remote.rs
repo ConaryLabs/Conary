@@ -244,14 +244,10 @@ pub fn fetch_remote_collection(
     // Verify content hash
     let computed_hash = hash::sha256_prefixed(&bytes);
     if !data.content_hash.is_empty() && computed_hash != data.content_hash {
-        warn!(
-            expected = %data.content_hash,
-            computed = %computed_hash,
-            "Content hash mismatch for remote collection '{}'",
-            name
-        );
-        // Log warning but don't fail — the server may compute the hash differently
-        // (e.g. over canonical form vs wire bytes)
+        return Err(ModelError::RemoteFetchError(format!(
+            "Content hash mismatch for remote collection '{}': expected {}, computed {}",
+            name, data.content_hash, computed_hash
+        )));
     }
 
     // Cache the result
@@ -305,6 +301,23 @@ pub fn fetch_and_verify_remote_collection(
         debug!(name = %name, label = %label, "Using cached remote collection");
         let data: CollectionData = serde_json::from_str(&cached.data_json)
             .map_err(|e| ModelError::RemoteFetchError(format!("Corrupt cache entry: {e}")))?;
+
+        // Re-verify signature on cached data when signatures are required
+        if require_signatures {
+            if let Some(ref sig_bytes) = cached.signature {
+                let verified = verify_against_trusted_keys(&data, sig_bytes, trusted_keys)?;
+                if !verified {
+                    return Err(ModelError::RemoteFetchError(format!(
+                        "Cached signature for collection '{name}' did not match any trusted key"
+                    )));
+                }
+            } else {
+                return Err(ModelError::RemoteFetchError(format!(
+                    "No cached signature for collection '{name}' and signatures are required"
+                )));
+            }
+        }
+
         return Ok(data.to_fetched_collection());
     }
 
@@ -340,11 +353,10 @@ pub fn fetch_and_verify_remote_collection(
     // Verify content hash
     let computed_hash = hash::sha256_prefixed(&bytes);
     if !data.content_hash.is_empty() && computed_hash != data.content_hash {
-        warn!(
-            expected = %data.content_hash,
-            computed = %computed_hash,
-            "Content hash mismatch for remote collection '{name}'",
-        );
+        return Err(ModelError::RemoteFetchError(format!(
+            "Content hash mismatch for remote collection '{name}': expected {}, computed {}",
+            data.content_hash, computed_hash
+        )));
     }
 
     // Attempt to fetch signature

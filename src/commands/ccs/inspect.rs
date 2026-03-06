@@ -72,11 +72,12 @@ pub fn cmd_ccs_verify(
     } else if allow_unsigned {
         TrustPolicy::permissive()
     } else {
-        // Default policy: allow unsigned but warn
-        TrustPolicy {
-            allow_unsigned: true,
-            ..Default::default()
-        }
+        // Default policy: reject unsigned packages (security default)
+        tracing::warn!(
+            "No trust policy file specified. Unsigned packages will be rejected. \
+             Use --allow-unsigned to override."
+        );
+        TrustPolicy::default()
     };
 
     // Run verification

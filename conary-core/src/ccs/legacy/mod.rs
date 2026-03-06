@@ -97,9 +97,9 @@ impl CommonHookGenerator {
 
         for group in &hooks.groups {
             let flags = if group.system { "--system " } else { "" };
+            let name = shell_escape(&group.name);
             commands.push(format!(
-                "getent group {} >/dev/null || groupadd {}{}",
-                group.name, flags, group.name
+                "getent group {name} >/dev/null || groupadd {flags}{name}"
             ));
         }
 
@@ -109,15 +109,15 @@ impl CommonHookGenerator {
                 flags.push("--system".to_string());
             }
             if let Some(home) = &user.home {
-                flags.push(format!("--home-dir {}", home));
+                flags.push(format!("--home-dir {}", shell_escape(home)));
             }
             if let Some(shell) = &user.shell {
-                flags.push(format!("--shell {}", shell));
+                flags.push(format!("--shell {}", shell_escape(shell)));
             } else if user.system {
                 flags.push("--shell /usr/sbin/nologin".to_string());
             }
             if let Some(group) = &user.group {
-                flags.push(format!("--gid {}", group));
+                flags.push(format!("--gid {}", shell_escape(group)));
             }
 
             let flags_str = if flags.is_empty() {
@@ -126,9 +126,9 @@ impl CommonHookGenerator {
                 format!("{} ", flags.join(" "))
             };
 
+            let name = shell_escape(&user.name);
             commands.push(format!(
-                "getent passwd {} >/dev/null || useradd {}{}",
-                user.name, flags_str, user.name
+                "getent passwd {name} >/dev/null || useradd {flags_str}{name}"
             ));
         }
 
@@ -142,7 +142,10 @@ impl CommonHookGenerator {
         for dir in &hooks.directories {
             commands.push(format!(
                 "install -d -m {} -o {} -g {} {}",
-                dir.mode, dir.owner, dir.group, dir.path
+                shell_escape(&dir.mode),
+                shell_escape(&dir.owner),
+                shell_escape(&dir.group),
+                shell_escape(&dir.path),
             ));
         }
 
@@ -156,15 +159,15 @@ impl CommonHookGenerator {
         for unit in &hooks.systemd {
             if unit.enable && enable {
                 // Only enable if requested
+                let unit_name = shell_escape(&unit.unit);
                 commands.push(format!(
-                    "if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload; systemctl enable {}; fi",
-                    unit.unit
+                    "if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload; systemctl enable {unit_name}; fi"
                 ));
             } else if !enable {
                 // Stop on removal
+                let unit_name = shell_escape(&unit.unit);
                 commands.push(format!(
-                    "if command -v systemctl >/dev/null 2>&1; then systemctl stop {} 2>/dev/null || true; fi",
-                    unit.unit
+                    "if command -v systemctl >/dev/null 2>&1; then systemctl stop {unit_name} 2>/dev/null || true; fi"
                 ));
             }
         }
@@ -192,18 +195,27 @@ impl CommonHookGenerator {
         let mut commands = Vec::new();
 
         for sysctl in &hooks.sysctl {
+            let key = shell_escape(&sysctl.key);
+            let value = shell_escape(&sysctl.value);
             if sysctl.only_if_lower {
                 commands.push(format!(
-                    "current=$(sysctl -n {} 2>/dev/null || echo 0); if [ \"$current\" -lt {} ]; then sysctl -w {}={}; fi",
-                    sysctl.key, sysctl.value, sysctl.key, sysctl.value
+                    "current=$(sysctl -n {key} 2>/dev/null || echo 0); if [ \"$current\" -lt {value} ]; then sysctl -w {key}={value}; fi"
                 ));
             } else {
-                commands.push(format!("sysctl -w {}={}", sysctl.key, sysctl.value));
+                commands.push(format!("sysctl -w {key}={value}"));
             }
         }
 
         commands
     }
+}
+
+/// Escape a string for safe use in shell commands.
+///
+/// Wraps the value in single quotes and escapes any embedded single quotes
+/// using the `'\''` idiom, which is safe against shell injection.
+pub fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\'\''"))
 }
 
 /// Map a CCS dependency to a format-specific package name

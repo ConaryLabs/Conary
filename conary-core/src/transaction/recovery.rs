@@ -248,7 +248,35 @@ pub fn rollback_transaction(
                         let _ = fs::create_dir_all(parent);
                     }
 
-                    // Check if backup is a symlink marker
+                    // Check for symlink sidecar file (new format)
+                    let sidecar_path = backup_path.with_extension("symlink-target");
+                    if sidecar_path.exists()
+                        && let Ok(target_bytes) = fs::read(&sidecar_path)
+                    {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::ffi::OsStrExt;
+                            let target = std::ffi::OsStr::from_bytes(&target_bytes);
+                            let target_str = target.to_string_lossy();
+                            if sanitize_path(&*target_str).is_err() {
+                                log::warn!(
+                                    "Refusing to restore symlink with unsafe target {:?}",
+                                    final_path
+                                );
+                                continue;
+                            }
+                            if let Err(e) = std::os::unix::fs::symlink(target, &final_path) {
+                                log::warn!(
+                                    "Failed to restore symlink {:?}: {}",
+                                    final_path,
+                                    e
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Legacy: check if backup is a symlink marker (old format)
                     #[allow(clippy::collapsible_if)]
                     if backup_path.is_file() {
                         if let Ok(content) = fs::read_to_string(backup_path) {

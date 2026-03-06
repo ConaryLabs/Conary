@@ -213,7 +213,11 @@ impl PackageFormat for RpmPackage {
             version
         };
 
-        let architecture = pkg.metadata.get_arch().ok().map(|s| s.to_string());
+        let architecture = pkg
+            .metadata
+            .get_arch()
+            .ok()
+            .map(|s| crate::packages::common::normalize_architecture(s).to_string());
         let description = pkg.metadata.get_description().ok().map(|s| s.to_string());
 
         // Extract provenance information
@@ -292,12 +296,14 @@ impl PackageFormat for RpmPackage {
             self.meta.package_path()
         );
 
-        let file = File::open(self.meta.package_path())
-            .map_err(|e| Error::InitError(format!("Failed to open RPM file: {}", e)))?;
-        let mut reader = BufReader::new(file);
+        // Read entire file into memory to avoid TOCTOU (file could change between
+        // metadata parse and content extraction)
+        let data = std::fs::read(self.meta.package_path())
+            .map_err(|e| Error::InitError(format!("Failed to read RPM file: {}", e)))?;
+        let mut cursor = std::io::Cursor::new(&data);
 
         // Parse the package - this gives us access to the payload content
-        let pkg = Package::parse(&mut reader)
+        let pkg = Package::parse(&mut cursor)
             .map_err(|e| Error::InitError(format!("Failed to parse RPM: {}", e)))?;
 
         // Get the compressed payload from the Package struct

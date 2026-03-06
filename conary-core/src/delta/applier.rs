@@ -10,6 +10,9 @@ use std::io::Read;
 use std::path::Path;
 use tracing::{debug, info};
 
+/// Maximum size for decompressed delta output (2 GiB)
+const MAX_DELTA_OUTPUT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Delta applier to reconstruct new version from old version + delta
 pub struct DeltaApplier {
     cas: CasStore,
@@ -80,7 +83,7 @@ impl DeltaApplier {
         Ok(actual_hash)
     }
 
-    /// Decompress data using dictionary decompression
+    /// Decompress data using dictionary decompression with size limit
     fn decompress_with_dictionary(&self, compressed: &[u8], dictionary: &[u8]) -> Result<Vec<u8>> {
         // Create decoder dictionary from old version (copied for 'static lifetime)
         let decoder_dict = zstd::dict::DecoderDictionary::copy(dictionary);
@@ -90,9 +93,22 @@ impl DeltaApplier {
             .map_err(|e| Error::DeltaError(format!("Failed to create decoder: {}", e)))?;
 
         let mut decompressed = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed)
-            .map_err(|e| Error::DeltaError(format!("Failed to read decompressed data: {}", e)))?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = decoder
+                .read(&mut buf)
+                .map_err(|e| Error::DeltaError(format!("Failed to read decompressed data: {}", e)))?;
+            if n == 0 {
+                break;
+            }
+            decompressed.extend_from_slice(&buf[..n]);
+            if decompressed.len() as u64 > MAX_DELTA_OUTPUT_SIZE {
+                return Err(Error::DeltaError(format!(
+                    "Delta output exceeds maximum size limit ({} bytes)",
+                    MAX_DELTA_OUTPUT_SIZE
+                )));
+            }
+        }
 
         Ok(decompressed)
     }

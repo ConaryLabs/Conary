@@ -485,7 +485,13 @@ impl Sandbox {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env("HOME", "/root")
+            .env("TERM", "dumb")
+            .env("LANG", "C.UTF-8")
+            .env("SHELL", "/bin/sh");
 
         for (key, value) in env {
             cmd.env(*key, *value);
@@ -665,7 +671,15 @@ impl Sandbox {
 
         // Execute the script
         let mut cmd = Command::new(interpreter);
-        cmd.arg(script_path).args(args).stdin(Stdio::null());
+        cmd.arg(script_path)
+            .args(args)
+            .stdin(Stdio::null())
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env("HOME", "/root")
+            .env("TERM", "dumb")
+            .env("LANG", "C.UTF-8")
+            .env("SHELL", "/bin/sh");
 
         for (key, value) in env {
             cmd.env(*key, *value);
@@ -725,19 +739,61 @@ impl Sandbox {
             }
         }
 
-        // Use chroot instead of pivot_root (simpler and more portable)
-        unsafe {
-            let root_cstr = std::ffi::CString::new(root.to_string_lossy().as_ref())
-                .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
-            if libc::chroot(root_cstr.as_ptr()) != 0 {
-                return Err(Error::ScriptletError("chroot failed".to_string()));
-            }
-            if libc::chdir(c"/".as_ptr()) != 0 {
-                return Err(Error::ScriptletError(
-                    "chdir after chroot failed".to_string(),
-                ));
+        // Try pivot_root first (more secure than chroot -- cannot be escaped
+        // from within a mount namespace). Fall back to chroot if pivot_root fails.
+        if let Err(e) = self.try_pivot_root(root) {
+            // pivot_root failed -- fall back to chroot with a warning
+            warn!(
+                "pivot_root failed ({}), falling back to chroot. \
+                 This is less secure -- chroot can be escaped by a privileged process.",
+                e
+            );
+            unsafe {
+                let root_cstr = std::ffi::CString::new(root.to_string_lossy().as_ref())
+                    .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
+                if libc::chroot(root_cstr.as_ptr()) != 0 {
+                    return Err(Error::ScriptletError("chroot failed".to_string()));
+                }
+                if libc::chdir(c"/".as_ptr()) != 0 {
+                    return Err(Error::ScriptletError(
+                        "chdir after chroot failed".to_string(),
+                    ));
+                }
             }
         }
+
+        Ok(())
+    }
+
+    /// Attempt to use pivot_root for stronger filesystem isolation.
+    ///
+    /// pivot_root swaps the root filesystem atomically and is not escapable
+    /// from within a mount namespace. Steps:
+    /// 1. Bind-mount the new root onto itself (pivot_root requires a mount point)
+    /// 2. Create a temporary old_root directory
+    /// 3. Call pivot_root(new_root, old_root)
+    /// 4. Unmount old_root and clean up
+    fn try_pivot_root(&self, root: &Path) -> Result<()> {
+        // pivot_root requires the new root to be a mount point
+        mount::<Path, Path, str, str>(Some(root), root, None, MsFlags::MS_BIND, None)
+            .map_err(|e| Error::ScriptletError(format!("bind mount for pivot_root: {e}")))?;
+
+        let old_root = root.join(".old_root");
+        std::fs::create_dir_all(&old_root)
+            .map_err(|e| Error::ScriptletError(format!("create old_root dir: {e}")))?;
+
+        // pivot_root(new_root, put_old)
+        nix::unistd::pivot_root(root, &old_root)
+            .map_err(|e| Error::ScriptletError(format!("pivot_root failed: {e}")))?;
+
+        std::env::set_current_dir("/")
+            .map_err(|e| Error::ScriptletError(format!("chdir / after pivot_root: {e}")))?;
+
+        // Unmount old root
+        nix::mount::umount2(&std::path::PathBuf::from("/.old_root"), nix::mount::MntFlags::MNT_DETACH)
+            .map_err(|e| Error::ScriptletError(format!("umount old_root: {e}")))?;
+
+        let _ = std::fs::remove_dir("/.old_root");
 
         Ok(())
     }

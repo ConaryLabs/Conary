@@ -39,8 +39,8 @@ use fs2::FileExt;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io;
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
@@ -89,6 +89,64 @@ pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Validate that a symlink target does not escape the install root.
+///
+/// Absolute targets are normalized and checked against `install_root`.
+/// Relative targets with `..` components are resolved from the link's parent directory.
+fn validate_symlink_target_for_root(
+    install_root: &Path,
+    link_path: &Path,
+    target: &Path,
+) -> crate::Result<()> {
+    if target.is_absolute() {
+        let mut normalized = PathBuf::from("/");
+        for component in target.components() {
+            match component {
+                Component::Normal(c) => normalized.push(c),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    normalized = PathBuf::from("/");
+                }
+            }
+        }
+        if !normalized.starts_with(install_root) {
+            return Err(crate::Error::PathTraversal(format!(
+                "Symlink target escapes install root: {}",
+                target.display()
+            )));
+        }
+    } else {
+        let has_parent_traversal = target
+            .components()
+            .any(|c| matches!(c, Component::ParentDir));
+        if has_parent_traversal {
+            let resolved_link = safe_join(install_root, link_path)?;
+            let link_parent = resolved_link.parent().unwrap_or(install_root);
+            let mut resolved = link_parent.to_path_buf();
+            for component in target.components() {
+                match component {
+                    Component::Normal(c) => resolved.push(c),
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    Component::Prefix(_) | Component::RootDir => {}
+                }
+            }
+            if !resolved.starts_with(install_root) {
+                return Err(crate::Error::PathTraversal(format!(
+                    "Symlink target escapes install root: {}",
+                    target.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Transaction engine configuration
@@ -622,11 +680,17 @@ impl<'a> Transaction<'a> {
             // Handle different file types
             let metadata = fs::symlink_metadata(&source)?;
             if metadata.is_symlink() {
-                // Backup symlink target
+                // Backup symlink target as sidecar file for rollback safety
                 let target = fs::read_link(&source)?;
-                // Store symlink info as a special file
-                let symlink_info = format!("SYMLINK:{}", target.display());
-                fs::write(&backup_path, symlink_info)?;
+                let meta_path = backup_path.with_extension("symlink-target");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    fs::write(&meta_path, target.as_os_str().as_bytes())?;
+                }
+                #[cfg(not(unix))]
+                fs::write(&meta_path, target.to_string_lossy().as_bytes())?;
+                fs::write(&backup_path, b"")?;
             } else if metadata.is_dir() {
                 // For directories, we just note they exist
                 fs::create_dir_all(&backup_path)?;
@@ -686,17 +750,30 @@ impl<'a> Transaction<'a> {
             }
 
             if let Some(ref target) = stage_info.symlink_target {
+                // Validate symlink target does not escape install root
+                validate_symlink_target_for_root(
+                    &self.engine.config.root,
+                    &stage_info.path,
+                    target,
+                )?;
+
                 // Create symlink in stage area
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(target, &stage_path)?;
                 #[cfg(not(unix))]
                 fs::write(&stage_path, format!("SYMLINK:{}", target.display()))?;
             } else {
-                // Try hardlink from CAS, fall back to copy
+                // Try hardlink from CAS, fall back to copy with fsync
                 let cas_path = self.engine.cas.hash_to_path(&stage_info.hash);
                 if fs::hard_link(&cas_path, &stage_path).is_err() {
                     let content = self.engine.cas.retrieve(&stage_info.hash)?;
-                    fs::write(&stage_path, content)?;
+                    let staged_file = File::create(&stage_path)?;
+                    {
+                        let mut writer = io::BufWriter::new(&staged_file);
+                        writer.write_all(&content)?;
+                        writer.flush()?;
+                    }
+                    staged_file.sync_all()?;
                 }
 
                 // Set permissions

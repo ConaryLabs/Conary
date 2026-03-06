@@ -305,6 +305,13 @@ pub fn download_delta(
 ///
 /// Uses the shared hash module for consistent SHA-256 verification.
 pub fn verify_checksum(path: &Path, expected: &str) -> Result<()> {
+    if expected.is_empty() {
+        return Err(Error::ChecksumMismatch {
+            expected: "<empty>".to_string(),
+            actual: "checksum verification skipped - empty checksum is not allowed".to_string(),
+        });
+    }
+
     debug!("Verifying checksum for {}", path.display());
 
     crate::hash::verify_file_sha256(path, expected).map_err(|e| Error::ChecksumMismatch {

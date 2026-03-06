@@ -67,10 +67,33 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Generate a canonical JSON representation for signing
-/// (deterministic serialization via serde_json)
+/// Generate a canonical JSON representation for signing.
+///
+/// Recursively sorts all JSON object keys to ensure deterministic output
+/// regardless of HashMap iteration order.
 fn canonical_json(data: &CollectionData) -> String {
-    serde_json::to_string(data).expect("CollectionData should always serialize")
+    let value = serde_json::to_value(data).expect("CollectionData should always serialize");
+    let sorted = sort_json_keys(value);
+    serde_json::to_string(&sorted).expect("sorted JSON should always serialize")
+}
+
+/// Recursively sort all object keys in a JSON value for deterministic serialization.
+fn sort_json_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: serde_json::Map<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| (k, sort_json_keys(v)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect();
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(sort_json_keys).collect())
+        }
+        other => other,
+    }
 }
 
 /// Get the public key ID (hex-encoded first 8 bytes of public key)

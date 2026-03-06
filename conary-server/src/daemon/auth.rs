@@ -96,19 +96,24 @@ impl PeerCredentials {
     ///
     /// Checks the peer's primary GID and supplementary groups for
     /// wheel (10) or sudo (27). Supplementary groups are read from
-    /// `/proc/{pid}/status` to avoid heavy dependencies.
+    /// `/proc/{pid}/status` with UID cross-validation to mitigate
+    /// PID reuse races.
     pub fn is_admin_group(&self) -> bool {
-        // wheel group is typically GID 10
-        // sudo group is typically GID 27
         let admin_gids: &[u32] = &[10, 27];
 
-        // Check primary GID first (fast path)
         if admin_gids.contains(&self.gid) {
             return true;
         }
 
-        // Check supplementary groups via /proc/{pid}/status
-        if let Ok(supplementary) = Self::read_supplementary_groups(self.pid) {
+        if let Ok((proc_uid, supplementary)) = Self::read_proc_status(self.pid) {
+            if proc_uid != self.uid {
+                tracing::warn!(
+                    "PID reuse detected: SO_PEERCRED uid={} but /proc/{}/status uid={}. \
+                     Denying supplementary group check.",
+                    self.uid, self.pid, proc_uid
+                );
+                return false;
+            }
             for gid in &supplementary {
                 if admin_gids.contains(gid) {
                     return true;
@@ -119,24 +124,31 @@ impl PeerCredentials {
         false
     }
 
-    /// Read supplementary group IDs from `/proc/{pid}/status`
+    /// Read UID and supplementary group IDs from `/proc/{pid}/status`
     ///
-    /// Parses the `Groups:` line which contains space-separated GIDs.
-    /// Returns an empty vec on any error (non-Linux, process gone, etc.).
-    fn read_supplementary_groups(pid: u32) -> std::io::Result<Vec<u32>> {
+    /// Returns (real_uid, supplementary_groups). The UID is cross-validated
+    /// against SO_PEERCRED to detect PID reuse races.
+    fn read_proc_status(pid: u32) -> std::io::Result<(u32, Vec<u32>)> {
         let status_path = format!("/proc/{}/status", pid);
         let contents = std::fs::read_to_string(status_path)?;
 
+        let mut uid: Option<u32> = None;
+        let mut groups = Vec::new();
+
         for line in contents.lines() {
-            if let Some(gids_str) = line.strip_prefix("Groups:") {
-                return Ok(gids_str
+            if let Some(uid_str) = line.strip_prefix("Uid:") {
+                if let Some(real_uid) = uid_str.split_whitespace().next() {
+                    uid = real_uid.parse::<u32>().ok();
+                }
+            } else if let Some(gids_str) = line.strip_prefix("Groups:") {
+                groups = gids_str
                     .split_whitespace()
                     .filter_map(|s| s.parse::<u32>().ok())
-                    .collect());
+                    .collect();
             }
         }
 
-        Ok(Vec::new())
+        Ok((uid.unwrap_or(u32::MAX), groups))
     }
 }
 
@@ -297,11 +309,18 @@ impl AuthChecker {
         if self.trusted_gids.contains(&creds.gid) {
             return Permission::Full;
         }
-        if let Ok(supplementary) = PeerCredentials::read_supplementary_groups(creds.pid) {
-            for gid in &supplementary {
-                if self.trusted_gids.contains(gid) {
-                    return Permission::Full;
+        if let Ok((proc_uid, supplementary)) = PeerCredentials::read_proc_status(creds.pid) {
+            if proc_uid == creds.uid {
+                for gid in &supplementary {
+                    if self.trusted_gids.contains(gid) {
+                        return Permission::Full;
+                    }
                 }
+            } else {
+                tracing::warn!(
+                    "PID reuse detected in AuthChecker: SO_PEERCRED uid={} but /proc/{}/status uid={}",
+                    creds.uid, creds.pid, proc_uid
+                );
             }
         }
 
@@ -511,20 +530,29 @@ mod tests {
     }
 
     #[test]
-    fn test_read_supplementary_groups_current_process() {
-        // Read our own supplementary groups via /proc/self
+    fn test_read_proc_status_current_process() {
         let pid = std::process::id();
-        let groups = PeerCredentials::read_supplementary_groups(pid);
-        // Should succeed for the current process on Linux
-        assert!(groups.is_ok());
+        let result = PeerCredentials::read_proc_status(pid);
+        assert!(result.is_ok());
+        let (uid, _groups) = result.unwrap();
+        assert_eq!(uid, nix::unistd::getuid().as_raw());
     }
 
     #[test]
-    fn test_read_supplementary_groups_nonexistent_pid() {
-        // A very large PID that almost certainly doesn't exist
-        let groups = PeerCredentials::read_supplementary_groups(u32::MAX);
-        // Should return an error (no such process)
-        assert!(groups.is_err());
+    fn test_read_proc_status_nonexistent_pid() {
+        let result = PeerCredentials::read_proc_status(u32::MAX);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pid_reuse_detection() {
+        let pid = std::process::id();
+        let actual_uid = nix::unistd::getuid().as_raw();
+        let fake_uid = actual_uid.wrapping_add(1);
+        let result = PeerCredentials::read_proc_status(pid);
+        assert!(result.is_ok());
+        let (proc_uid, _) = result.unwrap();
+        assert_ne!(proc_uid, fake_uid);
     }
 
     #[test]
