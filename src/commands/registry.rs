@@ -4,7 +4,7 @@
 use anyhow::Result;
 
 pub fn cmd_registry_update(db_path: &str) -> Result<()> {
-    let _conn = conary_core::db::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     println!("Syncing canonical registry...");
     let rules_dir = std::path::Path::new("/usr/share/conary/canonical-rules");
     let local_dir = std::path::Path::new("data/canonical-rules");
@@ -17,6 +17,45 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
     if dir.exists() {
         let engine = conary_core::canonical::rules::RulesEngine::load_from_dir(dir)?;
         println!("Loaded {} curated rules", engine.rule_count());
+
+        // Persist curated rules into the database
+        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
+        use conary_core::canonical::repology::repo_to_distro;
+
+        let tx = conn.unchecked_transaction()?;
+        let mut count = 0;
+        for rule in engine.rules() {
+            if rule.setname.is_empty() || (rule.name.is_empty() && rule.namepat.is_none()) {
+                continue;
+            }
+            let kind = rule.kind.as_deref().unwrap_or("package").to_string();
+            let mut canonical = CanonicalPackage::new(rule.setname.clone(), kind);
+            let id = canonical.insert_or_ignore(&tx)?;
+            let canonical_id = match id {
+                Some(cid) => cid,
+                None => match CanonicalPackage::find_by_name(&tx, &rule.setname)? {
+                    Some(existing) => existing.id.expect("existing row has id"),
+                    None => continue,
+                },
+            };
+
+            // Insert the implementation mapping if this rule has a concrete name + repo
+            if !rule.name.is_empty()
+                && let Some(ref repo) = rule.repo
+            {
+                let distro = repo_to_distro(repo).unwrap_or_else(|| repo.replace('_', "-"));
+                let mut imp = PackageImplementation::new(
+                    canonical_id,
+                    distro,
+                    rule.name.clone(),
+                    "curated".to_string(),
+                );
+                imp.insert_or_ignore(&tx)?;
+            }
+            count += 1;
+        }
+        tx.commit()?;
+        println!("Persisted {count} canonical entries to database");
     } else {
         println!("No canonical rules found at {}", dir.display());
     }

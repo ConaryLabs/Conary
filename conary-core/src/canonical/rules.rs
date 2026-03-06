@@ -28,7 +28,7 @@ pub struct Rule {
     #[serde(default)]
     pub namepat: Option<String>,
 
-    /// Repository to match (e.g., "fedora_41").
+    /// Repository to match (e.g., "fedora_43").
     #[serde(default)]
     pub repo: Option<String>,
 
@@ -152,6 +152,18 @@ impl RulesEngine {
             };
 
             if name_matches && !rule.setname.is_empty() {
+                // Expand regex capture groups ($1, $2, ...) in setname
+                if let Some(ref re) = compiled.name_regex
+                    && let Some(caps) = re.captures(name)
+                {
+                    let mut result = rule.setname.clone();
+                    for i in 1..caps.len() {
+                        if let Some(m) = caps.get(i) {
+                            result = result.replace(&format!("${i}"), m.as_str());
+                        }
+                    }
+                    return Some(result);
+                }
                 return Some(rule.setname.clone());
             }
         }
@@ -177,6 +189,11 @@ impl RulesEngine {
     /// Return the total number of rules loaded.
     pub fn rule_count(&self) -> usize {
         self.compiled.len()
+    }
+
+    /// Iterate over the raw rules.
+    pub fn rules(&self) -> impl Iterator<Item = &Rule> {
+        self.compiled.iter().map(|c| &c.rule)
     }
 }
 
@@ -252,6 +269,11 @@ rules:
         );
         // curl has no matching rule.
         assert_eq!(engine.resolve("curl", None), None);
+        // Regex capture group expansion: libssl-dev -> "ssl"
+        assert_eq!(
+            engine.resolve("libssl-dev", None),
+            Some("ssl".to_string())
+        );
     }
 
     #[test]

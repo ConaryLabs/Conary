@@ -52,8 +52,7 @@ pub fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
     println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");
     println!("  ubuntu-oracular  Ubuntu 24.10 (Oracular Oriole)");
-    println!("  fedora-41        Fedora 41");
-    println!("  fedora-42        Fedora 42");
+    println!("  fedora-43        Fedora 43");
     println!("  debian-12        Debian 12 (Bookworm)");
     println!("  arch             Arch Linux (rolling)");
     Ok(())

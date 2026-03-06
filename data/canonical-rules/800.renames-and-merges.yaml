@@ -8,7 +8,7 @@ rules:
     repo: ubuntu_24_04
   - setname: glibc
     name: glibc
-    repo: fedora_41
+    repo: fedora_43
   - setname: glibc
     name: glibc
     repo: arch
@@ -18,7 +18,7 @@ rules:
     repo: ubuntu_24_04
   - setname: libgcc
     name: libgcc
-    repo: fedora_41
+    repo: fedora_43
   - setname: libgcc
     name: gcc-libs
     repo: arch
@@ -28,7 +28,7 @@ rules:
     repo: ubuntu_24_04
   - setname: libstdc++
     name: libstdc++
-    repo: fedora_41
+    repo: fedora_43
   - setname: libstdc++
     name: gcc-libs
     repo: arch
@@ -39,7 +39,7 @@ rules:
     repo: ubuntu_24_04
   - setname: openssl
     name: openssl-libs
-    repo: fedora_41
+    repo: fedora_43
   - setname: openssl
     name: openssl
     repo: arch
@@ -50,7 +50,7 @@ rules:
     repo: ubuntu_24_04
   - setname: zlib
     name: zlib
-    repo: fedora_41
+    repo: fedora_43
   - setname: zlib
     name: zlib
     repo: arch
@@ -60,7 +60,7 @@ rules:
     repo: ubuntu_24_04
   - setname: zstd
     name: libzstd
-    repo: fedora_41
+    repo: fedora_43
   - setname: zstd
     name: zstd
     repo: arch
@@ -71,7 +71,7 @@ rules:
     repo: ubuntu_24_04
   - setname: libcurl
     name: libcurl
-    repo: fedora_41
+    repo: fedora_43
   - setname: libcurl
     name: curl
     repo: arch
@@ -82,7 +82,7 @@ rules:
     repo: ubuntu_24_04
   - setname: sqlite3
     name: sqlite-libs
-    repo: fedora_41
+    repo: fedora_43
   - setname: sqlite3
     name: sqlite
     repo: arch
@@ -93,7 +93,7 @@ rules:
     repo: ubuntu_24_04
   - setname: systemd
     name: systemd-libs
-    repo: fedora_41
+    repo: fedora_43
   - setname: systemd
     name: systemd-libs
     repo: arch
@@ -101,7 +101,7 @@ rules:
   # Web servers
   - setname: apache-httpd
     name: httpd
-    repo: fedora_41
+    repo: fedora_43
   - setname: apache-httpd
     name: apache2
     repo: ubuntu_24_04

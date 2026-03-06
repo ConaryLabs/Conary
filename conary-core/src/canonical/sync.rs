@@ -18,7 +18,7 @@ use crate::db::models::{CanonicalPackage, PackageImplementation};
 pub struct RepoPackageInfo {
     /// Distro package name (e.g., "httpd", "apache2").
     pub name: String,
-    /// Distro identifier (e.g., "fedora-41", "ubuntu-noble").
+    /// Distro identifier (e.g., "fedora-43", "ubuntu-noble").
     pub distro: String,
     /// Virtual provides / capabilities declared by this package.
     pub provides: Vec<String>,
@@ -47,7 +47,8 @@ pub fn ingest_canonical_mappings(
     let mut unmatched = Vec::new();
 
     for pkg in packages {
-        let resolved = rules.and_then(|engine| engine.resolve(&pkg.name, Some(&pkg.distro)));
+        let repo_id = crate::canonical::repology::distro_to_repo(&pkg.distro);
+        let resolved = rules.and_then(|engine| engine.resolve(&pkg.name, repo_id.as_deref()));
 
         if let Some(canonical_name) = resolved {
             // Determine kind from rules if available.

@@ -56,7 +56,9 @@ pub fn cmd_canonical_unmapped(db_path: &str) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
     let mut stmt = conn.prepare(
         "SELECT t.name FROM troves t
-         WHERE NOT EXISTS (
+         WHERE t.is_collection = 0
+         AND t.is_component = 0
+         AND NOT EXISTS (
              SELECT 1 FROM package_implementations pi WHERE pi.distro_name = t.name
          )
          AND NOT EXISTS (

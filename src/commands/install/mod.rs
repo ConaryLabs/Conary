@@ -86,8 +86,7 @@ pub struct InstallOptions<'a> {
     pub dep_mode: DepMode,
     /// Skip confirmation prompts
     pub yes: bool,
-    /// Install from a specific distro (cross-distro override)
-    #[allow(dead_code)] // Reserved for cross-distro canonical resolution
+    /// Install from a specific distro (cross-distro canonical resolution)
     pub from_distro: Option<String>,
 }
 
@@ -195,8 +194,33 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         force,
         dep_mode,
         yes,
-        from_distro: _,
+        from_distro,
     } = opts;
+
+    // If --from <distro> was specified, resolve the canonical name to that distro's package name
+    let resolved_name: Option<String> = if let Some(ref target_distro) = from_distro {
+        let db_conn = conary_core::db::open(db_path)
+            .context("Failed to open database for canonical resolution")?;
+        if let Some(canonical) = conary_core::db::models::CanonicalPackage::resolve_name(&db_conn, package)? {
+            let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
+                &db_conn,
+                canonical.id.unwrap(),
+            )?;
+            if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
+                info!("Resolved canonical '{}' -> '{}' for {}", package, imp.distro_name, target_distro);
+                Some(imp.distro_name.clone())
+            } else {
+                warn!("No implementation of '{}' found for distro '{}'", package, target_distro);
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let package = resolved_name.as_deref().unwrap_or(package);
+
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) =
         parse_component_spec(package)

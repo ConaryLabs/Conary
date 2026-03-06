@@ -7,7 +7,7 @@ use clap::Subcommand;
 pub enum DistroCommands {
     /// Pin system to a specific distro
     Set {
-        /// Distro name (e.g., "ubuntu-noble", "fedora-41")
+        /// Distro name (e.g., "ubuntu-noble", "fedora-43")
         distro: String,
 
         /// Mixing policy: strict, guarded, permissive

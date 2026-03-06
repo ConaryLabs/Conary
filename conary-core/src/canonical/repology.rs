@@ -99,6 +99,33 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
     Ok(projects)
 }
 
+/// Map a Conary distro identifier to a Repology-style repository ID.
+///
+/// This is the inverse of `repo_to_distro`. Returns `None` for unrecognised distros.
+pub fn distro_to_repo(distro: &str) -> Option<String> {
+    match distro {
+        "arch" => return Some("arch".to_string()),
+        "ubuntu-noble" => return Some("ubuntu_24_04".to_string()),
+        "ubuntu-jammy" => return Some("ubuntu_22_04".to_string()),
+        "opensuse-tumbleweed" => return Some("opensuse_tumbleweed".to_string()),
+        _ => {}
+    }
+
+    // Pattern: fedora-NN -> fedora_NN
+    if let Some(version) = distro.strip_prefix("fedora-")
+        && version.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(format!("fedora_{version}"));
+    }
+
+    // Pattern: opensuse-* -> opensuse_*
+    if let Some(suffix) = distro.strip_prefix("opensuse-") {
+        return Some(format!("opensuse_{suffix}"));
+    }
+
+    None
+}
+
 /// Map a Repology repository ID to a Conary distro identifier.
 ///
 /// Returns `None` for repositories we do not recognise.
