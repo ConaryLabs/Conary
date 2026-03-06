@@ -1,9 +1,5 @@
 # CLAUDE.md
 
-This project uses **Mira** for persistent memory and code intelligence.
-Start sessions with `project(action="start", project_path="/home/peter/Conary")`,
-then `recall("architecture")` and `recall("progress")` before making changes.
-
 ## Build & Test
 
 ```bash
@@ -35,17 +31,26 @@ IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
 - **Flavor**: Build variations (arch, features)
 - **CAS**: Content-addressable storage for files
 
-Database schema is currently **v44** (40+ tables across 44 migrations). See ROADMAP.md for version history.
+Database schema is currently **v45** (40+ tables across 45 migrations). See ROADMAP.md for version history.
 
 ## Tool Selection
 
-STOP before using Grep or Glob. Prefer Mira tools for semantic searches:
-- `semantic_code_search` over Grep for finding code by intent
-- `get_symbols` over grepping for definitions
-- `find_callers` / `find_callees` over grepping function names
-- `recall` before making architectural changes
 - Context7 (`resolve-library-id` then `query-docs`) for external library APIs
-
-Use Grep/Glob only for literal strings, exact filenames, or simple one-off searches.
+- Use Grep/Glob for code searches, exact filenames, or pattern matching
 
 See `.claude/rules/` for detailed tool selection guides and architecture reference.
+
+## Agents
+
+Six composable agents, dispatched by `portage`:
+
+| Agent | Role | Invoke |
+|-------|------|--------|
+| **portage** | Task dispatcher -- classifies and orchestrates | "Use portage to [task]" |
+| **lintian** | Code reviewer (read-only, has memory) | "Use lintian to review [scope]" |
+| **emerge** | Parallel implementer | "Use emerge to fix [findings]" |
+| **valgrind** | Debugger (has memory) | "Use valgrind to debug [issue]" |
+| **autopkgtest** | QA/test hardener | "Use autopkgtest on [scope]" |
+| **sbuild** | Release verifier | "Use sbuild to prep release" |
+
+For most tasks, just describe what you need and let portage pick the pipeline.
