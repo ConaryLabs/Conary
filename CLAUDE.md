@@ -24,6 +24,27 @@ IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
 
 **Rust Standards**: Edition 2024, Rust 1.93, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
 
+## Commit Convention
+
+Use [Conventional Commits](https://www.conventionalcommits.org/). Every commit message MUST start with a type prefix:
+
+| Prefix | When to use | Version bump |
+|--------|-------------|-------------|
+| `feat:` | New feature or capability | Minor |
+| `fix:` | Bug fix | Patch |
+| `docs:` | Documentation only | None |
+| `refactor:` | Code restructure, no behavior change | None |
+| `test:` | Test additions or changes | None |
+| `chore:` | Build, tooling, dependencies | None |
+| `security:` | Security fix | Patch |
+| `perf:` | Performance improvement | Patch |
+
+Add `!` after the type for breaking changes: `feat!: remove legacy API`.
+
+Scopes are optional: `feat(resolver): add SAT backtracking`.
+
+**Release:** Run `./scripts/release.sh [conary|erofs|server|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
+
 ## Architecture Glossary
 
 - **Trove**: Core unit (package, component, collection)
