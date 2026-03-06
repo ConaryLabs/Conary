@@ -38,12 +38,26 @@ pub struct RepologyProject {
 }
 
 /// A single distro implementation within a Repology project.
+///
+/// Mirrors `RepologyPackage` but is not `Deserialize` — constructed from parsed
+/// API responses rather than directly from JSON.
 #[derive(Debug, Clone)]
 pub struct RepologyImplementation {
     pub repo: String,
     pub visiblename: String,
     pub version: String,
     pub status: String,
+}
+
+impl From<RepologyPackage> for RepologyImplementation {
+    fn from(p: RepologyPackage) -> Self {
+        Self {
+            repo: p.repo,
+            visiblename: p.visiblename,
+            version: p.version,
+            status: p.status,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,15 +70,7 @@ pub fn parse_project_response(name: &str, json: &str) -> Result<RepologyProject>
     let packages: Vec<RepologyPackage> =
         serde_json::from_str(json).map_err(|e| Error::ParseError(e.to_string()))?;
 
-    let implementations = packages
-        .into_iter()
-        .map(|p| RepologyImplementation {
-            repo: p.repo,
-            visiblename: p.visiblename,
-            version: p.version,
-            status: p.status,
-        })
-        .collect();
+    let implementations = packages.into_iter().map(RepologyImplementation::from).collect();
 
     Ok(RepologyProject {
         name: name.to_string(),
@@ -81,15 +87,8 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
     let projects = map
         .into_iter()
         .map(|(name, packages)| {
-            let implementations = packages
-                .into_iter()
-                .map(|p| RepologyImplementation {
-                    repo: p.repo,
-                    visiblename: p.visiblename,
-                    version: p.version,
-                    status: p.status,
-                })
-                .collect();
+            let implementations =
+                packages.into_iter().map(RepologyImplementation::from).collect();
             RepologyProject {
                 name,
                 implementations,
@@ -133,9 +132,21 @@ pub fn repo_to_distro(repo: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Async client for the Repology REST API.
+///
+/// Note: Repology enforces strict rate limits (~1 request/second). Callers
+/// should throttle requests when fetching in bulk.
 pub struct RepologyClient {
     client: reqwest::Client,
     base_url: String,
+}
+
+const USER_AGENT: &str = "conary/0.1 (https://conary.io)";
+
+fn build_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .expect("failed to build HTTP client")
 }
 
 impl Default for RepologyClient {
@@ -148,7 +159,7 @@ impl RepologyClient {
     /// Create a new client pointing at the public Repology API.
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_client(),
             base_url: "https://repology.org".to_string(),
         }
     }
@@ -157,40 +168,38 @@ impl RepologyClient {
     /// local mock server).
     pub fn with_base_url(url: &str) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_client(),
             base_url: url.trim_end_matches('/').to_string(),
         }
     }
 
-    /// Fetch a single project by name.
-    pub async fn fetch_project(&self, name: &str) -> Result<RepologyProject> {
-        let url = format!("{}/api/v1/project/{name}", self.base_url);
-        let body = self
-            .client
-            .get(&url)
+    /// Fetch the response body from a URL, checking for HTTP errors.
+    async fn get_text(&self, url: &str) -> Result<String> {
+        self.client
+            .get(url)
             .send()
             .await
             .map_err(|e| Error::DownloadError(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| Error::DownloadError(e.to_string()))?
             .text()
             .await
-            .map_err(|e| Error::DownloadError(e.to_string()))?;
+            .map_err(|e| Error::DownloadError(e.to_string()))
+    }
 
+    /// Fetch a single project by name.
+    pub async fn fetch_project(&self, name: &str) -> Result<RepologyProject> {
+        let encoded = urlencoding::encode(name);
+        let url = format!("{}/api/v1/project/{encoded}", self.base_url);
+        let body = self.get_text(&url).await?;
         parse_project_response(name, &body)
     }
 
     /// Fetch a batch of projects starting at the given name (alphabetical).
     pub async fn fetch_projects_batch(&self, start: &str) -> Result<Vec<RepologyProject>> {
-        let url = format!("{}/api/v1/projects/{start}/", self.base_url);
-        let body = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::DownloadError(e.to_string()))?
-            .text()
-            .await
-            .map_err(|e| Error::DownloadError(e.to_string()))?;
-
+        let encoded = urlencoding::encode(start);
+        let url = format!("{}/api/v1/projects/{encoded}/", self.base_url);
+        let body = self.get_text(&url).await?;
         parse_projects_batch(&body)
     }
 
@@ -219,15 +228,20 @@ impl RepologyClient {
                 continue;
             }
 
-            // Upsert the canonical package
+            // Upsert the canonical package — if it already exists, look up its ID
             let mut canonical = CanonicalPackage::new(
                 project.name.clone(),
                 "package".to_string(),
             );
-            let can_id = canonical.insert_or_ignore(conn)?;
-
-            let Some(can_id) = can_id else {
-                continue;
+            let can_id = match canonical.insert_or_ignore(conn)? {
+                Some(id) => id,
+                None => {
+                    // Already exists — look up by name
+                    match CanonicalPackage::find_by_name(conn, &project.name)? {
+                        Some(existing) => existing.id.expect("existing row has id"),
+                        None => continue,
+                    }
+                }
             };
 
             // Upsert each distro implementation
