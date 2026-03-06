@@ -198,22 +198,25 @@ impl PackageMetadataBuilder {
         self
     }
 
-    /// Build the PackageMetadata
-    ///
-    /// # Panics
-    /// Panics if package_path, name, or version are not set.
-    pub fn build(self) -> PackageMetadata {
-        PackageMetadata {
-            package_path: self.package_path.expect("package_path is required"),
-            name: self.name.expect("name is required"),
-            version: self.version.expect("version is required"),
+    /// Build the PackageMetadata, returning an error if required fields are missing.
+    pub fn build(self) -> crate::error::Result<PackageMetadata> {
+        Ok(PackageMetadata {
+            package_path: self.package_path.ok_or_else(|| {
+                crate::error::Error::InitError("PackageMetadataBuilder: package_path is required".to_string())
+            })?,
+            name: self.name.ok_or_else(|| {
+                crate::error::Error::InitError("PackageMetadataBuilder: name is required".to_string())
+            })?,
+            version: self.version.ok_or_else(|| {
+                crate::error::Error::InitError("PackageMetadataBuilder: version is required".to_string())
+            })?,
             architecture: self.architecture,
             description: self.description,
             files: self.files,
             dependencies: self.dependencies,
             scriptlets: self.scriptlets,
             config_files: self.config_files,
-        }
+        })
     }
 
     /// Try to build the PackageMetadata, returning None if required fields are missing
@@ -259,7 +262,8 @@ mod tests {
             .version("2.0.0")
             .architecture("x86_64")
             .description("A test package")
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(meta.name(), "my-package");
         assert_eq!(meta.version(), "2.0.0");
@@ -275,7 +279,8 @@ mod tests {
             .version("1.2.3")
             .architecture("aarch64")
             .description("Example package")
-            .build();
+            .build()
+            .unwrap();
 
         let trove = meta.to_trove();
 

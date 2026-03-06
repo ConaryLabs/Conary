@@ -143,28 +143,17 @@ impl RulesEngine {
                 }
             }
 
-            // Check name match (exact or regex).
-            let name_matches = if let Some(ref re) = compiled.name_regex {
-                re.is_match(name)
-            } else if !rule.name.is_empty() {
-                rule.name == name
-            } else {
-                false
-            };
-
-            if name_matches && !rule.setname.is_empty() {
-                // Expand regex capture groups ($1, $2, ...) in setname
-                if let Some(ref re) = compiled.name_regex
-                    && let Some(caps) = re.captures(name)
-                {
-                    let mut result = rule.setname.clone();
-                    for i in 1..caps.len() {
-                        if let Some(m) = caps.get(i) {
-                            result = result.replace(&format!("${i}"), m.as_str());
-                        }
+            // Check name match (exact or regex) and expand capture groups.
+            if let Some(ref re) = compiled.name_regex {
+                if let Some(caps) = re.captures(name) {
+                    if !rule.setname.is_empty() {
+                        // Use Captures::expand for correct single-pass group expansion
+                        let mut result = String::new();
+                        caps.expand(&rule.setname, &mut result);
+                        return Some(result);
                     }
-                    return Some(result);
                 }
+            } else if !rule.name.is_empty() && rule.name == name && !rule.setname.is_empty() {
                 return Some(rule.setname.clone());
             }
         }

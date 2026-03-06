@@ -101,31 +101,34 @@ impl AutomationPrompt {
             )?;
         }
 
-        writeln!(stdout)?;
-        writeln!(stdout, "What would you like to do?")?;
-        writeln!(stdout, "  [a] Apply all suggested changes")?;
-        writeln!(stdout, "  [s] Review security updates only")?;
-        writeln!(stdout, "  [d] Show details for all pending actions")?;
-        writeln!(stdout, "  [c] Configure automation settings")?;
-        writeln!(stdout, "  [n] Do nothing (exit)")?;
-        writeln!(stdout)?;
-        write!(stdout, "Choice [a/s/d/c/n]: ")?;
-        stdout.flush()?;
+        loop {
+            writeln!(stdout)?;
+            writeln!(stdout, "What would you like to do?")?;
+            writeln!(stdout, "  [a] Apply all suggested changes")?;
+            writeln!(stdout, "  [s] Review security updates only")?;
+            writeln!(stdout, "  [d] Show details for all pending actions")?;
+            writeln!(stdout, "  [c] Configure automation settings")?;
+            writeln!(stdout, "  [n] Do nothing (exit)")?;
+            writeln!(stdout)?;
+            write!(stdout, "Choice [a/s/d/c/n]: ")?;
+            stdout.flush()?;
 
-        let mut input = String::new();
-        io::stdin().lock().read_line(&mut input)?;
+            let mut input = String::new();
+            io::stdin().lock().read_line(&mut input)?;
 
-        match input.trim().to_lowercase().as_str() {
-            "a" | "apply" | "yes" | "y" => Ok(SummaryResponse::ApplyAll),
-            "s" | "security" => Ok(SummaryResponse::ReviewCategory(
-                AutomationCategory::Security,
-            )),
-            "d" | "details" => Ok(SummaryResponse::ShowDetails),
-            "c" | "config" | "configure" => Ok(SummaryResponse::Configure),
-            "n" | "no" | "exit" | "q" | "" => Ok(SummaryResponse::Exit),
-            _ => {
-                writeln!(stdout, "Unknown option. Please try again.")?;
-                self.show_summary_interactive(summary)
+            match input.trim().to_lowercase().as_str() {
+                "a" | "apply" | "yes" | "y" => return Ok(SummaryResponse::ApplyAll),
+                "s" | "security" => {
+                    return Ok(SummaryResponse::ReviewCategory(
+                        AutomationCategory::Security,
+                    ));
+                }
+                "d" | "details" => return Ok(SummaryResponse::ShowDetails),
+                "c" | "config" | "configure" => return Ok(SummaryResponse::Configure),
+                "n" | "no" | "exit" | "q" | "" => return Ok(SummaryResponse::Exit),
+                _ => {
+                    writeln!(stdout, "Unknown option. Please try again.")?;
+                }
             }
         }
     }
@@ -209,26 +212,27 @@ impl AutomationPrompt {
             writeln!(stdout, "  Deadline: {}", deadline.format("%Y-%m-%d %H:%M"))?;
         }
 
-        writeln!(stdout)?;
-        writeln!(stdout, "  [Y] Yes, apply this change")?;
-        writeln!(stdout, "  [n] No, skip this change")?;
-        writeln!(stdout, "  [d] Defer until later")?;
-        writeln!(stdout, "  [?] Show more details")?;
-        writeln!(stdout)?;
-        write!(stdout, "Apply? [Y/n/d/?]: ")?;
-        stdout.flush()?;
+        loop {
+            writeln!(stdout)?;
+            writeln!(stdout, "  [Y] Yes, apply this change")?;
+            writeln!(stdout, "  [n] No, skip this change")?;
+            writeln!(stdout, "  [d] Defer until later")?;
+            writeln!(stdout, "  [?] Show more details")?;
+            writeln!(stdout)?;
+            write!(stdout, "Apply? [Y/n/d/?]: ")?;
+            stdout.flush()?;
 
-        let mut input = String::new();
-        io::stdin().lock().read_line(&mut input)?;
+            let mut input = String::new();
+            io::stdin().lock().read_line(&mut input)?;
 
-        match input.trim().to_lowercase().as_str() {
-            "y" | "yes" | "" => Ok(ActionDecision::Approved),
-            "n" | "no" => Ok(ActionDecision::Rejected),
-            "d" | "defer" | "later" => Ok(ActionDecision::Deferred { until: None }),
-            "?" | "help" | "details" => Ok(ActionDecision::NeedsDetails),
-            _ => {
-                writeln!(stdout, "Unknown option. Please enter Y, n, d, or ?")?;
-                self.prompt_action_interactive(action)
+            match input.trim().to_lowercase().as_str() {
+                "y" | "yes" | "" => return Ok(ActionDecision::Approved),
+                "n" | "no" => return Ok(ActionDecision::Rejected),
+                "d" | "defer" | "later" => return Ok(ActionDecision::Deferred { until: None }),
+                "?" | "help" | "details" => return Ok(ActionDecision::NeedsDetails),
+                _ => {
+                    writeln!(stdout, "Unknown option. Please enter Y, n, d, or ?")?;
+                }
             }
         }
     }
@@ -283,24 +287,25 @@ impl AutomationPrompt {
             )?;
         }
 
-        writeln!(stdout)?;
-        writeln!(stdout, "  [a] Apply all")?;
-        writeln!(stdout, "  [r] Review each individually")?;
-        writeln!(stdout, "  [s] Skip all")?;
-        writeln!(stdout)?;
-        write!(stdout, "Choice [a/r/s]: ")?;
-        stdout.flush()?;
+        loop {
+            writeln!(stdout)?;
+            writeln!(stdout, "  [a] Apply all")?;
+            writeln!(stdout, "  [r] Review each individually")?;
+            writeln!(stdout, "  [s] Skip all")?;
+            writeln!(stdout)?;
+            write!(stdout, "Choice [a/r/s]: ")?;
+            stdout.flush()?;
 
-        let mut input = String::new();
-        io::stdin().lock().read_line(&mut input)?;
+            let mut input = String::new();
+            io::stdin().lock().read_line(&mut input)?;
 
-        match input.trim().to_lowercase().as_str() {
-            "a" | "all" | "yes" | "y" => Ok(BatchDecision::ApplyAll),
-            "r" | "review" => Ok(BatchDecision::ReviewEach),
-            "s" | "skip" | "n" | "no" | "" => Ok(BatchDecision::Skip),
-            _ => {
-                writeln!(stdout, "Unknown option. Please try again.")?;
-                self.prompt_batch_interactive(actions)
+            match input.trim().to_lowercase().as_str() {
+                "a" | "all" | "yes" | "y" => return Ok(BatchDecision::ApplyAll),
+                "r" | "review" => return Ok(BatchDecision::ReviewEach),
+                "s" | "skip" | "n" | "no" | "" => return Ok(BatchDecision::Skip),
+                _ => {
+                    writeln!(stdout, "Unknown option. Please try again.")?;
+                }
             }
         }
     }

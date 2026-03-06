@@ -25,6 +25,23 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Buffer size for streaming downloads (8 KB)
 const STREAM_BUFFER_SIZE: usize = 8192;
 
+/// Maximum response size for in-memory downloads (100 MB)
+const MAX_BYTES_RESPONSE_SIZE: u64 = 100 * 1024 * 1024;
+
+/// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
+///
+/// Rejects file://, gopher://, and other non-HTTP schemes to prevent SSRF.
+pub fn validate_url_scheme(url: &str) -> Result<()> {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        Ok(())
+    } else {
+        Err(Error::ConfigError(format!(
+            "URL must use http:// or https:// scheme: {}",
+            url
+        )))
+    }
+}
+
 /// Retry policy with exponential backoff and jitter
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -137,6 +154,7 @@ fn is_transient_error(status: reqwest::StatusCode) -> bool {
         status,
         reqwest::StatusCode::BAD_GATEWAY
             | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
             | reqwest::StatusCode::TOO_MANY_REQUESTS
     )
 }
@@ -175,6 +193,7 @@ impl RepositoryClient {
 
     /// Fetch repository metadata from URL with retry support
     pub fn fetch_metadata(&self, url: &str) -> Result<RepositoryMetadata> {
+        validate_url_scheme(url)?;
         let metadata_url = if url.ends_with('/') {
             format!("{url}metadata.json")
         } else {
@@ -243,6 +262,8 @@ impl RepositoryClient {
     /// Returns the response body as bytes, or an error if the download fails.
     /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
     pub fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        validate_url_scheme(url)?;
+
         let response = self
             .client
             .get(url)
@@ -257,9 +278,26 @@ impl RepositoryClient {
             )));
         }
 
+        // Check Content-Length if available to reject oversized responses early
+        if let Some(content_length) = response.content_length() {
+            if content_length > MAX_BYTES_RESPONSE_SIZE {
+                return Err(Error::DownloadError(format!(
+                    "Response too large ({} bytes, max {}): {}",
+                    content_length, MAX_BYTES_RESPONSE_SIZE, url
+                )));
+            }
+        }
+
         let bytes = response
             .bytes()
             .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
+
+        if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
+            return Err(Error::DownloadError(format!(
+                "Response body too large ({} bytes, max {}): {}",
+                bytes.len(), MAX_BYTES_RESPONSE_SIZE, url
+            )));
+        }
 
         Ok(bytes.to_vec())
     }
@@ -347,6 +385,7 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<()> {
+        validate_url_scheme(url)?;
         info!("Downloading {} to {}", url, dest_path.display());
 
         // Create parent directory if it doesn't exist

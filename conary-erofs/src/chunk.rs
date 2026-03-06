@@ -67,6 +67,12 @@ impl ChunkIndex {
 /// - The chunk format value to store in the inode's `i_u` union field
 ///
 /// A zero-byte file produces no chunk entries.
+///
+/// NOTE: Not yet integrated into the builder. The current composefs builder
+/// relies on `trusted.overlay.redirect` xattrs for CAS references rather
+/// than chunk index entries. This function is retained for future use when
+/// chunk-index-based composefs images are needed.
+#[allow(dead_code)]
 pub fn build_chunk_indexes(file_size: u64, chunk_bits: u8) -> (Vec<u8>, u16) {
     let chunk_format = EROFS_CHUNK_FORMAT_INDEXES | (u16::from(chunk_bits) & EROFS_CHUNK_FORMAT_BLKBITS_MASK);
 

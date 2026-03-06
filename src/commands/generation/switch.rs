@@ -68,6 +68,9 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)
+    // WARNING: This overwrites the live /usr. Processes with open file descriptors
+    // under /usr may crash or fail to load libraries. A reboot is recommended
+    // for full consistency (printed at the end of this function).
     let mnt_usr = format!("{staging}/usr");
     if let Err(e) = run_command("mount", &["--bind", &mnt_usr, "/usr"]) {
         // Clean up staging composefs mount before returning error
@@ -84,8 +87,11 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
 
     // Step 3: Rebuild /etc overlay with new lower
     let staging_etc = format!("{staging}/etc");
-    // Unmount existing /etc overlay (may fail if busy, that's ok)
-    let _ = run_command("umount", &["/etc"]);
+    // Unmount existing /etc overlay only if it is currently an overlay mount.
+    // If /etc is not an overlay, unmounting it would leave the system with no /etc.
+    if is_overlay_mount("/etc") {
+        let _ = run_command("umount", &["/etc"]);
+    }
 
     std::fs::create_dir_all("/conary/etc-state/upper")
         .context("Failed to create /etc overlay upper dir")?;
@@ -203,4 +209,17 @@ pub fn current_generation() -> Result<Option<i64>> {
         .with_context(|| format!("Failed to parse generation number from '{component}'"))?;
 
     Ok(Some(gen_number))
+}
+
+/// Check whether the given path is currently an overlay mount by parsing /proc/mounts.
+fn is_overlay_mount(path: &str) -> bool {
+    let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
+        return false;
+    };
+    mounts.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        let fs_type = parts.next();
+        let mount_point = parts.next();
+        mount_point == Some(path) && fs_type == Some("overlay")
+    })
 }

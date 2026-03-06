@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -93,8 +94,8 @@ pub struct JobManager {
     jobs: HashMap<JobId, ConversionJob>,
     /// Map from job key to job ID (for deduplication)
     key_to_id: HashMap<String, JobId>,
-    /// Semaphore to limit concurrent conversions
-    concurrency_semaphore: Semaphore,
+    /// Semaphore to limit concurrent conversions (Arc for use across lock drops)
+    concurrency_semaphore: Arc<Semaphore>,
     /// Maximum concurrent conversions
     max_concurrent: usize,
     /// TTL for completed jobs (1 hour)
@@ -106,7 +107,7 @@ impl JobManager {
         Self {
             jobs: HashMap::new(),
             key_to_id: HashMap::new(),
-            concurrency_semaphore: Semaphore::new(max_concurrent),
+            concurrency_semaphore: Arc::new(Semaphore::new(max_concurrent)),
             max_concurrent,
             job_ttl: Duration::from_secs(3600), // 1 hour
         }
@@ -218,9 +219,11 @@ impl JobManager {
         }
     }
 
-    /// Get the concurrency semaphore for limiting parallel conversions
-    pub fn semaphore(&self) -> &Semaphore {
-        &self.concurrency_semaphore
+    /// Get the concurrency semaphore for limiting parallel conversions.
+    ///
+    /// Returns an `Arc` clone so the permit can outlive the lock guard.
+    pub fn semaphore(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.concurrency_semaphore)
     }
 
     /// Get statistics

@@ -173,7 +173,7 @@ impl DerivedPackage {
     /// Update the derived package
     pub fn update(&self, conn: &Connection) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update derived package without ID".to_string())
+            crate::error::Error::MissingId("Cannot update derived package without ID".to_string())
         })?;
 
         let (suffix, specific) = match &self.version_policy {
@@ -290,7 +290,7 @@ impl DerivedPackage {
     /// Update status
     pub fn set_status(&mut self, conn: &Connection, status: DerivedStatus) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update status without ID".to_string())
+            crate::error::Error::MissingId("Cannot update status without ID".to_string())
         })?;
 
         conn.execute(
@@ -305,7 +305,7 @@ impl DerivedPackage {
     /// Mark as built with the built trove ID
     pub fn mark_built(&mut self, conn: &Connection, built_trove_id: i64) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot mark built without ID".to_string())
+            crate::error::Error::MissingId("Cannot mark built without ID".to_string())
         })?;
 
         conn.execute(
@@ -323,7 +323,7 @@ impl DerivedPackage {
     /// Mark as error with message
     pub fn mark_error(&mut self, conn: &Connection, message: &str) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot mark error without ID".to_string())
+            crate::error::Error::MissingId("Cannot mark error without ID".to_string())
         })?;
 
         conn.execute(
@@ -357,7 +357,7 @@ impl DerivedPackage {
     /// Get patches for this derived package
     pub fn patches(&self, conn: &Connection) -> Result<Vec<DerivedPatch>> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot get patches without ID".to_string())
+            crate::error::Error::MissingId("Cannot get patches without ID".to_string())
         })?;
         DerivedPatch::find_by_derived(conn, id)
     }
@@ -365,7 +365,7 @@ impl DerivedPackage {
     /// Get file overrides for this derived package
     pub fn overrides(&self, conn: &Connection) -> Result<Vec<DerivedOverride>> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot get overrides without ID".to_string())
+            crate::error::Error::MissingId("Cannot get overrides without ID".to_string())
         })?;
         DerivedOverride::find_by_derived(conn, id)
     }

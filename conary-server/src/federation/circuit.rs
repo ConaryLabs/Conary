@@ -58,7 +58,16 @@ impl CircuitBreaker {
         }
     }
 
-    /// Check if the circuit is open (blocking requests)
+    /// Check if the circuit is open (blocking requests).
+    ///
+    /// NOTE: This method takes `&self` and cannot transition the state from
+    /// Open to HalfOpen. When the cooldown elapses, it returns `false`
+    /// (allowing a request through) but the internal state remains `Open`
+    /// until `get_state(&mut self)` is called. The `CircuitBreakerRegistry`
+    /// uses `DashMap` which provides interior mutability, so callers using
+    /// the registry will get correct transitions. Direct callers of this
+    /// method on a standalone `CircuitBreaker` should use `get_state()`
+    /// for accurate state tracking.
     pub fn is_open(&self) -> bool {
         match self.state {
             CircuitState::Closed => false,
@@ -67,7 +76,8 @@ impl CircuitBreaker {
                 if let Some(opened_at) = self.opened_at
                     && opened_at.elapsed() >= self.computed_cooldown
                 {
-                    // Would transition to HalfOpen, but we need mut for that
+                    // Cooldown elapsed - allow a probe request through.
+                    // State transitions to HalfOpen via get_state(&mut self).
                     return false;
                 }
                 true

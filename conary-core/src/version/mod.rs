@@ -39,7 +39,7 @@ impl RpmVersion {
         } else {
             epoch_str
                 .parse::<u64>()
-                .map_err(|e| Error::InitError(format!("Invalid epoch in version '{}': {}", s, e)))?
+                .map_err(|e| Error::VersionParse(format!("Invalid epoch in version '{}': {}", s, e)))?
         };
 
         let (version, release) = if let Some(dash_pos) = rest.find('-') {
@@ -50,7 +50,7 @@ impl RpmVersion {
         };
 
         if version.is_empty() {
-            return Err(Error::InitError(format!(
+            return Err(Error::VersionParse(format!(
                 "Empty version component in '{}'",
                 s
             )));
@@ -105,8 +105,13 @@ impl RpmVersion {
             ord => return ord,
         }
 
-        // Finally compare releases (lexicographically)
-        self.release.cmp(&other.release)
+        // Finally compare releases using numeric-aware comparison
+        match (&self.release, &other.release) {
+            (Some(a), Some(b)) => Self::compare_version_strings(a, b),
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+        }
     }
 }
 
@@ -171,13 +176,16 @@ impl VersionConstraint {
             return Ok(VersionConstraint::Any);
         }
 
-        // Check for compound constraints (e.g., ">= 1.0, < 2.0")
+        // Check for compound constraints (e.g., ">= 1.0, < 2.0, != 1.5")
         if s.contains(',') {
             let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
-            if parts.len() == 2 {
-                let left = Self::parse(parts[0])?;
-                let right = Self::parse(parts[1])?;
-                return Ok(VersionConstraint::And(Box::new(left), Box::new(right)));
+            if parts.len() >= 2 {
+                let mut result = Self::parse(parts[0])?;
+                for part in &parts[1..] {
+                    let right = Self::parse(part)?;
+                    result = VersionConstraint::And(Box::new(result), Box::new(right));
+                }
+                return Ok(result);
             }
         }
 

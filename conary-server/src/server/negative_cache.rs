@@ -132,6 +132,16 @@ impl NegativeCache {
         entries.retain(|_, entry| entry.created_at.elapsed() < self.ttl);
         before - entries.len()
     }
+
+    /// Remove all entries from the cache (expired and active).
+    ///
+    /// Use this for admin-initiated full cache clear operations.
+    pub async fn clear_all(&self) -> usize {
+        let mut entries = self.entries.write().await;
+        let count = entries.len();
+        entries.clear();
+        count
+    }
 }
 
 /// Statistics for the negative cache

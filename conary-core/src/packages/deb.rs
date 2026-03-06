@@ -29,6 +29,17 @@ const CONTROL_TAR_NAMES: &[&str] = &[
 
 const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
 
+/// Results of single-pass control tarball extraction
+#[derive(Default)]
+struct ControlTarContents {
+    /// Raw text of the control file
+    control_text: Option<String>,
+    /// Maintainer scripts extracted from preinst/postinst/prerm/postrm
+    scriptlets: Vec<Scriptlet>,
+    /// Config file paths extracted from conffiles
+    config_files: Vec<ConfigFileInfo>,
+}
+
 /// Debian package representation
 pub struct DebPackage {
     /// Common package metadata
@@ -102,6 +113,7 @@ impl DebPackage {
             "Priority" => info.priority = Some(value.to_string()),
             "Homepage" => info.homepage = Some(value.to_string()),
             "Installed-Size" => info.installed_size = value.parse().ok(),
+            "Epoch" => info.epoch = value.parse().ok(),
             "Depends" => info.dependencies = Self::parse_dependency_list(value),
             "Recommends" => info.recommends = Self::parse_dependency_list(value),
             "Suggests" => info.suggests = Self::parse_dependency_list(value),
@@ -171,26 +183,87 @@ impl DebPackage {
         Ok((control, data))
     }
 
-    /// Parse control file text from an already-extracted control tarball.
-    fn parse_control_tar(control_data: &[u8]) -> Result<String> {
+    /// Single-pass extraction of control text, scriptlets, and conffiles from the control tarball.
+    ///
+    /// Replaces three separate functions that each decompressed and iterated the
+    /// control tarball independently. One decompression, one iteration.
+    fn parse_control_tar_all(control_data: &[u8]) -> Result<ControlTarContents> {
         let reader = Self::create_tar_decoder(control_data)?;
         let mut archive = Archive::new(reader);
-        for entry in archive.entries()
+        let mut contents = ControlTarContents::default();
+
+        for entry in archive
+            .entries()
             .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
         {
-            let mut entry = entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
-            let entry_path = entry.path()
+            let mut entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            let entry_path = entry
+                .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                .to_string_lossy().to_string();
-            if entry_path == "./control" || entry_path == "control" {
-                let mut content = String::new();
-                entry.read_to_string(&mut content).map_err(|e| {
-                    Error::InitError(format!("Failed to read control file: {}", e))
-                })?;
-                return Ok(content);
+                .to_string_lossy()
+                .to_string();
+            let basename = entry_path.trim_start_matches("./");
+
+            match basename {
+                "control" => {
+                    let mut text = String::new();
+                    entry.read_to_string(&mut text).map_err(|e| {
+                        Error::InitError(format!("Failed to read control file: {}", e))
+                    })?;
+                    contents.control_text = Some(text);
+                }
+                "conffiles" => {
+                    let mut text = String::new();
+                    if entry.read_to_string(&mut text).is_ok() {
+                        contents.config_files = text
+                            .lines()
+                            .filter(|line| !line.is_empty() && line.starts_with('/'))
+                            .map(|line| ConfigFileInfo {
+                                path: line.trim().to_string(),
+                                noreplace: true,
+                                ghost: false,
+                            })
+                            .collect();
+                    }
+                }
+                "preinst" | "postinst" | "prerm" | "postrm" => {
+                    let phase = match basename {
+                        "preinst" => ScriptletPhase::PreInstall,
+                        "postinst" => ScriptletPhase::PostInstall,
+                        "prerm" => ScriptletPhase::PreRemove,
+                        "postrm" => ScriptletPhase::PostRemove,
+                        _ => unreachable!(),
+                    };
+                    let mut script_content = String::new();
+                    if entry.read_to_string(&mut script_content).is_ok()
+                        && !script_content.is_empty()
+                    {
+                        let interpreter = script_content
+                            .lines()
+                            .next()
+                            .and_then(|line| line.strip_prefix("#!"))
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_else(|| "/bin/sh".to_string());
+                        contents.scriptlets.push(Scriptlet {
+                            phase,
+                            interpreter,
+                            content: script_content,
+                            flags: None,
+                        });
+                    }
+                }
+                _ => {}
             }
         }
-        Err(Error::InitError("control file not found in control.tar".to_string()))
+
+        if contents.control_text.is_none() {
+            return Err(Error::InitError(
+                "control file not found in control.tar".to_string(),
+            ));
+        }
+
+        Ok(contents)
     }
 
     /// Parse the data tarball to extract the file list.
@@ -198,78 +271,37 @@ impl DebPackage {
         let reader = Self::create_tar_decoder(data_tar_data)?;
         let mut archive = Archive::new(reader);
         let mut files = Vec::new();
-        for entry in archive.entries()
+        for entry in archive
+            .entries()
             .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
         {
-            let entry = entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
-            if entry.header().entry_type().is_dir() { continue; }
-            let entry_path = entry.path()
+            let entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            if entry.header().entry_type().is_dir() {
+                continue;
+            }
+            let entry_path = entry
+                .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                .to_string_lossy().to_string();
-            let size = entry.header().size()
+                .to_string_lossy()
+                .to_string();
+            let size = entry
+                .header()
+                .size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
-            let mode = entry.header().mode()
+            let mode = entry
+                .header()
+                .mode()
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
             files.push(PackageFile {
                 path: normalize_path(&entry_path)
                     .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
-                size: size as i64, mode: mode as i32, sha256: None,
+                size: i64::try_from(size).unwrap_or(i64::MAX),
+                mode: mode as i32,
+                sha256: None,
             });
         }
         Ok(files)
-    }
-
-    /// Extract maintainer scripts from already-loaded control tarball data.
-    fn extract_maintainer_scripts_from_data(control_data: &[u8]) -> Vec<Scriptlet> {
-        let mut scriptlets = Vec::new();
-        let reader = match Self::create_tar_decoder(control_data) { Ok(r) => r, Err(_) => return scriptlets };
-        let mut archive = Archive::new(reader);
-        if let Ok(entries) = archive.entries() {
-            for entry_result in entries {
-                let entry = match entry_result { Ok(e) => e, Err(_) => continue };
-                let entry_path = match entry.path() { Ok(p) => p.to_string_lossy().to_string(), Err(_) => continue };
-                let phase = match entry_path.trim_start_matches("./") {
-                    "preinst" => ScriptletPhase::PreInstall,
-                    "postinst" => ScriptletPhase::PostInstall,
-                    "prerm" => ScriptletPhase::PreRemove,
-                    "postrm" => ScriptletPhase::PostRemove,
-                    _ => continue,
-                };
-                let mut entry = entry;
-                let mut content = String::new();
-                if entry.read_to_string(&mut content).is_ok() && !content.is_empty() {
-                    let interpreter = content.lines().next()
-                        .and_then(|line| line.strip_prefix("#!"))
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| "/bin/sh".to_string());
-                    scriptlets.push(Scriptlet { phase, interpreter, content, flags: None });
-                }
-            }
-        }
-        scriptlets
-    }
-
-    /// Extract conffiles from already-loaded control tarball data.
-    fn extract_conffiles_from_data(control_data: &[u8]) -> Vec<ConfigFileInfo> {
-        let reader = match Self::create_tar_decoder(control_data) { Ok(r) => r, Err(_) => return Vec::new() };
-        let mut archive = Archive::new(reader);
-        if let Ok(entries) = archive.entries() {
-            for entry_result in entries {
-                let entry = match entry_result { Ok(e) => e, Err(_) => continue };
-                let entry_path = match entry.path() { Ok(p) => p.to_string_lossy().to_string(), Err(_) => continue };
-                if entry_path.trim_start_matches("./") == "conffiles" {
-                    let mut entry = entry;
-                    let mut content = String::new();
-                    if entry.read_to_string(&mut content).is_ok() {
-                        return content.lines()
-                            .filter(|line| !line.is_empty() && line.starts_with('/'))
-                            .map(|line| ConfigFileInfo { path: line.trim().to_string(), noreplace: true, ghost: false })
-                            .collect();
-                    }
-                }
-            }
-        }
-        Vec::new()
     }
 
         /// Convert dependency list to Dependency structs
@@ -304,6 +336,7 @@ struct ControlInfo {
     recommends: Vec<String>,
     suggests: Vec<String>,
     build_depends: Vec<String>,
+    epoch: Option<u32>,
 }
 
 impl PackageFormat for DebPackage {
@@ -313,17 +346,22 @@ impl PackageFormat for DebPackage {
         // Extract and parse control file
         let (control_data, data_tar_data) = Self::extract_ar_members(path)?;
 
-        // Parse control file from control tarball
-        let control_content = Self::parse_control_tar(&control_data)?;
-        let control = Self::parse_control(&control_content)?;
+        // Single-pass extraction of control text, scriptlets, and conffiles
+        let control_tar = Self::parse_control_tar_all(&control_data)?;
+        let control = Self::parse_control(control_tar.control_text.as_deref().unwrap_or(""))?;
 
         let name = control.name.ok_or_else(|| {
             Error::InitError("Package name not found in control file".to_string())
         })?;
 
-        let version = control.version.ok_or_else(|| {
+        let mut version = control.version.ok_or_else(|| {
             Error::InitError("Package version not found in control file".to_string())
         })?;
+
+        // Prepend epoch if present (e.g., "2:1.0.0-1")
+        if let Some(epoch) = control.epoch {
+            version = format!("{epoch}:{version}");
+        }
 
         // Extract file list
         let files = Self::parse_data_tar(&data_tar_data)?;
@@ -347,9 +385,8 @@ impl PackageFormat for DebPackage {
             DependencyType::Build,
         ));
 
-        // Extract maintainer scripts and conffiles
-        let scriptlets = Self::extract_maintainer_scripts_from_data(&control_data);
-        let config_files = Self::extract_conffiles_from_data(&control_data);
+        let scriptlets = control_tar.scriptlets;
+        let config_files = control_tar.config_files;
 
         debug!(
             "Parsed DEB package: {} version {} ({} files, {} dependencies, {} scriptlets, {} config files)",
@@ -471,7 +508,7 @@ impl PackageFormat for DebPackage {
                     Error::InitError(format!("Path normalization failed: {}", e))
                 })?,
                 content,
-                size: size as i64,
+                size: i64::try_from(size).unwrap_or(i64::MAX),
                 mode: mode as i32,
                 sha256: Some(hash),
             });

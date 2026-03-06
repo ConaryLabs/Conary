@@ -320,13 +320,32 @@ impl BuildPolicy for StripBinariesPolicy {
             return Ok(PolicyAction::Keep);
         }
 
-        // Try to strip the binary using native Rust implementation
+        // Prefer system strip binary (preserves .note.gnu.build-id and .gnu.hash),
+        // fall back to native Rust implementation if unavailable
+        match strip_elf_with_system_tool(ctx.source_path) {
+            Ok(stripped) => {
+                if stripped.len() < ctx.content.len() {
+                    log::debug!(
+                        "Stripped {} with system strip: {} -> {} bytes",
+                        ctx.entry.path,
+                        ctx.content.len(),
+                        stripped.len()
+                    );
+                    return Ok(PolicyAction::Replace(stripped));
+                }
+                return Ok(PolicyAction::Keep);
+            }
+            Err(_) => {
+                // System strip not available, fall back to native implementation
+            }
+        }
+
         match strip_elf_binary(ctx.content) {
             Ok(stripped) => {
                 // Only replace if we actually reduced size
                 if stripped.len() < ctx.content.len() {
                     log::debug!(
-                        "Stripped {}: {} -> {} bytes",
+                        "Stripped {}: {} -> {} bytes (native)",
                         ctx.entry.path,
                         ctx.content.len(),
                         stripped.len()
@@ -343,6 +362,43 @@ impl BuildPolicy for StripBinariesPolicy {
             }
         }
     }
+}
+
+/// Attempt to strip an ELF binary using the system `strip` or `llvm-strip` tool.
+///
+/// This preserves `.note.gnu.build-id` sections (needed for debuginfod) and
+/// `.gnu.hash` sections that the native Rust stripper would remove.
+fn strip_elf_with_system_tool(source_path: &Path) -> std::result::Result<Vec<u8>, String> {
+    // Copy to a temp file so we don't modify the original
+    let temp_file = tempfile::NamedTempFile::new()
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    std::fs::copy(source_path, temp_file.path())
+        .map_err(|e| format!("Failed to copy for stripping: {}", e))?;
+
+    // Try strip, then llvm-strip
+    let strip_result = std::process::Command::new("strip")
+        .arg("--strip-unneeded")
+        .arg(temp_file.path())
+        .output();
+
+    let success = match strip_result {
+        Ok(output) if output.status.success() => true,
+        _ => {
+            // Try llvm-strip as fallback
+            let llvm_result = std::process::Command::new("llvm-strip")
+                .arg("--strip-unneeded")
+                .arg(temp_file.path())
+                .output();
+            matches!(llvm_result, Ok(output) if output.status.success())
+        }
+    };
+
+    if !success {
+        return Err("No system strip tool available".to_string());
+    }
+
+    std::fs::read(temp_file.path())
+        .map_err(|e| format!("Failed to read stripped binary: {}", e))
 }
 
 /// Strip debug symbols from an ELF binary using native Rust

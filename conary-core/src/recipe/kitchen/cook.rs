@@ -104,12 +104,25 @@ impl<'a> Cook<'a> {
         if let Some(patches) = &self.recipe.patches {
             for patch in &patches.files {
                 if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
-                    let checksum = patch.checksum.as_deref().unwrap_or("sha256:0");
-                    let path = self.kitchen.fetch_source(&patch.file, checksum)?;
                     let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
                     let local_path = self.build_dir.path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
-                    fs::copy(&path, &local_path)?;
+
+                    if let Some(checksum) = &patch.checksum {
+                        // Patch has a checksum -- fetch through cache with verification
+                        let path = self.kitchen.fetch_source(&patch.file, checksum)?;
+                        fs::copy(&path, &local_path)?;
+                    } else {
+                        // No checksum -- download directly without integrity verification.
+                        // This is a security risk for remote patches; recipe authors
+                        // should add checksums for all remote patches.
+                        tracing::warn!(
+                            "Remote patch {} has no checksum -- downloading without integrity verification",
+                            patch.file
+                        );
+                        crate::recipe::kitchen::archive::download_file(&patch.file, &local_path)?;
+                    }
+
                     self.log_line(&format!("Fetched patch: {}", patch.file));
                 }
             }

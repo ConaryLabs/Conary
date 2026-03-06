@@ -11,11 +11,20 @@ use std::process::Command;
 /// Download a file from a URL
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     // Use curl for now (could use reqwest later)
+    let dest_str = dest.to_str().ok_or_else(|| {
+        Error::DownloadError(format!("Non-UTF-8 download path: {}", dest.display()))
+    })?;
     let output = Command::new("curl")
         .args([
             "-fsSL",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "600",
+            "--retry",
+            "3",
             "-o",
-            dest.to_str().expect("path must be valid utf-8"),
+            dest_str,
             url,
         ])
         .output()

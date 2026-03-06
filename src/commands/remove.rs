@@ -210,6 +210,10 @@ pub fn cmd_remove(
         .iter()
         .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
 
+    // TODO: Use TransactionEngine for remove operations (like install does) to get
+    // journal-based crash recovery. Currently files are removed before the DB commit,
+    // so a crash between filesystem ops and DB commit leaves an inconsistent state.
+
     // Remove regular files first (BEFORE committing DB changes)
     progress.set_phase(RemovePhase::RemovingFiles);
     let mut removed_count = 0;
@@ -408,6 +412,10 @@ pub fn cmd_autoremove(
     }
 
     println!("\nRemoving {} orphaned package(s)...", orphans.len());
+
+    // TODO: Iterate in a fixed-point loop (re-query orphans after each removal) to catch
+    // transitively orphaned packages. Also consider batching removals to avoid re-opening
+    // the DB connection per orphan via cmd_remove.
 
     // Remove each orphaned package
     let mut removed_count = 0;

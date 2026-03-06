@@ -4,6 +4,10 @@
 //! Supports LZ4 and LZMA compression algorithms for metadata blocks.
 //! Compression functions return `None` when the compressed output is not
 //! smaller than the input, allowing the caller to store data uncompressed.
+//!
+//! NOTE: Not yet integrated into the builder. The current composefs builder
+//! produces uncompressed images. This module is retained for future use
+//! when compressed metadata blocks are needed.
 
 use std::io::{self, Cursor};
 

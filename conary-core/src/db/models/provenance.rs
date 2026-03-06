@@ -69,7 +69,7 @@ impl Provenance {
     /// Update provenance information
     pub fn update(&self, conn: &Connection) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update provenance without ID".to_string())
+            crate::error::Error::MissingId("Cannot update provenance without ID".to_string())
         })?;
 
         conn.execute(

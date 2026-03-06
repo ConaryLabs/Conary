@@ -240,6 +240,9 @@ impl RepologyClient {
         let projects = self.fetch_projects_batch(start).await?;
         let mut count = 0;
 
+        // Wrap all inserts in a single transaction for atomicity and performance
+        let tx = conn.unchecked_transaction()?;
+
         for project in &projects {
             // Filter to implementations we can map to a known distro
             let known: Vec<_> = project
@@ -260,11 +263,11 @@ impl RepologyClient {
                 project.name.clone(),
                 "package".to_string(),
             );
-            let can_id = match canonical.insert_or_ignore(conn)? {
+            let can_id = match canonical.insert_or_ignore(&tx)? {
                 Some(id) => id,
                 None => {
                     // Already exists — look up by name
-                    match CanonicalPackage::find_by_name(conn, &project.name)? {
+                    match CanonicalPackage::find_by_name(&tx, &project.name)? {
                         Some(existing) => existing.id.expect("existing row has id"),
                         None => continue,
                     }
@@ -279,11 +282,13 @@ impl RepologyClient {
                     distro_name,
                     "repology".to_string(),
                 );
-                imp.insert_or_ignore(conn)?;
+                imp.insert_or_ignore(&tx)?;
             }
 
             count += 1;
         }
+
+        tx.commit()?;
 
         Ok(count)
     }

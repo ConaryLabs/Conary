@@ -18,14 +18,14 @@ use std::io::{Cursor, Write};
 /// On-disk dirent size in bytes.
 const DIRENT_SIZE: usize = 12;
 
-/// File type: regular file.
-pub const EROFS_FT_REG_FILE: u8 = 8;
+/// File type: regular file (matches kernel FT_REG_FILE from fs_types.h).
+pub const EROFS_FT_REG_FILE: u8 = 1;
 
-/// File type: directory.
-pub const EROFS_FT_DIR: u8 = 4;
+/// File type: directory (matches kernel FT_DIR from fs_types.h).
+pub const EROFS_FT_DIR: u8 = 2;
 
-/// File type: symbolic link.
-pub const EROFS_FT_SYMLINK: u8 = 10;
+/// File type: symbolic link (matches kernel FT_SYMLINK from fs_types.h).
+pub const EROFS_FT_SYMLINK: u8 = 7;
 
 /// A directory entry to be packed into an EROFS directory block.
 #[derive(Debug, Clone)]

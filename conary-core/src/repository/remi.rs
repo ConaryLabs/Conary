@@ -100,9 +100,12 @@ fn map_http_error(status: u16, body: String, name: &str, distro: &str) -> Error 
 ///
 /// Shared between sync and async clients.
 fn build_package_url(base_url: &str, distro: &str, name: &str, version: Option<&str>) -> String {
-    let base = format!("{base_url}/v1/{distro}/packages/{name}");
+    let encoded_distro = urlencoding::encode(distro);
+    let encoded_name = urlencoding::encode(name);
+    let base = format!("{base_url}/v1/{encoded_distro}/packages/{encoded_name}");
     if let Some(v) = version {
-        format!("{base}?version={v}")
+        let encoded_version = urlencoding::encode(v);
+        format!("{base}?version={encoded_version}")
     } else {
         base
     }
@@ -238,9 +241,21 @@ impl RemiClient {
                         return Ok(manifest);
                     }
 
-                    // Re-request to get manifest
-                    let version = status.version.as_deref();
-                    return self.get_package(&status.distro, &status.package, version);
+                    // Re-request to get manifest (direct request, not recursive poll)
+                    let url = self.package_url(&status.distro, &status.package, status.version.as_deref());
+                    let response = self.client.get(&url).send().map_err(|e| {
+                        Error::DownloadError(format!("Failed to re-request package: {e}"))
+                    })?;
+                    if !response.status().is_success() {
+                        return Err(Error::DownloadError(format!(
+                            "Re-request for manifest failed: HTTP {}",
+                            response.status()
+                        )));
+                    }
+                    let manifest = response.json().map_err(|e| {
+                        Error::DownloadError(format!("Failed to parse manifest: {e}"))
+                    })?;
+                    return Ok(manifest);
                 }
                 "failed" => {
                     spinner.finish_with_message("Conversion failed");

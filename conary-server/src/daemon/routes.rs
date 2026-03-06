@@ -116,7 +116,14 @@ fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
         crate::daemon::JobKind::Install => Action::Install,
         crate::daemon::JobKind::Remove => Action::Remove,
         crate::daemon::JobKind::Update => Action::Update,
-        _ => Action::Install,
+        crate::daemon::JobKind::DryRun => Action::Query,
+        crate::daemon::JobKind::Rollback => Action::Rollback,
+        crate::daemon::JobKind::Verify => Action::Verify,
+        crate::daemon::JobKind::GarbageCollect => Action::GarbageCollect,
+        // Enhance is a background admin operation; map to GarbageCollect
+        // (requires root/admin privilege) since there is no dedicated
+        // Action::Enhance variant.
+        crate::daemon::JobKind::Enhance => Action::GarbageCollect,
     }
 }
 
@@ -152,9 +159,11 @@ async fn run_db_query<T: Send + 'static>(
 /// TCP connections have no credentials and are restricted to read-only access.
 ///
 /// Returns `Ok(())` if the action is authorized, or an `ApiError` with 403 Forbidden.
-fn require_auth(creds: &Option<PeerCredentials>, action: Action) -> Result<(), ApiError> {
-    let checker = AuthChecker::new();
-
+fn require_auth(
+    checker: &AuthChecker,
+    creds: &Option<PeerCredentials>,
+    action: Action,
+) -> Result<(), ApiError> {
     match creds {
         Some(creds) => {
             if checker.is_allowed(creds, action) {
@@ -190,6 +199,7 @@ fn require_auth(creds: &Option<PeerCredentials>, action: Action) -> Result<(), A
 /// endpoint missing its own `require_auth()` call is still protected.
 /// Individual handlers still check their specific action permissions.
 async fn auth_gate_middleware(
+    State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
     request: Request,
     next: middleware::Next,
@@ -198,7 +208,7 @@ async fn auth_gate_middleware(
         || request.method() == Method::PUT
         || request.method() == Method::DELETE
     {
-        require_auth(&creds, Action::Install)?;
+        require_auth(&state.auth_checker, &creds, Action::Install)?;
     }
     Ok(next.run(request).await)
 }
@@ -503,12 +513,12 @@ pub fn build_router(state: SharedState) -> Router {
         // Health check (no auth required)
         .route("/health", get(health_handler))
         // API v1
-        .nest("/v1", build_v1_router())
+        .nest("/v1", build_v1_router(state.clone()))
         .with_state(state)
 }
 
 /// Build the v1 API router
-fn build_v1_router() -> Router<SharedState> {
+fn build_v1_router(state: SharedState) -> Router<SharedState> {
     Router::new()
         // Version info
         .route("/version", get(version_handler))
@@ -544,7 +554,10 @@ fn build_v1_router() -> Router<SharedState> {
         // Global event stream
         .route("/events", get(events_handler))
         // Defense-in-depth: reject mutating requests without credentials
-        .layer(middleware::from_fn(auth_gate_middleware))
+        .layer(middleware::from_fn_with_state(
+            state,
+            auth_gate_middleware,
+        ))
 }
 
 // =============================================================================
@@ -681,6 +694,7 @@ async fn create_transaction_handler(
     Json<CreateTransactionResponse>,
 )> {
     require_auth(
+        &state.auth_checker,
         &creds,
         action_for_job_kind(determine_job_kind(&request.operations)),
     )?;
@@ -833,7 +847,7 @@ async fn cancel_transaction_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    require_auth(&creds, Action::CancelJob)?;
+    require_auth(&state.auth_checker, &creds, Action::CancelJob)?;
 
     let job_id = id.clone();
 
@@ -978,11 +992,12 @@ async fn transaction_stream_handler(
 ///
 /// POST /v1/transactions/dry-run
 async fn dry_run_handler(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<Json<DryRunResponse>> {
     require_auth(
+        &state.auth_checker,
         &creds,
         action_for_job_kind(determine_job_kind(&request.operations)),
     )?;
@@ -1310,19 +1325,19 @@ async fn list_states_handler(State(_state): State<SharedState>) -> ApiResult<Jso
 
 /// POST /v1/system/rollback
 async fn rollback_handler(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
-    require_auth(&creds, Action::Rollback)?;
+    require_auth(&state.auth_checker, &creds, Action::Rollback)?;
     Err(not_implemented_error("Rollback not yet implemented"))
 }
 
 /// POST /v1/system/verify
 async fn verify_handler(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_auth(&creds, Action::Verify)?;
+    require_auth(&state.auth_checker, &creds, Action::Verify)?;
     Err(not_implemented_error(
         "System verification not yet implemented",
     ))
@@ -1330,10 +1345,10 @@ async fn verify_handler(
 
 /// POST /v1/system/gc
 async fn gc_handler(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_auth(&creds, Action::GarbageCollect)?;
+    require_auth(&state.auth_checker, &creds, Action::GarbageCollect)?;
     Err(not_implemented_error(
         "Garbage collection not yet implemented",
     ))
@@ -1456,49 +1471,53 @@ mod tests {
 
     #[test]
     fn test_require_auth_root_allowed() {
+        let checker = AuthChecker::new();
         let creds = Some(PeerCredentials {
             pid: 1,
             uid: 0,
             gid: 0,
         });
-        assert!(require_auth(&creds, Action::Install).is_ok());
-        assert!(require_auth(&creds, Action::Remove).is_ok());
-        assert!(require_auth(&creds, Action::Update).is_ok());
-        assert!(require_auth(&creds, Action::Rollback).is_ok());
-        assert!(require_auth(&creds, Action::GarbageCollect).is_ok());
-        assert!(require_auth(&creds, Action::CancelJob).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Install).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Update).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Rollback).is_ok());
+        assert!(require_auth(&checker, &creds, Action::GarbageCollect).is_ok());
+        assert!(require_auth(&checker, &creds, Action::CancelJob).is_ok());
     }
 
     #[test]
     fn test_require_auth_admin_group_allowed() {
+        let checker = AuthChecker::new();
         let creds = Some(PeerCredentials {
             pid: 1000,
             uid: 1000,
             gid: 10, // wheel
         });
-        assert!(require_auth(&creds, Action::Install).is_ok());
-        assert!(require_auth(&creds, Action::Remove).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Install).is_ok());
+        assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
     }
 
     #[test]
     fn test_require_auth_regular_user_denied() {
+        let checker = AuthChecker::new();
         let creds = Some(PeerCredentials {
             pid: 1000,
             uid: 1000,
             gid: 1000,
         });
-        assert!(require_auth(&creds, Action::Install).is_err());
-        assert!(require_auth(&creds, Action::Remove).is_err());
-        assert!(require_auth(&creds, Action::Update).is_err());
-        assert!(require_auth(&creds, Action::Rollback).is_err());
+        assert!(require_auth(&checker, &creds, Action::Install).is_err());
+        assert!(require_auth(&checker, &creds, Action::Remove).is_err());
+        assert!(require_auth(&checker, &creds, Action::Update).is_err());
+        assert!(require_auth(&checker, &creds, Action::Rollback).is_err());
     }
 
     #[test]
     fn test_require_auth_no_creds_denied() {
+        let checker = AuthChecker::new();
         // TCP connection with no peer credentials
         let creds: Option<PeerCredentials> = None;
-        assert!(require_auth(&creds, Action::Install).is_err());
-        assert!(require_auth(&creds, Action::Remove).is_err());
+        assert!(require_auth(&checker, &creds, Action::Install).is_err());
+        assert!(require_auth(&checker, &creds, Action::Remove).is_err());
     }
 
     // =========================================================================

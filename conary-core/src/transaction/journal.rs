@@ -75,6 +75,15 @@ pub enum JournalRecord {
     /// All staging complete barrier
     StagingComplete { count: usize },
 
+    /// Individual file moved from stage to final location (for granular recovery)
+    FileMoved {
+        path: PathBuf,
+        stage_path: PathBuf,
+    },
+
+    /// Individual file removed from filesystem (for granular recovery)
+    FileRemoved { path: PathBuf },
+
     /// Filesystem changes applied
     FsApplied {
         files_added: usize,
@@ -120,6 +129,7 @@ impl JournalRecord {
             Self::PreScriptComplete { .. } => TransactionState::PreScriptsComplete,
             Self::Backup { .. } | Self::BackupsComplete { .. } => TransactionState::BackedUp,
             Self::Stage { .. } | Self::StagingComplete { .. } => TransactionState::Staged,
+            Self::FileMoved { .. } | Self::FileRemoved { .. } => TransactionState::Staged,
             Self::FsApplied { .. } | Self::DbCommitIntent { .. } => TransactionState::FsApplied,
             Self::DbApplied { .. } => TransactionState::DbApplied,
             Self::PostAction { .. } => TransactionState::PostScriptsComplete,

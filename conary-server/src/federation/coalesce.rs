@@ -97,14 +97,38 @@ impl RequestCoalescer {
             }
         };
 
-        // If we got a sender, we are the leader. If None, the previous leader dropped
-        // without sending, so we retry by creating a new entry.
+        // If we got a sender, we are the leader. If None, the previous leader
+        // dropped without sending, so we loop back through the entry API to
+        // properly coalesce with any concurrent retries (avoids multiple tasks
+        // all inserting new entries simultaneously).
         let tx = match rx {
             Some(tx) => tx,
             None => {
-                let (tx, _rx) = broadcast::channel::<CachedResult>(1);
-                self.inflight.insert(hash.to_string(), tx.clone());
-                tx
+                // Re-enter through the entry API for proper coalescing
+                match self.inflight.entry(hash.to_string()) {
+                    dashmap::mapref::entry::Entry::Occupied(e) => {
+                        // Another task beat us to the retry - subscribe
+                        let mut rx = e.get().subscribe();
+                        drop(e);
+                        self.coalesced_count.fetch_add(1, Ordering::Relaxed);
+                        match rx.recv().await {
+                            Ok(CachedResult::Success(data)) => return Ok(data),
+                            Ok(CachedResult::Failure(msg)) => {
+                                return Err(Error::DownloadError(msg));
+                            }
+                            Err(_) => {
+                                return Err(Error::DownloadError(
+                                    "Coalesced request failed after leader retry".into(),
+                                ));
+                            }
+                        }
+                    }
+                    dashmap::mapref::entry::Entry::Vacant(e) => {
+                        let (tx, _rx) = broadcast::channel::<CachedResult>(1);
+                        e.insert(tx.clone());
+                        tx
+                    }
+                }
             }
         };
 

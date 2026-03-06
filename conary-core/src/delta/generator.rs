@@ -46,8 +46,8 @@ impl DeltaGenerator {
     ) -> Result<DeltaMetrics> {
         info!(
             "Generating delta from {} to {}",
-            &old_hash[..8],
-            &new_hash[..8]
+            old_hash.get(..8).unwrap_or(old_hash),
+            new_hash.get(..8).unwrap_or(new_hash)
         );
 
         // Retrieve old and new versions from CAS
@@ -68,6 +68,8 @@ impl DeltaGenerator {
             .map_err(|e| Error::IoError(format!("Failed to create delta file: {}", e)))?;
         file.write_all(&delta)
             .map_err(|e| Error::IoError(format!("Failed to write delta file: {}", e)))?;
+        file.sync_all()
+            .map_err(|e| Error::IoError(format!("Failed to fsync delta file: {}", e)))?;
 
         // Calculate metrics
         let metrics = DeltaMetrics::new(

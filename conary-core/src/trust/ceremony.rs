@@ -6,7 +6,7 @@
 //! root metadata, and performing key rotation.
 
 use crate::ccs::signing::SigningKeyPair;
-use crate::trust::TrustResult;
+use crate::trust::{TrustError, TrustResult};
 use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
 use crate::trust::metadata::{RoleDefinition, RootMetadata, Signed, TUF_SPEC_VERSION};
 use chrono::{Duration, Utc};
@@ -132,11 +132,15 @@ pub fn rotate_key(
     new_root.keys.insert(new_key_id.clone(), new_tuf_key);
 
     // Update role definition
-    if let Some(role_def) = new_root.roles.get_mut(role_name) {
-        role_def.keyids.retain(|id| *id != old_key_id);
-        if !role_def.keyids.contains(&new_key_id) {
-            role_def.keyids.push(new_key_id);
-        }
+    let role_def = new_root.roles.get_mut(role_name).ok_or_else(|| {
+        TrustError::ConsistencyError(format!(
+            "Cannot rotate key: role '{}' not found in root metadata",
+            role_name
+        ))
+    })?;
+    role_def.keyids.retain(|id| *id != old_key_id);
+    if !role_def.keyids.contains(&new_key_id) {
+        role_def.keyids.push(new_key_id);
     }
 
     // Sign with both old root key and new root key (if rotating root)

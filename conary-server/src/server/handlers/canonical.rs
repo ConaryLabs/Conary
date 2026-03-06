@@ -47,6 +47,10 @@ pub async fn canonical_lookup(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
 ) -> Response {
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let db_path = state.read().await.config.db_path.clone();
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<CanonicalLookupResponse>> {

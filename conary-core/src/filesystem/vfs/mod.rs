@@ -213,16 +213,16 @@ impl VfsTree {
         self.root
     }
 
-    /// Get the total number of nodes in the tree
+    /// Get the total number of live (non-orphaned) nodes in the tree
     #[inline]
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.path_index.len()
     }
 
     /// Check if the tree is empty (only root exists)
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.nodes.len() == 1
+        self.path_index.len() == 1
     }
 
     /// Get a node by ID
@@ -447,10 +447,13 @@ impl VfsTree {
         let parent = self.get_node_mut(parent_id);
         parent.children.retain(|&id| id != node_id);
 
-        // Remove all paths from index
+        // Remove all paths from index and mark nodes as orphaned
         for &id in &to_remove {
             let node_path = self.get_path(id);
             self.path_index.remove(&node_path);
+            // Mark as orphaned so iter() skips these nodes
+            self.get_node_mut(id).parent = None;
+            self.get_node_mut(id).children.clear();
         }
 
         Ok(())
@@ -653,11 +656,12 @@ impl VfsTree {
         node_id
     }
 
-    /// Iterate over all nodes in the tree
+    /// Iterate over all live (non-orphaned) nodes in the tree
     pub fn iter(&self) -> impl Iterator<Item = (NodeId, &VfsNode)> {
         self.nodes
             .iter()
             .enumerate()
+            .filter(|(i, node)| *i == self.root.0 || node.parent.is_some())
             .map(|(i, node)| (NodeId(i), node))
     }
 
@@ -697,11 +701,11 @@ impl VfsTree {
         }
     }
 
-    /// Get statistics about the tree
+    /// Get statistics about the tree (excludes orphaned nodes)
     pub fn stats(&self) -> VfsStats {
         let mut stats = VfsStats::default();
 
-        for node in &self.nodes {
+        for (_id, node) in self.iter() {
             match &node.kind {
                 NodeKind::Directory => stats.directories += 1,
                 NodeKind::File { size, .. } => {
@@ -712,7 +716,7 @@ impl VfsTree {
             }
         }
 
-        stats.total_nodes = self.nodes.len();
+        stats.total_nodes = self.path_index.len();
         stats
     }
 }

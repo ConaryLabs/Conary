@@ -57,6 +57,7 @@ enum FsEntry {
 }
 
 /// Statistics from a completed build.
+#[must_use]
 pub struct BuildStats {
     pub image_size: u64,
     pub inode_count: u64,
@@ -107,6 +108,10 @@ fn cas_path_from_digest(digest: &[u8; 32]) -> String {
 fn align_up(offset: u64, align: u64) -> u64 {
     (offset + align - 1) & !(align - 1)
 }
+
+/// Pre-allocated zero buffer to avoid heap allocation for padding writes.
+/// 4096 bytes covers any block-sized padding needed during image building.
+const ZEROS: [u8; 4096] = [0u8; 4096];
 
 // ---------------------------------------------------------------------------
 // Builder implementation
@@ -299,7 +304,7 @@ impl ErofsBuilder {
         let sb_end = 1024 + 128;
         let pad_to_meta = meta_start as usize - sb_end;
         if pad_to_meta > 0 {
-            writer.write_all(&vec![0u8; pad_to_meta])?;
+            writer.write_all(&ZEROS[..pad_to_meta])?;
         }
 
         // 4b. Write inode table
@@ -318,7 +323,7 @@ impl ErofsBuilder {
             let aligned = align_up(written, 32);
             let pad = aligned - written;
             if pad > 0 {
-                writer.write_all(&vec![0u8; pad as usize])?;
+                writer.write_all(&ZEROS[..pad as usize])?;
                 written += pad;
             }
 
@@ -406,7 +411,7 @@ impl ErofsBuilder {
         // Pad inode table to block boundary
         let pad = align_up(written, bs64) - written;
         if pad > 0 {
-            writer.write_all(&vec![0u8; pad as usize])?;
+            writer.write_all(&ZEROS[..pad as usize])?;
             written += pad;
         }
 
@@ -423,7 +428,7 @@ impl ErofsBuilder {
         // Pad to final block boundary
         let final_pad = align_up(written, bs64) - written;
         if final_pad > 0 {
-            writer.write_all(&vec![0u8; final_pad as usize])?;
+            writer.write_all(&ZEROS[..final_pad as usize])?;
             written += final_pad;
         }
 
@@ -435,10 +440,12 @@ impl ErofsBuilder {
         sb.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
         sb.feature_incompat =
             EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            sb.root_nid = root_nid as u16;
-        }
+        sb.root_nid = u16::try_from(root_nid).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("root NID {root_nid} exceeds u16::MAX"),
+            )
+        })?;
         sb.inos = inode_count;
         sb.blocks = total_blocks;
         sb.meta_blkaddr = meta_blkaddr;
@@ -606,8 +613,16 @@ fn entry_path(entry: &FsEntry) -> &str {
 }
 
 /// Normalize a path: strip leading `/`, ensure no trailing `/`.
+///
+/// # Panics
+///
+/// Panics if the path contains `..` components (path traversal).
 fn normalize_path(path: &str) -> String {
     let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+    assert!(
+        !trimmed.split('/').any(|c| c == ".."),
+        "path must not contain '..' components: {trimmed}"
+    );
     trimmed.to_string()
 }
 

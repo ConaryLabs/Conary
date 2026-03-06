@@ -36,6 +36,15 @@ pub(crate) fn is_valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Normalize a hash to lowercase for consistent CAS path lookup.
+///
+/// `is_valid_hash` accepts uppercase hex, but the CAS stores files with
+/// lowercase hex paths. This avoids 404s or duplicate storage for
+/// uppercase hashes.
+pub(crate) fn normalize_hash(hash: &str) -> String {
+    hash.to_ascii_lowercase()
+}
+
 /// Build a chunk response with standard immutable-cache headers.
 ///
 /// Every chunk response shares the same CONTENT_TYPE, CACHE_CONTROL, ETAG,
@@ -70,6 +79,7 @@ pub async fn head_chunk(
     if !is_valid_hash(&hash) {
         return (StatusCode::BAD_REQUEST, "Invalid chunk hash format").into_response();
     }
+    let hash = normalize_hash(&hash);
 
     let state = state.read().await;
 
@@ -154,6 +164,7 @@ pub async fn get_chunk(
     if !is_valid_hash(&hash) {
         return (StatusCode::BAD_REQUEST, "Invalid chunk hash format").into_response();
     }
+    let hash = normalize_hash(&hash);
 
     let state_guard = state.read().await;
 
@@ -617,13 +628,14 @@ pub async fn batch_fetch(
     let mut missing = Vec::new();
     let mut invalid = Vec::new();
 
-    for hash in &request.hashes {
-        if !is_valid_hash(hash) {
-            invalid.push(hash.clone());
+    for raw_hash in &request.hashes {
+        if !is_valid_hash(raw_hash) {
+            invalid.push(raw_hash.clone());
             continue;
         }
+        let hash = normalize_hash(raw_hash);
 
-        let path = state.chunk_cache.chunk_path(hash);
+        let path = state.chunk_cache.chunk_path(&hash);
         match tokio::fs::read(&path).await {
             Ok(data) => {
                 state.metrics.record_hit();

@@ -97,7 +97,7 @@ impl RpmPackage {
 
                 files.push(PackageFile {
                     path: entry.path.to_string_lossy().to_string(),
-                    size: entry.size as i64,
+                    size: i64::try_from(entry.size).unwrap_or(i64::MAX),
                     mode: entry.mode.raw_mode() as i32,
                     sha256,
                 });
@@ -336,7 +336,7 @@ impl PackageFormat for RpmPackage {
         debug!("Detected payload compression: {}", format);
 
         // Create decompressor from the payload
-        let cursor = std::io::Cursor::new(payload.clone());
+        let cursor = std::io::Cursor::new(payload);
         let decoder = compression::create_decoder(cursor, format)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
@@ -375,7 +375,7 @@ impl PackageFormat for RpmPackage {
                 extracted_files.push(ExtractedFile {
                     path: abs_path,
                     content,
-                    size: entry.size as i64,
+                    size: i64::try_from(entry.size).unwrap_or(i64::MAX),
                     mode: entry.mode as i32,
                     sha256: meta.sha256.clone(),
                 });

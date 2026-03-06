@@ -89,6 +89,9 @@ pub struct PreparedPackage {
     pub classified_files: HashMap<ComponentType, Vec<String>>,
     /// Language-specific provides detected from files
     pub language_provides: Vec<LanguageDep>,
+    /// Cached scriptlets from old package (for upgrades), queried before DB commit
+    /// to avoid cascade-delete losing them
+    pub cached_old_scriptlets: Vec<ScriptletEntry>,
 }
 
 impl PreparedPackage {
@@ -491,14 +494,14 @@ impl<'a> BatchInstaller<'a> {
             for pkg in &packages {
                 // Run old package post-remove for upgrades
                 if let Some(ref old_trove) = pkg.old_trove {
-                    let old_scriptlets = get_old_package_scriptlets(&conn, old_trove.id)?;
+                    // Use cached scriptlets (queried before DB commit deleted the old trove)
                     let scriptlet_format = to_scriptlet_format(pkg.format);
                     run_old_post_remove(
                         Path::new(self.root),
                         &old_trove.name,
                         &old_trove.version,
                         &pkg.version,
-                        &old_scriptlets,
+                        &pkg.cached_old_scriptlets,
                         scriptlet_format,
                         self.sandbox_mode,
                     );
@@ -748,6 +751,10 @@ pub fn prepare_package_for_batch(
     // Detect language provides
     let language_provides = LanguageDepDetector::detect_all_provides(&file_paths);
 
+    // Cache old package scriptlets before DB commit (cascade delete would lose them)
+    let old_trove_id = old_trove.as_ref().and_then(|t| t.id);
+    let cached_old_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
+
     Ok(PreparedPackage {
         name: pkg.name().to_string(),
         version: pkg.version().to_string(),
@@ -764,6 +771,7 @@ pub fn prepare_package_for_batch(
         installed_components,
         classified_files,
         language_provides,
+        cached_old_scriptlets,
     })
 }
 
@@ -829,6 +837,10 @@ pub fn prepare_from_parsed(
     let installed_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
     let language_provides = LanguageDepDetector::detect_all_provides(&installed_paths);
 
+    // Cache old package scriptlets before DB commit (cascade delete would lose them)
+    let old_trove_id = old_trove.as_ref().and_then(|t| t.id);
+    let cached_old_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
+
     Ok(PreparedPackage {
         name: pkg.name().to_string(),
         version: pkg.version().to_string(),
@@ -845,6 +857,7 @@ pub fn prepare_from_parsed(
         installed_components,
         classified_files,
         language_provides,
+        cached_old_scriptlets,
     })
 }
 
@@ -877,6 +890,7 @@ mod tests {
             installed_components: vec![ComponentType::Runtime],
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
+            cached_old_scriptlets: Vec::new(),
         };
 
         let pkg2 = PreparedPackage {
@@ -901,6 +915,7 @@ mod tests {
             installed_components: vec![ComponentType::Runtime],
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
+            cached_old_scriptlets: Vec::new(),
         };
 
         let installer = BatchInstaller::new("/tmp/test.db", "/", SandboxMode::None, true);
@@ -941,6 +956,7 @@ mod tests {
             installed_components: Vec::new(),
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
+            cached_old_scriptlets: Vec::new(),
         };
 
         let trove = pkg.to_trove(42);

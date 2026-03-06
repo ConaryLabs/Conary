@@ -121,11 +121,12 @@ impl RepositoryParser for ArchParser {
         // Download and decompress database (handled by RepositoryClient)
         let decompressed = self.download_database(repo_url)?;
 
-        // Extract tarball
+        // Single-pass: collect desc and depends data keyed by directory name.
+        // Directory names in .db.tar.gz are "{name}-{version}-{pkgrel}/".
         let mut archive = Archive::new(decompressed.as_slice());
-        let mut packages = Vec::new();
+        let mut desc_data: HashMap<String, String> = HashMap::new();
+        let mut depends_data: HashMap<String, String> = HashMap::new();
 
-        // Iterate through tarball entries
         for entry in archive.entries()? {
             let mut entry = entry
                 .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
@@ -134,143 +135,122 @@ impl RepositoryParser for ArchParser {
                 .path()
                 .map_err(|e| Error::ParseError(format!("Invalid path in tarball: {}", e)))?;
 
-            let path_str = path.to_string_lossy();
+            let path_str = path.to_string_lossy().to_string();
 
-            // Each package has a directory with desc and depends files
-            if path_str.ends_with("/desc") {
-                let mut content = String::new();
-                entry
-                    .read_to_string(&mut content)
-                    .map_err(|e| Error::ParseError(format!("Failed to read desc file: {}", e)))?;
+            if let Some(dir) = path_str.split('/').next() {
+                let dir_key = dir.to_string();
 
-                let desc_fields = self.parse_desc_file(&content);
-
-                // Extract required fields
-                let name = desc_fields
-                    .get("NAME")
-                    .and_then(|v| v.first())
-                    .ok_or_else(|| Error::ParseError("Missing %NAME% field".to_string()))?
-                    .clone();
-
-                let version = desc_fields
-                    .get("VERSION")
-                    .and_then(|v| v.first())
-                    .ok_or_else(|| Error::ParseError("Missing %VERSION% field".to_string()))?
-                    .clone();
-
-                let filename = desc_fields
-                    .get("FILENAME")
-                    .and_then(|v| v.first())
-                    .ok_or_else(|| Error::ParseError("Missing %FILENAME% field".to_string()))?
-                    .clone();
-
-                let checksum = desc_fields
-                    .get("SHA256SUM")
-                    .and_then(|v| v.first())
-                    .ok_or_else(|| Error::ParseError("Missing %SHA256SUM% field".to_string()))?
-                    .clone();
-
-                let size: u64 = desc_fields
-                    .get("CSIZE")
-                    .and_then(|v| v.first())
-                    .and_then(|s| s.parse().ok())
-                    .ok_or_else(|| {
-                        Error::ParseError("Missing or invalid %CSIZE% field".to_string())
+                if path_str.ends_with("/desc") {
+                    let mut content = String::new();
+                    entry.read_to_string(&mut content).map_err(|e| {
+                        Error::ParseError(format!("Failed to read desc file: {}", e))
                     })?;
-
-                let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
-
-                let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
-
-                // Build download URL
-                let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
-
-                // Build extra metadata
-                let mut extra = serde_json::Map::new();
-                if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
-                    extra.insert(
-                        "homepage".to_string(),
-                        serde_json::Value::String(url.clone()),
-                    );
+                    desc_data.insert(dir_key, content);
+                } else if path_str.ends_with("/depends") {
+                    let mut content = String::new();
+                    entry.read_to_string(&mut content).map_err(|e| {
+                        Error::ParseError(format!("Failed to read depends file: {}", e))
+                    })?;
+                    depends_data.insert(dir_key, content);
                 }
-                if let Some(license) = desc_fields.get("LICENSE").and_then(|v| v.first()) {
-                    extra.insert(
-                        "license".to_string(),
-                        serde_json::Value::String(license.clone()),
-                    );
-                }
-                if let Some(builddate) = desc_fields.get("BUILDDATE").and_then(|v| v.first()) {
-                    extra.insert(
-                        "builddate".to_string(),
-                        serde_json::Value::String(builddate.clone()),
-                    );
-                }
-                if let Some(isize) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
-                    extra.insert(
-                        "installed_size".to_string(),
-                        serde_json::Value::String(isize.clone()),
-                    );
-                }
-                extra.insert(
-                    "format".to_string(),
-                    serde_json::Value::String("arch".to_string()),
-                );
-
-                let package = PackageMetadata {
-                    name,
-                    version,
-                    architecture,
-                    description,
-                    checksum,
-                    checksum_type: ChecksumType::Sha256,
-                    size,
-                    download_url,
-                    dependencies: Vec::new(), // Will be populated if depends file exists
-                    extra_metadata: serde_json::Value::Object(extra),
-                };
-
-                packages.push(package);
             }
         }
 
-        // Second pass: parse depends files and update dependencies
-        let mut archive = Archive::new(decompressed.as_slice());
-        let mut package_deps: HashMap<String, Vec<Dependency>> = HashMap::new();
+        // Build packages from collected data
+        let mut packages = Vec::new();
+        for (dir_key, desc_content) in &desc_data {
+            let desc_fields = self.parse_desc_file(desc_content);
 
-        for entry in archive.entries()? {
-            let mut entry = entry
-                .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
+            // Extract required fields
+            let name = desc_fields
+                .get("NAME")
+                .and_then(|v| v.first())
+                .ok_or_else(|| Error::ParseError("Missing %NAME% field".to_string()))?
+                .clone();
 
-            let path = entry
-                .path()
-                .map_err(|e| Error::ParseError(format!("Invalid path in tarball: {}", e)))?;
+            let version = desc_fields
+                .get("VERSION")
+                .and_then(|v| v.first())
+                .ok_or_else(|| Error::ParseError("Missing %VERSION% field".to_string()))?
+                .clone();
 
-            let path_str = path.to_string_lossy();
+            let filename = desc_fields
+                .get("FILENAME")
+                .and_then(|v| v.first())
+                .ok_or_else(|| Error::ParseError("Missing %FILENAME% field".to_string()))?
+                .clone();
 
-            if path_str.ends_with("/depends") {
-                // Extract package name from path (e.g., "bash-5.2.037-1/depends" -> "bash")
-                let pkg_name = path_str
-                    .split('/')
-                    .next()
-                    .and_then(|s| s.split('-').next())
-                    .unwrap_or("")
-                    .to_string();
+            let checksum = desc_fields
+                .get("SHA256SUM")
+                .and_then(|v| v.first())
+                .ok_or_else(|| Error::ParseError("Missing %SHA256SUM% field".to_string()))?
+                .clone();
 
-                let mut content = String::new();
-                entry.read_to_string(&mut content).map_err(|e| {
-                    Error::ParseError(format!("Failed to read depends file: {}", e))
+            let size: u64 = desc_fields
+                .get("CSIZE")
+                .and_then(|v| v.first())
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| {
+                    Error::ParseError("Missing or invalid %CSIZE% field".to_string())
                 })?;
 
-                let deps = self.parse_depends_file(&content);
-                package_deps.insert(pkg_name, deps);
-            }
-        }
+            let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
+            let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
 
-        // Update packages with their dependencies
-        for pkg in &mut packages {
-            if let Some(deps) = package_deps.remove(&pkg.name) {
-                pkg.dependencies = deps;
+            // Build download URL
+            let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
+
+            // Build extra metadata
+            let mut extra = serde_json::Map::new();
+            if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
+                extra.insert(
+                    "homepage".to_string(),
+                    serde_json::Value::String(url.clone()),
+                );
             }
+            if let Some(license) = desc_fields.get("LICENSE").and_then(|v| v.first()) {
+                extra.insert(
+                    "license".to_string(),
+                    serde_json::Value::String(license.clone()),
+                );
+            }
+            if let Some(builddate) = desc_fields.get("BUILDDATE").and_then(|v| v.first()) {
+                extra.insert(
+                    "builddate".to_string(),
+                    serde_json::Value::String(builddate.clone()),
+                );
+            }
+            if let Some(isize_val) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
+                extra.insert(
+                    "installed_size".to_string(),
+                    serde_json::Value::String(isize_val.clone()),
+                );
+            }
+            extra.insert(
+                "format".to_string(),
+                serde_json::Value::String("arch".to_string()),
+            );
+
+            // Match dependencies by directory key (correct for multi-hyphen names)
+            let dependencies = depends_data
+                .get(dir_key)
+                .map(|content| self.parse_depends_file(content))
+                .unwrap_or_default();
+
+            let package = PackageMetadata {
+                name,
+                version,
+                architecture,
+                description,
+                checksum,
+                checksum_type: ChecksumType::Sha256,
+                size,
+                download_url,
+                dependencies,
+                extra_metadata: serde_json::Value::Object(extra),
+            };
+
+            packages.push(package);
         }
 
         info!("Parsed {} packages from Arch repository", packages.len());

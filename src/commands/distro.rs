@@ -48,6 +48,7 @@ pub fn cmd_distro_info(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+// TODO: Drive this list from the database or registry instead of hardcoding
 pub fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
     println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");

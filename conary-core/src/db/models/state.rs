@@ -120,7 +120,7 @@ impl SystemState {
     /// Set this state as the active state (unsets all others)
     pub fn set_active(&self, conn: &Connection) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot set active without ID".to_string())
+            crate::error::Error::MissingId("Cannot set active without ID".to_string())
         })?;
 
         conn.execute("SAVEPOINT set_active", [])?;
@@ -181,7 +181,7 @@ impl SystemState {
     /// Get members of this state
     pub fn get_members(&self, conn: &Connection) -> Result<Vec<StateMember>> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot get members without ID".to_string())
+            crate::error::Error::MissingId("Cannot get members without ID".to_string())
         })?;
 
         StateMember::find_by_state(conn, id)
@@ -397,11 +397,11 @@ impl<'a> StateEngine<'a> {
     pub fn plan_restore(&self, target_state_id: i64) -> Result<RestorePlan> {
         // Get current active state
         let current = SystemState::get_active(self.conn)?
-            .ok_or_else(|| crate::error::Error::InitError("No active state found".to_string()))?;
+            .ok_or_else(|| crate::error::Error::NotFound("No active state found".to_string()))?;
 
         let current_id = current
             .id
-            .ok_or_else(|| crate::error::Error::InitError("Current state has no ID".to_string()))?;
+            .ok_or_else(|| crate::error::Error::MissingId("Current state has no ID".to_string()))?;
 
         // Get the diff from current to target
         let diff = StateDiff::compare(self.conn, current_id, target_state_id)?;
@@ -409,7 +409,7 @@ impl<'a> StateEngine<'a> {
         Ok(RestorePlan {
             from_state: current,
             to_state: SystemState::find_by_id(self.conn, target_state_id)?.ok_or_else(|| {
-                crate::error::Error::InitError("Target state not found".to_string())
+                crate::error::Error::NotFound("Target state not found".to_string())
             })?,
             to_remove: diff.removed,
             to_install: diff.added,

@@ -278,7 +278,6 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
         return Ok(());
     }
 
-    let _objects_dir = objects_dir(db_path);
 
     let mut modified_count = 0;
     let mut missing_count = 0;
@@ -345,7 +344,7 @@ pub fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
         println!(
             "  [{}] {} - {} ({})",
             id,
-            &backup.backup_hash[..12],
+            backup.backup_hash.get(..12).unwrap_or(&backup.backup_hash),
             backup.reason,
             created
         );

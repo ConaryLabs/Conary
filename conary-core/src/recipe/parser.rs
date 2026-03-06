@@ -35,13 +35,13 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
         ));
     }
 
-    // Validate checksum format
+    // Validate checksum format.
+    // Only sha256 and xxh128 are supported by verify_file_checksum in archive.rs.
     if !recipe.source.checksum.starts_with("sha256:")
-        && !recipe.source.checksum.starts_with("sha512:")
-        && !recipe.source.checksum.starts_with("blake3:")
+        && !recipe.source.checksum.starts_with("xxh128:")
     {
         return Err(Error::ParseError(format!(
-            "Invalid checksum format: {}. Expected sha256:..., sha512:..., or blake3:...",
+            "Invalid checksum format: {}. Expected sha256:... or xxh128:...",
             recipe.source.checksum
         )));
     }

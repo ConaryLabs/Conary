@@ -9,7 +9,8 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use std::fmt;
+use std::str::FromStr;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Column list for ConfigFile SELECT queries (avoids repetition across methods)
 const CONFIG_FILE_COLUMNS: &str = "id, file_id, path, trove_id, original_hash, current_hash, \
@@ -20,7 +21,8 @@ const CONFIG_BACKUP_COLUMNS: &str = "id, config_file_id, backup_hash, reason, ch
     created_at";
 
 /// Status of a configuration file
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum ConfigStatus {
     /// File is unchanged from package version
     Pristine,
@@ -31,32 +33,18 @@ pub enum ConfigStatus {
 }
 
 impl ConfigStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ConfigStatus::Pristine => "pristine",
-            ConfigStatus::Modified => "modified",
-            ConfigStatus::Missing => "missing",
-        }
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "pristine" => Some(ConfigStatus::Pristine),
-            "modified" => Some(ConfigStatus::Modified),
-            "missing" => Some(ConfigStatus::Missing),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for ConfigStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        Self::from_str(s).ok()
     }
 }
 
 /// Source that declared a file as configuration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum ConfigSource {
     /// Automatically detected (e.g., file in /etc/)
     Auto,
@@ -69,29 +57,12 @@ pub enum ConfigSource {
 }
 
 impl ConfigSource {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ConfigSource::Auto => "auto",
-            ConfigSource::Rpm => "rpm",
-            ConfigSource::Deb => "deb",
-            ConfigSource::Arch => "arch",
-        }
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "auto" => Some(ConfigSource::Auto),
-            "rpm" => Some(ConfigSource::Rpm),
-            "deb" => Some(ConfigSource::Deb),
-            "arch" => Some(ConfigSource::Arch),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for ConfigSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        Self::from_str(s).ok()
     }
 }
 
@@ -127,8 +98,8 @@ impl ConfigFile {
             file_id: None,
             path,
             trove_id,
-            original_hash: original_hash.clone(),
-            current_hash: Some(original_hash),
+            current_hash: Some(original_hash.clone()),
+            original_hash,
             noreplace: false,
             status: ConfigStatus::Pristine,
             modified_at: None,

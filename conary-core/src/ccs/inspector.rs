@@ -3,6 +3,7 @@
 //!
 //! Tools for reading and examining .ccs packages.
 
+use crate::ccs::binary_manifest::BinaryManifest;
 use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use anyhow::{Context, Result};
@@ -40,10 +41,22 @@ impl InspectedPackage {
         for entry in archive.entries()? {
             let mut entry = entry?;
             let entry_path = entry.path()?;
-            let entry_path_str = entry_path.to_string_lossy();
+            let entry_path_str = entry_path.to_string_lossy().to_string();
 
-            // Read MANIFEST.toml
-            if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
+            // Prefer CBOR MANIFEST over TOML
+            if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
+                let mut content = Vec::new();
+                entry.read_to_end(&mut content)?;
+                if let Ok(bin_manifest) = BinaryManifest::from_cbor(&content) {
+                    manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(
+                        &bin_manifest,
+                    ));
+                }
+            }
+            // Fall back to MANIFEST.toml
+            else if manifest.is_none()
+                && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
+            {
                 let mut content = String::new();
                 entry.read_to_string(&mut content)?;
                 manifest = Some(CcsManifest::parse(&content)?);
@@ -60,7 +73,9 @@ impl InspectedPackage {
             }
         }
 
-        let manifest = manifest.ok_or_else(|| anyhow::anyhow!("Package missing MANIFEST.toml"))?;
+        let manifest = manifest.ok_or_else(|| {
+            anyhow::anyhow!("Package missing both MANIFEST (CBOR) and MANIFEST.toml")
+        })?;
 
         // Collect files from components (spec says files live in components/*.json)
         let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();

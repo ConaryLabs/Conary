@@ -26,7 +26,9 @@ impl DeltaMetrics {
             1.0
         };
 
-        let bandwidth_saved = new_size as i64 - delta_size as i64;
+        let new_i64 = i64::try_from(new_size).unwrap_or(i64::MAX);
+        let delta_i64 = i64::try_from(delta_size).unwrap_or(i64::MAX);
+        let bandwidth_saved = new_i64.saturating_sub(delta_i64);
 
         Self {
             old_size,

@@ -37,16 +37,16 @@ pub struct DnaHash {
 impl DnaHash {
     /// Create a DNA hash from raw bytes
     ///
-    /// Returns an error if `bytes` is shorter than 32 bytes.
+    /// Returns an error if `bytes` is not exactly 32 bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DnaHashError> {
-        if bytes.len() < 32 {
+        if bytes.len() != 32 {
             return Err(DnaHashError::ShortInput {
                 expected: 32,
                 actual: bytes.len(),
             });
         }
         let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes[..32]);
+        arr.copy_from_slice(bytes);
         Ok(Self { bytes: arr })
     }
 

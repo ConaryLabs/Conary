@@ -271,7 +271,20 @@ impl MirrorHealthTracker {
         };
 
         let recency_bonus = match &health.last_success {
-            Some(ts) if !ts.is_empty() => 1.0,
+            Some(ts) if !ts.is_empty() => {
+                // Exponential decay: 1.0 if recent, decays toward 0.0 over hours
+                use chrono::NaiveDateTime;
+                let now = chrono::Utc::now().naive_utc();
+                NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S")
+                    .or_else(|_| NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S"))
+                    .map(|parsed| {
+                        let age_secs = (now - parsed).num_seconds().max(0) as f64;
+                        let hours = age_secs / 3600.0;
+                        // Half-life of 1 hour: score halves every hour
+                        (-hours * 0.693).exp()
+                    })
+                    .unwrap_or(0.5) // Unparseable timestamp gets a moderate score
+            }
             _ => 0.0,
         };
 

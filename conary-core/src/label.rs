@@ -23,6 +23,7 @@
 
 use std::fmt;
 use std::str::FromStr;
+use thiserror::Error;
 
 /// A Conary-style label identifying package provenance
 ///
@@ -160,42 +161,33 @@ impl FromStr for Label {
 }
 
 /// Errors that can occur when parsing a label
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LabelParseError {
     /// Missing @ separator
+    #[error("Missing '@' in label: {0}")]
     MissingAt(String),
     /// Missing : separator
+    #[error("Missing ':' in label: {0}")]
     MissingColon(String),
     /// Empty repository component
+    #[error("Empty repository in label: {0}")]
     EmptyRepository(String),
     /// Empty namespace component
+    #[error("Empty namespace in label: {0}")]
     EmptyNamespace(String),
     /// Empty tag component
+    #[error("Empty tag in label: {0}")]
     EmptyTag(String),
     /// Invalid characters in repository
+    #[error("Invalid repository name: {0}")]
     InvalidRepository(String),
     /// Invalid characters in namespace
+    #[error("Invalid namespace: {0}")]
     InvalidNamespace(String),
     /// Invalid characters in tag
+    #[error("Invalid tag: {0}")]
     InvalidTag(String),
 }
-
-impl fmt::Display for LabelParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LabelParseError::MissingAt(s) => write!(f, "Missing '@' in label: {}", s),
-            LabelParseError::MissingColon(s) => write!(f, "Missing ':' in label: {}", s),
-            LabelParseError::EmptyRepository(s) => write!(f, "Empty repository in label: {}", s),
-            LabelParseError::EmptyNamespace(s) => write!(f, "Empty namespace in label: {}", s),
-            LabelParseError::EmptyTag(s) => write!(f, "Empty tag in label: {}", s),
-            LabelParseError::InvalidRepository(s) => write!(f, "Invalid repository name: {}", s),
-            LabelParseError::InvalidNamespace(s) => write!(f, "Invalid namespace: {}", s),
-            LabelParseError::InvalidTag(s) => write!(f, "Invalid tag: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for LabelParseError {}
 
 /// A label path defines the search order for package resolution
 ///
@@ -265,6 +257,11 @@ impl LabelPath {
     /// Parse a label path from a colon-separated string
     ///
     /// Example: `repo1@ns:tag1:repo2@ns:tag2`
+    ///
+    /// Note: `:` is used both as the internal namespace:tag separator and as the
+    /// label-path delimiter. The parser uses `@` depth tracking to disambiguate,
+    /// which means input like `"a@b@c:d"` will not parse correctly (multiple `@`
+    /// before a `:`). This is an inherent limitation of the format.
     pub fn parse(s: &str) -> Result<Self, LabelParseError> {
         if s.is_empty() {
             return Ok(Self::new());

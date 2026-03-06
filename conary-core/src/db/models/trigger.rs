@@ -198,7 +198,7 @@ impl Trigger {
     pub fn get_dependencies(&self, conn: &Connection) -> Result<Vec<String>> {
         let id = self
             .id
-            .ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
+            .ok_or_else(|| crate::error::Error::MissingId("Trigger has no ID".to_string()))?;
         TriggerDependency::get_dependencies(conn, id)
     }
 
@@ -206,7 +206,7 @@ impl Trigger {
     pub fn add_dependency(&self, conn: &Connection, depends_on: &str) -> Result<()> {
         let id = self
             .id
-            .ok_or_else(|| crate::error::Error::InitError("Trigger has no ID".to_string()))?;
+            .ok_or_else(|| crate::error::Error::MissingId("Trigger has no ID".to_string()))?;
         TriggerDependency::add(conn, id, depends_on)
     }
 }

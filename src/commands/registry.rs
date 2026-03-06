@@ -92,8 +92,7 @@ pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
     )?;
     let sources: Vec<(String, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     if !sources.is_empty() {
         println!("  By source:");

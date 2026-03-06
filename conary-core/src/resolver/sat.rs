@@ -140,46 +140,12 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     // Intern version sets for dependencies
     provider.intern_all_dependency_version_sets();
 
-    // Build requirements: every installed package except those being removed
-    // should still have its dependencies satisfied
-    let mut requirements = Vec::new();
-    let mut excluded = Vec::new();
     let remove_set: std::collections::HashSet<&str> =
         to_remove.iter().map(String::as_str).collect();
 
-    // First pass: collect info without mutating
     let solvable_count = provider.solvable_count();
-    let mut to_exclude = Vec::new();
-    let mut to_require = Vec::new();
 
-    for i in 0..solvable_count {
-        let sid = resolvo::SolvableId(i as u32);
-        let pkg = provider.get_solvable(sid);
-        if remove_set.contains(pkg.name.as_str()) {
-            to_exclude.push((sid, pkg.name.clone()));
-        } else if pkg.trove_id.is_some() {
-            to_require.push((sid, pkg.name.clone()));
-        }
-    }
-
-    // Second pass: intern with mutable access
-    for (sid, name) in &to_exclude {
-        let reason = provider.intern_string(&format!("Removed by user: {name}"));
-        excluded.push((*sid, reason));
-    }
-    for (_sid, name) in &to_require {
-        let name_id = provider.intern_name(name);
-        let vs_id = provider.intern_version_set(name_id, VersionConstraint::Any);
-        requirements.push(ConditionalRequirement::from(vs_id));
-    }
-
-    // We need to mark excluded packages in the candidates
-    // Since we can't modify candidates after creation, we check if the removal
-    // causes any dependency to become unsatisfied using the graph-based approach
-    // as a fallback — the SAT approach is used when the full solver is invoked
-    // through engine.rs
-
-    // For now, use the dependency list to find direct + transitive reverse deps
+    // Find direct + transitive reverse deps
     let mut breaking = Vec::new();
     for i in 0..solvable_count {
         let sid = resolvo::SolvableId(i as u32);
@@ -209,28 +175,34 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
         }
     }
 
-    // Expand transitively: packages that depend on breaking packages also break
-    let mut breaking_set: std::collections::HashSet<String> = breaking.iter().cloned().collect();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for i in 0..solvable_count {
-            let sid = resolvo::SolvableId(i as u32);
-            let pkg = provider.get_solvable(sid);
-            if pkg.trove_id.is_none()
-                || remove_set.contains(pkg.name.as_str())
-                || breaking_set.contains(&pkg.name)
-            {
-                continue;
+    // Build reverse dependency map for O(N+E) transitive expansion
+    let mut reverse_deps: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for i in 0..solvable_count {
+        let sid = resolvo::SolvableId(i as u32);
+        let pkg = provider.get_solvable(sid);
+        if pkg.trove_id.is_none() || remove_set.contains(pkg.name.as_str()) {
+            continue;
+        }
+        if let Some(deps) = provider.get_dependency_list(sid) {
+            for (dep_name, _) in deps {
+                reverse_deps
+                    .entry(dep_name.to_string())
+                    .or_default()
+                    .push(pkg.name.clone());
             }
+        }
+    }
 
-            if let Some(deps) = provider.get_dependency_list(sid) {
-                for (dep_name, _) in deps {
-                    if breaking_set.contains(dep_name) {
-                        breaking_set.insert(pkg.name.clone());
-                        changed = true;
-                        break;
-                    }
+    // BFS from breaking packages through reverse deps
+    let mut breaking_set: std::collections::HashSet<String> = breaking.iter().cloned().collect();
+    let mut queue: std::collections::VecDeque<String> = breaking.iter().cloned().collect();
+    while let Some(broken) = queue.pop_front() {
+        if let Some(rdeps) = reverse_deps.get(&broken) {
+            for rdep in rdeps {
+                if !breaking_set.contains(rdep) && !remove_set.contains(rdep.as_str()) {
+                    breaking_set.insert(rdep.clone());
+                    queue.push_back(rdep.clone());
                 }
             }
         }

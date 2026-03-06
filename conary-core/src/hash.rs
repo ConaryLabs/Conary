@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{self, Read};
 use std::str::FromStr;
-use xxhash_rust::xxh3::xxh3_128;
+use thiserror::Error;
+use xxhash_rust::xxh3::{Xxh3Default, xxh3_128};
 
 /// Hash algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -97,29 +98,18 @@ impl FromStr for HashAlgorithm {
 }
 
 /// Hash computation errors
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HashError {
     /// Unknown hash algorithm name
+    #[error("unknown hash algorithm: {0}")]
     UnknownAlgorithm(String),
     /// Hash string has wrong length for algorithm
+    #[error("invalid hash length: expected {expected}, got {got}")]
     InvalidLength { expected: usize, got: usize },
     /// Hash string contains invalid hex characters
+    #[error("invalid hex in hash: {0}")]
     InvalidHex(String),
 }
-
-impl fmt::Display for HashError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownAlgorithm(name) => write!(f, "unknown hash algorithm: {}", name),
-            Self::InvalidLength { expected, got } => {
-                write!(f, "invalid hash length: expected {}, got {}", expected, got)
-            }
-            Self::InvalidHex(s) => write!(f, "invalid hex in hash: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for HashError {}
 
 /// A hash value with its algorithm
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -196,7 +186,7 @@ pub struct Hasher {
 
 enum HasherState {
     Sha256(Sha256),
-    Xxh128(Vec<u8>), // XXH3 doesn't have incremental API, buffer data
+    Xxh128(Xxh3Default),
 }
 
 impl Hasher {
@@ -204,7 +194,7 @@ impl Hasher {
     pub fn new(algorithm: HashAlgorithm) -> Self {
         let state = match algorithm {
             HashAlgorithm::Sha256 => HasherState::Sha256(Sha256::new()),
-            HashAlgorithm::Xxh128 => HasherState::Xxh128(Vec::new()),
+            HashAlgorithm::Xxh128 => HasherState::Xxh128(Xxh3Default::new()),
         };
         Self { algorithm, state }
     }
@@ -213,7 +203,7 @@ impl Hasher {
     pub fn update(&mut self, data: &[u8]) {
         match &mut self.state {
             HasherState::Sha256(hasher) => hasher.update(data),
-            HasherState::Xxh128(buffer) => buffer.extend_from_slice(data),
+            HasherState::Xxh128(hasher) => hasher.update(data),
         }
     }
 
@@ -221,7 +211,7 @@ impl Hasher {
     pub fn finalize(self) -> Hash {
         let value = match self.state {
             HasherState::Sha256(hasher) => format!("{:x}", hasher.finalize()),
-            HasherState::Xxh128(buffer) => format!("{:032x}", xxh3_128(&buffer)),
+            HasherState::Xxh128(hasher) => format!("{:032x}", hasher.digest128()),
         };
         Hash::new_unchecked(self.algorithm, value)
     }
@@ -287,24 +277,13 @@ pub fn xxh128(data: &[u8]) -> String {
 // =============================================================================
 
 /// Verification result error
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{algorithm} mismatch: expected {expected}, got {actual}")]
 pub struct VerifyError {
     pub expected: String,
     pub actual: String,
     pub algorithm: HashAlgorithm,
 }
-
-impl fmt::Display for VerifyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} mismatch: expected {}, got {}",
-            self.algorithm, self.expected, self.actual
-        )
-    }
-}
-
-impl std::error::Error for VerifyError {}
 
 /// Verify bytes match an expected hash
 ///

@@ -204,19 +204,7 @@ impl FileEntry {
 
     /// Format size as human-readable string
     pub fn size_human(&self) -> String {
-        const KB: i64 = 1024;
-        const MB: i64 = KB * 1024;
-        const GB: i64 = MB * 1024;
-
-        if self.size >= GB {
-            format!("{:.1}G", self.size as f64 / GB as f64)
-        } else if self.size >= MB {
-            format!("{:.1}M", self.size as f64 / MB as f64)
-        } else if self.size >= KB {
-            format!("{:.1}K", self.size as f64 / KB as f64)
-        } else {
-            format!("{}", self.size)
-        }
+        super::format_size(self.size)
     }
 
     /// Delete a file by path

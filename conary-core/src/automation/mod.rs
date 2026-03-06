@@ -328,11 +328,20 @@ impl AutomationSummary {
     }
 }
 
-/// Parse a duration string like "24h", "7d", "30m"
+/// Parse a duration string like "24h", "7d", "30m", "daily", "weekly"
 pub fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(Duration::from_secs(0));
+    }
+
+    // Handle word-form durations used by UpdateAutomation.frequency
+    match s {
+        "hourly" => return Ok(Duration::from_secs(3600)),
+        "daily" => return Ok(Duration::from_secs(86400)),
+        "weekly" => return Ok(Duration::from_secs(604800)),
+        "monthly" => return Ok(Duration::from_secs(2_592_000)), // 30 days
+        _ => {}
     }
 
     // Validate input is ASCII to avoid panics from split_at on multi-byte chars

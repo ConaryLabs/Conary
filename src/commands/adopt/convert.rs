@@ -144,11 +144,12 @@ pub fn cmd_adopt_convert(
 
     // 4. Configure rayon thread pool
     if let Some(j) = jobs {
-        // build_global returns Err if already initialized; that is fine
-        rayon::ThreadPoolBuilder::new()
+        if let Err(e) = rayon::ThreadPoolBuilder::new()
             .num_threads(j)
             .build_global()
-            .ok();
+        {
+            warn!("Could not set thread pool to {j} threads (already initialized): {e}");
+        }
     }
 
     // 5. Progress tracking

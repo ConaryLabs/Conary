@@ -107,17 +107,21 @@ pub async fn execute_enhance_job(
         spec.batch_size
     );
 
-    // Get database connection
-    let conn = state.open_db()?;
-
-    // Determine which packages to enhance
-    let trove_ids = if spec.trove_ids.is_empty() {
-        // Get pending packages by priority
-        get_pending_by_priority(&conn, spec.batch_size)
-            .map_err(|e| conary_core::Error::IoError(e.to_string()))?
-    } else {
-        spec.trove_ids.clone()
-    };
+    // Run the blocking database query on a background thread to avoid
+    // blocking the async executor.
+    let state_clone = state.clone();
+    let spec_clone = spec.clone();
+    let trove_ids = tokio::task::spawn_blocking(move || -> Result<Vec<i64>, conary_core::Error> {
+        let conn = state_clone.open_db()?;
+        if spec_clone.trove_ids.is_empty() {
+            get_pending_by_priority(&conn, spec_clone.batch_size)
+                .map_err(|e| conary_core::Error::IoError(e.to_string()))
+        } else {
+            Ok(spec_clone.trove_ids.clone())
+        }
+    })
+    .await
+    .map_err(|e| conary_core::Error::IoError(format!("Task join error: {e}")))??;
 
     if trove_ids.is_empty() {
         info!("No packages pending enhancement");
@@ -139,129 +143,135 @@ pub async fn execute_enhance_job(
         spec.types.clone()
     };
 
-    let options = EnhancementOptions {
-        types,
-        force: spec.force,
-        install_root: PathBuf::from("/"),
-        fail_fast: false,
-        parallel: true,
-        parallel_workers: 0,
-        cancel_token: Some(cancel_token.clone()),
-    };
+    // Run the main enhancement loop on a blocking thread since
+    // EnhancementRunner does synchronous file I/O and database queries.
+    let state_for_loop = state.clone();
+    let cancel_for_loop = cancel_token.clone();
+    tokio::task::spawn_blocking(move || -> Result<EnhanceJobResult, conary_core::Error> {
+        let conn = state_for_loop.open_db()?;
 
-    let runner = EnhancementRunner::with_options(&conn, options);
+        let options = EnhancementOptions {
+            types,
+            force: spec.force,
+            install_root: PathBuf::from("/"),
+            fail_fast: false,
+            parallel: true,
+            parallel_workers: 0,
+            cancel_token: Some(cancel_for_loop.clone()),
+        };
 
-    // Process each package
-    let mut result = EnhanceJobResult {
-        processed: 0,
-        succeeded: 0,
-        failed: 0,
-        skipped: 0,
-        packages: Vec::new(),
-    };
+        let runner = EnhancementRunner::with_options(&conn, options);
 
-    let total = trove_ids.len();
+        let mut job_result = EnhanceJobResult {
+            processed: 0,
+            succeeded: 0,
+            failed: 0,
+            skipped: 0,
+            packages: Vec::new(),
+        };
 
-    for (idx, trove_id) in trove_ids.iter().enumerate() {
-        // Check for cancellation
-        if cancel_token.load(Ordering::Relaxed) {
-            info!("Enhancement job cancelled after {} packages", idx);
-            break;
-        }
+        let total = trove_ids.len();
 
-        // Get package name for events
-        let package_name =
-            get_package_name(&conn, *trove_id).unwrap_or_else(|| format!("trove_{}", trove_id));
+        for (idx, trove_id) in trove_ids.iter().enumerate() {
+            // Check for cancellation
+            if cancel_for_loop.load(Ordering::Relaxed) {
+                info!("Enhancement job cancelled after {} packages", idx);
+                break;
+            }
 
-        // Emit start event
-        state.emit(DaemonEvent::EnhancementStarted {
-            trove_id: *trove_id,
-            package_name: package_name.clone(),
-        });
+            let package_name = get_package_name(&conn, *trove_id)
+                .unwrap_or_else(|| format!("trove_{}", trove_id));
 
-        // Emit progress event
-        state.emit(DaemonEvent::EnhancementProgress {
-            trove_id: *trove_id,
-            package_name: package_name.clone(),
-            current: (idx + 1) as u32,
-            total: total as u32,
-            phase: "analyzing".to_string(),
-        });
+            state_for_loop.emit(DaemonEvent::EnhancementStarted {
+                trove_id: *trove_id,
+                package_name: package_name.clone(),
+            });
 
-        // Run enhancement
-        match runner.enhance(*trove_id) {
-            Ok(enhancement_result) => {
-                result.processed += 1;
+            state_for_loop.emit(DaemonEvent::EnhancementProgress {
+                trove_id: *trove_id,
+                package_name: package_name.clone(),
+                current: (idx + 1) as u32,
+                total: total as u32,
+                phase: "analyzing".to_string(),
+            });
 
-                let error_msg = if enhancement_result.is_success() {
-                    result.succeeded += 1;
-                    state.emit(DaemonEvent::EnhancementCompleted {
+            match runner.enhance(*trove_id) {
+                Ok(enhancement_result) => {
+                    job_result.processed += 1;
+
+                    let error_msg = if enhancement_result.is_success() {
+                        job_result.succeeded += 1;
+                        state_for_loop.emit(DaemonEvent::EnhancementCompleted {
+                            trove_id: *trove_id,
+                            package_name: package_name.clone(),
+                            capabilities_inferred: enhancement_result
+                                .applied
+                                .contains(&EnhancementType::Capabilities),
+                        });
+                        None
+                    } else {
+                        job_result.failed += 1;
+                        let msg = enhancement_result
+                            .failed
+                            .iter()
+                            .map(|(t, e)| format!("{}: {}", t, e))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        state_for_loop.emit(DaemonEvent::EnhancementFailed {
+                            trove_id: *trove_id,
+                            package_name: package_name.clone(),
+                            error: msg.clone(),
+                        });
+                        Some(msg)
+                    };
+
+                    job_result.packages.push(EnhancedPackageResult {
                         trove_id: *trove_id,
-                        package_name: package_name.clone(),
-                        capabilities_inferred: enhancement_result
+                        name: package_name,
+                        success: enhancement_result.is_success(),
+                        error: error_msg,
+                        applied: enhancement_result
                             .applied
-                            .contains(&EnhancementType::Capabilities),
+                            .iter()
+                            .map(|t| t.to_string())
+                            .collect(),
                     });
-                    None
-                } else {
-                    result.failed += 1;
-                    let msg = enhancement_result
-                        .failed
-                        .iter()
-                        .map(|(t, e)| format!("{}: {}", t, e))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    state.emit(DaemonEvent::EnhancementFailed {
+                }
+                Err(e) => {
+                    job_result.processed += 1;
+                    job_result.failed += 1;
+
+                    let error_msg = e.to_string();
+                    warn!("Enhancement failed for {}: {}", package_name, error_msg);
+
+                    state_for_loop.emit(DaemonEvent::EnhancementFailed {
                         trove_id: *trove_id,
                         package_name: package_name.clone(),
-                        error: msg.clone(),
+                        error: error_msg.clone(),
                     });
-                    Some(msg)
-                };
 
-                result.packages.push(EnhancedPackageResult {
-                    trove_id: *trove_id,
-                    name: package_name,
-                    success: enhancement_result.is_success(),
-                    error: error_msg,
-                    applied: enhancement_result
-                        .applied
-                        .iter()
-                        .map(|t| t.to_string())
-                        .collect(),
-                });
-            }
-            Err(e) => {
-                result.processed += 1;
-                result.failed += 1;
-
-                let error_msg = e.to_string();
-                warn!("Enhancement failed for {}: {}", package_name, error_msg);
-
-                state.emit(DaemonEvent::EnhancementFailed {
-                    trove_id: *trove_id,
-                    package_name: package_name.clone(),
-                    error: error_msg.clone(),
-                });
-
-                result.packages.push(EnhancedPackageResult {
-                    trove_id: *trove_id,
-                    name: package_name,
-                    success: false,
-                    error: Some(error_msg),
-                    applied: Vec::new(),
-                });
+                    job_result.packages.push(EnhancedPackageResult {
+                        trove_id: *trove_id,
+                        name: package_name,
+                        success: false,
+                        error: Some(error_msg),
+                        applied: Vec::new(),
+                    });
+                }
             }
         }
-    }
 
-    info!(
-        "Enhancement job complete: {} processed, {} succeeded, {} failed",
-        result.processed, result.succeeded, result.failed
-    );
+        info!(
+            "Enhancement job complete: {} processed, {} succeeded, {} failed",
+            job_result.processed, job_result.succeeded, job_result.failed
+        );
 
-    Ok(result)
+        Ok(job_result)
+    })
+    .await
+    .map_err(|e| conary_core::Error::IoError(format!("Task join error: {e}")))?
 }
+
 
 /// Get package name from trove ID
 fn get_package_name(conn: &Connection, trove_id: i64) -> Option<String> {

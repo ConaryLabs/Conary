@@ -227,15 +227,12 @@ impl RecipeGraph {
         path: &mut Vec<String>,
         cycles: &mut Vec<Vec<String>>,
     ) {
-        visited.insert(node.to_string());
         rec_stack.insert(node.to_string());
         path.push(node.to_string());
 
         if let Some(deps) = self.edges.get(node) {
             for dep in deps {
-                if !visited.contains(dep) {
-                    self.find_cycles_dfs(dep, visited, rec_stack, path, cycles);
-                } else if rec_stack.contains(dep) {
+                if rec_stack.contains(dep) {
                     // Found a cycle - extract it from path
                     let cycle_start = path
                         .iter()
@@ -243,12 +240,16 @@ impl RecipeGraph {
                         .expect("cycle node must be in current path");
                     let cycle: Vec<String> = path[cycle_start..].to_vec();
                     cycles.push(cycle);
+                } else if !visited.contains(dep) {
+                    self.find_cycles_dfs(dep, visited, rec_stack, path, cycles);
                 }
             }
         }
 
         path.pop();
         rec_stack.remove(node);
+        // Mark as permanently visited only after all descendants are explored
+        visited.insert(node.to_string());
     }
 
     /// Get all recipes that a given recipe transitively depends on

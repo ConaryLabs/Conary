@@ -56,7 +56,10 @@ pub fn ingest_canonical_mappings(
                 .and_then(|engine| engine.get_kind(&canonical_name))
                 .unwrap_or_else(|| "package".to_string());
 
-            let mut canonical = CanonicalPackage::new(canonical_name, kind);
+            let mut canonical = CanonicalPackage::new(canonical_name.clone(), kind);
+
+            // Check if this canonical package already exists before inserting
+            let already_exists = CanonicalPackage::find_by_name(&tx, &canonical_name)?.is_some();
             let id = canonical.insert_or_ignore(&tx)?;
 
             if let Some(canonical_id) = id {
@@ -67,7 +70,11 @@ pub fn ingest_canonical_mappings(
                     "curated".to_string(),
                 );
                 imp.insert_or_ignore(&tx)?;
-                new_count += 1;
+
+                // Only count genuinely new canonical packages
+                if !already_exists {
+                    new_count += 1;
+                }
             }
         } else {
             unmatched.push(pkg);

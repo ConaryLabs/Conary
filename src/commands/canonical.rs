@@ -25,7 +25,10 @@ pub fn cmd_canonical_show(db_path: &str, name: &str) -> Result<()> {
     }
     println!();
 
-    let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
+    let pkg_id = pkg.id.ok_or_else(|| {
+        anyhow::anyhow!("Canonical package '{}' has no database ID", name)
+    })?;
+    let impls = PackageImplementation::find_by_canonical(&conn, pkg_id)?;
     if impls.is_empty() {
         println!("No implementations found.");
     } else {
@@ -68,8 +71,7 @@ pub fn cmd_canonical_unmapped(db_path: &str) -> Result<()> {
     )?;
     let names: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     if names.is_empty() {
         println!("All installed packages have canonical mappings.");

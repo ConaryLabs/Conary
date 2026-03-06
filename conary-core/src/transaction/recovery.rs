@@ -13,10 +13,10 @@
 //! is written.
 
 use crate::Result;
-use crate::filesystem::path::{safe_join, sanitize_path};
+use crate::filesystem::path::safe_join;
 use rusqlite::Connection;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::journal::{JournalRecord, TransactionJournal, find_incomplete_journals};
 use super::{FileType, TransactionEngine, TransactionState, move_file_atomic};
@@ -258,7 +258,7 @@ pub fn rollback_transaction(
                             use std::os::unix::ffi::OsStrExt;
                             let target = std::ffi::OsStr::from_bytes(&target_bytes);
                             let target_str = target.to_string_lossy();
-                            if sanitize_path(&*target_str).is_err() {
+                            if !validate_symlink_target_for_recovery(&target_str) {
                                 log::warn!(
                                     "Refusing to restore symlink with unsafe target {:?}",
                                     final_path
@@ -282,7 +282,7 @@ pub fn rollback_transaction(
                         if let Ok(content) = fs::read_to_string(backup_path) {
                             if let Some(target) = content.strip_prefix("SYMLINK:") {
                                 // Sanitize symlink target to prevent path traversal
-                                if sanitize_path(target).is_err() {
+                                if !validate_symlink_target_for_recovery(target) {
                                     log::warn!(
                                         "Refusing to restore symlink with unsafe target {:?} -> {}",
                                         final_path,
@@ -318,6 +318,20 @@ pub fn rollback_transaction(
                         );
                     }
                 }
+            }
+
+            JournalRecord::FileMoved { path, .. } => {
+                // A file was moved from stage to final -- undo by removing from final
+                let final_path = safe_join(root, Path::new(path))?;
+                if final_path.exists() || final_path.symlink_metadata().is_ok() {
+                    if let Err(e) = fs::remove_file(&final_path) {
+                        log::warn!("Failed to remove moved file {:?}: {}", final_path, e);
+                    }
+                }
+            }
+
+            JournalRecord::FileRemoved { .. } => {
+                // File was removed -- the Backup handler will restore it
             }
 
             _ => {}
@@ -419,6 +433,23 @@ fn get_changeset_id_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<i64> {
         .unwrap_or(0);
 
     Ok(id)
+}
+
+/// Permissive symlink target validation for recovery.
+///
+/// Unlike `sanitize_path` (which rejects `..`), this allows `..` components
+/// since legitimate symlink targets commonly use them (e.g., `../lib/libfoo.so`).
+/// Only rejects null bytes and Windows-style prefixes.
+fn validate_symlink_target_for_recovery(target: &str) -> bool {
+    if target.is_empty() || target.contains('\0') {
+        return false;
+    }
+    for component in Path::new(target).components() {
+        if matches!(component, Component::Prefix(_)) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

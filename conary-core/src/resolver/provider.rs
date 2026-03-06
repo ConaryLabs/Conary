@@ -207,14 +207,9 @@ impl<'db> ConaryProvider<'db> {
 
         // Query the provides table for packages that provide this capability
         if let Ok(Some(provide)) = ProvideEntry::find_by_capability(self.conn, capability) {
-            // Look up the trove name from the trove_id
-            if let Ok(troves) = Trove::list_all(self.conn) {
-                for trove in troves {
-                    if trove.id == Some(provide.trove_id) {
-                        providers.push(trove.name.clone());
-                        break;
-                    }
-                }
+            // Direct O(1) lookup by trove_id instead of scanning all troves
+            if let Ok(Some(trove)) = Trove::find_by_id(self.conn, provide.trove_id) {
+                providers.push(trove.name.clone());
             }
         }
 
@@ -457,8 +452,11 @@ impl DependencyProvider for ConaryProvider<'_> {
                     if let Some(vs_id) = vs_id {
                         requirements.push(ConditionalRequirement::from(vs_id));
                     }
-                    // If no version set found, skip — the dependency wasn't
-                    // pre-interned (will be handled at the sat.rs level)
+                } else {
+                    tracing::warn!(
+                        "Dependency '{}' not interned during resolution -- skipping",
+                        dep_name
+                    );
                 }
             }
         }

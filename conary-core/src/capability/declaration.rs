@@ -755,7 +755,9 @@ static SCRIPTLET_SYSCALLS: &[&str] = &[
     // Directory
     "chdir",
     "fchdir",
-    "chroot",
+    // chroot intentionally omitted -- it is the classic container-escape
+    // primitive and scriptlets should not need it (the container already
+    // handles filesystem isolation).
     // Random
     "getrandom",
     // Threading

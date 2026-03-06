@@ -12,7 +12,7 @@ use crate::trust::keys::canonical_json;
 use crate::trust::metadata::{MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TufKey};
 use crate::trust::{TrustError, TrustResult};
 use chrono::Utc;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::Digest;
 use std::collections::BTreeMap;
 
@@ -20,6 +20,11 @@ use std::collections::BTreeMap;
 ///
 /// Checks each signature against the provided keys and verifies that
 /// the threshold is met.
+///
+/// IMPORTANT: Callers MUST pass only role-specific keys, not the full
+/// `root.keys` map. Use `extract_role_keys()` to filter keys for the
+/// target role. Passing the full key map would allow any key for any
+/// role to satisfy the threshold.
 pub fn verify_signatures<T: serde::Serialize>(
     signed: &Signed<T>,
     role: Role,
@@ -86,7 +91,7 @@ fn verify_ed25519_signature(
         .map_err(|e| TrustError::VerificationFailed(format!("Invalid signature: {e}")))?;
 
     verifying_key
-        .verify(message, &signature)
+        .verify_strict(message, &signature)
         .map_err(|_| TrustError::VerificationFailed("Signature verification failed".to_string()))
 }
 

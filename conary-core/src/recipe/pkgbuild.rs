@@ -390,8 +390,29 @@ fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
     };
     let url = url.replace("${pkgver%.*}", version_without_last);
 
-    // Replace actual values with placeholders where they appear literally
-    let url = url.replace(pkgname, "%(name)s");
+    // Only replace literal values when they match whole URL path segments
+    // to avoid corrupting URLs. For example, a package named "lib" should NOT
+    // replace the "lib" substring in "calibre" or "libfoo".
+    // The $pkgname/${pkgname} shell variable replacements above are sufficient
+    // for most cases; this literal fallback only applies to whole-segment matches.
+    let url = if pkgname.len() >= 3 {
+        // Use word-boundary-like matching: only replace if the package name
+        // appears as a standalone segment (preceded/followed by /, -, _, or string boundary)
+        let pattern = format!(r"(?:^|[/\-_]){}(?:[/\-_.]|$)", regex::escape(pkgname));
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            if re.is_match(&url) {
+                url.replace(pkgname, "%(name)s")
+            } else {
+                url
+            }
+        } else {
+            url
+        }
+    } else {
+        // For very short names (1-2 chars), skip literal replacement entirely
+        // as it would cause too many false positives
+        url
+    };
     url.replace(pkgver, "%(version)s")
 }
 

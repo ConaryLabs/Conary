@@ -173,6 +173,9 @@ impl<'a> TriggerExecutor<'a> {
     }
 
     /// Execute a single trigger handler
+    // TODO: `execute_handler` and `execute_handler_in_target` share ~80% identical
+    // code. Extract the common post-spawn logic (timeout wait, output capture,
+    // status checking) into a shared helper function.
     fn execute_handler(&self, trigger: &Trigger) -> Result<Option<String>> {
         // Parse handler command
         let parts: Vec<&str> = trigger.handler.split_whitespace().collect();

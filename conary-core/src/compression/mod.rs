@@ -155,11 +155,17 @@ pub fn decompress_auto(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
     decompress(data, format)
 }
 
-/// Decompress a byte slice using the specified format
+/// Maximum decompressed output size (2 GiB) to guard against decompression bombs.
+pub const MAX_DECOMPRESS_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Decompress a byte slice using the specified format.
+///
+/// Output is capped at `MAX_DECOMPRESS_SIZE` bytes to prevent decompression bombs.
 pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, CompressionError> {
-    let mut decoder = create_decoder(data, format)?;
+    let decoder = create_decoder(data, format)?;
+    let mut limited = decoder.take(MAX_DECOMPRESS_SIZE);
     let mut output = Vec::new();
-    decoder
+    limited
         .read_to_end(&mut output)
         .map_err(|e| CompressionError::Decompression {
             format: format.name(),

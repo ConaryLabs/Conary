@@ -326,9 +326,11 @@ fn create_deb_archive(
     let file = File::create(output_path)?;
     let mut archive = ar::Builder::new(file);
 
-    // debian-binary must be first
+    // debian-binary must be first (use append_file with explicit name to ensure
+    // the ar entry is named exactly "debian-binary", not a temp directory path)
+    let mut debian_binary_file = File::open(debian_binary)?;
     archive
-        .append_path(debian_binary)
+        .append_file(b"debian-binary", &mut debian_binary_file)
         .context("Failed to add debian-binary")?;
 
     // control.tar.gz second

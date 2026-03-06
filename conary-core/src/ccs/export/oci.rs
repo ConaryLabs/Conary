@@ -153,6 +153,12 @@ struct OciLayout {
     image_layout_version: String,
 }
 
+/// A file entry for OCI layer construction, distinguishing regular files from symlinks
+enum OciFileEntry {
+    Regular { path: String, content: Vec<u8>, mode: u32 },
+    Symlink { path: String, target: String },
+}
+
 /// Export CCS packages to OCI image format
 pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -> Result<()> {
     if packages.is_empty() {
@@ -165,7 +171,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     fs::create_dir_all(&blobs_dir)?;
 
     // Parse packages and collect files
-    let mut all_files: Vec<(String, Vec<u8>, u32)> = Vec::new(); // (path, content, mode)
+    let mut all_files: Vec<OciFileEntry> = Vec::new();
     let mut package_names: Vec<String> = Vec::new();
     let mut container_config = ContainerConfig::default();
 
@@ -183,25 +189,36 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
         }
 
         // Extract file contents
-        let blobs = pkg.extract_all_content()?;
+        let mut blobs = pkg.extract_all_content()?;
         let files = pkg.file_entries();
 
         for file in files {
             if let Some(target) = &file.target {
-                // Symlink - store as special content
-                all_files.push((
-                    file.path.clone(),
-                    format!("symlink:{}", target).into_bytes(),
-                    file.mode,
-                ));
-            } else if let Some(content) = blobs.get(&file.hash) {
-                all_files.push((file.path.clone(), content.clone(), file.mode));
+                all_files.push(OciFileEntry::Symlink {
+                    path: file.path.clone(),
+                    target: target.clone(),
+                });
+            } else if let Some(content) = blobs.remove(&file.hash) {
+                // Take ownership of the blob to avoid cloning
+                all_files.push(OciFileEntry::Regular {
+                    path: file.path.clone(),
+                    content,
+                    mode: file.mode,
+                });
             }
         }
     }
 
     // Sort files for deterministic layer
-    all_files.sort_by(|a, b| a.0.cmp(&b.0));
+    all_files.sort_by(|a, b| {
+        let path_a = match a {
+            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
+        };
+        let path_b = match b {
+            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
+        };
+        path_a.cmp(path_b)
+    });
 
     // Create layer tarball
     let layer_data = create_layer_tarball(&all_files)?;
@@ -317,11 +334,14 @@ const LAYER_MTIME: u64 = 1_704_067_200;
 /// Write file entries into a tar archive, creating parent directories as needed
 fn write_tar_entries<W: std::io::Write>(
     archive: &mut Builder<W>,
-    files: &[(String, Vec<u8>, u32)],
+    files: &[OciFileEntry],
 ) -> Result<()> {
     let mut created_dirs = std::collections::HashSet::new();
 
-    for (path, content, mode) in files {
+    for entry in files {
+        let path = match entry {
+            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
+        };
         let clean_path = path.trim_start_matches('/');
 
         // Create parent directories
@@ -347,23 +367,25 @@ fn write_tar_entries<W: std::io::Write>(
             }
         }
 
-        if content.starts_with(b"symlink:") {
-            let target = String::from_utf8_lossy(&content[8..]);
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_mode(0o777);
-            header.set_size(0);
-            header.set_mtime(LAYER_MTIME);
-            header.set_cksum();
-            archive.append_link(&mut header, clean_path, target.as_ref())?;
-        } else {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Regular);
-            header.set_mode(*mode);
-            header.set_size(content.len() as u64);
-            header.set_mtime(LAYER_MTIME);
-            header.set_cksum();
-            archive.append_data(&mut header, clean_path, content.as_slice())?;
+        match entry {
+            OciFileEntry::Symlink { target, .. } => {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_mode(0o777);
+                header.set_size(0);
+                header.set_mtime(LAYER_MTIME);
+                header.set_cksum();
+                archive.append_link(&mut header, clean_path, target.as_str())?;
+            }
+            OciFileEntry::Regular { content, mode, .. } => {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_mode(*mode);
+                header.set_size(content.len() as u64);
+                header.set_mtime(LAYER_MTIME);
+                header.set_cksum();
+                archive.append_data(&mut header, clean_path, content.as_slice())?;
+            }
         }
     }
 
@@ -371,7 +393,7 @@ fn write_tar_entries<W: std::io::Write>(
 }
 
 /// Create a gzipped tar layer from files
-fn create_layer_tarball(files: &[(String, Vec<u8>, u32)]) -> Result<Vec<u8>> {
+fn create_layer_tarball(files: &[OciFileEntry]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     {
         let encoder = GzEncoder::new(&mut output, Compression::default());
@@ -384,7 +406,7 @@ fn create_layer_tarball(files: &[(String, Vec<u8>, u32)]) -> Result<Vec<u8>> {
 }
 
 /// Calculate SHA256 of uncompressed layer content (for diff_id)
-fn sha256_hex_uncompressed(files: &[(String, Vec<u8>, u32)]) -> Result<String> {
+fn sha256_hex_uncompressed(files: &[OciFileEntry]) -> Result<String> {
     let mut output = Vec::new();
     {
         let mut archive = Builder::new(&mut output);

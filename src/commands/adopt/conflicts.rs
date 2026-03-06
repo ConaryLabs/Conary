@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use conary_core::packages::rpm_query;
+use tracing::info;
 
 /// Check for conflicts between tracked packages and files
 pub fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
@@ -61,7 +62,11 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
     };
 
     // For adopted packages, verify the file still matches what RPM says
-    if rpm_query::is_rpm_available() {
+    // NOTE: This check only works on RPM-based systems. dpkg/pacman equivalents
+    // are not yet implemented.
+    if !rpm_query::is_rpm_available() {
+        info!("Overlapping file ownership check: skipped (only available for RPM-based systems)");
+    } else {
         let mut rpm_owners: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
 

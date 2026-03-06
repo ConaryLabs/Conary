@@ -30,6 +30,9 @@ pub enum ConaryStageError {
     #[error("Conary build failed: {0}")]
     ConaryBuildFailed(String),
 
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -103,68 +106,25 @@ impl ConaryStageBuilder {
     }
 
     /// Build Rust from source.
+    ///
+    /// Currently a stub -- returns an error to prevent the bootstrap pipeline
+    /// from silently "succeeding" with an empty output directory.
     pub fn build_rust(&self) -> Result<PathBuf, ConaryStageError> {
-        let rust_dir = self.work_dir.join("rust-build");
-        std::fs::create_dir_all(&rust_dir)?;
-
-        info!(
-            "Building Rust {} for {}",
-            RUST_VERSION,
-            self.config.triple()
-        );
-        info!("  Bootstrap URL: {}", self.rust_bootstrap_url());
-
-        // Step 1: Download bootstrap compiler
-        let bootstrap_dir = rust_dir.join("bootstrap");
-        std::fs::create_dir_all(&bootstrap_dir)?;
-        info!("  Step 1: Download Rust bootstrap binary");
-
-        // Step 2: Download Rust source
-        let source_dir = rust_dir.join("source");
-        std::fs::create_dir_all(&source_dir)?;
-        info!("  Step 2: Download Rust source");
-
-        // Step 3: Build with x.py
-        // ./x.py build --target <triple> --prefix <sysroot>/usr
-        let target = self.config.triple();
-        let prefix = self.sysroot.join("usr");
-        info!(
-            "  Step 3: Build Rust (target={target}, prefix={})",
-            prefix.display()
-        );
-
-        // Step 4: Install
-        info!("  Step 4: Install Rust to sysroot");
-
-        let rustc_path = prefix.join("bin/rustc");
-        info!("Rust build complete: {}", rustc_path.display());
-        Ok(rustc_path)
+        Err(ConaryStageError::NotImplemented(
+            "build_rust() is a stub -- Rust cross-compilation build logic is not yet implemented"
+                .to_string(),
+        ))
     }
 
     /// Build Conary from source.
+    ///
+    /// Currently a stub -- returns an error to prevent the bootstrap pipeline
+    /// from silently "succeeding" with an empty output directory.
     pub fn build_conary(&self) -> Result<PathBuf, ConaryStageError> {
-        let conary_dir = self.work_dir.join("conary-build");
-        std::fs::create_dir_all(&conary_dir)?;
-
-        info!("Building Conary for {}", self.config.triple());
-
-        // Step 1: Copy or checkout Conary source
-        info!("  Step 1: Prepare Conary source");
-
-        // Step 2: Set up cross-compilation environment
-        let target = self.config.triple();
-        info!("  Step 2: Configure cargo for target {target}");
-
-        // Step 3: Build with cargo
-        // cargo build --release --target <triple>
-        info!("  Step 3: cargo build --release");
-
-        // Step 4: Install binary
-        let binary_path = self.sysroot.join("usr/bin/conary");
-        info!("  Step 4: Install to {}", binary_path.display());
-
-        info!("Conary build complete");
-        Ok(binary_path)
+        Err(ConaryStageError::NotImplemented(
+            "build_conary() is a stub -- Conary cross-compilation build logic is not yet implemented"
+                .to_string(),
+        ))
     }
 
     /// Run the full Conary stage.
@@ -284,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_conary_stage_build_creates_dirs() {
+    fn test_conary_stage_build_returns_not_implemented() {
         let dir = tempfile::tempdir().unwrap();
         let sysroot = dir.path().join("sysroot");
 
@@ -298,11 +258,10 @@ mod tests {
         let config = BootstrapConfig::new();
         let builder =
             ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
-        assert!(builder.build().is_ok());
-
-        // Verify work directories were created
-        assert!(dir.path().join("rust-build/bootstrap").exists());
-        assert!(dir.path().join("rust-build/source").exists());
-        assert!(dir.path().join("conary-build").exists());
+        let err = builder.build().unwrap_err();
+        assert!(
+            matches!(err, ConaryStageError::NotImplemented(_)),
+            "Expected NotImplemented error, got: {err}"
+        );
     }
 }

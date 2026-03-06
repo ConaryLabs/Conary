@@ -160,7 +160,7 @@ pub fn cmd_update(
                 ) {
                     (Ok(repo_ver), Ok(installed_ver)) => {
                         if repo_ver <= installed_ver {
-                            debug!(
+                            warn!(
                                 "Skipping {} {} (installed {} is same or newer)",
                                 trove.name, repo_pkg.version, trove.version
                             );
@@ -168,10 +168,11 @@ pub fn cmd_update(
                         }
                     }
                     _ => {
-                        debug!(
-                            "Could not compare versions for {}: {} vs {}",
+                        warn!(
+                            "Could not compare versions for {}: {} vs {}, skipping",
                             trove.name, repo_pkg.version, trove.version
                         );
+                        continue;
                     }
                 }
 
@@ -392,7 +393,7 @@ pub fn cmd_update(
                     Ok(_) => {
                         println!("  [OK] Delta applied");
                         deltas_applied += 1;
-                        total_bytes_saved += repo_pkg.size - delta_info.delta_size;
+                        total_bytes_saved += (repo_pkg.size - delta_info.delta_size).max(0);
                     }
                     Err(e) => {
                         warn!(
@@ -686,6 +687,29 @@ pub fn cmd_update_group(
             if repo_pkg.version != trove.version
                 && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
             {
+                // Skip if the repository version is not actually newer than installed
+                match (
+                    RpmVersion::parse(&repo_pkg.version),
+                    RpmVersion::parse(&trove.version),
+                ) {
+                    (Ok(repo_ver), Ok(installed_ver)) => {
+                        if repo_ver <= installed_ver {
+                            debug!(
+                                "Skipping {} {} (installed {} is same or newer)",
+                                member.member_name, repo_pkg.version, trove.version
+                            );
+                            continue;
+                        }
+                    }
+                    _ => {
+                        warn!(
+                            "Could not compare versions for {}: {} vs {}, skipping",
+                            member.member_name, repo_pkg.version, trove.version
+                        );
+                        continue;
+                    }
+                }
+
                 // Filter by security if requested
                 if security_only && !repo_pkg.is_security_update {
                     continue;

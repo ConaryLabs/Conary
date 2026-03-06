@@ -742,7 +742,21 @@ impl Sandbox {
         // Try pivot_root first (more secure than chroot -- cannot be escaped
         // from within a mount namespace). Fall back to chroot if pivot_root fails.
         if let Err(e) = self.try_pivot_root(root) {
-            // pivot_root failed -- fall back to chroot with a warning
+            // In Enforce mode, chroot fallback is not acceptable because a
+            // privileged process can escape chroot via chroot(".") + chdir("..").
+            let is_enforce = self
+                .config
+                .capability_policy
+                .as_ref()
+                .is_some_and(|p| p.mode == EnforcementMode::Enforce);
+            if is_enforce {
+                return Err(Error::ScriptletError(format!(
+                    "pivot_root failed ({}) and chroot fallback is not allowed in Enforce mode",
+                    e
+                )));
+            }
+
+            // pivot_root failed -- fall back to chroot with a warning (Warn/Audit mode)
             warn!(
                 "pivot_root failed ({}), falling back to chroot. \
                  This is less secure -- chroot can be escaped by a privileged process.",

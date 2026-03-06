@@ -111,6 +111,18 @@ fn is_cloudflare_ip(ip: &IpAddr) -> bool {
     }
 }
 
+/// Check if a connection IP is from a trusted proxy source (loopback or private).
+///
+/// Only connections from these addresses are allowed to set proxy headers like
+/// X-Forwarded-For or X-Real-IP. This prevents external clients from spoofing
+/// client IP addresses.
+fn is_trusted_proxy_source(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
 /// Parse a CIDR notation string into (network_u32, prefix_length)
 fn parse_cidr(cidr: &str) -> Option<(u32, u32)> {
     let parts: Vec<&str> = cidr.split('/').collect();
@@ -146,8 +158,13 @@ fn extract_client_ip(
         }
     }
 
-    // Check trusted proxy header if configured
+    // Check trusted proxy header if configured.
+    // Only honor the header when the direct connection is from a loopback or
+    // private address (i.e., the server is behind a reverse proxy). This
+    // prevents external clients from spoofing the header to bypass rate
+    // limiting and ban lists.
     if let Some(header_name) = trusted_proxy_header
+        && is_trusted_proxy_source(conn_ip)
         && let Some(ip) = headers
             .get(header_name)
             .and_then(|v| v.to_str().ok())
@@ -701,12 +718,12 @@ async fn negative_cache_stats(
     }))
 }
 
-/// Clear the negative cache
+/// Clear the negative cache (removes all entries, not just expired ones)
 async fn negative_cache_clear(
     axum::extract::State(state): axum::extract::State<Arc<RwLock<ServerState>>>,
 ) -> Json<serde_json::Value> {
     let state_guard = state.read().await;
-    let removed = state_guard.negative_cache.cleanup().await;
+    let removed = state_guard.negative_cache.clear_all().await;
 
     Json(serde_json::json!({
         "cleared": true,

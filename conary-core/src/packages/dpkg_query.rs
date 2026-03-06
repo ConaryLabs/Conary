@@ -88,12 +88,12 @@ pub fn list_installed_packages() -> Result<Vec<String>> {
 pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
     debug!("Querying package info: {}", name);
 
-    // Query format: Package|Version|Architecture|Description|Maintainer|Homepage|Section|Priority|Installed-Size
+    // Use ASCII Record Separator (\x1e) to avoid conflicts with | in descriptions
     let output = Command::new("dpkg-query")
         .args([
             "-W",
             "-f",
-            "${Package}|${Version}|${Architecture}|${Description}|${Maintainer}|${Homepage}|${Section}|${Priority}|${Installed-Size}\n",
+            "${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\n",
             name,
         ])
         .output()
@@ -107,7 +107,7 @@ pub fn query_package(name: &str) -> Result<InstalledDpkgInfo> {
     }
 
     let line = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = line.trim().split('|').collect();
+    let parts: Vec<&str> = line.trim().split('\x1e').collect();
 
     if parts.len() < 3 {
         return Err(Error::InitError(format!(
@@ -397,9 +397,9 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
 pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {
     debug!("Querying all installed dpkg packages with info");
 
-    // Query format: Package|Version|Architecture
+    // Use ASCII Record Separator (\x1e) to avoid conflicts with | in field values
     let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Package}|${Version}|${Architecture}\n"])
+        .args(["-W", "-f", "${Package}\x1e${Version}\x1e${Architecture}\n"])
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
 
@@ -413,7 +413,7 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {
     let mut packages = HashMap::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let parts: Vec<&str> = line.split('|').collect();
+        let parts: Vec<&str> = line.split('\x1e').collect();
         if parts.len() < 3 {
             warn!("Skipping malformed dpkg-query output line: {}", line);
             continue;

@@ -259,6 +259,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     let content_status = verify_content_hashes(&files, &blobs)?;
 
     // Verify Merkle root against binary manifest's content_root
+    let mut merkle_valid = true;
     if let Some(ref bin_manifest) = binary_manifest
         && !MerkleTree::verify_root(&bin_manifest.components, &bin_manifest.content_root)
     {
@@ -267,16 +268,19 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
             "Merkle root mismatch: expected {}, got {}",
             bin_manifest.content_root.value, calculated.value
         ));
+        merkle_valid = false;
     }
 
-    let valid = matches!(
-        (&signature_status, &content_status),
-        (
-            SignatureStatus::Valid { .. } | SignatureStatus::Unsigned,
-            ContentStatus::Valid { .. }
+    let valid = merkle_valid
+        && matches!(
+            (&signature_status, &content_status),
+            (
+                SignatureStatus::Valid { .. } | SignatureStatus::Unsigned,
+                ContentStatus::Valid { .. }
+            )
         )
-    ) && (policy.allow_unsigned
-        || matches!(signature_status, SignatureStatus::Valid { .. }));
+        && (policy.allow_unsigned
+            || matches!(signature_status, SignatureStatus::Valid { .. }));
 
     Ok(VerificationResult {
         valid,
@@ -562,5 +566,85 @@ mod tests {
 
         let status = verify_content_hashes(&files, &blobs).unwrap();
         assert!(matches!(status, ContentStatus::Valid { files_checked: 0 }));
+    }
+
+    #[test]
+    fn test_chunked_file_verification_valid() {
+        use crate::ccs::builder::{FileEntry, FileType};
+
+        let chunk1_data = b"chunk one data";
+        let chunk2_data = b"chunk two data";
+        let chunk1_hash = hash::sha256(chunk1_data);
+        let chunk2_hash = hash::sha256(chunk2_data);
+
+        let files = vec![FileEntry {
+            path: "/usr/bin/app".to_string(),
+            hash: "whole-file-hash-unused-for-chunked".to_string(),
+            size: (chunk1_data.len() + chunk2_data.len()) as u64,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: Some(vec![chunk1_hash.clone(), chunk2_hash.clone()]),
+        }];
+
+        let mut blobs = HashMap::new();
+        blobs.insert(chunk1_hash, chunk1_data.to_vec());
+        blobs.insert(chunk2_hash, chunk2_data.to_vec());
+
+        let status = verify_content_hashes(&files, &blobs).unwrap();
+        assert!(matches!(status, ContentStatus::Valid { files_checked: 1 }));
+    }
+
+    #[test]
+    fn test_chunked_file_verification_missing_chunk() {
+        use crate::ccs::builder::{FileEntry, FileType};
+
+        let chunk1_data = b"chunk one data";
+        let chunk1_hash = hash::sha256(chunk1_data);
+        let missing_hash = "deadbeef".repeat(8);
+
+        let files = vec![FileEntry {
+            path: "/usr/bin/app".to_string(),
+            hash: "unused".to_string(),
+            size: 100,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: Some(vec![chunk1_hash.clone(), missing_hash]),
+        }];
+
+        let mut blobs = HashMap::new();
+        blobs.insert(chunk1_hash, chunk1_data.to_vec());
+
+        let status = verify_content_hashes(&files, &blobs).unwrap();
+        assert!(matches!(status, ContentStatus::Invalid { .. }));
+    }
+
+    #[test]
+    fn test_chunked_file_verification_hash_mismatch() {
+        use crate::ccs::builder::{FileEntry, FileType};
+
+        let chunk_data = b"real data";
+        let chunk_hash = hash::sha256(chunk_data);
+
+        let files = vec![FileEntry {
+            path: "/usr/bin/app".to_string(),
+            hash: "unused".to_string(),
+            size: chunk_data.len() as u64,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: Some(vec![chunk_hash.clone()]),
+        }];
+
+        let mut blobs = HashMap::new();
+        // Insert wrong content for the hash
+        blobs.insert(chunk_hash, b"tampered data".to_vec());
+
+        let status = verify_content_hashes(&files, &blobs).unwrap();
+        assert!(matches!(status, ContentStatus::Invalid { .. }));
     }
 }

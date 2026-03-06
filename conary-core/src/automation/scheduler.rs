@@ -210,6 +210,11 @@ impl AutomationDaemon {
     }
 
     /// Start the daemon (blocking)
+    ///
+    /// WARNING: `run()` and `stop()` both require `&mut self`, making it
+    /// impossible to call `stop()` from another thread while `run()` is active.
+    /// TODO: Replace `running: bool` with `Arc<AtomicBool>` and change `stop()`
+    /// to take `&self` so it can be called from a signal handler or other thread.
     pub fn run(&mut self) -> Result<()> {
         self.running = true;
         tracing::info!("Automation daemon started");

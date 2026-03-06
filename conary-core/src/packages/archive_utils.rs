@@ -1,3 +1,5 @@
+// conary-core/src/packages/archive_utils.rs
+
 use crate::error::Result;
 use crate::filesystem::path::sanitize_path;
 pub use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;

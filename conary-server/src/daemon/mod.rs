@@ -407,6 +407,8 @@ pub struct DaemonState {
     db_path: PathBuf,
     /// When the daemon started (for uptime tracking)
     start_time: std::time::Instant,
+    /// Pre-built auth checker (respects config.require_polkit)
+    pub auth_checker: auth::AuthChecker,
 }
 
 impl DaemonState {
@@ -447,6 +449,15 @@ impl DaemonState {
         let (event_tx, _) = broadcast::channel(1024);
         let db_path = config.db_path.clone();
 
+        // Create AuthChecker once, respecting the config's require_polkit setting.
+        // This avoids per-request getgrnam syscalls and ensures disable_polkit is
+        // actually wired through.
+        let auth_checker = if config.require_polkit {
+            auth::AuthChecker::new()
+        } else {
+            auth::AuthChecker::new().disable_polkit()
+        };
+
         Self {
             config,
             system_lock,
@@ -455,6 +466,7 @@ impl DaemonState {
             metrics: DaemonMetrics::default(),
             db_path,
             start_time: std::time::Instant::now(),
+            auth_checker,
         }
     }
 

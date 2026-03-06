@@ -4,14 +4,15 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use std::str::FromStr;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Column list for Changeset SELECT queries (avoids repetition across methods)
 const CHANGESET_COLUMNS: &str = "id, description, status, created_at, applied_at, \
     rolled_back_at, reversed_by_changeset_id, tx_uuid";
 
 /// Changeset status
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
 pub enum ChangesetStatus {
     Pending,
     Applied,
@@ -20,24 +21,7 @@ pub enum ChangesetStatus {
 
 impl ChangesetStatus {
     pub fn as_str(&self) -> &str {
-        match self {
-            ChangesetStatus::Pending => "pending",
-            ChangesetStatus::Applied => "applied",
-            ChangesetStatus::RolledBack => "rolled_back",
-        }
-    }
-}
-
-impl FromStr for ChangesetStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(ChangesetStatus::Pending),
-            "applied" => Ok(ChangesetStatus::Applied),
-            "rolled_back" => Ok(ChangesetStatus::RolledBack),
-            _ => Err(format!("Invalid changeset status: {s}")),
-        }
+        self.as_ref()
     }
 }
 
@@ -125,7 +109,7 @@ impl Changeset {
     /// Update changeset status
     pub fn update_status(&mut self, conn: &Connection, new_status: ChangesetStatus) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update changeset without ID".to_string())
+            crate::error::Error::MissingId("Cannot update changeset without ID".to_string())
         })?;
 
         let timestamp_field = match new_status {
@@ -159,7 +143,7 @@ impl Changeset {
             rusqlite::Error::FromSqlConversionFailure(
                 2,
                 rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                Box::new(e),
             )
         })?;
 

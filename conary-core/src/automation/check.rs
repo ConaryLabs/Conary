@@ -253,7 +253,13 @@ impl<'a> AutomationChecker<'a> {
 
         let orphans: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("Failed to read file record from database: {}", e);
+                    None
+                }
+            })
             .collect();
 
         Ok(orphans)
@@ -313,7 +319,10 @@ impl<'a> AutomationChecker<'a> {
                     }
                 }
                 None => {
-                    // First time this package is detected as orphan - mark it
+                    // First time this package is detected as orphan - mark it.
+                    // NOTE: This is a write side effect in a "check" method.
+                    // The orphan_since timestamp must be persisted to track the
+                    // grace period across invocations.
                     debug!("Marking package {} as orphaned at {}", name, now_str);
                     if let Err(e) = self.conn.execute(
                         "UPDATE troves SET orphan_since = ?1 WHERE name = ?2",

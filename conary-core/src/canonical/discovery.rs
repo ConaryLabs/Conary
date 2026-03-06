@@ -208,11 +208,18 @@ fn extract_soname(path: &str) -> Option<String> {
 pub fn strip_distro_affixes(name: &str) -> String {
     let mut s = name.to_string();
 
-    // Strip common suffixes (order matters: longest first).
+    // Strip common suffixes repeatedly (order matters: longest first).
+    // Loop to handle compound suffixes like "-devel-doc".
     let suffixes = ["-devel", "-common", "-tools", "-libs", "-dev", "-doc"];
-    for suffix in &suffixes {
-        if let Some(stripped) = s.strip_suffix(suffix) {
-            s = stripped.to_string();
+    loop {
+        let before = s.len();
+        for suffix in &suffixes {
+            if let Some(stripped) = s.strip_suffix(suffix) {
+                s = stripped.to_string();
+                break;
+            }
+        }
+        if s.len() == before {
             break;
         }
     }

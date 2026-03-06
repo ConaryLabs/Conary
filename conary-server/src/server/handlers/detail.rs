@@ -81,6 +81,13 @@ pub async fn get_package_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let db_path = state.read().await.config.db_path.clone();
 
     let result =
@@ -112,6 +119,13 @@ pub async fn get_versions(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let db_path = state.read().await.config.db_path.clone();
 
     let result =
@@ -142,6 +156,13 @@ pub async fn get_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let db_path = state.read().await.config.db_path.clone();
 
     let result =

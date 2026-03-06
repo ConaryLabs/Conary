@@ -418,7 +418,7 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledPacmanInfo>> {
         let info = InstalledPacmanInfo {
             name: name.clone(),
             version,
-            arch: "x86_64".to_string(), // Pacman -Q doesn't show arch, assume native
+            arch: std::env::consts::ARCH.to_string(), // Pacman -Q doesn't show arch, assume native
             description: None,
             url: None,
             licenses: None,

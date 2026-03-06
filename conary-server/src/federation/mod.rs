@@ -315,12 +315,15 @@ impl Federation {
                     // Convert to Peer and add to registry
                     match discovered.to_peer() {
                         Ok(peer) => {
-                            // Use try_write to avoid blocking in the callback
+                            // Use try_write to avoid blocking in the callback.
+                            // If the lock is contended, the peer is silently
+                            // dropped. This is logged at warn level so operators
+                            // can detect persistent lock contention.
                             if let Ok(mut registry) = peers.try_write() {
                                 registry.add(peer);
                             } else {
-                                debug!(
-                                    "[mdns] Could not acquire write lock, peer will be added later"
+                                warn!(
+                                    "[mdns] Could not acquire write lock, discovered peer dropped"
                                 );
                             }
                         }
@@ -517,9 +520,19 @@ impl Federation {
             return false;
         }
 
-        let peers = self.peers.read().await;
-        let all_peers = peers.all();
-        let candidates = self.router.select_peers(hash, &all_peers);
+        // Snapshot the peer list and drop the lock before doing network I/O,
+        // matching the pattern used in fetch_chunk_inner. Holding the lock
+        // across HEAD requests would starve writers (add_peer, remove_peer,
+        // mDNS discovery).
+        let candidates: Vec<Peer> = {
+            let peers = self.peers.read().await;
+            let all_peers = peers.all();
+            self.router
+                .select_peers(hash, &all_peers)
+                .into_iter()
+                .cloned()
+                .collect()
+        };
 
         for peer in &candidates {
             if self.circuits.is_open(&peer.id) {

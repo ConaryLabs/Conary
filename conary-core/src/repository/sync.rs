@@ -30,7 +30,7 @@ pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
     let dt = DateTime::parse_from_rfc3339(timestamp)
         .map_err(|e| Error::ParseError(format!("Invalid timestamp: {e}")))?;
 
-    Ok(dt.timestamp() as u64)
+    Ok(u64::try_from(dt.timestamp()).unwrap_or(0))
 }
 
 /// Rebase a download URL from metadata source to content source
@@ -243,7 +243,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
                 repo_id,
                 entry.name,
                 entry.version,
-                String::new(), // Remi handles verification server-side
+                "remi:server-verified".to_string(), // Marker to avoid false-positive checksum mismatch
                 0,             // Size unknown until download
                 download_url,
             );

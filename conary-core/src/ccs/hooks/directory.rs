@@ -46,14 +46,32 @@ impl HookExecutor {
     ) -> Result<()> {
         use std::os::unix::fs::{PermissionsExt, chown};
 
-        // Parse mode string (e.g., "0755" or "755") as octal
-        let mode_val = u32::from_str_radix(mode.trim_start_matches('0'), 8)
+        // Parse mode string (e.g., "0755" or "755") as octal.
+        // Strip at most one leading '0' to preserve significant zeros
+        // (e.g., "0700" -> "700", not "7").
+        let mode_str = mode
+            .strip_prefix("0o")
+            .or_else(|| mode.strip_prefix('0'))
+            .unwrap_or(mode);
+        let mode_val = u32::from_str_radix(mode_str, 8)
             .with_context(|| format!("Invalid mode string: {}", mode))?;
 
         // Apply mode using std::fs
         let permissions = std::fs::Permissions::from_mode(mode_val);
         std::fs::set_permissions(path, permissions)
             .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+
+        // When installing to a non-root target (chroot, image build), the
+        // user/group may not exist on the host. Skip ownership changes and
+        // log a warning in that case.
+        if self.root != Path::new("/") {
+            debug!(
+                "Skipping ownership change for '{}' (target root is '{}', not '/')",
+                path.display(),
+                self.root.display()
+            );
+            return Ok(());
+        }
 
         // Look up uid from owner name
         let uid = nix::unistd::User::from_name(owner)

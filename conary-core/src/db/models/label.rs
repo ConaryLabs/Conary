@@ -197,7 +197,7 @@ impl LabelEntry {
     /// Update label description
     pub fn update_description(&self, conn: &Connection, description: Option<&str>) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update label without ID".to_string())
+            crate::error::Error::MissingId("Cannot update label without ID".to_string())
         })?;
 
         conn.execute(
@@ -211,7 +211,7 @@ impl LabelEntry {
     /// Set parent label for branch history tracking
     pub fn set_parent(&mut self, conn: &Connection, parent_id: Option<i64>) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update label without ID".to_string())
+            crate::error::Error::MissingId("Cannot update label without ID".to_string())
         })?;
 
         conn.execute(
@@ -235,7 +235,7 @@ impl LabelEntry {
     /// Get all child labels (labels that have this as parent)
     pub fn children(&self, conn: &Connection) -> Result<Vec<Self>> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot find children without label ID".to_string())
+            crate::error::Error::MissingId("Cannot find children without label ID".to_string())
         })?;
 
         let sql =
@@ -252,7 +252,7 @@ impl LabelEntry {
     /// Set the repository for package resolution through this label
     pub fn set_repository(&mut self, conn: &Connection, repo_id: Option<i64>) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update label without ID".to_string())
+            crate::error::Error::MissingId("Cannot update label without ID".to_string())
         })?;
 
         conn.execute(
@@ -271,7 +271,7 @@ impl LabelEntry {
         delegate_label_id: Option<i64>,
     ) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot update label without ID".to_string())
+            crate::error::Error::MissingId("Cannot update label without ID".to_string())
         })?;
 
         conn.execute(
@@ -300,7 +300,7 @@ impl LabelEntry {
     /// Find all labels that delegate to this label
     pub fn delegating_labels(&self, conn: &Connection) -> Result<Vec<Self>> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot find delegating labels without ID".to_string())
+            crate::error::Error::MissingId("Cannot find delegating labels without ID".to_string())
         })?;
 
         let sql = format!(
@@ -336,7 +336,7 @@ impl LabelEntry {
     /// Count packages using this label
     pub fn package_count(&self, conn: &Connection) -> Result<i64> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::InitError("Cannot count packages without label ID".to_string())
+            crate::error::Error::MissingId("Cannot count packages without label ID".to_string())
         })?;
 
         let count: i64 = conn.query_row(

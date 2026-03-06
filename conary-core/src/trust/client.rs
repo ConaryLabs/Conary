@@ -60,6 +60,7 @@ impl TufClient {
         // Step 1: Fetch and verify timestamp
         let timestamp_bytes = self.fetch_metadata("timestamp.json")?;
         let signed_timestamp: Signed<TimestampMetadata> = serde_json::from_slice(&timestamp_bytes)?;
+        verify_type_field(&signed_timestamp.signed.type_field, "timestamp")?;
 
         let (ts_keys, ts_threshold) = extract_role_keys(&trusted_root.signed, Role::Timestamp)?;
         verify_signatures(&signed_timestamp, Role::Timestamp, &ts_keys, ts_threshold)?;
@@ -90,6 +91,7 @@ impl TufClient {
             verify_metadata_hash(snapshot_ref, &snapshot_bytes)?;
 
             let signed: Signed<SnapshotMetadata> = serde_json::from_slice(&snapshot_bytes)?;
+            verify_type_field(&signed.signed.type_field, "snapshot")?;
             let (snap_keys, snap_threshold) =
                 extract_role_keys(&trusted_root.signed, Role::Snapshot)?;
             verify_signatures(&signed, Role::Snapshot, &snap_keys, snap_threshold)?;
@@ -106,6 +108,10 @@ impl TufClient {
         };
 
         // Step 3: Check for root rotation
+        // TODO: Per TUF spec 5.3, root rotation should happen BEFORE
+        // timestamp/snapshot verification (step 1). Currently root is checked
+        // after snapshot, meaning stale root keys could be used for timestamp/
+        // snapshot verification if a root key was rotated.
         let current_root = if let Some(root_meta) = signed_snapshot.signed.meta.get("root.json") {
             if root_meta.version > root_version {
                 info!(
@@ -134,6 +140,7 @@ impl TufClient {
             }
 
             let signed: Signed<TargetsMetadata> = serde_json::from_slice(&targets_bytes)?;
+            verify_type_field(&signed.signed.type_field, "targets")?;
             let (tgt_keys, tgt_threshold) = extract_role_keys(&current_root.signed, Role::Targets)?;
             verify_signatures(&signed, Role::Targets, &tgt_keys, tgt_threshold)?;
             verify_not_expired(Role::Targets, &signed.signed.expires)?;
@@ -155,6 +162,8 @@ impl TufClient {
         )?;
 
         // Persist verified state
+        // TODO: Wrap persist operations in an explicit database transaction
+        // to prevent partial state if the process crashes mid-persist.
         self.persist_metadata(conn, "timestamp", &signed_timestamp)?;
         if snapshot_changed {
             self.persist_metadata(conn, "snapshot", &signed_snapshot)?;
@@ -187,6 +196,7 @@ impl TufClient {
     /// time we accept root metadata without prior trust.
     pub fn bootstrap(&self, conn: &Connection, root_json: &[u8]) -> TrustResult<()> {
         let signed_root: Signed<RootMetadata> = serde_json::from_slice(root_json)?;
+        verify_type_field(&signed_root.signed.type_field, "root")?;
 
         // Verify root is self-signed
         let (root_keys, root_threshold) = extract_role_keys(&signed_root.signed, Role::Root)?;
@@ -215,7 +225,13 @@ impl TufClient {
     const MAX_TUF_METADATA_SIZE: u64 = 10 * 1024 * 1024;
 
     /// Fetch metadata from the TUF base URL
+    ///
+    /// Reads the response body in chunks to enforce the size limit during
+    /// download, preventing a malicious server from streaming unbounded data
+    /// when Content-Length is absent.
     fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
+        use std::io::Read;
+
         let url = format!("{}/{}", self.tuf_base_url, filename);
         debug!("Fetching TUF metadata: {}", url);
 
@@ -240,12 +256,19 @@ impl TufClient {
             )));
         }
 
-        let body = response
-            .bytes()
+        // Read body in chunks, enforcing size limit during download.
+        // This prevents a malicious server from omitting Content-Length
+        // and streaming unlimited data.
+        let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
+        let mut body = Vec::with_capacity(
+            response.content_length().unwrap_or(4096).min(Self::MAX_TUF_METADATA_SIZE) as usize,
+        );
+        response
+            .take(Self::MAX_TUF_METADATA_SIZE + 1)
+            .read_to_end(&mut body)
             .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
 
-        // Also check actual body size (Content-Length may be absent or wrong)
-        if body.len() as u64 > Self::MAX_TUF_METADATA_SIZE {
+        if body.len() > max_size {
             return Err(TrustError::FetchError(format!(
                 "TUF metadata {filename} exceeds size limit: {} bytes (max {} bytes)",
                 body.len(),
@@ -253,7 +276,7 @@ impl TufClient {
             )));
         }
 
-        Ok(body.to_vec())
+        Ok(body)
     }
 
     /// Fetch and verify a new root version during key rotation
@@ -322,7 +345,7 @@ impl TufClient {
             )
             .optional()?;
 
-        Ok(version.map(|v| v as u64))
+        Ok(version.and_then(|v| u64::try_from(v).ok()))
     }
 
     /// Load stored snapshot metadata from the database
@@ -496,6 +519,20 @@ impl TufClient {
 
         Ok(())
     }
+}
+
+/// Verify that a metadata type_field matches the expected role name.
+///
+/// Prevents a server from serving the wrong metadata type (e.g., returning
+/// targets.json content when snapshot.json is requested).
+fn verify_type_field(type_field: &str, expected: &str) -> TrustResult<()> {
+    if type_field != expected {
+        return Err(TrustError::ConsistencyError(format!(
+            "Metadata type mismatch: expected '{}', got '{}'",
+            expected, type_field
+        )));
+    }
+    Ok(())
 }
 
 /// Trait for extracting common fields from TUF metadata types

@@ -12,7 +12,7 @@
 
 use crate::error::Result;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
@@ -152,19 +152,25 @@ impl FileDeployer {
             Err(e) => return Err(e.into()),
         }
 
-        // Try hardlink first, fall back to copy from the already-open file handle
-        let method = if self.try_hardlink(&cas_path, &target_path) {
+        // Try hardlink first (only when CAS permissions already match, to avoid
+        // corrupting the shared inode), fall back to copy from the already-open fd.
+        let method = if self.permissions_match_cas(&cas_path, permissions)
+            && self.try_hardlink(&cas_path, &target_path)
+        {
             "hardlink"
         } else {
-            // Hardlink failed, fall back to copy from the open fd
-            debug!("Hardlink failed for {}, falling back to copy", path);
+            debug!(
+                "Using copy for {} (permissions differ or hardlink failed)",
+                path
+            );
             self.copy_from_cas_fd(&cas_file, &target_path)?;
             "copy"
         };
 
-        // Set permissions
+        // Only set permissions on copies -- hardlinks share the CAS inode and
+        // modifying their mode bits would corrupt the shared object.
         #[cfg(unix)]
-        {
+        if method == "copy" {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(permissions);
             fs::set_permissions(&target_path, perms)?;
@@ -175,6 +181,21 @@ impl FileDeployer {
             path, hash, permissions, method
         );
         Ok(())
+    }
+
+    /// Check if the CAS object's permissions already match the requested mode.
+    #[cfg(unix)]
+    fn permissions_match_cas(&self, cas_path: &Path, requested: u32) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(cas_path)
+            .map(|m| (m.permissions().mode() & 0o777) == (requested & 0o777))
+            .unwrap_or(false)
+    }
+
+    /// Non-Unix stub: always returns false so the copy path is taken.
+    #[cfg(not(unix))]
+    fn permissions_match_cas(&self, _cas_path: &Path, _requested: u32) -> bool {
+        false
     }
 
     /// Try to create a hardlink, returns true if successful
@@ -195,6 +216,7 @@ impl FileDeployer {
         let temp_path = target_path.with_file_name(temp_name);
         let mut target = fs::File::create(&temp_path)?;
         let mut reader: &fs::File = source;
+        reader.seek(std::io::SeekFrom::Start(0))?;
         std::io::copy(&mut reader, &mut target)?;
         target.sync_all()?;
 

@@ -160,9 +160,17 @@ impl<'db> Resolver<'db> {
                 if self.graph.get_node(&edge.to).is_none() {
                     missing
                         .entry(edge.to.clone())
-                        .or_insert_with(|| (edge.constraint.clone(), Vec::new()))
-                        .1
-                        .push(package_name.clone());
+                        .and_modify(|(existing_constraint, requirers)| {
+                            // Keep the stricter constraint when multiple packages
+                            // require the same missing dependency
+                            if *existing_constraint == VersionConstraint::Any
+                                && edge.constraint != VersionConstraint::Any
+                            {
+                                *existing_constraint = edge.constraint.clone();
+                            }
+                            requirers.push(package_name.clone());
+                        })
+                        .or_insert_with(|| (edge.constraint.clone(), vec![package_name.clone()]));
                 }
             }
         }

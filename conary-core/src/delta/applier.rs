@@ -45,8 +45,8 @@ impl DeltaApplier {
     ) -> Result<String> {
         info!(
             "Applying delta to {} (expecting {})",
-            &old_hash[..8],
-            &expected_new_hash[..8]
+            old_hash.get(..8).unwrap_or(old_hash),
+            expected_new_hash.get(..8).unwrap_or(expected_new_hash)
         );
 
         // Retrieve old version from CAS

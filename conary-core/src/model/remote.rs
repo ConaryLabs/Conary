@@ -241,14 +241,26 @@ pub fn fetch_remote_collection(
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {}: {}", url, e)))?;
 
-    // Verify content hash
-    let computed_hash = hash::sha256_prefixed(&bytes);
-    if !data.content_hash.is_empty() && computed_hash != data.content_hash {
-        return Err(ModelError::RemoteFetchError(format!(
-            "Content hash mismatch for remote collection '{}': expected {}, computed {}",
-            name, data.content_hash, computed_hash
-        )));
-    }
+    // Verify content hash.
+    // The content_hash is computed over JSON with content_hash set to "".
+    // To verify, we must zero out content_hash before hashing, otherwise
+    // we'd be hashing JSON that includes the hash itself (chicken-and-egg).
+    let computed_hash = if !data.content_hash.is_empty() {
+        let mut verification_data = data.clone();
+        verification_data.content_hash = String::new();
+        let verification_json = serde_json::to_vec(&verification_data)
+            .map_err(|e| ModelError::RemoteFetchError(format!("Re-serialize failed: {}", e)))?;
+        let hash = hash::sha256_prefixed(&verification_json);
+        if hash != data.content_hash {
+            return Err(ModelError::RemoteFetchError(format!(
+                "Content hash mismatch for remote collection '{}': expected {}, computed {}",
+                name, data.content_hash, hash
+            )));
+        }
+        hash
+    } else {
+        hash::sha256_prefixed(&bytes)
+    };
 
     // Cache the result
     let expires_at = (Utc::now() + chrono::Duration::seconds(DEFAULT_CACHE_TTL_SECS))

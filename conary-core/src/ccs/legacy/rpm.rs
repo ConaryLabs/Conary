@@ -20,12 +20,12 @@ struct RpmHookConverter;
 
 impl HookConverter for RpmHookConverter {
     fn pre_install(&self, hooks: &Hooks) -> Option<String> {
-        let mut lines = Vec::new();
+        let mut lines = vec!["#!/bin/sh".to_string(), "set -e".to_string()];
 
         // Create groups and users
         lines.extend(CommonHookGenerator::user_creation_commands(hooks));
 
-        if lines.is_empty() {
+        if lines.len() <= 2 {
             return None;
         }
 
@@ -33,7 +33,7 @@ impl HookConverter for RpmHookConverter {
     }
 
     fn post_install(&self, hooks: &Hooks) -> Option<String> {
-        let mut lines = Vec::new();
+        let mut lines = vec!["#!/bin/sh".to_string(), "set -e".to_string()];
 
         lines.extend(CommonHookGenerator::directory_commands(hooks));
         lines.extend(CommonHookGenerator::systemd_commands(hooks, true));
@@ -45,12 +45,12 @@ impl HookConverter for RpmHookConverter {
     }
 
     fn pre_remove(&self, hooks: &Hooks) -> Option<String> {
-        let mut lines = Vec::new();
+        let mut lines = vec!["#!/bin/sh".to_string(), "set -e".to_string()];
 
         // Stop services before removal
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
 
-        if lines.is_empty() {
+        if lines.len() <= 2 {
             return None;
         }
 
@@ -58,8 +58,9 @@ impl HookConverter for RpmHookConverter {
     }
 
     fn post_remove(&self, _hooks: &Hooks) -> Option<String> {
-        // ldconfig
-        Some("/sbin/ldconfig".to_string())
+        Some(
+            ["#!/bin/sh", "set -e", "/sbin/ldconfig"].join("\n"),
+        )
     }
 }
 

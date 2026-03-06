@@ -605,8 +605,15 @@ fn format_bytes(bytes: u64) -> String {
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        return s.to_string();
     }
+    let truncated_len = max_len.saturating_sub(3);
+    // Find a safe char boundary to avoid panicking on multi-byte UTF-8
+    let end = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= truncated_len)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..end])
 }

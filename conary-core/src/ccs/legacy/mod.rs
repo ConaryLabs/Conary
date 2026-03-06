@@ -10,6 +10,7 @@ pub mod rpm;
 
 use crate::ccs::manifest::Hooks;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 /// Information that may be lost when converting to legacy formats
 #[derive(Debug, Default)]
@@ -191,12 +192,31 @@ impl CommonHookGenerator {
     }
 
     /// Generate sysctl commands
+    ///
+    /// Sysctl keys and values are validated to contain only safe characters
+    /// (alphanumeric, dots, underscores, hyphens, digits) and emitted unquoted.
+    /// This avoids breaking arithmetic comparisons and sysctl -w assignments
+    /// that would fail with shell-escaped (single-quoted) values.
     pub fn sysctl_commands(hooks: &Hooks) -> Vec<String> {
         let mut commands = Vec::new();
 
         for sysctl in &hooks.sysctl {
-            let key = shell_escape(&sysctl.key);
-            let value = shell_escape(&sysctl.value);
+            let key = &sysctl.key;
+            let value = &sysctl.value;
+
+            // Validate that key and value contain only safe characters
+            let is_safe =
+                |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
+
+            if !is_safe(key) || !is_safe(value) {
+                // Fall back to shell-escaped form for safety, but only for
+                // non-arithmetic (unconditional) sysctl writes
+                let escaped_key = shell_escape(key);
+                let escaped_value = shell_escape(value);
+                commands.push(format!("sysctl -w {escaped_key}={escaped_value}"));
+                continue;
+            }
+
             if sysctl.only_if_lower {
                 commands.push(format!(
                     "current=$(sysctl -n {key} 2>/dev/null || echo 0); if [ \"$current\" -lt {value} ]; then sysctl -w {key}={value}; fi"
@@ -218,12 +238,10 @@ pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Map a CCS dependency to a format-specific package name
-/// This is a best-effort mapping and may not be accurate for all cases
-pub fn map_capability_to_package(capability: &str, format: &str) -> Option<String> {
-    // Common mappings for well-known capabilities
-    // Format: (capability_name, [(format, package_name), ...])
-    let mappings: HashMap<&str, HashMap<&str, &str>> = HashMap::from([
+/// Static capability-to-package mapping table, initialized once
+static CAPABILITY_MAPPINGS: LazyLock<HashMap<&'static str, HashMap<&'static str, &'static str>>> =
+    LazyLock::new(|| {
+        HashMap::from([
         // Core system libraries
         (
             "glibc",
@@ -467,9 +485,13 @@ pub fn map_capability_to_package(capability: &str, format: &str) -> Option<Strin
                 ("arch", "ruby"),
             ]),
         ),
-    ]);
+    ])
+});
 
-    mappings
+/// Map a CCS dependency to a format-specific package name
+/// This is a best-effort mapping and may not be accurate for all cases
+pub fn map_capability_to_package(capability: &str, format: &str) -> Option<String> {
+    CAPABILITY_MAPPINGS
         .get(capability)
         .and_then(|m| m.get(format))
         .map(|s| (*s).to_string())

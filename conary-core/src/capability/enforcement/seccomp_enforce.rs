@@ -112,7 +112,12 @@ pub fn build_seccomp_filter(
     allowed.sort();
     allowed.dedup();
 
-    // Build the BPF filter
+    // Build the BPF filter.
+    // In Enforce mode, unauthorized syscalls kill the process.
+    // In Warn and Audit modes, unauthorized syscalls are logged but still
+    // allowed to execute. This is intentional for capability discovery:
+    // Warn mode lets users observe which syscalls a scriptlet actually uses
+    // before switching to Enforce mode. Neither Warn nor Audit blocks syscalls.
     let default_action = match mode {
         EnforcementMode::Enforce => SeccompAction::KillProcess,
         EnforcementMode::Warn | EnforcementMode::Audit => SeccompAction::Log,

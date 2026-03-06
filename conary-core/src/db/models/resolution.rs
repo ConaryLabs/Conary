@@ -334,7 +334,7 @@ impl PackageResolution {
     /// Update this resolution entry
     pub fn update(&self, conn: &Connection) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            Error::InitError("Cannot update resolution entry without ID".to_string())
+            Error::MissingId("Cannot update resolution entry without ID".to_string())
         })?;
 
         let strategies_json = serde_json::to_string(&self.strategies)

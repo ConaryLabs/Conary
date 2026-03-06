@@ -147,6 +147,17 @@ impl RepositoryParser for DebianParser {
                 Vec::new()
             };
 
+            // Validate filename for path traversal attacks
+            if entry.filename.contains("..")
+                || entry.filename.starts_with('/')
+                || entry.filename.contains("://")
+            {
+                return Err(Error::ParseError(format!(
+                    "Suspicious filename in Packages file: {}",
+                    entry.filename
+                )));
+            }
+
             // Build download URL
             let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), entry.filename);
 

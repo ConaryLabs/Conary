@@ -77,9 +77,11 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
 
     let conn = Connection::open(path)?;
 
-    // Set pragmas
+    // Set pragmas (WAL persists in file but synchronous is session-level)
     conn.execute_batch(
         "
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
         PRAGMA busy_timeout = 5000;
         ",

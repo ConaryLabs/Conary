@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub fn db_dir(db_path: &str) -> PathBuf {
     Path::new(db_path)
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("/var/lib/conary"))
         .to_path_buf()
 }

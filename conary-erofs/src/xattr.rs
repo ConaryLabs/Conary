@@ -89,7 +89,7 @@ impl XattrEntry {
         let aligned = align4(unaligned);
         let padding = aligned - unaligned;
         if padding > 0 {
-            w.write_all(&vec![0u8; padding])?;
+            w.write_all(&[0u8; 3][..padding])?;
         }
 
         Ok(aligned)

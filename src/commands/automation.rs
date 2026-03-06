@@ -117,7 +117,7 @@ pub fn cmd_automation_check(
     let results = checker.run_all()?;
 
     // Filter by categories if specified
-    let _filter: Option<Vec<AutomationCategory>> = categories.map(|cats| {
+    let filter: Option<Vec<AutomationCategory>> = categories.map(|cats| {
         cats.iter()
             .filter_map(|c| match c.to_lowercase().as_str() {
                 "security" => Some(AutomationCategory::Security),
@@ -129,6 +129,13 @@ pub fn cmd_automation_check(
             .collect()
     });
 
+    let show_category = |cat: &AutomationCategory| -> bool {
+        match &filter {
+            Some(cats) => cats.contains(cat),
+            None => true,
+        }
+    };
+
     if quiet {
         if results.total() > 0 {
             std::process::exit(1);
@@ -139,7 +146,7 @@ pub fn cmd_automation_check(
     println!("Found {} actionable item(s):", results.total());
     println!();
 
-    if !results.security.is_empty() {
+    if !results.security.is_empty() && show_category(&AutomationCategory::Security) {
         println!("[SECURITY] {} security update(s)", results.security.len());
         for action in &results.security {
             println!("  - {}", action.summary);
@@ -147,7 +154,7 @@ pub fn cmd_automation_check(
         println!();
     }
 
-    if !results.updates.is_empty() {
+    if !results.updates.is_empty() && show_category(&AutomationCategory::Updates) {
         println!("[UPDATES] {} package update(s)", results.updates.len());
         for action in &results.updates {
             println!("  - {}", action.summary);
@@ -155,7 +162,7 @@ pub fn cmd_automation_check(
         println!();
     }
 
-    if !results.orphans.is_empty() {
+    if !results.orphans.is_empty() && show_category(&AutomationCategory::Orphans) {
         println!("[ORPHANS] {} orphaned package(s)", results.orphans.len());
         for action in &results.orphans {
             println!("  - {}", action.summary);
@@ -163,7 +170,7 @@ pub fn cmd_automation_check(
         println!();
     }
 
-    if !results.integrity.is_empty() {
+    if !results.integrity.is_empty() && show_category(&AutomationCategory::Repair) {
         println!("[INTEGRITY] {} issue(s)", results.integrity.len());
         for action in &results.integrity {
             println!("  - {}", action.summary);
@@ -183,9 +190,9 @@ pub fn cmd_automation_apply(
     db_path: &str,
     _root: &str,
     yes: bool,
-    _categories: Option<Vec<String>>,
+    categories: Option<Vec<String>>,
     dry_run: bool,
-    _no_scripts: bool,
+    no_scripts: bool,
 ) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
 
@@ -204,15 +211,36 @@ pub fn cmd_automation_apply(
         return Ok(());
     }
 
+    // Filter by categories if specified
+    let category_filter: Option<Vec<AutomationCategory>> = categories.map(|cats| {
+        cats.iter()
+            .filter_map(|c| match c.to_lowercase().as_str() {
+                "security" => Some(AutomationCategory::Security),
+                "orphans" => Some(AutomationCategory::Orphans),
+                "updates" => Some(AutomationCategory::Updates),
+                "integrity" | "repair" => Some(AutomationCategory::Repair),
+                _ => None,
+            })
+            .collect()
+    });
+
     let mut manager = AutomationManager::new(config.clone());
-    let all_actions = results.all_actions();
+    let all_actions: Vec<_> = results
+        .all_actions()
+        .into_iter()
+        .filter(|a| match &category_filter {
+            Some(cats) => cats.contains(&a.category),
+            None => true,
+        })
+        .cloned()
+        .collect();
 
     for action in &all_actions {
-        manager.register_action((*action).clone());
+        manager.register_action(action.clone());
     }
 
     if dry_run {
-        println!("Dry run - would apply {} action(s):", results.total());
+        println!("Dry run - would apply {} action(s):", all_actions.len());
         for action in &all_actions {
             println!(
                 "  - [{}] {}",
@@ -224,8 +252,8 @@ pub fn cmd_automation_apply(
     }
 
     if yes {
-        println!("Applying {} action(s)...", results.total());
-        let mut executor = conary_core::automation::action::ActionExecutor::new(false);
+        println!("Applying {} action(s)...", all_actions.len());
+        let mut executor = conary_core::automation::action::ActionExecutor::new(no_scripts);
         let mut applied = 0;
         let mut failed = 0;
 
@@ -252,10 +280,40 @@ pub fn cmd_automation_apply(
     match prompt.show_summary(&summary)? {
         SummaryResponse::ApplyAll => {
             println!("Applying all actions...");
+            let mut executor = conary_core::automation::action::ActionExecutor::new(no_scripts);
+            let mut applied = 0;
+            let mut failed = 0;
+            for action in &all_actions {
+                println!("  Applying: {}", action.summary);
+                match executor.execute(action) {
+                    Ok(_) => applied += 1,
+                    Err(e) => {
+                        println!("  [FAILED] {}: {}", action.summary, e);
+                        failed += 1;
+                    }
+                }
+            }
+            println!();
+            println!("Complete: {} applied, {} failed", applied, failed);
         }
         SummaryResponse::ReviewCategory(category) => {
             let actions = manager.pending_by_category(category);
             println!("Reviewing {} action(s)...", actions.len());
+            let mut executor = conary_core::automation::action::ActionExecutor::new(no_scripts);
+            let mut applied = 0;
+            let mut failed = 0;
+            for action in &actions {
+                println!("  Applying: {}", action.summary);
+                match executor.execute(action) {
+                    Ok(_) => applied += 1,
+                    Err(e) => {
+                        println!("  [FAILED] {}: {}", action.summary, e);
+                        failed += 1;
+                    }
+                }
+            }
+            println!();
+            println!("Complete: {} applied, {} failed", applied, failed);
         }
         SummaryResponse::ShowDetails => {
             for action in manager.pending_actions() {
@@ -428,6 +486,8 @@ pub fn cmd_automation_daemon(
 }
 
 /// Show automation history
+// TODO: Query the database for actual automation history records using db_path,
+// limit, category, status, and since parameters instead of stub output.
 pub fn cmd_automation_history(
     _db_path: &str,
     limit: usize,

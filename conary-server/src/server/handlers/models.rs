@@ -42,25 +42,30 @@ pub async fn get_model(
         return e;
     }
 
-    let state = state.read().await;
-    let db_path = &state.config.db_path;
+    let db_path = state.read().await.config.db_path.clone();
 
-    match build_collection_data(db_path, &name) {
-        Ok(Some(data)) => {
-            let json = match super::serialize_json(&data, &format!("collection '{name}'")) {
+    let result = tokio::task::spawn_blocking(move || build_collection_data(&db_path, &name)).await;
+
+    match result {
+        Ok(Ok(Some(data))) => {
+            let json = match super::serialize_json(&data, "collection") {
                 Ok(j) => j,
                 Err(e) => return e,
             };
             super::json_response(json, 300)
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "Collection not found").into_response(),
-        Err(e) => {
-            tracing::error!("Failed to build collection '{}': {}", name, e);
+        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Collection not found").into_response(),
+        Ok(Err(e)) => {
+            tracing::error!("Failed to build collection: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to build collection data",
             )
                 .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Task panicked in get_model: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }
 }
@@ -69,24 +74,29 @@ pub async fn get_model(
 ///
 /// Lists all published collections (name, version, member count).
 pub async fn list_models(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
-    let state = state.read().await;
-    let db_path = &state.config.db_path;
+    let db_path = state.read().await.config.db_path.clone();
 
-    match build_collection_list(db_path) {
-        Ok(entries) => {
+    let result = tokio::task::spawn_blocking(move || build_collection_list(&db_path)).await;
+
+    match result {
+        Ok(Ok(entries)) => {
             let json = match super::serialize_json(&entries, "collection list") {
                 Ok(j) => j,
                 Err(e) => return e,
             };
             super::json_response(json, 300)
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!("Failed to list collections: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to list collections",
             )
                 .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Task panicked in list_models: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }
 }

@@ -83,9 +83,10 @@ pub struct FederationManifest {
     /// MIME type of the resource (optional)
     #[serde(default)]
     pub content_type: Option<String>,
-    /// Additional metadata
+    /// Additional metadata (BTreeMap ensures deterministic serialization
+    /// order, which is critical for canonical_bytes() signature stability).
     #[serde(default)]
-    pub metadata: std::collections::HashMap<String, String>,
+    pub metadata: std::collections::BTreeMap<String, String>,
     /// Signature (if signed)
     #[serde(default)]
     pub signature: Option<PackageSignature>,
@@ -100,7 +101,7 @@ impl FederationManifest {
             chunks: Vec::new(),
             total_size: 0,
             content_type: None,
-            metadata: std::collections::HashMap::new(),
+            metadata: std::collections::BTreeMap::new(),
             signature: None,
         }
     }
@@ -239,7 +240,7 @@ struct CanonicalManifest<'a> {
     total_size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_type: Option<&'a str>,
-    metadata: &'a std::collections::HashMap<String, String>,
+    metadata: &'a std::collections::BTreeMap<String, String>,
 }
 
 /// Trust policy for manifest verification

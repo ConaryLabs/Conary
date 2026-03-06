@@ -128,10 +128,12 @@ impl InodeInfo {
         let size_u32 = self.size as u32;
         buf[off..off + 4].copy_from_slice(&size_u32.to_le_bytes());
         off += 4;
-        // i_mtime (u32) — lower 32 bits of mtime
-        #[allow(clippy::cast_possible_truncation)]
-        let mtime_u32 = self.mtime as u32;
-        buf[off..off + 4].copy_from_slice(&mtime_u32.to_le_bytes());
+        // i_mtime / i_reserved at offset 0x0C (u32).
+        // NOTE: In newer EROFS on-disk specifications (kernel 6.x+) this field
+        // is marked as `i_reserved` for compact inodes. Compact inode timestamps
+        // are derived from the superblock `build_time` field. We always write 0
+        // for composefs use; writing non-zero values here is deprecated.
+        buf[off..off + 4].copy_from_slice(&0u32.to_le_bytes());
         off += 4;
         // i_u (u32)
         buf[off..off + 4].copy_from_slice(&self.union_value.to_le_bytes());
@@ -403,16 +405,17 @@ mod tests {
     }
 
     #[test]
-    fn compact_inode_mtime_written() {
+    fn compact_inode_mtime_always_zero() {
         let mut inode = test_inode();
         inode.mtime = 1_700_000_000;
 
         let mut buf = Vec::new();
         inode.write_compact(&mut buf).unwrap();
 
-        // i_mtime at offset 0x0C (u32) — lower 32 bits
-        let mtime = u32::from_le_bytes(buf[0x0C..0x10].try_into().unwrap());
-        assert_eq!(mtime, 1_700_000_000_u32, "compact inode must write i_mtime at offset 0x0C");
+        // Offset 0x0C is deprecated i_mtime / i_reserved in compact inodes.
+        // We always write 0 regardless of the InodeInfo mtime value.
+        let reserved = u32::from_le_bytes(buf[0x0C..0x10].try_into().unwrap());
+        assert_eq!(reserved, 0, "compact inode offset 0x0C must be 0 (deprecated field)");
     }
 
     #[test]

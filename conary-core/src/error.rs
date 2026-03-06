@@ -21,6 +21,18 @@ pub enum Error {
     #[error("Failed to initialize database: {0}")]
     InitError(String),
 
+    /// Missing ID on model object (required for update/query operations)
+    #[error("Missing ID: {0}")]
+    MissingId(String),
+
+    /// Version parse error
+    #[error("Version parse error: {0}")]
+    VersionParse(String),
+
+    /// Hash error
+    #[error("Hash error: {0}")]
+    HashError(#[from] crate::hash::HashError),
+
     /// Configuration error
     #[error("Configuration error: {0}")]
     ConfigError(String),

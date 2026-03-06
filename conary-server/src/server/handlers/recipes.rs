@@ -144,9 +144,9 @@ pub async fn download_recipe_package(
     let state_read = state.read().await;
     let cache_dir = &state_read.config.cache_dir;
 
-    // Sanitize filename
-    let safe_name = name.replace(['/', '\\', '\0'], "_");
-    let safe_version = version.replace(['/', '\\', '\0'], "_");
+    // Sanitize filename: strip path separators, null bytes, and ".." sequences
+    let safe_name = name.replace(['/', '\\', '\0'], "_").replace("..", "_");
+    let safe_version = version.replace(['/', '\\', '\0'], "_").replace("..", "_");
     let filename = format!("{}-{}.ccs", safe_name, safe_version);
     let ccs_path = cache_dir.join("packages").join(&filename);
 

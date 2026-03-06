@@ -67,8 +67,23 @@ pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
                 dst.display()
             );
 
-            // Copy file content
+            // Capture metadata before copy (for ownership preservation)
+            #[cfg(unix)]
+            let src_meta = fs::metadata(src)?;
+
+            // Copy file content (preserves permissions but not ownership)
             fs::copy(src, dst)?;
+
+            // Preserve ownership (uid/gid) on Unix -- fs::copy does not do this
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let uid = nix::unistd::Uid::from_raw(src_meta.uid());
+                let gid = nix::unistd::Gid::from_raw(src_meta.gid());
+                if let Err(e) = nix::unistd::chown(dst, Some(uid), Some(gid)) {
+                    log::warn!("Failed to preserve ownership on {}: {}", dst.display(), e);
+                }
+            }
 
             // fsync the destination file to ensure data is on disk
             let file = File::open(dst)?;
@@ -877,6 +892,12 @@ impl<'a> Transaction<'a> {
             // Move from stage to final location (handles cross-FS)
             move_file_atomic(&stage_path, &target)?;
 
+            // Record per-file move for granular crash recovery
+            self.journal.write(JournalRecord::FileMoved {
+                path: stage_info.path.clone(),
+                stage_path: stage_path.clone(),
+            })?;
+
             // Count as add or replace based on whether we backed it up
             let was_replaced = plan
                 .files_to_backup
@@ -907,6 +928,10 @@ impl<'a> Transaction<'a> {
                 if target.exists() || target.symlink_metadata().is_ok() {
                     fs::remove_file(&target)?;
                     result.files_removed += 1;
+
+                    // Record per-file removal for granular crash recovery
+                    self.journal
+                        .write(JournalRecord::FileRemoved { path: op.path.clone() })?;
                 }
             }
         }

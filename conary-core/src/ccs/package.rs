@@ -40,8 +40,15 @@ pub struct CcsPackage {
     dependencies: Vec<Dependency>,
 }
 
-/// Convert a BinaryManifest to CcsManifest for internal compatibility
-/// This is also exposed publicly for use by the verify module.
+/// Convert a BinaryManifest to CcsManifest for internal compatibility.
+///
+/// This is also exposed publicly for use by the verify and inspector modules.
+///
+/// Note: The binary manifest format does not carry all CcsManifest fields.
+/// The following fields are unavailable from CBOR and will use defaults:
+/// `homepage`, `repository`, `authors`, `build.environment`, `build.commands`,
+/// `suggests`, `components`, `config`, `legacy`, `policy`, `provenance`,
+/// `capabilities`, and `redirects`.
 pub fn convert_binary_to_ccs_manifest(
     bin: &crate::ccs::binary_manifest::BinaryManifest,
 ) -> CcsManifest {

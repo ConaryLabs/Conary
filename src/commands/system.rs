@@ -5,7 +5,7 @@ use super::TroveSnapshot;
 use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {
@@ -85,6 +85,8 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)?
         .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
 
+    // TODO: Move these status/reversal checks inside the transaction to eliminate the
+    // TOCTOU gap between these reads and the actual rollback transaction below.
     if changeset.status == conary_core::db::models::ChangesetStatus::RolledBack {
         return Err(anyhow::anyhow!(
             "Changeset {} is already rolled back",
@@ -242,11 +244,23 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     let files_to_rollback = files_to_rollback.into_inner();
 
     info!("Removing files from filesystem...");
+    let mut removal_errors = Vec::new();
     for (path, action) in &files_to_rollback {
         if action == "add" || action == "modify" {
-            deployer.remove_file(path)?;
-            info!("Removed file: {}", path);
+            match deployer.remove_file(path) {
+                Ok(()) => info!("Removed file: {}", path),
+                Err(e) => {
+                    warn!("Failed to remove file during rollback: {}: {}", path, e);
+                    removal_errors.push(format!("{}: {}", path, e));
+                }
+            }
         }
+    }
+    if !removal_errors.is_empty() {
+        warn!(
+            "{} file(s) could not be removed during rollback",
+            removal_errors.len()
+        );
     }
 
     println!(

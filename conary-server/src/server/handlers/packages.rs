@@ -116,6 +116,21 @@ pub async fn get_package(
     drop(state_guard); // Release read lock before acquiring write
     let mut state_guard = state.write().await;
 
+    // Re-check for existing job after acquiring write lock (another request may
+    // have created one in the gap between dropping read and acquiring write).
+    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
+        return (
+            StatusCode::ACCEPTED,
+            Json(ConversionAccepted {
+                status: "converting",
+                job_id: existing_job.to_string(),
+                poll_url: format!("/v1/jobs/{}", existing_job),
+                eta_seconds: None,
+            }),
+        )
+            .into_response();
+    }
+
     match state_guard.job_manager.create_job(
         job_key.clone(),
         distro.clone(),
@@ -222,6 +237,27 @@ fn check_converted(
 
 /// Run the actual conversion in a background task
 async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
+    // Acquire a semaphore permit to limit concurrent conversions.
+    // This prevents unbounded parallelism when many conversion requests
+    // arrive simultaneously. Clone the Arc<Semaphore> so the permit can
+    // outlive the RwLock guard.
+    let semaphore = {
+        let state_guard = state.read().await;
+        state_guard.job_manager.semaphore()
+    };
+    let _permit = match semaphore.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            tracing::error!("Conversion semaphore closed (job {})", job_id);
+            let mut state_guard = state.write().await;
+            state_guard.job_manager.update_status(
+                &job_id,
+                JobStatus::Failed("Semaphore closed".to_string()),
+            );
+            return;
+        }
+    };
+
     let (job, conversion_service) = {
         let state_guard = state.read().await;
         let job = match state_guard.job_manager.get_job(&job_id) {

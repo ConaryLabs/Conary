@@ -115,6 +115,13 @@ impl CasStore {
         file.sync_all()?;
         fs::rename(&temp_path, &path)?;
 
+        // Fsync parent directory to ensure the rename is durable on crash
+        if let Some(parent) = path.parent()
+            && let Ok(dir) = fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+
         Ok(true)
     }
 
@@ -353,14 +360,15 @@ impl CasStore {
     }
 
     /// Check if a hash represents a symlink
+    ///
+    /// Only reads the first 8 bytes ("symlink:") instead of the entire file.
     pub fn is_symlink_hash(&self, hash: &str) -> bool {
-        // Symlinks are always stored with SHA-256, so use that for verification
-        if let Ok(content) = self.retrieve_with_algorithm(hash, HashAlgorithm::Sha256) {
-            let content_str = String::from_utf8_lossy(&content);
-            content_str.starts_with("symlink:")
-        } else {
-            false
-        }
+        let path = self.hash_to_path(hash);
+        let Ok(mut file) = fs::File::open(&path) else {
+            return false;
+        };
+        let mut prefix = [0u8; 8];
+        file.read_exact(&mut prefix).is_ok() && prefix == *b"symlink:"
     }
 
     /// Hardlink an existing file into CAS (zero-copy adoption)
@@ -408,6 +416,15 @@ impl CasStore {
                     "Hardlinked into CAS: {} -> {} (hash: {})",
                     existing_path.display(),
                     cas_path.display(),
+                    hash
+                );
+                Ok(hash)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another process stored this content concurrently -- that's fine
+                debug!(
+                    "CAS object appeared concurrently for {}: {}",
+                    existing_path.display(),
                     hash
                 );
                 Ok(hash)
@@ -476,6 +493,15 @@ impl CasStore {
             Ok(()) => {
                 debug!(
                     "Hardlinked into CAS (with known hash): {} -> {}",
+                    existing_path.display(),
+                    expected_hash
+                );
+                Ok(expected_hash.to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another process stored this content concurrently -- that's fine
+                debug!(
+                    "CAS object appeared concurrently for {}: {}",
                     existing_path.display(),
                     expected_hash
                 );

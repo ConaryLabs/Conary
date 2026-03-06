@@ -106,6 +106,8 @@ pub struct TransactionPlan {
     pub operations: Vec<PlannedOperation>,
     /// Directories to create (in order, parents first)
     pub dirs_to_create: Vec<PathBuf>,
+    /// O(1) lookup for dirs_to_create deduplication
+    pub dirs_to_create_set: HashSet<PathBuf>,
     /// Files that need backup (exist on disk and will be replaced/removed)
     pub files_to_backup: Vec<BackupInfo>,
     /// Files to stage from CAS
@@ -123,6 +125,7 @@ impl TransactionPlan {
             vfs: VfsTree::new(),
             operations: Vec::new(),
             dirs_to_create: Vec::new(),
+            dirs_to_create_set: HashSet::new(),
             files_to_backup: Vec::new(),
             files_to_stage: Vec::new(),
             dirs_to_remove: Vec::new(),
@@ -417,7 +420,7 @@ impl<'a> TransactionPlanner<'a> {
             let current_str = current.to_string_lossy();
             let relative = current_str.strip_prefix('/').unwrap_or(&current_str);
             let target = self.root.join(relative);
-            if !target.exists() && !plan.dirs_to_create.contains(&current.to_path_buf()) {
+            if !target.exists() && !plan.dirs_to_create_set.contains(&current.to_path_buf()) {
                 to_create.push(current.to_path_buf());
             }
             current = current.parent().unwrap_or(Path::new(""));
@@ -426,7 +429,7 @@ impl<'a> TransactionPlanner<'a> {
         // Add in parent-first order
         to_create.reverse();
         for dir in to_create {
-            if !plan.dirs_to_create.contains(&dir) {
+            if plan.dirs_to_create_set.insert(dir.clone()) {
                 plan.dirs_to_create.push(dir.clone());
                 plan.operations.push(PlannedOperation {
                     path: dir.clone(),
@@ -593,6 +596,7 @@ mod tests {
                 },
             ],
             dirs_to_create: vec![PathBuf::from("usr/bin")],
+            dirs_to_create_set: HashSet::from([PathBuf::from("usr/bin")]),
             files_to_backup: vec![],
             files_to_stage: vec![],
             dirs_to_remove: vec![],

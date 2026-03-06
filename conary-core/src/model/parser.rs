@@ -307,12 +307,17 @@ impl Default for RepairAutomation {
 }
 
 /// Health check that can trigger automatic rollback
+///
+/// SAFETY: The `command` field MUST NOT be passed through a shell (`/bin/sh -c`).
+/// It should be tokenized with `shlex::split()` or split on whitespace and
+/// executed via `Command::new(parts[0]).args(&parts[1..])` to prevent shell
+/// injection from model TOML files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackTrigger {
     /// Name for this trigger (for logging)
     pub name: String,
 
-    /// Command to run as health check
+    /// Command to run as health check (tokenized, NOT passed to shell)
     pub command: String,
 
     /// Timeout for health check (e.g., "30s")

@@ -192,14 +192,16 @@ impl CcsBuilder {
                         // This shouldn't happen as the chain already returns an error
                         anyhow::bail!("Policy rejected file {}: {}", entry.path, msg);
                     }
-                    PolicyAction::Keep | PolicyAction::Replace(_) => {
-                        // Content may have been modified - recompute hash if needed
-                        if new_content != entry.hash.as_bytes() {
-                            let new_hash = hash::sha256(&new_content);
-                            if new_hash != entry.hash {
-                                entry.hash = new_hash;
-                                entry.size = new_content.len() as u64;
-                            }
+                    PolicyAction::Keep => {
+                        // Content unchanged by policy, no rehash needed
+                        new_content
+                    }
+                    PolicyAction::Replace(_) => {
+                        // Content was modified by policy, recompute hash
+                        let new_hash = hash::sha256(&new_content);
+                        if new_hash != entry.hash {
+                            entry.hash = new_hash;
+                            entry.size = new_content.len() as u64;
                         }
                         new_content
                     }
@@ -695,7 +697,11 @@ fn build_binary_manifest(
 }
 
 fn parse_octal_mode(mode: &str) -> u32 {
-    u32::from_str_radix(mode.trim_start_matches('0'), 8).unwrap_or(0o755)
+    let mode_str = mode
+        .strip_prefix("0o")
+        .or_else(|| mode.strip_prefix('0'))
+        .unwrap_or(mode);
+    u32::from_str_radix(mode_str, 8).unwrap_or(0o755)
 }
 
 fn convert_hooks_to_binary(
