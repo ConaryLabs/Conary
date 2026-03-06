@@ -19,7 +19,8 @@
 
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
-use crate::recipe::{Recipe, parse_recipe_file};
+use crate::container::{ContainerConfig, Sandbox};
+use crate::recipe::{Recipe, RecipeGraph, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,12 @@ pub enum BaseError {
 
     #[error("Phase {0} failed: {1}")]
     PhaseFailed(String, String),
+
+    #[error("I/O error: {0}")]
+    IoError(String),
+
+    #[error("Dependency cycle detected: {0}")]
+    DependencyCycle(String),
 }
 
 /// Build phase for base system
@@ -149,6 +156,9 @@ pub struct BaseBuilder {
 
     /// Packages to build
     packages: Vec<BasePackage>,
+
+    /// Recipes loaded from directory (name, recipe) for graph-based ordering
+    recipes: Vec<(String, Recipe)>,
 
     /// Environment variables for builds
     build_env: HashMap<String, String>,
@@ -317,6 +327,7 @@ impl BaseBuilder {
             logs_dir,
             recipe_dir,
             packages: Vec::new(),
+            recipes: Vec::new(),
             build_env,
             current_phase: None,
         })
@@ -415,6 +426,95 @@ impl BaseBuilder {
             self.packages.len()
         );
         Ok(())
+    }
+
+    /// Load all recipes from a directory and resolve build order via dependency graph.
+    ///
+    /// Scans `recipe_dir` for `.toml` files, parses each as a Recipe, adds them
+    /// to a `RecipeGraph`, and returns the topologically sorted build order.
+    /// This replaces the hardcoded phase-based ordering with graph-based ordering
+    /// derived from actual recipe dependencies.
+    pub fn load_recipes_from_dir(&mut self, recipe_dir: &Path) -> Result<Vec<String>, BaseError> {
+        let mut graph = RecipeGraph::new();
+        self.recipes.clear();
+
+        for entry in std::fs::read_dir(recipe_dir)
+            .map_err(|e| BaseError::IoError(format!("Cannot read recipe dir: {e}")))?
+        {
+            let entry = entry.map_err(|e| BaseError::IoError(e.to_string()))?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                let recipe = parse_recipe_file(&path).map_err(|e| {
+                    BaseError::RecipeParseFailed(format!("{}: {e}", path.display()))
+                })?;
+                graph.add_from_recipe(&recipe);
+                self.recipes.push((recipe.package.name.clone(), recipe));
+            }
+        }
+
+        let order = graph
+            .topological_sort()
+            .map_err(|e| BaseError::DependencyCycle(format!("{e}")))?;
+
+        info!(
+            "Loaded {} base recipes, resolved build order ({} packages)",
+            self.recipes.len(),
+            order.len()
+        );
+        Ok(order)
+    }
+
+    /// Classify a package into a build phase for progress reporting.
+    ///
+    /// This preserves the phase classification from the hardcoded package lists
+    /// for use in progress reporting and UI, even when using graph-based ordering.
+    pub fn package_phase(name: &str) -> BaseBuildPhase {
+        match name {
+            "zlib" | "xz" | "zstd" | "ncurses" | "readline" | "openssl" | "libcap" | "libmnl"
+            | "elfutils" | "kmod" | "dbus" | "linux-pam" => BaseBuildPhase::Libraries,
+            "make" | "m4" | "autoconf" | "automake" | "libtool" | "pkgconf" | "bison" | "flex"
+            | "gettext" | "perl" | "python" | "cmake" | "ninja" | "meson" => {
+                BaseBuildPhase::DevTools
+            }
+            "linux" | "coreutils" | "bash" | "util-linux" | "systemd" => {
+                BaseBuildPhase::CoreSystem
+            }
+            "grub" | "dosfstools" | "efivar" | "efibootmgr" | "popt" | "dracut" => {
+                BaseBuildPhase::Boot
+            }
+            _ => BaseBuildPhase::Userland,
+        }
+    }
+
+    /// Initialize packages from graph-based build order.
+    ///
+    /// Uses the topologically sorted order from `load_recipes_from_dir` to
+    /// populate the package list with proper phase classification.
+    pub fn init_packages_from_order(&mut self, order: &[String]) {
+        self.packages.clear();
+
+        for name in order {
+            let phase = Self::package_phase(name);
+            let recipe = self
+                .recipes
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, r)| r.clone());
+
+            self.packages.push(BasePackage {
+                name: name.clone(),
+                category: phase.name().to_string(),
+                phase,
+                recipe,
+                status: BaseBuildStatus::Pending,
+                log: String::new(),
+            });
+        }
+
+        info!(
+            "Initialized {} packages from graph-resolved order",
+            self.packages.len()
+        );
     }
 
     /// Load recipe for a package
@@ -858,7 +958,12 @@ impl BaseBuilder {
         result
     }
 
-    /// Run a shell command
+    /// Run a shell command, with optional sandbox isolation.
+    ///
+    /// On Linux, attempts to run the command inside a pristine container
+    /// (using `ContainerConfig::pristine_for_bootstrap`) to prevent host
+    /// toolchain contamination. Falls back to direct execution if sandboxing
+    /// is unavailable.
     fn run_shell_command(
         &mut self,
         idx: usize,
@@ -885,55 +990,116 @@ impl BaseBuilder {
 
         let verbose = self.config.verbose;
 
-        let mut command = Command::new("bash");
-        command.arg("-c").arg(cmd).current_dir(workdir);
-
-        // Set base environment
-        for (key, value) in &self.build_env {
-            command.env(key, value);
-        }
-
-        // Set recipe environment
-        for (key, value) in recipe_env {
-            command.env(key, value);
-        }
-
-        // Capture output
-        if verbose {
-            command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-        } else {
-            command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        }
-
         debug!("Running: bash -c \"{}\"", cmd);
         debug!("Workdir: {}", workdir.display());
 
-        let output = command
-            .output()
-            .map_err(|e| BaseError::BuildFailed(pkg_name.clone(), e.to_string()))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if !stdout.is_empty() {
-            self.packages[idx]
-                .log
-                .push_str(&format!("stdout:\n{}\n", stdout));
+        // Merge all environment variables for both sandbox and direct execution
+        let mut all_env: Vec<(&str, String)> = Vec::new();
+        for (key, value) in &self.build_env {
+            all_env.push((key.as_str(), value.clone()));
         }
-        if !stderr.is_empty() {
-            self.packages[idx]
-                .log
-                .push_str(&format!("stderr:\n{}\n", stderr));
+        for (key, value) in &recipe_env {
+            all_env.push((key.as_str(), value.clone()));
         }
 
-        if !output.status.success() {
-            return Err(BaseError::BuildFailed(
-                pkg_name,
-                format!("{} phase failed:\n{}", phase, stderr),
+        // Try sandboxed execution on Linux
+        #[cfg(target_os = "linux")]
+        let sandbox_result = {
+            let build_dir = self.work_dir.join("build").join(&pkg_name);
+            let container_config = ContainerConfig::pristine_for_bootstrap(
+                &self.toolchain.path,
+                workdir,
+                &build_dir,
+                &self.target_root,
+            );
+            let mut sandbox = Sandbox::new(container_config);
+
+            let env_refs: Vec<(&str, &str)> =
+                all_env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+            sandbox.execute("bash", cmd, &[], &env_refs)
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        let sandbox_result: std::result::Result<(i32, String, String), crate::error::Error> =
+            Err(crate::error::Error::ScriptletError(
+                "Sandbox not available on non-Linux".to_string(),
             ));
-        }
 
-        Ok(())
+        match sandbox_result {
+            Ok((code, stdout, stderr)) => {
+                if !stdout.is_empty() {
+                    self.packages[idx]
+                        .log
+                        .push_str(&format!("stdout:\n{}\n", stdout));
+                }
+                if !stderr.is_empty() {
+                    self.packages[idx]
+                        .log
+                        .push_str(&format!("stderr:\n{}\n", stderr));
+                }
+
+                if code != 0 {
+                    return Err(BaseError::BuildFailed(
+                        pkg_name,
+                        format!("{} phase failed (sandboxed, exit {}):\n{}", phase, code, stderr),
+                    ));
+                }
+
+                debug!("  [sandbox] {} completed successfully", phase);
+                Ok(())
+            }
+            Err(sandbox_err) => {
+                debug!(
+                    "Sandbox unavailable ({}), falling back to direct execution",
+                    sandbox_err
+                );
+
+                // Fall back to direct execution
+                let mut command = Command::new("bash");
+                command.arg("-c").arg(cmd).current_dir(workdir);
+
+                for (key, value) in &self.build_env {
+                    command.env(key, value);
+                }
+                for (key, value) in &recipe_env {
+                    command.env(key, value);
+                }
+
+                if verbose {
+                    command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+                } else {
+                    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                }
+
+                let output = command
+                    .output()
+                    .map_err(|e| BaseError::BuildFailed(pkg_name.clone(), e.to_string()))?;
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                if !stdout.is_empty() {
+                    self.packages[idx]
+                        .log
+                        .push_str(&format!("stdout:\n{}\n", stdout));
+                }
+                if !stderr.is_empty() {
+                    self.packages[idx]
+                        .log
+                        .push_str(&format!("stderr:\n{}\n", stderr));
+                }
+
+                if !output.status.success() {
+                    return Err(BaseError::BuildFailed(
+                        pkg_name,
+                        format!("{} phase failed:\n{}", phase, stderr),
+                    ));
+                }
+
+                Ok(())
+            }
+        }
     }
 
     /// Save package build log
@@ -1033,6 +1199,102 @@ mod tests {
         assert!(BaseBuilder::is_critical("linux", "base"));
         assert!(!BaseBuilder::is_critical("vim", "editors"));
         assert!(!BaseBuilder::is_critical("git", "vcs"));
+    }
+
+    #[test]
+    fn test_package_phase_classification() {
+        assert_eq!(
+            BaseBuilder::package_phase("zlib"),
+            BaseBuildPhase::Libraries
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("openssl"),
+            BaseBuildPhase::Libraries
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("make"),
+            BaseBuildPhase::DevTools
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("cmake"),
+            BaseBuildPhase::DevTools
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("bash"),
+            BaseBuildPhase::CoreSystem
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("systemd"),
+            BaseBuildPhase::CoreSystem
+        );
+        assert_eq!(BaseBuilder::package_phase("grub"), BaseBuildPhase::Boot);
+        assert_eq!(
+            BaseBuilder::package_phase("vim"),
+            BaseBuildPhase::Userland
+        );
+        assert_eq!(
+            BaseBuilder::package_phase("unknown-pkg"),
+            BaseBuildPhase::Userland
+        );
+    }
+
+    #[test]
+    fn test_load_recipes_from_dir() {
+        use crate::bootstrap::toolchain::ToolchainKind;
+
+        let recipe_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("recipes/base");
+        if !recipe_dir.exists() {
+            eprintln!("Skipping test_load_recipes_from_dir: recipes/base not found");
+            return;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let tools_path = temp.path().join("tools");
+        std::fs::create_dir_all(&tools_path).unwrap();
+
+        let config = BootstrapConfig::new().with_skip_verify(true);
+        let toolchain = Toolchain {
+            kind: ToolchainKind::Stage1,
+            path: tools_path,
+            target: "x86_64-conary-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let mut builder = BaseBuilder::new(
+            temp.path().join("work"),
+            &config,
+            toolchain,
+            &target,
+            &recipe_dir,
+        )
+        .unwrap();
+
+        let order = builder.load_recipes_from_dir(&recipe_dir).unwrap();
+        assert!(!order.is_empty(), "Should load at least one recipe");
+
+        // Verify graph ordering: zlib should come before packages that depend on it
+        if let (Some(zlib_pos), Some(tar_pos)) = (
+            order.iter().position(|n| n == "zlib"),
+            order.iter().position(|n| n == "tar"),
+        ) {
+            assert!(
+                zlib_pos < tar_pos,
+                "zlib should come before tar in build order"
+            );
+        }
+
+        // Test init_packages_from_order
+        builder.init_packages_from_order(&order);
+        assert_eq!(builder.packages.len(), order.len());
     }
 
     #[test]

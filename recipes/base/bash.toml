@@ -1,0 +1,23 @@
+[package]
+name = "bash"
+version = "5.3"
+summary = "GNU Bourne Again SHell"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bash/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/bash/bash-%(version)s.tar.gz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = ["ncurses", "readline"]
+configure = """
+./configure --prefix=/usr \
+    --without-bash-malloc \
+    --with-installed-readline
+"""
+make = "make -j%(jobs)s"
+install = """
+make install DESTDIR=%(destdir)s
+ln -sf bash %(destdir)s/usr/bin/sh
+"""

@@ -1,0 +1,16 @@
+[package]
+name = "sed"
+version = "4.10"
+summary = "GNU stream editor"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/sed/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/sed/sed-%(version)s.tar.xz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = []
+configure = "./configure --prefix=/usr"
+make = "make -j%(jobs)s"
+install = "make install DESTDIR=%(destdir)s"

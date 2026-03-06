@@ -1,0 +1,23 @@
+[package]
+name = "coreutils"
+version = "9.7"
+summary = "GNU Core Utilities"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/coreutils/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = ["gmp"]
+
+[build.environment]
+FORCE_UNSAFE_CONFIGURE = "1"
+
+configure = """
+./configure --prefix=/usr \
+    --enable-no-install-program=kill,uptime
+"""
+make = "make -j%(jobs)s"
+install = "make install DESTDIR=%(destdir)s"

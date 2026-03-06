@@ -1,0 +1,16 @@
+[package]
+name = "xz"
+version = "5.8.1"
+summary = "XZ Utils - LZMA compression utilities"
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later"
+homepage = "https://tukaani.org/xz/"
+
+[source]
+archive = "https://github.com/tukaani-project/xz/releases/download/v%(version)s/xz-%(version)s.tar.xz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = []
+configure = "./configure --prefix=/usr --disable-static"
+make = "make -j%(jobs)s"
+install = "make install DESTDIR=%(destdir)s"

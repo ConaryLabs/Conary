@@ -117,6 +117,10 @@ pub struct StageState {
 
     /// Duration of the build in seconds
     pub duration_secs: Option<u64>,
+
+    /// Packages completed within this stage (for per-package checkpointing)
+    #[serde(default)]
+    pub completed_packages: Vec<String>,
 }
 
 /// Manager for tracking bootstrap progress
@@ -208,6 +212,26 @@ impl StageManager {
         let state = self.stages.get_mut(&stage).expect("Stage should exist");
         state.duration_secs = Some(duration_secs);
         self.save()
+    }
+
+    /// Record a completed package within a stage.
+    ///
+    /// This enables per-package checkpointing so that a resumed build can
+    /// skip packages that were already successfully built.
+    pub fn mark_package_complete(&mut self, stage: BootstrapStage, package: &str) -> Result<()> {
+        let state = self.stages.get_mut(&stage).expect("Stage should exist");
+        if !state.completed_packages.contains(&package.to_string()) {
+            state.completed_packages.push(package.to_string());
+        }
+        self.save()
+    }
+
+    /// Get list of completed packages for a stage.
+    pub fn completed_packages(&self, stage: BootstrapStage) -> Vec<String> {
+        self.stages
+            .get(&stage)
+            .map(|s| s.completed_packages.clone())
+            .unwrap_or_default()
     }
 
     /// Reset a stage (and all subsequent stages)
@@ -320,6 +344,64 @@ mod tests {
             let manager = StageManager::new(temp.path()).unwrap();
             assert!(manager.is_complete(BootstrapStage::Stage0));
         }
+    }
+
+    #[test]
+    fn test_stage_manager_package_checkpointing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut manager = StageManager::new(temp.path()).unwrap();
+
+        // Mark some packages complete in the BaseSystem stage
+        manager
+            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .unwrap();
+        manager
+            .mark_package_complete(BootstrapStage::BaseSystem, "ncurses")
+            .unwrap();
+
+        let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+        assert_eq!(completed.len(), 2);
+        assert!(completed.contains(&"zlib".to_string()));
+        assert!(completed.contains(&"ncurses".to_string()));
+
+        // Other stages should have empty package lists
+        let stage0_pkgs = manager.completed_packages(BootstrapStage::Stage0);
+        assert!(stage0_pkgs.is_empty());
+    }
+
+    #[test]
+    fn test_stage_manager_package_checkpointing_persistence() {
+        let temp = tempfile::tempdir().unwrap();
+
+        {
+            let mut manager = StageManager::new(temp.path()).unwrap();
+            manager
+                .mark_package_complete(BootstrapStage::BaseSystem, "bash")
+                .unwrap();
+        }
+
+        // Reload and verify
+        {
+            let manager = StageManager::new(temp.path()).unwrap();
+            let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+            assert_eq!(completed, vec!["bash"]);
+        }
+    }
+
+    #[test]
+    fn test_stage_manager_package_no_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut manager = StageManager::new(temp.path()).unwrap();
+
+        manager
+            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .unwrap();
+        manager
+            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .unwrap();
+
+        let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+        assert_eq!(completed.len(), 1);
     }
 
     #[test]

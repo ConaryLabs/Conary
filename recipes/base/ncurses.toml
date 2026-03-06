@@ -1,0 +1,33 @@
+[package]
+name = "ncurses"
+version = "6.6"
+summary = "Terminal handling library"
+license = "MIT"
+homepage = "https://invisible-island.net/ncurses/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/ncurses/ncurses-%(version)s.tar.gz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = []
+configure = """
+./configure --prefix=/usr \
+    --with-shared \
+    --without-debug \
+    --without-normal \
+    --with-cxx-shared \
+    --enable-pc-files \
+    --with-pkg-config-libdir=/usr/lib/pkgconfig \
+    --enable-widec
+"""
+make = "make -j%(jobs)s"
+install = """
+make install DESTDIR=%(destdir)s
+# Create non-wide-character ncurses symlinks
+for lib in ncurses form panel menu ; do
+    ln -sf lib${lib}w.so %(destdir)s/usr/lib/lib${lib}.so
+    ln -sf ${lib}w.pc %(destdir)s/usr/lib/pkgconfig/${lib}.pc
+done
+ln -sf libncursesw.so %(destdir)s/usr/lib/libcurses.so
+"""

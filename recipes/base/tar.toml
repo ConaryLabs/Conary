@@ -1,0 +1,16 @@
+[package]
+name = "tar"
+version = "1.35.2"
+summary = "GNU tape archiver"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/tar/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/tar/tar-%(version)s.tar.xz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = ["zlib", "xz"]
+configure = "./configure --prefix=/usr"
+make = "make -j%(jobs)s"
+install = "make install DESTDIR=%(destdir)s"
