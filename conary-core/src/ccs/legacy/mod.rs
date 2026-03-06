@@ -226,14 +226,6 @@ pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\'\''"))
 }
 
-/// Escape a string for safe use in shell commands.
-///
-/// Wraps the value in single quotes and escapes any embedded single quotes
-/// using the `'\''` idiom, which is safe against shell injection.
-pub fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\'\''"))
-}
-
 /// Map a CCS dependency to a format-specific package name
 /// This is a best-effort mapping and may not be accurate for all cases
 pub fn map_capability_to_package(capability: &str, format: &str) -> Option<String> {
