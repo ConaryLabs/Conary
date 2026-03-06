@@ -41,6 +41,14 @@ pub struct SystemModel {
     /// Federation configuration (CAS sharing across machines)
     #[serde(default)]
     pub federation: FederationConfig,
+
+    /// System-level configuration (distro pin, mixing policy)
+    #[serde(default)]
+    pub system: SystemConfig,
+
+    /// Per-package distro overrides
+    #[serde(default)]
+    pub overrides: HashMap<String, PackageOverrideConfig>,
 }
 
 /// Automation mode - how autonomous should the system be?
@@ -673,6 +681,29 @@ impl Default for FederationConfig {
     }
 }
 
+/// System-level configuration (distro pin, mixing policy)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SystemConfig {
+    /// Default distro for package sourcing (e.g., "ubuntu-noble", "fedora-41")
+    #[serde(default)]
+    pub distro: Option<String>,
+
+    /// Cross-distro mixing policy (e.g., "guarded", "open", "locked")
+    #[serde(default)]
+    pub mixing: Option<String>,
+}
+
+/// Per-package override to source from a different distro
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PackageOverrideConfig {
+    /// Distro to source this package from (e.g., "fedora-41", "rpmfusion-41")
+    pub from: String,
+
+    /// Human-readable reason for the override
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 impl SystemModel {
     /// Create a new empty system model
     pub fn new() -> Self {
@@ -689,6 +720,8 @@ impl SystemModel {
             include: IncludeConfig::default(),
             automation: AutomationConfig::default(),
             federation: FederationConfig::default(),
+            system: SystemConfig::default(),
+            overrides: HashMap::new(),
         }
     }
 
@@ -1115,5 +1148,51 @@ mode = "auto"
             parsed.automation.security.mode,
             Some(AutomationMode::Suggest)
         );
+    }
+
+    #[test]
+    fn test_parse_distro_pin() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+distro = "ubuntu-noble"
+mixing = "guarded"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.system.distro.as_deref(), Some("ubuntu-noble"));
+        assert_eq!(model.system.mixing.as_deref(), Some("guarded"));
+    }
+
+    #[test]
+    fn test_parse_package_overrides() {
+        let input = r#"
+[model]
+version = 1
+
+[overrides]
+mesa = { from = "fedora-41" }
+nvidia-driver = { from = "rpmfusion-41", reason = "closed source drivers" }
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.overrides.len(), 2);
+        assert_eq!(model.overrides["mesa"].from, "fedora-41");
+        assert_eq!(
+            model.overrides["nvidia-driver"].reason.as_deref(),
+            Some("closed source drivers")
+        );
+    }
+
+    #[test]
+    fn test_default_no_distro() {
+        let input = r#"
+[model]
+version = 1
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert!(model.system.distro.is_none());
+        assert!(model.system.mixing.is_none());
+        assert!(model.overrides.is_empty());
     }
 }
