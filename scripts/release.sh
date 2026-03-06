@@ -18,20 +18,20 @@ usage() {
 }
 
 DRY_RUN=false
-GROUPS=()
+RELEASE_RELEASE_GROUPS=()
 
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        conary|erofs|server|all) GROUPS+=("$arg") ;;
+        conary|erofs|server|all) RELEASE_GROUPS+=("$arg") ;;
         *) usage ;;
     esac
 done
 
-[[ ${#GROUPS[@]} -eq 0 ]] && usage
+[[ ${#RELEASE_GROUPS[@]} -eq 0 ]] && usage
 
-if [[ " ${GROUPS[*]} " == *" all "* ]]; then
-    GROUPS=(conary erofs server)
+if [[ " ${RELEASE_GROUPS[*]} " == *" all "* ]]; then
+    RELEASE_GROUPS=(conary erofs server)
 fi
 
 declare -A TAG_PREFIX=(
@@ -168,7 +168,7 @@ update_cargo_version() {
     sed -i "0,/^version = \".*\"/s/^version = \".*\"/version = \"${new_version}\"/" "$file"
 }
 
-for group in "${GROUPS[@]}"; do
+for group in "${RELEASE_GROUPS[@]}"; do
     echo "=== Releasing: $group ==="
 
     local_tag=$(latest_tag "$group")
