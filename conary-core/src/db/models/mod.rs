@@ -5,6 +5,7 @@
 //! This module defines Rust structs that correspond to database tables
 //! and provides methods for creating, reading, updating, and deleting records.
 
+mod canonical;
 mod changeset;
 mod chunk_access;
 mod collection;
@@ -15,6 +16,7 @@ mod converted;
 mod delta;
 mod dependency;
 mod derived;
+mod distro_pin;
 mod download_stats;
 mod file_entry;
 mod flavor;
@@ -31,6 +33,7 @@ mod subpackage;
 mod trigger;
 mod trove;
 
+pub use canonical::{CanonicalPackage, PackageImplementation};
 pub use changeset::{Changeset, ChangesetStatus};
 pub use chunk_access::{ChunkAccess, ChunkStats};
 pub use collection::CollectionMember;
@@ -41,6 +44,7 @@ pub use converted::{CONVERSION_VERSION, ConvertedPackage};
 pub use delta::{DeltaStats, PackageDelta};
 pub use dependency::DependencyEntry;
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
+pub use distro_pin::{DistroPin, PackageOverride, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::FileEntry;
 pub use flavor::Flavor;
