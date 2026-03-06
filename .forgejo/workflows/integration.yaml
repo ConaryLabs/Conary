@@ -1,0 +1,31 @@
+# .forgejo/workflows/integration.yaml
+# Integration test matrix -- 3 distros via Podman (~15 min)
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  integration:
+    runs-on: linux-native
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora43, ubuntu-noble, arch]
+    name: Integration (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build conary
+        run: cargo build
+
+      - name: Run integration tests (${{ matrix.distro }})
+        run: ./tests/integration/remi/run.sh --distro ${{ matrix.distro }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.distro }}
+          path: tests/integration/remi/results/${{ matrix.distro }}.json
