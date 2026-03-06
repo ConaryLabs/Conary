@@ -3,17 +3,19 @@
 #
 # Usage:
 #   ssh peter@forge.conarylabs.com
-#   sudo ./deploy/setup-forge.sh
+#   sudo bash /home/peter/Conary/deploy/setup-forge.sh
 #
 # Prerequisites:
 #   - Fedora 43 with Podman installed
-#   - Rust 1.93+ installed
+#   - Rust 1.93+ installed (in /home/peter/.cargo/bin/)
 #   - Git installed
 #
 # What this installs:
 #   - Forgejo (native binary) on port 3000
-#   - Forgejo Runner (native binary) registered with the instance
+#   - Forgejo Runner (native binary, host executor) registered with the instance
 #   - systemd services for both
+#   - app.ini with SQLite, Actions enabled
+#   - Admin user, DB migration, runner registration
 set -euo pipefail
 
 RED='\033[0;31m'
@@ -27,12 +29,17 @@ error() { echo -e "${RED}[-]${NC} $1"; exit 1; }
 
 [[ $EUID -ne 0 ]] && error "This script must be run as root"
 
-FORGEJO_VERSION="10.0.1"
-RUNNER_VERSION="6.3.1"
+FORGEJO_VERSION="14.0.2"
+RUNNER_VERSION="12.7.1"
 FORGEJO_USER="forgejo"
 FORGEJO_HOME="/var/lib/forgejo"
 FORGEJO_BIN="/usr/local/bin/forgejo"
 RUNNER_BIN="/usr/local/bin/forgejo-runner"
+RUNNER_HOME="/var/lib/forgejo-runner"
+ADMIN_USER="${FORGE_ADMIN_USER:-peter}"
+ADMIN_EMAIL="${FORGE_ADMIN_EMAIL:-peter@conary.io}"
+ADMIN_PASS="${FORGE_ADMIN_PASS:-}"
+DOMAIN="${FORGE_DOMAIN:-forge.conarylabs.com}"
 
 # ── Create forgejo user ──────────────────────────────────────────────────
 if ! id "$FORGEJO_USER" &>/dev/null; then
@@ -48,16 +55,77 @@ chmod +x "$FORGEJO_BIN"
 
 # ── Install Forgejo Runner binary ────────────────────────────────────────
 log "Downloading Forgejo Runner ${RUNNER_VERSION}..."
-curl -fSL "https://codeberg.org/forgejo/runner/releases/download/v${RUNNER_VERSION}/forgejo-runner-${RUNNER_VERSION}-linux-amd64" \
+curl -fSL "https://code.forgejo.org/forgejo/runner/releases/download/v${RUNNER_VERSION}/forgejo-runner-${RUNNER_VERSION}-linux-amd64" \
     -o "$RUNNER_BIN"
 chmod +x "$RUNNER_BIN"
 
 # ── Create directories ──────────────────────────────────────────────────
 mkdir -p "$FORGEJO_HOME"/{custom,data,log}
 mkdir -p /etc/forgejo
+mkdir -p "$RUNNER_HOME"
 chown -R "$FORGEJO_USER":"$FORGEJO_USER" "$FORGEJO_HOME"
-chown root:"$FORGEJO_USER" /etc/forgejo
+chown -R "$FORGEJO_USER":"$FORGEJO_USER" "$RUNNER_HOME"
+chown "$FORGEJO_USER":"$FORGEJO_USER" /etc/forgejo
 chmod 770 /etc/forgejo
+
+# ── Generate app.ini ─────────────────────────────────────────────────────
+log "Writing app.ini..."
+SECRET_KEY=$(openssl rand -hex 32)
+INTERNAL_TOKEN=$(openssl rand -hex 64)
+
+cat > /etc/forgejo/app.ini << APPEOF
+APP_NAME = Conary Forge
+RUN_USER = ${FORGEJO_USER}
+WORK_PATH = ${FORGEJO_HOME}
+
+[server]
+HTTP_PORT = 3000
+ROOT_URL = http://${DOMAIN}:3000/
+DOMAIN = ${DOMAIN}
+SSH_PORT = 22
+SSH_DOMAIN = ${DOMAIN}
+
+[database]
+DB_TYPE = sqlite3
+PATH = ${FORGEJO_HOME}/data/forgejo.db
+
+[repository]
+ROOT = ${FORGEJO_HOME}/repos
+
+[security]
+INSTALL_LOCK = true
+SECRET_KEY = ${SECRET_KEY}
+INTERNAL_TOKEN = ${INTERNAL_TOKEN}
+
+[actions]
+ENABLED = true
+
+[log]
+ROOT_PATH = ${FORGEJO_HOME}/data/log
+MODE = console
+LEVEL = Info
+APPEOF
+
+chown "$FORGEJO_USER":"$FORGEJO_USER" /etc/forgejo/app.ini
+chmod 660 /etc/forgejo/app.ini
+
+# ── Run database migration ───────────────────────────────────────────────
+log "Migrating database..."
+sudo -u "$FORGEJO_USER" "$FORGEJO_BIN" migrate --config /etc/forgejo/app.ini
+
+# ── Create admin user ────────────────────────────────────────────────────
+if [[ -n "$ADMIN_PASS" ]]; then
+    log "Creating admin user: ${ADMIN_USER}..."
+    sudo -u "$FORGEJO_USER" "$FORGEJO_BIN" admin user create \
+        --config /etc/forgejo/app.ini \
+        --username "$ADMIN_USER" \
+        --password "$ADMIN_PASS" \
+        --email "$ADMIN_EMAIL" \
+        --admin
+else
+    warn "No FORGE_ADMIN_PASS set -- skipping admin user creation"
+    warn "Create one manually: forgejo admin user create --config /etc/forgejo/app.ini --username peter --password <pass> --email peter@conary.io --admin"
+fi
 
 # ── Forgejo systemd service ─────────────────────────────────────────────
 log "Creating Forgejo systemd service..."
@@ -80,6 +148,36 @@ Environment=USER=forgejo HOME=/var/lib/forgejo FORGEJO_WORK_DIR=/var/lib/forgejo
 WantedBy=multi-user.target
 SVCEOF
 
+# ── Start Forgejo ────────────────────────────────────────────────────────
+systemctl daemon-reload
+systemctl enable --now forgejo
+sleep 2
+
+# Verify Forgejo is responding
+if curl -sf http://localhost:3000/api/v1/version > /dev/null 2>&1; then
+    log "Forgejo is running"
+else
+    error "Forgejo failed to start -- check: journalctl -u forgejo"
+fi
+
+# ── Register runner ──────────────────────────────────────────────────────
+log "Generating runner registration token..."
+RUNNER_TOKEN=$(sudo -u "$FORGEJO_USER" "$FORGEJO_BIN" actions generate-runner-token --config /etc/forgejo/app.ini 2>/dev/null)
+
+log "Registering runner..."
+cd "$RUNNER_HOME"
+sudo -u "$FORGEJO_USER" "$RUNNER_BIN" register \
+    --instance http://localhost:3000 \
+    --token "$RUNNER_TOKEN" \
+    --labels linux-native \
+    --name forge-runner \
+    --no-interactive
+
+# ── Configure runner for host executor ───────────────────────────────────
+log "Generating runner config (host executor)..."
+sudo -u "$FORGEJO_USER" "$RUNNER_BIN" generate-config > "$RUNNER_HOME/config.yaml"
+sed -i 's/^  labels: \[\]/  labels: ["linux-native:host"]/' "$RUNNER_HOME/config.yaml"
+
 # ── Runner systemd service ──────────────────────────────────────────────
 log "Creating Runner systemd service..."
 cat > /etc/systemd/system/forgejo-runner.service << 'SVCEOF'
@@ -90,9 +188,9 @@ Wants=forgejo.service
 
 [Service]
 Type=simple
-User=peter
-WorkingDirectory=/home/peter
-ExecStart=/usr/local/bin/forgejo-runner daemon
+User=forgejo
+WorkingDirectory=/var/lib/forgejo-runner
+ExecStart=/usr/local/bin/forgejo-runner daemon --config /var/lib/forgejo-runner/config.yaml
 Restart=always
 RestartSec=5
 
@@ -100,25 +198,32 @@ RestartSec=5
 WantedBy=multi-user.target
 SVCEOF
 
-# ── Enable and start Forgejo ────────────────────────────────────────────
 systemctl daemon-reload
-systemctl enable forgejo
-systemctl start forgejo
+systemctl enable --now forgejo-runner
+sleep 2
 
-log "Forgejo installed and running on port 3000"
+# ── Make Rust toolchain accessible to forgejo user ───────────────────────
+log "Symlinking Rust toolchain..."
+for bin in cargo rustc clippy-driver cargo-clippy; do
+    if [[ -f "/home/peter/.cargo/bin/$bin" ]]; then
+        ln -sf "/home/peter/.cargo/bin/$bin" "/usr/local/bin/$bin"
+    fi
+done
+
+# ── Verify ───────────────────────────────────────────────────────────────
+log ""
+log "Setup complete!"
+log ""
+log "  Forgejo:  http://${DOMAIN}:3000  (v${FORGEJO_VERSION})"
+log "  Runner:   forge-runner (v${RUNNER_VERSION}, host executor)"
+log "  Admin:    ${ADMIN_USER}"
 log ""
 log "Next steps:"
-log "  1. Visit http://forge.conarylabs.com:3000 to complete web setup"
-log "  2. Create an admin account"
-log "  3. Mirror the GitHub repo:"
-log "     - New Migration > GitHub > https://github.com/ConaryLabs/Conary"
-log "     - Enable 'Mirror' option"
-log "  4. Generate a runner registration token:"
-log "     - Site Administration > Actions > Runners > Create new Runner"
-log "  5. Register the runner:"
-log "     forgejo-runner register --instance http://localhost:3000 --token <TOKEN> --labels linux-native --name forge-runner"
-log "  6. Start the runner:"
-log "     systemctl enable --now forgejo-runner"
+log "  1. Mirror the GitHub repo via API or web UI:"
+log "     curl -X POST http://localhost:3000/api/v1/repos/migrate \\"
+log "       -H 'Authorization: token <TOKEN>' \\"
+log "       -H 'Content-Type: application/json' \\"
+log "       -d '{\"clone_addr\":\"https://github.com/ConaryLabs/Conary.git\",\"repo_name\":\"Conary\",\"repo_owner\":\"peter\",\"service\":\"git\",\"mirror\":true,\"mirror_interval\":\"10m\"}'"
 log ""
-warn "DNS: Point forge.conarylabs.com to this server's IP"
+warn "DNS: Point ${DOMAIN} to this server's IP"
 warn "TLS: Set up Caddy/nginx reverse proxy with Let's Encrypt for HTTPS"
