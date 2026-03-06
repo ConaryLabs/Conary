@@ -8,6 +8,7 @@
 //! It also provides component-level resolution for independent component
 //! installation and removal safety checking.
 
+pub mod canonical;
 mod component_resolver;
 mod conflict;
 mod engine;
