@@ -458,51 +458,6 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
         )));
     }
 
-    // Reject insecure HTTP URLs for GPG key fetching
-    if key_url.starts_with("http://") {
-        return Err(Error::ConfigError(format!(
-            "GPG key URL for repository '{}' uses insecure http:// scheme. \
-             Use https:// instead: {}",
-            repo.name, key_url
-        )));
-    }
-
-    // Reject insecure HTTP URLs for GPG key fetching
-    if key_url.starts_with("http://") {
-        return Err(Error::ConfigError(format!(
-            "GPG key URL for repository '{}' uses insecure http:// scheme. \
-             Use https:// instead: {}",
-            repo.name, key_url
-        )));
-    }
-
-    // Reject insecure HTTP URLs for GPG key fetching
-    if key_url.starts_with("http://") {
-        return Err(Error::ConfigError(format!(
-            "GPG key URL for repository '{}' uses insecure http:// scheme. \
-             Use https:// instead: {}",
-            repo.name, key_url
-        )));
-    }
-
-    // Reject insecure HTTP URLs for GPG key fetching
-    if key_url.starts_with("http://") {
-        return Err(Error::ConfigError(format!(
-            "GPG key URL for repository '{}' uses insecure http:// scheme. \
-             Use https:// instead: {}",
-            repo.name, key_url
-        )));
-    }
-
-    // Reject insecure HTTP URLs for GPG key fetching
-    if key_url.starts_with("http://") {
-        return Err(Error::ConfigError(format!(
-            "GPG key URL for repository '{}' uses insecure http:// scheme. \
-             Use https:// instead: {}",
-            repo.name, key_url
-        )));
-    }
-
     info!(
         "Fetching GPG key for repository '{}' from {}",
         repo.name, key_url

@@ -1049,7 +1049,6 @@ dependencies = [
  "rustls-pki-types",
  "rustls-webpki 0.103.9",
  "seccompiler",
- "semver",
  "sequoia-openpgp",
  "serde",
  "serde_json",
