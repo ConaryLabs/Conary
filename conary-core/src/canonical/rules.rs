@@ -203,14 +203,14 @@ impl RulesEngine {
 /// Unanchored patterns could match substrings, leading to unexpected
 /// canonical name mappings. This adds `^` and `$` if not already present.
 fn anchor_regex(pat: &str) -> String {
-    let mut result = pat.to_string();
-    if !result.starts_with('^') {
-        result.insert(0, '^');
+    let needs_start = !pat.starts_with('^');
+    let needs_end = !pat.ends_with('$');
+    match (needs_start, needs_end) {
+        (true, true) => format!("^(?:{pat})$"),
+        (true, false) => format!("^(?:{pat})"),
+        (false, true) => format!("(?:{pat})$"),
+        (false, false) => pat.to_string(),
     }
-    if !result.ends_with('$') {
-        result.push('$');
-    }
-    result
 }
 
 #[cfg(test)]

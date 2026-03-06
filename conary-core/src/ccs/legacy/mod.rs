@@ -215,7 +215,7 @@ impl CommonHookGenerator {
 /// Wraps the value in single quotes and escapes any embedded single quotes
 /// using the `'\''` idiom, which is safe against shell injection.
 pub fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\'\''"))
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// Map a CCS dependency to a format-specific package name

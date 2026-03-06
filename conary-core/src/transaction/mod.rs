@@ -114,7 +114,11 @@ fn validate_symlink_target_for_root(
                 }
             }
         }
-        if !normalized.starts_with(install_root) {
+        // Absolute symlinks inside a package are relative to the install root.
+        // Prepend install_root so the check is against the target filesystem,
+        // not the host root.
+        let rooted = install_root.join(normalized.strip_prefix("/").unwrap_or(&normalized));
+        if !rooted.starts_with(install_root) {
             return Err(crate::Error::PathTraversal(format!(
                 "Symlink target escapes install root: {}",
                 target.display()
