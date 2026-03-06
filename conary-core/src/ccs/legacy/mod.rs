@@ -463,6 +463,37 @@ pub fn map_capability_to_package(capability: &str, format: &str) -> Option<Strin
         .map(|s| (*s).to_string())
 }
 
+/// Map a capability to a distro-specific package name via canonical DB.
+/// Falls back to hardcoded mappings if DB has no entry.
+pub fn map_capability_to_package_db(
+    conn: &rusqlite::Connection,
+    capability: &str,
+    format: &str,
+) -> crate::error::Result<Option<String>> {
+    use crate::db::models::{CanonicalPackage, PackageImplementation};
+
+    // Map format string to distro prefix for matching
+    let distro_prefix = match format {
+        "deb" => "ubuntu",
+        "rpm" => "fedora",
+        "arch" => "arch",
+        _ => return Ok(map_capability_to_package(capability, format)),
+    };
+
+    // Try canonical lookup first
+    if let Some(canonical) = CanonicalPackage::resolve_name(conn, capability)?
+        && let Some(can_id) = canonical.id
+    {
+        let impls = PackageImplementation::find_by_canonical(conn, can_id)?;
+        if let Some(impl_pkg) = impls.iter().find(|i| i.distro.starts_with(distro_prefix)) {
+            return Ok(Some(impl_pkg.distro_name.clone()));
+        }
+    }
+
+    // Fall back to hardcoded mappings
+    Ok(map_capability_to_package(capability, format))
+}
+
 /// Get the architecture string for a format
 pub fn arch_for_format(arch: Option<&str>, format: &str) -> String {
     let arch = arch.unwrap_or("x86_64");
@@ -512,6 +543,51 @@ mod tests {
             Some("openssl-libs".to_string())
         );
         assert_eq!(map_capability_to_package("unknown", "deb"), None);
+    }
+
+    #[test]
+    fn test_map_capability_from_db() {
+        use crate::db::models::{CanonicalPackage, PackageImplementation};
+        use crate::db::schema;
+        use rusqlite::Connection;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        // Populate canonical data
+        let mut pkg = CanonicalPackage::new("glibc".to_string(), "package".to_string());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut i1 = PackageImplementation::new(
+            cid,
+            "ubuntu-noble".into(),
+            "libc6".into(),
+            "curated".into(),
+        );
+        i1.insert_or_ignore(&conn).unwrap();
+        let mut i2 = PackageImplementation::new(
+            cid,
+            "fedora-41".into(),
+            "glibc".into(),
+            "curated".into(),
+        );
+        i2.insert_or_ignore(&conn).unwrap();
+        let mut i3 =
+            PackageImplementation::new(cid, "arch".into(), "glibc".into(), "curated".into());
+        i3.insert_or_ignore(&conn).unwrap();
+
+        // DB lookup should work
+        let result = map_capability_to_package_db(&conn, "glibc", "deb").unwrap();
+        assert_eq!(result, Some("libc6".to_string()));
+
+        let result = map_capability_to_package_db(&conn, "glibc", "rpm").unwrap();
+        assert_eq!(result, Some("glibc".to_string()));
+
+        // Unknown capability falls through to hardcoded (which also returns None for truly unknown)
+        let result = map_capability_to_package_db(&conn, "totally-unknown-pkg", "deb").unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]
