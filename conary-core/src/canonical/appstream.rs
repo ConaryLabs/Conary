@@ -224,6 +224,22 @@ pub fn ingest_appstream(
     components: &[AppStreamComponent],
     distro: &str,
 ) -> Result<usize> {
+    // Wrap in a transaction for atomicity and performance (avoids per-statement autocommit)
+    conn.execute_batch("BEGIN")?;
+    let result = ingest_appstream_inner(conn, components, distro);
+    if result.is_ok() {
+        conn.execute_batch("COMMIT")?;
+    } else {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result
+}
+
+fn ingest_appstream_inner(
+    conn: &rusqlite::Connection,
+    components: &[AppStreamComponent],
+    distro: &str,
+) -> Result<usize> {
     let mut count = 0;
 
     for comp in components {
