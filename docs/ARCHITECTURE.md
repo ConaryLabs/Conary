@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-06
+revision: 1
+summary: System design overview with module structure and data flow
+---
+
 # Conary Architecture
 
 This document describes the internal architecture of Conary, a modern system

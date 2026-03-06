@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-06
+revision: 1
+summary: Comprehensive technical guide covering all Conary subsystems
+---
+
 # Conaryopedia v2
 
 *A comprehensive guide to Conary package management*
