@@ -44,6 +44,9 @@ pub struct ConaryProvider<'db> {
     /// Each version set is (name_id, constraint).
     version_sets: Vec<(NameId, VersionConstraint)>,
 
+    /// Cache for deduplicating version sets by (name_id, constraint).
+    version_set_cache: HashMap<(u32, VersionConstraint), VersionSetId>,
+
     strings: Vec<String>,
 
     /// Pre-loaded dependencies for each solvable, keyed by `SolvableId` index.
@@ -61,6 +64,7 @@ impl<'db> ConaryProvider<'db> {
             name_to_id: HashMap::new(),
             solvables: Vec::new(),
             version_sets: Vec::new(),
+            version_set_cache: HashMap::new(),
             strings: Vec::new(),
             dependencies: HashMap::new(),
             conn,
@@ -78,14 +82,19 @@ impl<'db> ConaryProvider<'db> {
         id
     }
 
-    /// Intern a version constraint for a given name.
+    /// Intern a version constraint for a given name, deduplicating via cache.
     pub fn intern_version_set(
         &mut self,
         name_id: NameId,
         constraint: VersionConstraint,
     ) -> VersionSetId {
+        let cache_key = (name_id.0, constraint.clone());
+        if let Some(&existing) = self.version_set_cache.get(&cache_key) {
+            return existing;
+        }
         let id = VersionSetId(self.version_sets.len() as u32);
         self.version_sets.push((name_id, constraint));
+        self.version_set_cache.insert(cache_key, id);
         id
     }
 
@@ -251,14 +260,8 @@ impl<'db> ConaryProvider<'db> {
         for (_sid, deps) in &all_deps {
             for (dep_name, constraint) in deps {
                 let name_id = self.intern_name(dep_name);
-                // Check if this version set already exists
-                let already_exists = self
-                    .version_sets
-                    .iter()
-                    .any(|(nid, c)| *nid == name_id && c == constraint);
-                if !already_exists {
-                    self.intern_version_set(name_id, constraint.clone());
-                }
+                // intern_version_set deduplicates via its internal cache
+                self.intern_version_set(name_id, constraint.clone());
             }
         }
     }
@@ -386,17 +389,22 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
-        let candidates = self.solvables_for_name(name);
+        let mut candidates = self.solvables_for_name(name);
 
         if candidates.is_empty() {
-            // Check if this is a virtual provide
+            // Check if this is a virtual provide and resolve through real packages
             let name_str = &self.names[name.0 as usize];
             if ProvideEntry::is_virtual_provide(name_str) {
-                let _providers = self.resolve_virtual_provide(name_str);
-                // Virtual provides are resolved through real package names
-                // that the solver will discover via dependencies
+                let providers = self.resolve_virtual_provide(name_str);
+                for provider_name in &providers {
+                    if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
+                        candidates.extend(self.solvables_for_name(provider_name_id));
+                    }
+                }
             }
-            return None;
+            if candidates.is_empty() {
+                return None;
+            }
         }
 
         let favored = self.installed_solvable_for_name(name);

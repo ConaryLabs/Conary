@@ -318,7 +318,7 @@ impl LanguageDep {
         Self::check_version_constraint(installed, constraint)
     }
 
-    /// Simple version constraint checker
+    /// Version constraint checker using proper numeric comparison via RpmVersion.
     fn check_version_constraint(installed: &str, constraint: &str) -> bool {
         // Parse operator from constraint
         let (op, required) = if let Some(ver) = constraint.strip_prefix(">=") {
@@ -338,14 +338,20 @@ impl LanguageDep {
             ("=", constraint)
         };
 
-        // Simple string comparison (works for many version schemes)
-        // A full implementation would use semantic versioning or distro-specific comparison
+        use crate::version::RpmVersion;
+
+        // Use RpmVersion for proper numeric comparison; fall back to string comparison
+        let cmp = match (RpmVersion::parse(installed), RpmVersion::parse(required)) {
+            (Ok(inst), Ok(req)) => inst.compare(&req),
+            _ => installed.cmp(required),
+        };
+
         match op {
-            ">=" => installed >= required,
-            "<=" => installed <= required,
-            ">" => installed > required,
-            "<" => installed < required,
-            "=" | "==" => installed == required,
+            ">=" => cmp.is_ge(),
+            "<=" => cmp.is_le(),
+            ">" => cmp.is_gt(),
+            "<" => cmp.is_lt(),
+            "=" | "==" => cmp.is_eq(),
             _ => false,
         }
     }

@@ -190,10 +190,20 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 
         // Check if any of this package's dependencies are being removed
         if let Some(deps) = provider.get_dependency_list(sid) {
-            for (dep_name, _) in deps {
+            for (dep_name, constraint) in deps {
                 if remove_set.contains(dep_name.as_str()) {
-                    breaking.push(pkg.name.clone());
-                    break;
+                    let has_alternative = (0..solvable_count).any(|j| {
+                        let alt_sid = resolvo::SolvableId(j as u32);
+                        let alt = provider.get_solvable(alt_sid);
+                        alt.trove_id.is_some()
+                            && alt.name == *dep_name
+                            && !remove_set.contains(alt.name.as_str())
+                            && constraint.satisfies(&alt.version)
+                    });
+                    if !has_alternative {
+                        breaking.push(pkg.name.clone());
+                        break;
+                    }
                 }
             }
         }

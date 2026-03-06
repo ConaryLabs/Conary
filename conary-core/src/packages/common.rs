@@ -12,6 +12,17 @@ use std::path::PathBuf;
 /// Maximum size for a single file during package extraction (512 MB).
 pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Normalize architecture strings across distros.
+///
+/// Maps Debian "all", Arch "any", and RPM "noarch" to a canonical "noarch".
+/// All other values pass through unchanged.
+pub fn normalize_architecture(arch: &str) -> &str {
+    match arch {
+        "all" | "any" | "noarch" => "noarch",
+        other => other,
+    }
+}
+
 /// Common metadata shared by all package formats
 ///
 /// This struct contains the core fields that every package format provides.
@@ -279,5 +290,15 @@ mod tests {
         let result = PackageMetadataBuilder::new().name("incomplete").try_build();
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_normalize_architecture() {
+        use super::normalize_architecture;
+        assert_eq!(normalize_architecture("all"), "noarch");
+        assert_eq!(normalize_architecture("any"), "noarch");
+        assert_eq!(normalize_architecture("noarch"), "noarch");
+        assert_eq!(normalize_architecture("x86_64"), "x86_64");
+        assert_eq!(normalize_architecture("aarch64"), "aarch64");
     }
 }

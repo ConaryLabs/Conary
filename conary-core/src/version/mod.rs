@@ -6,7 +6,6 @@
 //! including support for epoch:version-release format and version constraints.
 
 use crate::error::{Error, Result};
-use semver::Version;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -64,33 +63,32 @@ impl RpmVersion {
         })
     }
 
-    /// Convert to a semver::Version for comparison
+    /// Compare version strings component-by-component.
     ///
-    /// RPM versions may not be semver-compliant, so we normalize them:
-    /// - If version parses as semver, use it directly
-    /// - Otherwise, try to extract major.minor.patch from version string
-    fn to_semver(&self) -> Result<Version> {
-        // First try to parse version directly
-        if let Ok(v) = Version::parse(&self.version) {
-            return Ok(v);
+    /// Splits on '.' and compares each segment numerically when possible,
+    /// falling back to lexicographic comparison for non-numeric segments.
+    /// This preserves 4th+ version components that semver would discard.
+    fn compare_version_strings(a: &str, b: &str) -> Ordering {
+        let a_parts: Vec<&str> = a.split('.').collect();
+        let b_parts: Vec<&str> = b.split('.').collect();
+
+        for i in 0..a_parts.len().max(b_parts.len()) {
+            let a_part = a_parts.get(i).copied().unwrap_or("0");
+            let b_part = b_parts.get(i).copied().unwrap_or("0");
+
+            match (a_part.parse::<u64>(), b_part.parse::<u64>()) {
+                (Ok(a_num), Ok(b_num)) => match a_num.cmp(&b_num) {
+                    Ordering::Equal => continue,
+                    ord => return ord,
+                },
+                _ => match a_part.cmp(b_part) {
+                    Ordering::Equal => continue,
+                    ord => return ord,
+                },
+            }
         }
 
-        // Try to extract numbers and create a semver-compliant version
-        let parts: Vec<&str> = self.version.split('.').collect();
-        let major = parts
-            .first()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        let minor = parts
-            .get(1)
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        let patch = parts
-            .get(2)
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        Ok(Version::new(major, minor, patch))
+        Ordering::Equal
     }
 
     /// Compare two RPM versions
@@ -101,19 +99,10 @@ impl RpmVersion {
             ord => return ord,
         }
 
-        // Then compare versions using semver if possible
-        match (self.to_semver(), other.to_semver()) {
-            (Ok(v1), Ok(v2)) => match v1.cmp(&v2) {
-                Ordering::Equal => {}
-                ord => return ord,
-            },
-            _ => {
-                // Fall back to string comparison if semver parsing fails
-                match self.version.cmp(&other.version) {
-                    Ordering::Equal => {}
-                    ord => return ord,
-                }
-            }
+        // Then compare versions component-by-component
+        match Self::compare_version_strings(&self.version, &other.version) {
+            Ordering::Equal => {}
+            ord => return ord,
         }
 
         // Finally compare releases (lexicographically)
@@ -147,7 +136,7 @@ impl PartialOrd for RpmVersion {
 }
 
 /// Version constraint operators
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VersionConstraint {
     /// Any version is acceptable
     Any,
@@ -394,5 +383,16 @@ mod tests {
 
         let c2 = VersionConstraint::parse(">= 1.0.0, < 2.0.0").unwrap();
         assert_eq!(c2.to_string(), ">= 1.0.0, < 2.0.0");
+    }
+
+    #[test]
+    fn test_rpm_version_four_component() {
+        let v1 = RpmVersion::parse("1.2.3.4").unwrap();
+        let v2 = RpmVersion::parse("1.2.3.5").unwrap();
+        assert_eq!(v1.compare(&v2), Ordering::Less);
+
+        let v3 = RpmVersion::parse("1.2.3").unwrap();
+        let v4 = RpmVersion::parse("1.2.3.4").unwrap();
+        assert_eq!(v3.compare(&v4), Ordering::Less);
     }
 }

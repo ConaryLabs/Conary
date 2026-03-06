@@ -85,7 +85,11 @@ impl ArchPackage {
                     "builddate" => info.build_date = Some(value.to_string()),
                     "packager" => info.packager = Some(value.to_string()),
                     "size" => info.size = value.parse().ok(),
-                    "arch" => info.architecture = Some(value.to_string()),
+                    "arch" => {
+                        info.architecture = Some(
+                            crate::packages::common::normalize_architecture(value).to_string(),
+                        )
+                    }
                     "license" => info.licenses.push(value.to_string()),
                     "group" => info.groups.push(value.to_string()),
                     "depend" => info.dependencies.push(value.to_string()),

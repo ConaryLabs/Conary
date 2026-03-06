@@ -33,9 +33,6 @@ rpm = "0.14"
 # Temp files for RPM extraction
 tempfile.workspace = true
 
-# Version parsing and comparison
-semver = "1.0"
-
 # HTTP client for repository downloads
 reqwest.workspace = true
 

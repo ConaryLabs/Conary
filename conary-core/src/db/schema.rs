@@ -64,11 +64,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Apply migrations in order, each wrapped in a transaction for atomicity
     for version in (current_version + 1)..=SCHEMA_VERSION {
         info!("Applying migration to version {}", version);
-        conn.execute("BEGIN", [])?;
+        let tx = conn.unchecked_transaction()?;
         match apply_migration(conn, version).and_then(|()| set_schema_version(conn, version)) {
-            Ok(()) => conn.execute("COMMIT", [])?,
+            Ok(()) => tx.commit()?,
             Err(e) => {
-                let _ = conn.execute("ROLLBACK", []);
+                drop(tx); // rollback on drop
                 return Err(e);
             }
         };
