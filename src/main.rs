@@ -1668,6 +1668,56 @@ fn main() -> Result<()> {
                 .block_on(run_server_from_config(&remi_config))
         }
 
+        // =====================================================================
+        // Distro Commands
+        // =====================================================================
+        Some(Commands::Distro(distro_cmd)) => match distro_cmd {
+            cli::DistroCommands::Set {
+                distro,
+                mixing,
+                db_path,
+            } => commands::distro::cmd_distro_set(&db_path, &distro, &mixing),
+            cli::DistroCommands::Remove { db_path } => {
+                commands::distro::cmd_distro_remove(&db_path)
+            }
+            cli::DistroCommands::List => commands::distro::cmd_distro_list(),
+            cli::DistroCommands::Info { db_path } => {
+                commands::distro::cmd_distro_info(&db_path)
+            }
+            cli::DistroCommands::Mixing { policy, db_path } => {
+                commands::distro::cmd_distro_mixing(&db_path, &policy)
+            }
+        },
+
+        // =====================================================================
+        // Canonical Commands
+        // =====================================================================
+        Some(Commands::Canonical(can_cmd)) => match can_cmd {
+            cli::CanonicalCommands::Show { name, db_path } => {
+                commands::canonical::cmd_canonical_show(&db_path, &name)
+            }
+            cli::CanonicalCommands::Search { query, db_path } => {
+                commands::canonical::cmd_canonical_search(&db_path, &query)
+            }
+            cli::CanonicalCommands::Unmapped { db_path } => {
+                commands::canonical::cmd_canonical_unmapped(&db_path)
+            }
+        },
+
+        // =====================================================================
+        // Groups Commands
+        // =====================================================================
+        Some(Commands::Groups(grp_cmd)) => match grp_cmd {
+            cli::GroupsCommands::List { db_path } => {
+                commands::groups::cmd_groups_list(&db_path)
+            }
+            cli::GroupsCommands::Show {
+                name,
+                distro,
+                db_path,
+            } => commands::groups::cmd_groups_show(&db_path, &name, distro.as_deref()),
+        },
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

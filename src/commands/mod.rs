@@ -4,6 +4,7 @@
 mod adopt;
 mod automation;
 mod bootstrap;
+pub mod canonical;
 mod capability;
 pub mod ccs;
 mod collection;
@@ -11,7 +12,9 @@ mod config;
 mod convert_pkgbuild;
 mod cook;
 mod derived;
+pub mod distro;
 mod federation;
+pub mod groups;
 pub mod generation;
 mod install;
 mod label;

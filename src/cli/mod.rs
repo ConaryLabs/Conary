@@ -29,13 +29,16 @@ use clap::{Args, Parser, Subcommand};
 
 mod automation;
 mod bootstrap;
+mod canonical;
 mod capability;
 mod ccs;
 mod collection;
 mod config;
 mod derive;
+mod distro;
 mod federation;
 mod generation;
+mod groups;
 mod label;
 mod model;
 mod package;
@@ -52,13 +55,16 @@ mod trust;
 pub use automation::AiCommands;
 pub use automation::AutomationCommands;
 pub use bootstrap::BootstrapCommands;
+pub use canonical::CanonicalCommands;
 pub use capability::CapabilityCommands;
 pub use ccs::CcsCommands;
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derive::DeriveCommands;
+pub use distro::DistroCommands;
 pub use federation::FederationCommands;
 pub use generation::GenerationCommands;
+pub use groups::GroupsCommands;
 pub use label::LabelCommands;
 pub use model::ModelCommands;
 pub use provenance::ProvenanceCommands;
@@ -373,6 +379,18 @@ pub enum Commands {
     /// Configuration file management
     #[command(subcommand)]
     Config(ConfigCommands),
+
+    /// Distro pinning management
+    #[command(subcommand)]
+    Distro(DistroCommands),
+
+    /// Canonical package identity
+    #[command(subcommand)]
+    Canonical(CanonicalCommands),
+
+    /// Package group management
+    #[command(subcommand)]
+    Groups(GroupsCommands),
 
     // =========================================================================
     // Advanced/Developer
