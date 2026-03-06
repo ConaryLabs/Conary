@@ -113,6 +113,25 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
+    /// Build Conary stage (Rust + self-hosting)
+    Conary {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// Target root directory (sysroot)
+        #[arg(long)]
+        root: Option<String>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip this stage
+        #[arg(long)]
+        skip: bool,
+    },
+
     /// Generate bootable image
     Image {
         /// Directory for bootstrap work

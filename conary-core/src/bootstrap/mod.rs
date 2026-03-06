@@ -45,7 +45,9 @@
 
 mod base;
 mod config;
+mod conary_stage;
 mod image;
+pub(crate) mod repart;
 mod stage0;
 mod stage1;
 mod stage2;
@@ -59,6 +61,7 @@ pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
+pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use stage2::{Stage2Builder, Stage2Error, Stage2Package, Stage2PackageStatus};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use toolchain::{Toolchain, ToolchainKind};
@@ -226,6 +229,30 @@ impl Bootstrap {
             .mark_complete(BootstrapStage::BaseSystem, builder.target_root())?;
 
         Ok(builder.summary())
+    }
+
+    /// Build the Conary self-hosting stage (Rust + Conary).
+    ///
+    /// Downloads a Rust bootstrap compiler, builds Rust from source, then
+    /// compiles Conary itself. After this stage the bootstrapped system can
+    /// manage its own packages.
+    pub fn build_conary_stage(&mut self) -> Result<()> {
+        let sysroot = self
+            .get_sysroot()
+            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run base first."))?;
+
+        let builder = ConaryStageBuilder::new(
+            self.work_dir.join("conary-stage"),
+            self.config.clone(),
+            sysroot.clone(),
+        );
+
+        builder.build()?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Conary, &sysroot)?;
+
+        Ok(())
     }
 
     /// Resume bootstrap from last checkpoint

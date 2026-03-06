@@ -1,0 +1,17 @@
+[package]
+name = "rust"
+version = "1.93.0"
+summary = "The Rust programming language compiler"
+license = "MIT OR Apache-2.0"
+homepage = "https://www.rust-lang.org"
+
+[source]
+url = "https://static.rust-lang.org/dist/rustc-1.93.0-src.tar.xz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = ["gcc", "make", "cmake", "python", "openssl", "curl"]
+makedepends = ["ninja"]
+configure = "./x.py setup dist"
+make = "./x.py build -j%(jobs)s"
+install = "./x.py install --prefix=%(destdir)s/usr"

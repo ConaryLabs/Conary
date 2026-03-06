@@ -1,0 +1,16 @@
+[package]
+name = "conary"
+version = "0.1.0"
+summary = "Cross-distribution system manager"
+license = "Apache-2.0"
+homepage = "https://conary.io"
+
+[source]
+url = "https://github.com/ConaryLabs/Conary/archive/refs/tags/v0.1.0.tar.gz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[build]
+requires = ["rust", "openssl", "sqlite"]
+makedepends = []
+make = "cargo build --release"
+install = "install -Dm755 target/release/conary %(destdir)s/usr/bin/conary"

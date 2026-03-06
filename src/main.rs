@@ -1263,6 +1263,13 @@ fn main() -> Result<()> {
                 verbose,
             } => commands::cmd_bootstrap_base(&work_dir, &root, recipe_dir.as_deref(), verbose),
 
+            cli::BootstrapCommands::Conary {
+                work_dir,
+                root,
+                verbose,
+                skip,
+            } => commands::cmd_bootstrap_conary(&work_dir, root.as_deref(), verbose, skip),
+
             cli::BootstrapCommands::Image {
                 work_dir,
                 output,

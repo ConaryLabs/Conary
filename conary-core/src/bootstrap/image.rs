@@ -193,6 +193,8 @@ pub struct ImageTools {
     pub qemu_img: Option<PathBuf>,
     pub xorriso: Option<PathBuf>,
     pub mksquashfs: Option<PathBuf>,
+    pub systemd_repart: Option<PathBuf>,
+    pub ukify: Option<PathBuf>,
 }
 
 impl ImageTools {
@@ -228,6 +230,8 @@ impl ImageTools {
             qemu_img: find_tool(&["qemu-img"]),
             xorriso: find_tool(&["xorriso"]),
             mksquashfs: find_tool(&["mksquashfs"]),
+            systemd_repart: find_tool(&["systemd-repart"]),
+            ukify: find_tool(&["ukify"]),
         })
     }
 
@@ -235,20 +239,24 @@ impl ImageTools {
     pub fn check_for_format(&self, format: ImageFormat) -> Result<(), ImageError> {
         match format {
             ImageFormat::Raw | ImageFormat::Qcow2 => {
-                if self.sfdisk.is_none() && self.parted.is_none() {
-                    return Err(ImageError::ToolNotFound(
-                        "sfdisk or parted (for partitioning)".to_string(),
-                    ));
-                }
-                if self.mkfs_fat.is_none() {
-                    return Err(ImageError::ToolNotFound(
-                        "mkfs.fat (for ESP partition)".to_string(),
-                    ));
-                }
-                if self.mkfs_ext4.is_none() {
-                    return Err(ImageError::ToolNotFound(
-                        "mkfs.ext4 (for root partition)".to_string(),
-                    ));
+                // systemd-repart handles partitioning and filesystem creation internally,
+                // so legacy tools (sfdisk/parted/mkfs) are only required without it.
+                if self.systemd_repart.is_none() {
+                    if self.sfdisk.is_none() && self.parted.is_none() {
+                        return Err(ImageError::ToolNotFound(
+                            "sfdisk or parted (for partitioning) or systemd-repart".to_string(),
+                        ));
+                    }
+                    if self.mkfs_fat.is_none() {
+                        return Err(ImageError::ToolNotFound(
+                            "mkfs.fat (for ESP partition)".to_string(),
+                        ));
+                    }
+                    if self.mkfs_ext4.is_none() {
+                        return Err(ImageError::ToolNotFound(
+                            "mkfs.ext4 (for root partition)".to_string(),
+                        ));
+                    }
                 }
                 if format == ImageFormat::Qcow2 && self.qemu_img.is_none() {
                     return Err(ImageError::ToolNotFound(
@@ -296,6 +304,12 @@ impl ImageTools {
         if self.mksquashfs.is_none() {
             missing.push("mksquashfs");
         }
+        if self.systemd_repart.is_none() {
+            missing.push("systemd-repart");
+        }
+        if self.ukify.is_none() {
+            missing.push("ukify");
+        }
         missing
     }
 }
@@ -313,6 +327,10 @@ pub struct ImageResult {
     pub efi_bootable: bool,
     /// Whether BIOS boot is supported
     pub bios_bootable: bool,
+    /// Build method used (e.g., "legacy", "systemd-repart")
+    pub method: String,
+    /// Partition descriptions (if applicable)
+    pub partitions: Vec<String>,
 }
 
 /// Image builder
@@ -415,8 +433,73 @@ impl ImageBuilder {
         Ok(result)
     }
 
-    /// Build raw disk image
+    /// Build a raw disk image using systemd-repart (rootless, no loop devices).
+    fn build_raw_repart(&mut self) -> Result<ImageResult, ImageError> {
+        let repart_dir = self.work_dir.join("repart.d");
+        super::repart::generate_repart_definitions(
+            &repart_dir,
+            self.config.target_arch,
+            Self::ESP_SIZE_MB,
+        )
+        .map_err(|e| ImageError::PartitionFailed(e.to_string()))?;
+
+        let repart_bin = self
+            .tools
+            .systemd_repart
+            .clone()
+            .ok_or_else(|| ImageError::ToolNotFound("systemd-repart".to_string()))?;
+
+        self.log_line("Creating disk image with systemd-repart (rootless)");
+
+        let output = Command::new(&repart_bin)
+            .arg("--empty=create")
+            .arg(format!("--size={}", self.size.bytes()))
+            .arg(format!("--definitions={}", repart_dir.display()))
+            .arg(format!("--root={}", self.sysroot.display()))
+            .arg("--discard=no")
+            .arg("--defer-partitions=no")
+            .arg(&self.output)
+            .output()
+            .map_err(|e| ImageError::CommandFailed(format!("systemd-repart: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ImageError::CommandFailed(format!(
+                "systemd-repart failed: {stderr}"
+            )));
+        }
+
+        self.log_line("Disk image created successfully");
+
+        let size = fs::metadata(&self.output)?.len();
+
+        Ok(ImageResult {
+            path: self.output.clone(),
+            format: self.format,
+            size,
+            efi_bootable: true,
+            bios_bootable: false,
+            method: "systemd-repart".to_string(),
+            partitions: vec![
+                format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
+                "root (ext4)".to_string(),
+            ],
+        })
+    }
+
+    /// Build raw disk image, preferring systemd-repart when available.
     fn build_raw(&mut self) -> Result<ImageResult, ImageError> {
+        if self.tools.systemd_repart.is_some() {
+            self.log_line("Using systemd-repart for rootless image generation");
+            self.build_raw_repart()
+        } else {
+            self.log_line("systemd-repart not found, using legacy method (requires root)");
+            self.build_raw_legacy()
+        }
+    }
+
+    /// Build raw disk image using the legacy loop-device method (requires root).
+    fn build_raw_legacy(&mut self) -> Result<ImageResult, ImageError> {
         self.log_line("Creating raw disk image");
 
         // Create sparse image file
@@ -448,6 +531,11 @@ impl ImageBuilder {
             size,
             efi_bootable: true,
             bios_bootable: self.tools.grub_install.is_some(),
+            method: "legacy".to_string(),
+            partitions: vec![
+                format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
+                "root (ext4)".to_string(),
+            ],
         })
     }
 
@@ -497,6 +585,11 @@ impl ImageBuilder {
             size,
             efi_bootable: true,
             bios_bootable: true,
+            method: "qemu-img".to_string(),
+            partitions: vec![
+                format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
+                "root (ext4)".to_string(),
+            ],
         })
     }
 
@@ -531,6 +624,8 @@ impl ImageBuilder {
             size,
             efi_bootable: true,
             bios_bootable: true,
+            method: "xorriso".to_string(),
+            partitions: Vec::new(),
         })
     }
 
@@ -1192,5 +1287,13 @@ mod tests {
         let tools = tools.unwrap();
         // dd, mount, umount should exist
         assert!(tools.dd.exists());
+    }
+
+    #[test]
+    fn test_image_tools_repart_detection() {
+        let tools = ImageTools::check().unwrap();
+        // systemd-repart may or may not be installed -- just verify the fields exist
+        let _ = tools.systemd_repart;
+        let _ = tools.ukify;
     }
 }

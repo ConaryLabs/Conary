@@ -363,6 +363,51 @@ pub fn cmd_bootstrap_base(
     Ok(())
 }
 
+/// Build Conary stage (Rust + self-hosting)
+pub fn cmd_bootstrap_conary(work_dir: &str, _root: Option<&str>, verbose: bool, skip: bool) -> Result<()> {
+    if skip {
+        println!("[SKIP] Conary stage skipped (--skip flag)");
+        return Ok(());
+    }
+
+    println!("Building Conary stage (Rust + self-hosting)...");
+    println!("  Work directory: {}", work_dir);
+
+    // Check if base system is complete
+    let mut bootstrap = Bootstrap::new(work_dir)?;
+
+    let sysroot = bootstrap.get_sysroot();
+
+    if sysroot.is_none() {
+        println!("[ERROR] Base system not found.");
+        println!("Run 'conary bootstrap base' first.");
+        return Err(anyhow::anyhow!("Base system not complete"));
+    }
+
+    let sysroot = sysroot.unwrap();
+    println!("  Sysroot: {}", sysroot.display());
+
+    println!("\nThis will build Rust from source and compile Conary.");
+    println!("The system will be self-hosting after this stage.\n");
+
+    bootstrap.build_conary_stage()?;
+
+    println!("\n[COMPLETE] Conary stage built successfully!");
+    println!("  The system is now self-hosting.");
+
+    if verbose {
+        println!("\nPackages built:");
+        for name in conary_core::bootstrap::ConaryStageBuilder::package_names() {
+            println!("  - {}", name);
+        }
+    }
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap image' to generate a bootable image");
+
+    Ok(())
+}
+
 /// Generate bootable image
 pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &str) -> Result<()> {
     println!("Generating bootable image...");
@@ -531,9 +576,10 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         BootstrapStage::BaseSystem => {
             cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose)
         }
+        BootstrapStage::Conary => cmd_bootstrap_conary(work_dir, None, verbose, false),
         BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
         stage => {
-            // Handle other stages (Boot, Networking, Conary) - not yet implemented
+            // Handle other stages (Boot, Networking) - not yet implemented
             println!(
                 "[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.",
                 stage
