@@ -121,16 +121,21 @@ conary system takeover              # Execute takeover
 
 ### Bootstrap System
 
-Build a complete Conary-managed system from scratch using a staged pipeline. Supports x86_64, aarch64, and riscv64 targets.
+Build a complete Conary-managed system from scratch using a staged pipeline. Supports x86_64, aarch64, and riscv64 targets. Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42, kernel 6.16.1). Pipeline runs Stage 0 through Stage 2, BaseSystem with per-package checkpointing, an optional Conary self-hosting stage, and image generation via systemd-repart. RecipeGraph handles dependency ordering; SHA-256 checksum enforcement is on by default.
 
 ```bash
 conary bootstrap init --target x86_64
 conary bootstrap check                  # Verify prerequisites
+conary bootstrap dry-run                # Validate pipeline without building
 conary bootstrap stage0                 # Cross-compilation toolchain
 conary bootstrap stage1                 # Self-hosted toolchain
+conary bootstrap stage2                 # Extended toolchain (optional)
 conary bootstrap base                   # Core system packages
-conary bootstrap image --format qcow2   # Bootable image
+conary bootstrap conary                 # Build Conary itself (optional)
+conary bootstrap image --format qcow2   # Bootable image (systemd-repart)
 conary bootstrap status                 # Progress report
+conary bootstrap base --skip-verify     # Skip checksum enforcement
+conary bootstrap image --skip-stage2 --skip-conary  # Minimal image
 ```
 
 ### Derived Packages

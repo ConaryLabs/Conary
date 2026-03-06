@@ -227,17 +227,22 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The bootstrap pipeline has four stages: Stage 0 builds a cross-compilation toolchain, Stage 1 builds a self-hosted toolchain, Base builds core system packages, and Image produces a bootable disk image. Targets x86_64, aarch64, and riscv64.
+Build a complete Conary-managed Linux system from scratch. The pipeline runs Stage 0 (cross-compilation toolchain), Stage 1 (self-hosted toolchain), optional Stage 2 (extended toolchain), BaseSystem (core packages with per-package checkpointing), optional Conary stage (self-hosting), and Image (bootable disk via systemd-repart). RecipeGraph handles dependency ordering across all stages. Targets x86_64, aarch64, and riscv64. Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42, kernel 6.16.1).
 
 ```bash
 conary bootstrap init --target x86_64
 conary bootstrap check              # Verify prerequisites
+conary bootstrap dry-run            # Validate pipeline without building
 conary bootstrap stage0             # Cross-compilation toolchain
 conary bootstrap stage1             # Self-hosted toolchain
+conary bootstrap stage2             # Extended toolchain (optional)
 conary bootstrap base               # Core system packages
-conary bootstrap image --format raw # Bootable disk image
+conary bootstrap conary             # Build Conary itself (optional)
+conary bootstrap image --format raw # Bootable disk image (systemd-repart)
 conary bootstrap status             # Progress report
 conary bootstrap resume             # Resume from last checkpoint
+conary bootstrap base --skip-verify # Skip checksum enforcement
+conary bootstrap image --skip-stage2 --skip-conary  # Minimal image
 ```
 
 ### Derived Packages

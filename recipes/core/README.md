@@ -141,7 +141,10 @@ system.
 
 ## Bootstrap Build Order
 
-The complete bootstrap follows this dependency order:
+The complete bootstrap follows a staged pipeline. The RecipeGraph determines
+dependency ordering within each stage, with automatic cycle breaking for
+known patterns (e.g., gcc/glibc). Stage 2 and Conary are optional but
+recommended for production images.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -160,56 +163,52 @@ The complete bootstrap follows this dependency order:
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    STAGE 2: Core Libraries                          │
+│              STAGE 2: Pure Rebuild (optional)                       │
 │                                                                     │
-│  zlib, xz, zstd          (compression)                             │
-│  ncurses, readline       (terminal)                                │
-│  openssl                 (crypto)                                  │
-│  libcap, linux-pam       (security)                                │
-│  elfutils, kmod          (kernel support)                          │
-│  libmnl, dbus            (IPC)                                     │
+│  Rebuild the entire toolchain using Stage 1's native compiler.     │
+│  Eliminates all host contamination. Every binary is now built      │
+│  by a Conary-native compiler.                                      │
+│                                                                     │
+│  Result: /stage2/ -- bit-for-bit independent of host               │
 └─────────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    STAGE 3: Development Tools                       │
+│                     BASE SYSTEM                                     │
 │                                                                     │
-│  make, m4                (basic build)                             │
-│  autoconf, automake      (autotools)                               │
-│  libtool, pkgconf        (library tools)                           │
-│  bison, flex             (parsers)                                 │
-│  gettext                 (i18n)                                    │
-│  perl, python            (scripting)                               │
-│  cmake, ninja, meson     (modern build systems)                    │
+│  Built with per-package checkpointing (resume at package level).   │
+│  Sandboxed via ContainerConfig::pristine_for_bootstrap().          │
+│                                                                     │
+│  Libraries:  zlib, xz, zstd, ncurses, readline, openssl, libcap,  │
+│              linux-pam, elfutils, kmod, libmnl, dbus               │
+│  Dev tools:  make, m4, autoconf, automake, libtool, pkgconf,       │
+│              bison, flex, gettext, perl, python, cmake, ninja,     │
+│              meson                                                  │
+│  Core:       linux (kernel), coreutils, bash, util-linux, systemd, │
+│              iproute2, openssh                                      │
+│  Userland:   grep, sed, gawk, less, diffutils, patch, findutils,   │
+│              file, tar, gzip, bzip2, cpio, ca-certificates, curl,  │
+│              wget2, git, procps-ng, psmisc, shadow, sudo, vim,     │
+│              nano                                                   │
+│  Boot:       popt, efivar, efibootmgr, dosfstools, grub           │
 └─────────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      STAGE 4: Base System                           │
+│               CONARY: Self-Hosting (optional)                       │
 │                                                                     │
-│  linux (kernel)          coreutils, bash, util-linux               │
-│  systemd                 iproute2, openssh                         │
+│  Build Conary itself using the Rust toolchain from the base        │
+│  system. The resulting system can manage its own packages.          │
 └─────────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     STAGE 5: Userland Tools                         │
+│                        IMAGE                                        │
 │                                                                     │
-│  Text:    grep, sed, gawk, less, diffutils, patch, findutils, file │
-│  Archive: tar, gzip, bzip2, cpio                                   │
-│  Net:     ca-certificates, curl, wget2                             │
-│  VCS:     git                                                      │
-│  Sys:     procps-ng, psmisc, shadow, sudo                          │
-│  Editors: vim, nano                                                │
-└─────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                       STAGE 6: Boot Tools                           │
-│                                                                     │
-│  popt ──► efivar ──► efibootmgr                                    │
-│  dosfstools                                                        │
-│  grub (BIOS + UEFI)                                                │
+│  systemd-repart for rootless image generation                      │
+│  (fallback: sfdisk/mkfs on systems without systemd-repart)         │
+│  UKI support via ukify for direct-boot configurations              │
+│  Formats: Raw, Qcow2, ISO                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -222,17 +221,18 @@ The complete bootstrap follows this dependency order:
 conary bootstrap full
 
 # Or stage by stage
+conary bootstrap stage0
 conary bootstrap stage1
-conary bootstrap libs
-conary bootstrap dev
-conary bootstrap base
-conary bootstrap text
-conary bootstrap archive
-conary bootstrap net
-conary bootstrap vcs
-conary bootstrap sys
-conary bootstrap editors
-conary bootstrap boot
+conary bootstrap stage2              # Optional: pure rebuild
+conary bootstrap base                # BaseSystem with per-package checkpointing
+conary bootstrap conary              # Optional: self-hosting
+conary bootstrap image --format qcow2
+
+# Validate without writing anything
+conary bootstrap dry-run
+
+# Check progress
+conary bootstrap status
 ```
 
 ### Individual Packages
@@ -344,9 +344,10 @@ recipes/core/
 
 ## Checksums
 
-All recipes include SHA-256 checksums for source verification.
-Checksums marked `FIXME_ACTUAL_CHECKSUM` need to be updated
-before building.
+All recipes require valid SHA-256 checksums for source verification.
+The bootstrap pipeline enforces checksum validation on every source
+download -- placeholder or missing checksums will cause the build to
+fail immediately.
 
 To get a checksum:
 ```bash

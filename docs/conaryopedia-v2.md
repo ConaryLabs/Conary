@@ -2050,14 +2050,24 @@ When a `[cross]` section is present, the Kitchen sets cross-compilation environm
 
 ### 5.9 Bootstrap Stages
 
-Conary supports multi-stage bootstrap builds following the LFS/Gentoo model:
+Conary supports multi-stage bootstrap builds following the LFS 12.4 methodology. The pipeline proceeds through a well-defined sequence, with optional stages that can be skipped for faster iteration:
+
+```
+Stage 0 --> Stage 1 --> Stage 2 (optional) --> BaseSystem --> Conary (optional) --> Image
+```
 
 | Stage | Description | Example |
 |-------|-------------|---------|
-| `stage0` | Cross-compiled from host toolchain | Minimal binutils + GCC targeting new system |
-| `stage1` | Built with stage0 tools, runs on target | May still link some host libs |
-| `stage2` | Fully self-hosted, built with stage1 | First native build, no host dependency |
-| `final` | Production build (default) | Normal system toolchain |
+| `stage0` | Cross-compiled from host toolchain | Minimal binutils 2.45 + GCC 15.2.0 targeting new system |
+| `stage1` | Built with stage0 tools, runs on target | Self-hosted compiler, may still link some host libs |
+| `stage2` | Pure rebuild with stage1 compiler (optional) | Eliminates all host contamination |
+| `base` | Core userspace with per-package checkpointing | coreutils, bash, util-linux, systemd |
+| `conary` | Build Conary itself for self-hosting (optional) | Self-managing system |
+| `image` | Bootable disk image via systemd-repart | Raw, qcow2, or ISO output |
+
+Stage 2 is optional but recommended for production images -- it guarantees that every binary was compiled by a Conary-native compiler with no host system contamination. The Conary stage builds Conary itself using the Rust toolchain from earlier stages, producing a self-managing system.
+
+All source downloads enforce SHA-256 checksum verification. Placeholder checksums are no longer accepted.
 
 The **`StageRegistry`** holds configurations for all stages, with a convenience constructor for standard bootstrap layouts:
 
@@ -2067,6 +2077,14 @@ let registry = StageRegistry::bootstrap_standard(
     Path::new("/opt/bootstrap"),
     "x86_64-conary-linux-gnu"
 );
+```
+
+Build sandboxing uses `ContainerConfig::pristine_for_bootstrap()` to create a minimal namespace environment with no host filesystem leakage. The `RecipeGraph` determines build order with automatic cycle detection and breaking (e.g., the gcc/glibc circular dependency).
+
+A **dry-run** mode validates the entire pipeline -- checking prerequisites, verifying checksums, and confirming dependency ordering -- without writing any files:
+
+```bash
+conary bootstrap dry-run
 ```
 
 ### 5.10 Build Provenance Capture
@@ -4223,7 +4241,7 @@ This chapter covers the systems that make Conary more than a package manager: bo
 
 ### 8.1 Bootstrap: Building an OS from Nothing
 
-The bootstrap system (`src/bootstrap/`) builds a complete Conary-managed Linux distribution from source, starting with nothing but a host compiler. It follows the Linux From Scratch methodology but automated and resumable.
+The bootstrap system (`src/bootstrap/`) builds a complete Conary-managed Linux distribution from source, starting with nothing but a host compiler. It follows the LFS 12.4 methodology (binutils 2.45, GCC 15.2.0, glibc 2.42, kernel 6.16.1) but automated and resumable.
 
 #### Target Architecture
 
@@ -4254,8 +4272,8 @@ pub struct BootstrapConfig {
     pub target: TargetArch,
     pub gcc_version: String,       // "15.2.0"
     pub glibc_version: String,     // "2.42"
-    pub binutils_version: String,  // "2.45.1"
-    pub kernel_version: String,    // "6.18"
+    pub binutils_version: String,  // "2.45"
+    pub kernel_version: String,    // "6.16.1"
     pub musl_version: String,      // "1.2.5"
     pub sysroot: PathBuf,          // /sysroot
     pub stage_dir: PathBuf,        // /stage{0,1,2}
@@ -4264,11 +4282,15 @@ pub struct BootstrapConfig {
 }
 ```
 
-Source tarballs are cached locally so repeated bootstrap attempts don't re-download.
+Source tarballs are cached locally so repeated bootstrap attempts don't re-download. All source archives require valid SHA-256 checksums -- placeholder checksums are rejected at download time.
 
-#### The Eight Stages
+#### The Pipeline
 
-The bootstrap proceeds through eight stages, each building on the previous:
+The bootstrap proceeds through a staged pipeline. Stage 2 and Conary are optional but recommended for production images:
+
+```
+Stage 0 --> Stage 1 --> Stage 2 (optional) --> BaseSystem --> Conary (optional) --> Image
+```
 
 ```
 Stage 0: Cross-Compiler
@@ -4283,36 +4305,34 @@ Stage 1: Self-Hosted Toolchain
   x86_64-conary-linux-gnu.
   Result: /stage1/ with native gcc, binutils, glibc
 
-Stage 2: Pure Rebuild
+Stage 2: Pure Rebuild (optional)
   Rebuild the entire toolchain using Stage 1's native compiler. This eliminates
   any contamination from the host system. After Stage 2, every binary was built
-  by a Conary-native compiler.
+  by a Conary-native compiler. Optional for development iteration, recommended
+  for production images.
   Result: /stage2/ -- bit-for-bit independent of host
 
-Base System:
+BaseSystem:
   Build essential userspace: coreutils, bash, util-linux, findutils, grep, sed,
-  gawk, make, diffutils, file, gzip, xz, tar, pkg-config, ncurses, readline.
-  Uses Stage 2 toolchain.
-  Result: A minimal but functional system
+  gawk, make, diffutils, file, gzip, xz, tar, pkg-config, ncurses, readline,
+  systemd, iproute2, openssh, kernel, boot chain, and networking stack.
+  Uses the RecipeGraph for dependency ordering with automatic cycle breaking.
+  Per-package checkpointing enables resume after interruption at package
+  granularity (not just stage granularity). Build sandboxing uses
+  ContainerConfig::pristine_for_bootstrap() for namespace isolation.
+  Result: A minimal but complete bootable system
 
-Boot:
-  Build the boot chain: Linux kernel (configured for target arch), systemd-boot
-  or GRUB, filesystem tools (e2fsprogs, dosfstools), initramfs generation.
-  Result: A bootable system
-
-Networking:
-  Build network stack: iproute2, openssl/rustls, curl, ca-certificates, DNS
-  resolver (systemd-resolved or musl's built-in).
-  Result: A system that can reach the internet
-
-Conary:
+Conary (optional):
   Build Conary itself using the Rust toolchain compiled in earlier stages. This
   is the "self-hosting" step -- the system can now manage its own packages.
   Result: A self-managing system
 
 Image:
-  Produce a bootable disk image from the assembled filesystem. Supports Raw
-  (dd-able), Qcow2 (KVM/QEMU), and ISO (optical/USB) formats.
+  Produce a bootable disk image from the assembled filesystem using
+  systemd-repart for rootless image generation (fallback to sfdisk/mkfs on
+  systems without systemd-repart). Supports Raw (dd-able), Qcow2 (KVM/QEMU),
+  and ISO (optical/USB) formats. UKI (Unified Kernel Image) support is
+  available via ukify for direct-boot configurations.
   Result: A deployable OS image
 ```
 
@@ -4353,7 +4373,7 @@ Missing tools produce a clear error listing what to install.
 
 #### Image Generation
 
-The `ImageBuilder` produces bootable disk images:
+The `ImageBuilder` produces bootable disk images using systemd-repart for rootless image generation. On systems without systemd-repart, it falls back to sfdisk/mkfs. UKI (Unified Kernel Image) support is available via ukify for direct-boot configurations without a separate bootloader.
 
 ```rust
 pub enum ImageFormat {
@@ -4382,13 +4402,19 @@ Partition 2: Root filesystem
 #### CLI
 
 ```bash
-conary bootstrap                      # Full bootstrap (all 8 stages)
+conary bootstrap                      # Full bootstrap (all stages)
 conary bootstrap --target aarch64     # Cross-bootstrap for ARM64
 conary bootstrap --resume             # Resume from last checkpoint
-conary bootstrap --stage base-system  # Run up to a specific stage
+conary bootstrap stage0               # Run only Stage 0
+conary bootstrap stage1               # Run only Stage 1
+conary bootstrap stage2               # Run optional Stage 2 (pure rebuild)
+conary bootstrap base                 # Run BaseSystem stage
+conary bootstrap conary               # Build Conary itself (self-hosting)
+conary bootstrap image --format qcow2 # Produce a VM image
+conary bootstrap dry-run              # Validate pipeline without writing
 conary bootstrap --reset-from stage1  # Rebuild from Stage 1 onward
-conary bootstrap --format qcow2       # Produce a VM image
 conary bootstrap --jobs 8             # Override parallelism
+conary bootstrap status               # Show current progress
 ```
 
 ### 8.2 CAS Federation: Distributed Content Sharing

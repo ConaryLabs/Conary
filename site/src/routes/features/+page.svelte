@@ -54,17 +54,27 @@
 				<h3>Bootstrap</h3>
 				<p>
 					Build a complete Conary-managed system from scratch using a staged pipeline.
-					Supports x86_64, aarch64, and riscv64 targets.
+					Stage 0 cross-compiles the toolchain, Stage 1 builds a self-hosted compiler,
+					optional Stage 2 eliminates host contamination, BaseSystem assembles core
+					userspace with per-package checkpointing, and Image produces bootable media
+					via systemd-repart (rootless, fallback to sfdisk/mkfs). Based on LFS 12.4
+					with binutils 2.45, GCC 15.2.0, glibc 2.42, and kernel 6.16.1. Supports
+					x86_64, aarch64, and riscv64 targets. Dry-run mode validates the full
+					pipeline without writing anything.
 				</p>
 				<div class="feature-code">
 					<code>conary bootstrap init --target x86_64</code>
 					<code>conary bootstrap check</code>
 					<code>conary bootstrap stage0</code>
 					<code>conary bootstrap stage1</code>
+					<code>conary bootstrap stage2</code>
 					<code>conary bootstrap base</code>
+					<code>conary bootstrap conary</code>
 					<code>conary bootstrap image --format qcow2</code>
+					<code>conary bootstrap dry-run</code>
 					<code>conary bootstrap status</code>
 				</div>
+				<p class="feature-note">RecipeGraph handles dependency ordering with automatic cycle breaking. SHA-256 checksum enforcement on all source downloads.</p>
 			</div>
 
 			<div class="feature-card">

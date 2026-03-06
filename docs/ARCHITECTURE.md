@@ -336,25 +336,41 @@ The composefs driver (Linux 6.2+, `CONFIG_EROFS_FS`) provides:
 
 ## Bootstrap Pipeline
 
-Build a complete Conary-managed system from scratch:
+Build a complete Conary-managed system from scratch. The pipeline has
+up to 6 stages, with Stage 2 and Conary being optional:
 
 ```
-Stage 0: Cross-Compiler
-  crosstool-ng -> minimal GCC + binutils for target arch
+Stage 0: Cross-Compiler (crosstool-ng 1.28.0)
+  Build minimal cross-compiler for target arch
        |
-Stage 1: Self-Hosted Toolchain
-  Use Stage 0 to build native GCC, binutils, glibc on target
+Stage 1: Self-Hosted Toolchain (recipes/stage1/*.toml)
+  5 packages: linux-headers, binutils, gcc-pass1, glibc, gcc-pass2
+  Built with Stage 0 cross-compiler, sandboxed via ContainerConfig
        |
-Base System
-  Cook core packages: kernel, systemd, coreutils, bash, networking
-  Install into sysroot, create initial generation
+Stage 2: Reproducibility Rebuild (optional, --skip-stage2 to skip)
+  Rebuilds Stage 1 packages using the Stage 1 compiler (not cross)
+  Ensures bit-reproducible toolchain independent of host
+       |
+Base System (recipes/base/*.toml)
+  ~80 packages resolved via RecipeGraph (topological sort)
+  Boot/networking packages are tagged recipes, not hardcoded order
+  Per-package checkpointing for resume after interruption
+       |
+Conary (optional, --skip-conary to skip) (recipes/conary/*.toml)
+  Rust bootstrap + Conary self-hosting in the new sysroot
        |
 Image Generation
-  Build bootable image (raw, qcow2, or ISO) from sysroot
+  systemd-repart for rootless image generation (fallback: sfdisk/mkfs)
+  UKI support via ukify. Output formats: raw, qcow2, ISO
 ```
 
-Supports x86_64, aarch64, and riscv64 targets. Each stage has
-checkpoint/resume support for interrupted builds.
+Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42,
+kernel 6.16.1). All recipes carry SHA-256 checksums enforced at
+build time (`--skip-verify` to override). All stages run in
+sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
+
+Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
+(`--dry-run`) validates the full pipeline without building.
 
 ## Database Schema (v44)
 

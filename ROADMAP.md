@@ -449,13 +449,20 @@ Building packages from source using recipe files, following original Conary's cu
 
 ### Bootstrap System
 
-Build a complete Conary system from scratch.
+Build a complete Conary system from scratch. Pipeline: Stage 0 -> Stage 1 -> Stage 2 (optional) -> BaseSystem -> Conary (optional) -> Image. Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42, kernel 6.16.1).
 
 - [COMPLETE] **Stage 0** - Minimal cross-compilation toolchain bootstrap
 - [COMPLETE] **Stage 1** - Self-hosting build environment
+- [COMPLETE] **Stage 2** - Extended toolchain (optional, skippable with `--skip-stage2`)
 - [COMPLETE] **Toolchain Management** - Compiler and build tool versioning
-- [COMPLETE] **Base System** - Minimal bootable system definition
-- [COMPLETE] **Image Generation** - Produce installable system images
+- [COMPLETE] **Base System** - Core system packages with per-package checkpointing
+- [COMPLETE] **Conary Stage** - Build Conary itself for self-hosting (optional, skippable with `--skip-conary`)
+- [COMPLETE] **Image Generation** - Bootable disk images via systemd-repart (fallback to sfdisk/mkfs)
+- [COMPLETE] **RecipeGraph Ordering** - Dependency-driven build ordering (not hardcoded)
+- [COMPLETE] **Checksum Enforcement** - SHA-256 verification on all sources (`--skip-verify` to bypass)
+- [COMPLETE] **Dry-Run Validation** - `conary bootstrap dry-run` validates pipeline without building
+- [COMPLETE] **ContainerConfig Sandboxing** - All stages run in sandboxed environments
+- [COMPLETE] **Recipe Files** - TOML recipes in `recipes/stage1/`, `recipes/base/`, `recipes/conary/`
 
 ### Automated Maintenance
 
