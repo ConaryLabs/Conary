@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**100K+ lines of Rust, 1,800+ tests, database schema v44.** This is not a prototype.
+**100K+ lines of Rust, 1,800+ tests, database schema v45.** This is not a prototype.
 
 ---
 
@@ -483,7 +483,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 **Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v45). System generations (EROFS + composefs), system takeover, and the bootstrap pipeline are implemented. A production Remi server is running at packages.conary.io.
 
-See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
+See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 ---
 

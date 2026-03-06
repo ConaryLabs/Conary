@@ -102,8 +102,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v44, migration dispatcher
-    |   +-- migrations.rs All 44 migration functions
+    |   +-- schema.rs    Schema v45, migration dispatcher
+    |   +-- migrations.rs All 45 migration functions
     |   +-- models/      ORM-style model structs
     +-- transaction/     Crash-safe atomic operations
     |   +-- journal.rs   Append-only recovery journal
