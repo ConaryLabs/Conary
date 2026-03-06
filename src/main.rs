@@ -45,6 +45,7 @@ fn main() -> Result<()> {
             skip_optional,
             force,
             dep_mode,
+            from,
             yes,
         }) => {
             let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
@@ -80,6 +81,7 @@ fn main() -> Result<()> {
                         force,
                         dep_mode,
                         yes,
+                        from_distro: from,
                     },
                 )
             }

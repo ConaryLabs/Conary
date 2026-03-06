@@ -173,6 +173,10 @@ pub enum Commands {
         #[arg(long, default_value = "satisfy")]
         dep_mode: String,
 
+        /// Install from a specific distro (cross-distro override)
+        #[arg(long)]
+        from: Option<String>,
+
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
         yes: bool,

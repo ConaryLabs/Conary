@@ -86,6 +86,9 @@ pub struct InstallOptions<'a> {
     pub dep_mode: DepMode,
     /// Skip confirmation prompts
     pub yes: bool,
+    /// Install from a specific distro (cross-distro override)
+    #[allow(dead_code)] // Reserved for cross-distro canonical resolution
+    pub from_distro: Option<String>,
 }
 
 pub(super) fn run_triggers(
@@ -192,6 +195,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         force,
         dep_mode,
         yes,
+        from_distro: _,
     } = opts;
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) =
