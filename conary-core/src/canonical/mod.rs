@@ -9,4 +9,5 @@
 //!   provides, binary paths, sonames, and stem matching
 
 pub mod discovery;
+pub mod repology;
 pub mod rules;
