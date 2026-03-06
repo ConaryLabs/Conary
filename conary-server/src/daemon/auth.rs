@@ -203,12 +203,34 @@ pub struct AuthChecker {
     trusted_gids: Vec<u32>,
 }
 
+/// Resolve admin group GIDs at runtime using group name lookup.
+/// Falls back to well-known defaults (wheel=10, sudo=27) if lookup fails.
+fn resolve_admin_gids() -> Vec<u32> {
+    let mut gids = vec![0]; // root is always trusted
+
+    // Try to resolve "wheel" group
+    match nix::unistd::Group::from_name("wheel") {
+        Ok(Some(group)) => gids.push(group.gid.as_raw()),
+        _ => gids.push(10), // fallback to well-known GID
+    }
+
+    // Try to resolve "sudo" group
+    match nix::unistd::Group::from_name("sudo") {
+        Ok(Some(group)) => gids.push(group.gid.as_raw()),
+        _ => gids.push(27), // fallback to well-known GID
+    }
+
+    gids.sort_unstable();
+    gids.dedup();
+    gids
+}
+
 impl Default for AuthChecker {
     fn default() -> Self {
         Self {
             allow_admin_groups: true,
             require_polkit: true,
-            trusted_gids: vec![0, 10, 27], // root, wheel, sudo
+            trusted_gids: resolve_admin_gids(),
         }
     }
 }

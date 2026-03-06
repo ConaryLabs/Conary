@@ -289,8 +289,8 @@ pub struct FederationConfig {
     #[serde(default)]
     pub manifest_trusted_keys: Vec<String>,
 
-    /// Allow fetching resources with unsigned manifests (default: true)
-    /// Set to false in production to require signed manifests
+    /// Allow fetching resources with unsigned manifests (default: false)
+    /// Set to true only in development/testing environments
     #[serde(default = "default_manifest_allow_unsigned")]
     pub manifest_allow_unsigned: bool,
 }
@@ -332,7 +332,7 @@ fn default_max_cell_size() -> usize {
 }
 
 fn default_manifest_allow_unsigned() -> bool {
-    true // Permissive by default, set false in production
+    false // Secure by default: require signed manifests
 }
 
 impl Default for FederationConfig {

@@ -64,34 +64,49 @@ impl RequestCoalescer {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Vec<u8>>>,
     {
-        // Check if there's already an in-flight request
-        if let Some(sender) = self.inflight.get(hash) {
-            // Subscribe to the in-flight request
-            let mut rx = sender.subscribe();
-            drop(sender); // Release lock before awaiting
+        // Use DashMap's entry API for atomic check-then-insert to avoid a race
+        // where two tasks both see no in-flight request and both start fetches.
+        use dashmap::mapref::entry::Entry;
 
-            debug!("Coalescing request for chunk {}", hash);
-            self.coalesced_count.fetch_add(1, Ordering::Relaxed);
+        let rx = match self.inflight.entry(hash.to_string()) {
+            Entry::Occupied(e) => {
+                // Another task is already fetching this chunk - subscribe and wait
+                let mut rx = e.get().subscribe();
+                drop(e); // Release the entry lock before awaiting
 
-            // Wait for the result
-            match rx.recv().await {
-                Ok(CachedResult::Success(data)) => return Ok(data),
-                Ok(CachedResult::Failure(msg)) => {
-                    return Err(Error::DownloadError(msg));
-                }
-                Err(_) => {
-                    // Sender dropped without sending - retry
-                    debug!("Coalesced request sender dropped, retrying");
+                debug!("Coalescing request for chunk {}", hash);
+                self.coalesced_count.fetch_add(1, Ordering::Relaxed);
+
+                match rx.recv().await {
+                    Ok(CachedResult::Success(data)) => return Ok(data),
+                    Ok(CachedResult::Failure(msg)) => {
+                        return Err(Error::DownloadError(msg));
+                    }
+                    Err(_) => {
+                        // Sender dropped without sending - fall through to retry
+                        debug!("Coalesced request sender dropped, retrying");
+                        None
+                    }
                 }
             }
-        }
+            Entry::Vacant(e) => {
+                // We are the leader - create broadcast channel and register
+                let (tx, _rx) = broadcast::channel::<CachedResult>(1);
+                e.insert(tx.clone());
+                Some(tx)
+            }
+        };
 
-        // No in-flight request - we'll do the fetch
-        // Create a broadcast channel for this request
-        let (tx, _rx) = broadcast::channel::<CachedResult>(1);
-
-        // Register as in-flight
-        self.inflight.insert(hash.to_string(), tx.clone());
+        // If we got a sender, we are the leader. If None, the previous leader dropped
+        // without sending, so we retry by creating a new entry.
+        let tx = match rx {
+            Some(tx) => tx,
+            None => {
+                let (tx, _rx) = broadcast::channel::<CachedResult>(1);
+                self.inflight.insert(hash.to_string(), tx.clone());
+                tx
+            }
+        };
 
         // Execute the fetch
         let result = fetch().await;

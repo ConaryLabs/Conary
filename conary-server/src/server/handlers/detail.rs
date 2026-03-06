@@ -172,6 +172,13 @@ pub async fn get_reverse_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = super::validate_name(&distro) {
+        return e;
+    }
+    if let Err(e) = super::validate_name(&name) {
+        return e;
+    }
+
     let db_path = state.read().await.config.db_path.clone();
 
     let result =
@@ -454,13 +461,15 @@ fn query_reverse_dependencies(
         None => return Ok(Vec::new()),
     };
 
-    // Find packages whose dependencies contain this package name
-    let pattern = format!("%{}%", name);
+    // Find packages whose dependencies contain this package name.
+    // Escape LIKE metacharacters to prevent wildcard injection.
+    let escaped = name.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{}%", escaped);
     let mut stmt = conn.prepare(
         "SELECT DISTINCT rp.name
          FROM repository_packages rp
          WHERE rp.repository_id = ?1
-           AND rp.dependencies LIKE ?2
+           AND rp.dependencies LIKE ?2 ESCAPE '\\'
            AND rp.name != ?3
          ORDER BY rp.name",
     )?;

@@ -382,18 +382,19 @@ impl Stage2Builder {
     /// Fetch additional sources (like GMP, MPFR, MPC for GCC)
     fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), Stage2Error> {
         let pkg_name = self.packages[idx].name.clone();
+        let skip_verify = self.config.skip_verify;
         let additional_sources: Vec<_> = self.packages[idx]
             .recipe
             .source
             .additional
             .iter()
-            .map(|a| (a.url.clone(), a.extract_to.clone()))
+            .map(|a| (a.url.clone(), a.checksum.clone(), a.extract_to.clone()))
             .collect();
 
         let sources_dir = self.sources_dir.clone();
         let src_dir = src_dir.to_path_buf();
 
-        for (url, extract_to) in additional_sources {
+        for (url, checksum, extract_to) in additional_sources {
             let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let target_path = sources_dir.join(filename);
 
@@ -424,6 +425,48 @@ impl Stage2Builder {
                         reason: format!("Additional source fetch failed: {}", stderr),
                     });
                 }
+            }
+
+            // Verify checksum of additional source
+            if !checksum.is_empty()
+                && !checksum.contains("VERIFY_BEFORE_BUILD")
+                && !checksum.contains("FIXME")
+            {
+                if let Some((algo, hash)) = checksum.split_once(':') {
+                    if algo == "sha256" {
+                        let output = Command::new("sha256sum")
+                            .arg(&target_path)
+                            .output()
+                            .map_err(|e| Stage2Error::BuildFailed {
+                                package: pkg_name.clone(),
+                                reason: e.to_string(),
+                            })?;
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let computed = stdout.split_whitespace().next().unwrap_or("");
+                        if computed != hash {
+                            return Err(Stage2Error::BuildFailed {
+                                package: pkg_name.clone(),
+                                reason: format!(
+                                    "Additional source checksum mismatch for {}: expected {}, got {}",
+                                    filename, hash, computed
+                                ),
+                            });
+                        }
+                    } else {
+                        warn!("  Unknown checksum algorithm for additional source: {}", algo);
+                    }
+                }
+            } else if checksum.contains("VERIFY_BEFORE_BUILD") || checksum.contains("FIXME") {
+                if !skip_verify {
+                    return Err(Stage2Error::BuildFailed {
+                        package: pkg_name.clone(),
+                        reason: format!(
+                            "Additional source has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
+                            checksum
+                        ),
+                    });
+                }
+                warn!("  Skipping placeholder checksum for additional source (--skip-verify enabled)");
             }
 
             // Extract to the specified location, stripping top-level directory

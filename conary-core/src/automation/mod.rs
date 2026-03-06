@@ -335,7 +335,21 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         return Ok(Duration::from_secs(0));
     }
 
+    // Validate input is ASCII to avoid panics from split_at on multi-byte chars
+    if !s.is_ascii() {
+        return Err(crate::error::Error::Config(format!(
+            "Invalid duration string (non-ASCII): {}",
+            s
+        )));
+    }
+
     let (num_str, unit) = s.split_at(s.len() - 1);
+    if num_str.is_empty() || !num_str.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(crate::error::Error::Config(format!(
+            "Invalid duration number: {}",
+            num_str
+        )));
+    }
     let num: u64 = num_str.parse().map_err(|_| {
         crate::error::Error::Config(format!("Invalid duration number: {}", num_str))
     })?;
@@ -368,6 +382,21 @@ mod tests {
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
         assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
         assert_eq!(parse_duration("1w").unwrap(), Duration::from_secs(604800));
+    }
+
+    #[test]
+    fn test_parse_duration_non_ascii() {
+        // Non-ASCII input must return an error, not panic
+        assert!(parse_duration("5\u{00e9}").is_err());
+        assert!(parse_duration("\u{1f600}h").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        // Single char (no number part) must return an error
+        assert!(parse_duration("h").is_err());
+        // Letters in number part must return an error
+        assert!(parse_duration("abc5h").is_err());
     }
 
     #[test]

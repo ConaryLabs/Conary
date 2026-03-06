@@ -136,6 +136,12 @@ impl BanList {
     }
 
     /// Ban an IP immediately
+    ///
+    /// Note: This acquires two separate locks (`bans` then `failures`). There is a minor
+    /// TOCTOU race where concurrent callers could both pass the `is_banned` check in
+    /// `record_failure` and call `ban` simultaneously. The worst case is a redundant ban
+    /// insertion, which is harmless. Combining both maps into a single lock would add
+    /// contention on the hot `is_banned` read path, so this trade-off is acceptable.
     pub async fn ban(&self, ip: &str) {
         let mut bans = self.bans.write().await;
         let mut failures = self.failures.write().await;

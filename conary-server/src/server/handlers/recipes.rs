@@ -101,17 +101,33 @@ pub async fn download_recipe_package(
         return (StatusCode::NOT_FOUND, Json(error)).into_response();
     }
 
-    // Read and serve the file
-    match tokio::fs::read(&ccs_path).await {
-        Ok(data) => {
-            let headers = [
-                ("Content-Type", "application/octet-stream"),
-                (
+    // Stream the file instead of reading it all into memory
+    match tokio::fs::File::open(&ccs_path).await {
+        Ok(file) => {
+            let metadata = match file.metadata().await {
+                Ok(m) => m,
+                Err(e) => {
+                    let error = serde_json::json!({
+                        "error": "read_failed",
+                        "message": format!("Failed to read package metadata: {}", e),
+                    });
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
+                }
+            };
+
+            let stream = tokio_util::io::ReaderStream::new(file);
+            let body = axum::body::Body::from_stream(stream);
+
+            axum::http::Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .header("Content-Length", metadata.len())
+                .header(
                     "Content-Disposition",
-                    &format!("attachment; filename=\"{}\"", filename),
-                ),
-            ];
-            (StatusCode::OK, headers, data).into_response()
+                    format!("attachment; filename=\"{}\"", filename),
+                )
+                .body(body)
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
             let error = serde_json::json!({

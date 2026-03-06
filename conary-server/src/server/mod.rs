@@ -399,6 +399,19 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     // Start negative cache cleanup task
     tokio::spawn(negative_cache::run_cleanup_loop(state.clone()));
 
+    // Start rate limiter and ban list cleanup task to prevent unbounded memory growth
+    {
+        let cleanup_state = state.clone();
+        tokio::spawn(async move {
+            let cleanup_interval = std::time::Duration::from_secs(300);
+            loop {
+                tokio::time::sleep(cleanup_interval).await;
+                let ban_list = cleanup_state.read().await.ban_list.clone();
+                ban_list.cleanup().await;
+            }
+        });
+    }
+
     // Start background pre-warming if enabled
     if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
         let prewarm_interval =
@@ -539,6 +552,19 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
 
     // Start background LRU eviction task
     tokio::spawn(cache::run_eviction_loop(state.clone()));
+
+    // Start ban list cleanup task to prevent unbounded memory growth
+    {
+        let cleanup_state = state.clone();
+        tokio::spawn(async move {
+            let cleanup_interval = std::time::Duration::from_secs(300);
+            loop {
+                tokio::time::sleep(cleanup_interval).await;
+                let ban_list = cleanup_state.read().await.ban_list.clone();
+                ban_list.cleanup().await;
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!("Remi is ready to serve");

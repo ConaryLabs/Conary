@@ -332,7 +332,7 @@ impl Stage1Builder {
         let sources_dir = self.sources_dir.clone();
         let src_dir = src_dir.to_path_buf();
 
-        for (url, _checksum, extract_to) in additional_sources {
+        for (url, checksum, extract_to) in additional_sources {
             let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let target_path = sources_dir.join(filename);
 
@@ -359,6 +359,42 @@ impl Stage1Builder {
                         pkg_name.clone(),
                         stderr.to_string(),
                     ));
+                }
+            }
+
+            // Verify checksum of additional source
+            if checksum.contains("VERIFY_BEFORE_BUILD") || checksum.contains("FIXME") {
+                if !self.config.skip_verify {
+                    return Err(Stage1Error::SourceFetchFailed(
+                        pkg_name.clone(),
+                        format!(
+                            "Additional source has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
+                            checksum
+                        ),
+                    ));
+                }
+                warn!("  Skipping placeholder checksum for additional source (--skip-verify)");
+            } else if let Some((algo, hash)) = checksum.split_once(':') {
+                if algo == "sha256" {
+                    let output = Command::new("sha256sum")
+                        .arg(&target_path)
+                        .output()
+                        .map_err(|e| {
+                            Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string())
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let computed = stdout.split_whitespace().next().unwrap_or("");
+                    if computed != hash {
+                        return Err(Stage1Error::SourceFetchFailed(
+                            pkg_name.clone(),
+                            format!(
+                                "Additional source checksum mismatch for {}: expected {}, got {}",
+                                filename, hash, computed
+                            ),
+                        ));
+                    }
+                } else {
+                    warn!("  Unknown checksum algorithm for additional source: {}", algo);
                 }
             }
 

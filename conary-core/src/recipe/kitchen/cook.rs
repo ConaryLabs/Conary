@@ -386,9 +386,14 @@ impl<'a> Cook<'a> {
         // Convert env to the format expected by Sandbox
         let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
+        // Shell-escape the workdir to prevent injection from paths with
+        // spaces or special characters. Single-quote the path, escaping
+        // any embedded single-quotes with '\'' .
+        let workdir_str = workdir.to_string_lossy();
+        let escaped_workdir = format!("'{}'", workdir_str.replace('\'', "'\\''"));
         let (exit_code, stdout, stderr) = sandbox.execute(
             "/bin/sh",
-            &format!("cd {} && {}", workdir.display(), command),
+            &format!("cd {} && {}", escaped_workdir, command),
             &[],
             &env_refs,
         )?;

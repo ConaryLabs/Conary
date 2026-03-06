@@ -15,6 +15,7 @@ use super::action::{
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
+use crate::version::RpmVersion;
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -121,34 +122,39 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find packages with available security updates
     fn find_security_updates(&self) -> Result<Vec<(String, Vec<String>, String)>> {
-        // Query the repository_packages table for security updates
-        // This checks the is_security_update and security_severity columns
+        // Fetch all candidates and compare versions in Rust using RpmVersion
+        // to avoid lexicographic ordering bugs (e.g. "9" > "10" in SQL).
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT t.name, rp.security_cves, rp.security_severity
+            "SELECT DISTINCT t.name, t.version, rp.version,
+                    rp.security_cves, rp.security_severity
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
-             WHERE rp.is_security_update = 1
-               AND rp.version > t.version
-             ORDER BY
-               CASE rp.security_severity
-                 WHEN 'critical' THEN 1
-                 WHEN 'high' THEN 2
-                 WHEN 'medium' THEN 3
-                 WHEN 'low' THEN 4
-                 ELSE 5
-               END",
+             WHERE rp.is_security_update = 1",
         )?;
 
         let mut updates = Vec::new();
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
-            let cves_str: Option<String> = row.get(1)?;
-            let severity: String = row.get(2)?;
-            Ok((name, cves_str, severity))
+            let installed_ver: String = row.get(1)?;
+            let repo_ver: String = row.get(2)?;
+            let cves_str: Option<String> = row.get(3)?;
+            let severity: String = row.get(4)?;
+            Ok((name, installed_ver, repo_ver, cves_str, severity))
         })?;
 
         for row in rows {
-            let (name, cves_str, severity) = row?;
+            let (name, installed_ver, repo_ver, cves_str, severity) = row?;
+
+            // Use semantic version comparison instead of string comparison
+            let (Ok(installed), Ok(repo)) =
+                (RpmVersion::parse(&installed_ver), RpmVersion::parse(&repo_ver))
+            else {
+                continue;
+            };
+            if repo <= installed {
+                continue;
+            }
+
             let cves: Vec<String> = cves_str
                 .map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
                 .unwrap_or_default();
@@ -158,6 +164,20 @@ impl<'a> AutomationChecker<'a> {
                 updates.push((name, cves, severity));
             }
         }
+
+        // Sort by severity
+        updates.sort_by(|a, b| {
+            let severity_order = |s: &str| -> u8 {
+                match s.to_lowercase().as_str() {
+                    "critical" => 1,
+                    "high" => 2,
+                    "medium" => 3,
+                    "low" => 4,
+                    _ => 5,
+                }
+            };
+            severity_order(&a.2).cmp(&severity_order(&b.2))
+        });
 
         Ok(updates)
     }
@@ -331,33 +351,58 @@ impl<'a> AutomationChecker<'a> {
 
     /// Check for available updates
     fn check_updates(&self, results: &mut CheckResults) -> Result<()> {
-        // Find packages with newer versions in repos (excluding security which is handled separately)
+        // Fetch all candidate updates and compare versions in Rust using
+        // RpmVersion to avoid lexicographic ordering bugs.
         let mut stmt = self.conn.prepare(
-            "SELECT t.name, t.version, MAX(rp.version) as new_version
+            "SELECT t.name, t.version, rp.version
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
-             WHERE rp.version > t.version
-               AND (rp.is_security_update IS NULL OR rp.is_security_update = 0)
-             GROUP BY t.name
-             ORDER BY t.name",
+             WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)",
         )?;
 
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let current: String = row.get(1)?;
-            let new: String = row.get(2)?;
-            Ok((name, current, new))
+            let repo: String = row.get(2)?;
+            Ok((name, current, repo))
         })?;
 
         // Filter out excluded packages
         let exclude_set: HashSet<_> = self.config.updates.exclude.iter().collect();
 
+        // Keep the best (highest) repo version per package
+        let mut best: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new();
+
         for row in rows {
-            let (name, current, new) = row?;
+            let (name, current, repo_ver) = row?;
             if exclude_set.contains(&name) {
                 continue;
             }
 
+            let (Ok(installed), Ok(repo)) =
+                (RpmVersion::parse(&current), RpmVersion::parse(&repo_ver))
+            else {
+                continue;
+            };
+            if repo <= installed {
+                continue;
+            }
+
+            let dominated = best.get(&name).is_none_or(|(_, existing)| {
+                RpmVersion::parse(existing)
+                    .map_or(true, |existing_ver| existing_ver < repo)
+            });
+            if dominated {
+                best.insert(name, (current, repo_ver));
+            }
+        }
+
+        // Sort by name for stable output
+        let mut sorted: Vec<_> = best.into_iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, (current, new)) in sorted {
             // Check if this is a major version upgrade
             if is_major_upgrade(&current, &new) {
                 // Handle separately in major upgrades category

@@ -76,7 +76,38 @@ fn is_cloudflare_ip(ip: &IpAddr) -> bool {
                 })
             })
         }
-        IpAddr::V6(_) => false,
+        IpAddr::V6(ipv6) => {
+            // Cloudflare IPv6 CIDR ranges
+            const CF_V6: &[(&[u16; 8], u32)] = &[
+                (&[0x2400, 0xcb00, 0, 0, 0, 0, 0, 0], 32),
+                (&[0x2606, 0x4700, 0, 0, 0, 0, 0, 0], 32),
+                (&[0x2803, 0xf800, 0, 0, 0, 0, 0, 0], 32),
+                (&[0x2405, 0xb500, 0, 0, 0, 0, 0, 0], 32),
+                (&[0x2405, 0x8100, 0, 0, 0, 0, 0, 0], 32),
+                (&[0x2a06, 0x98c0, 0, 0, 0, 0, 0, 0], 29),
+                (&[0x2c0f, 0xf248, 0, 0, 0, 0, 0, 0], 32),
+            ];
+            let segments = ipv6.segments();
+            CF_V6.iter().any(|(network, prefix_len)| {
+                let prefix = *prefix_len;
+                let full_segments = (prefix / 16) as usize;
+                for i in 0..full_segments.min(8) {
+                    if segments[i] != network[i] {
+                        return false;
+                    }
+                }
+                if full_segments < 8 {
+                    let remaining_bits = prefix % 16;
+                    if remaining_bits > 0 {
+                        let mask = !0u16 << (16 - remaining_bits);
+                        if (segments[full_segments] & mask) != (network[full_segments] & mask) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+        }
     }
 }
 
@@ -302,6 +333,19 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         config.rate_limit_rps,
         config.rate_limit_burst,
     ));
+
+    // Spawn periodic cleanup for the rate limiter to prevent unbounded HashMap growth
+    if config.enable_rate_limit {
+        let cleanup_limiter = Arc::clone(&rate_limiter);
+        tokio::spawn(async move {
+            let cleanup_interval = std::time::Duration::from_secs(300);
+            let max_age = std::time::Duration::from_secs(300);
+            loop {
+                tokio::time::sleep(cleanup_interval).await;
+                cleanup_limiter.cleanup(max_age).await;
+            }
+        });
+    }
 
     // CORS layers
     let public_cors = create_cors_layer(&config, false);

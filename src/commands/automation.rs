@@ -225,15 +225,23 @@ pub fn cmd_automation_apply(
 
     if yes {
         println!("Applying {} action(s)...", results.total());
+        let mut executor = conary_core::automation::action::ActionExecutor::new(false);
         let mut applied = 0;
+        let mut failed = 0;
 
         for action in &all_actions {
             println!("  Applying: {}", action.summary);
-            applied += 1;
+            match executor.execute(action) {
+                Ok(_) => applied += 1,
+                Err(e) => {
+                    println!("  [FAILED] {}: {}", action.summary, e);
+                    failed += 1;
+                }
+            }
         }
 
         println!();
-        println!("Complete: {} applied, 0 failed", applied);
+        println!("Complete: {} applied, {} failed", applied, failed);
         return Ok(());
     }
 

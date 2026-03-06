@@ -385,8 +385,11 @@ impl Federation {
     ///
     /// Uses hierarchical routing: cell hubs → region hubs → leaves
     async fn fetch_chunk_inner(&self, hash: &str) -> Result<Vec<u8>> {
-        let peers = self.peers.read().await;
-        let all_peers = peers.all();
+        // Snapshot the peer list so the read lock is not held across async fetches
+        let all_peers = {
+            let peers = self.peers.read().await;
+            peers.all()
+        }; // guard dropped here
 
         if all_peers.is_empty() {
             return Err(Error::NotFound("No federation peers available".to_string()));
@@ -473,12 +476,22 @@ impl Federation {
             )));
         }
 
+        // Check Content-Length before downloading the body to avoid OOM
+        if let Some(content_length) = response.content_length()
+            && content_length as usize > self.config.max_chunk_size
+        {
+            return Err(Error::DownloadError(format!(
+                "Chunk {} Content-Length exceeds max size ({} > {})",
+                hash, content_length, self.config.max_chunk_size
+            )));
+        }
+
         let data = response
             .bytes()
             .await
             .map_err(|e| Error::DownloadError(format!("Failed to read response: {e}")))?;
 
-        // Enforce max chunk size
+        // Enforce max chunk size (also catches responses without Content-Length)
         if data.len() > self.config.max_chunk_size {
             return Err(Error::DownloadError(format!(
                 "Chunk {} exceeds max size ({} > {})",

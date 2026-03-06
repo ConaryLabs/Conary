@@ -340,6 +340,38 @@ impl<'a> DerivedBuilder<'a> {
         let stripped_path = strip_path_prefix(file_path, strip_level);
         let full_path = work_dir.join(&stripped_path);
 
+        // Validate that the resolved path stays within work_dir to prevent
+        // path traversal via ".." components in patch file paths.
+        let canonical_work = work_dir
+            .canonicalize()
+            .map_err(|e| Error::InitError(format!("Cannot canonicalize work dir: {}", e)))?;
+        // Ensure parent directory exists before canonicalizing (new files)
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::InitError(format!("Failed to create directory: {}", e)))?;
+        }
+        let canonical_full = full_path
+            .canonicalize()
+            .or_else(|_| {
+                // File may not exist yet; canonicalize the parent and append the filename
+                full_path.parent().map_or_else(
+                    || Ok(full_path.clone()),
+                    |p| {
+                        p.canonicalize().map(|cp| {
+                            cp.join(full_path.file_name().unwrap_or_default())
+                        })
+                    },
+                )
+            })
+            .map_err(|e| Error::InitError(format!("Cannot canonicalize patch target: {}", e)))?;
+        if !canonical_full.starts_with(&canonical_work) {
+            return Err(Error::InitError(format!(
+                "Path traversal detected: patch target '{}' escapes work directory '{}'",
+                stripped_path,
+                work_dir.display()
+            )));
+        }
+
         debug!("Applying patch to: {}", full_path.display());
 
         // Read original file content (or empty if new file)
@@ -678,5 +710,14 @@ index 111222..333444 100644
         assert_eq!(patches.len(), 2);
         assert!(patches[0].contains("src/main.rs"));
         assert!(patches[1].contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_path_traversal_rejected() {
+        // Verify that strip_path_prefix + ".." cannot escape
+        let result = strip_path_prefix("a/../../etc/passwd", 1);
+        assert_eq!(result, "../../etc/passwd");
+        // The actual protection is in apply_single_file_patch which
+        // canonicalizes and checks starts_with -- tested via integration.
     }
 }

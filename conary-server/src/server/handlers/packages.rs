@@ -453,7 +453,16 @@ fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std
             entry
                 .file_name()
                 .to_str()
-                .map(|n| n.starts_with(&prefix) && n.ends_with(".ccs"))
+                .map(|n| {
+                    if !n.starts_with(&prefix) || !n.ends_with(".ccs") {
+                        return false;
+                    }
+                    // Extract the version portion between prefix and ".ccs" suffix.
+                    // Verify it starts with a digit to avoid matching different package
+                    // names that share a prefix (e.g., "nginx-extra" when name is "nginx").
+                    let remainder = &n[prefix.len()..n.len() - 4];
+                    remainder.starts_with(|c: char| c.is_ascii_digit())
+                })
                 .unwrap_or(false)
         })
         .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
@@ -499,10 +508,20 @@ async fn stream_ccs_file(
         }
     };
 
-    let filename = ccs_path
+    let raw_filename = ccs_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("package.ccs");
+    // Sanitize filename for Content-Disposition header: allow only safe characters
+    let safe_filename: String = raw_filename
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect();
+    let filename = if safe_filename.is_empty() {
+        "package.ccs".to_string()
+    } else {
+        safe_filename
+    };
 
     tracing::info!(
         "Serving CCS package: {} ({} bytes)",

@@ -98,7 +98,13 @@ impl DiscoveredPeer {
             .or_else(|| self.addresses.first())
             .ok_or_else(|| Error::NotFound("No IP address for peer".into()))?;
 
-        let endpoint = format!("http://{}:{}", addr, self.port);
+        // Use HTTPS for RegionHub peers since they require mTLS for WAN transport
+        let scheme = if self.tier == PeerTier::RegionHub {
+            "https"
+        } else {
+            "http"
+        };
+        let endpoint = format!("{}://{}:{}", scheme, addr, self.port);
         let mut peer = Peer::from_endpoint(&endpoint, self.tier)?;
         peer.name = Some(self.instance_name.clone());
 

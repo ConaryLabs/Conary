@@ -199,9 +199,28 @@ impl<'a> TriggerExecutor<'a> {
         // Wait with timeout
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
-                let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
+                // Process already exited; read buffered output without
+                // calling wait_with_output (which would double-wait).
+                let stdout_bytes = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr_bytes = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stdout = String::from_utf8_lossy(&stdout_bytes);
+                let stderr = String::from_utf8_lossy(&stderr_bytes);
 
                 // Log output
                 if !stdout.is_empty() {
@@ -295,9 +314,28 @@ impl<'a> TriggerExecutor<'a> {
         // Wait with timeout
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
-                let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
+                // Process already exited; read buffered output without
+                // calling wait_with_output (which would double-wait).
+                let stdout_bytes = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr_bytes = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stdout = String::from_utf8_lossy(&stdout_bytes);
+                let stderr = String::from_utf8_lossy(&stderr_bytes);
 
                 // Log output
                 if !stdout.is_empty() {

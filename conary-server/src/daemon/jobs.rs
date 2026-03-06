@@ -256,13 +256,24 @@ impl DaemonJob {
         let started_at: Option<String> = row.get(10)?;
         let completed_at: Option<String> = row.get(11)?;
 
-        // Parse kind
-        let kind: JobKind =
-            serde_json::from_str(&format!("\"{}\"", kind_str)).unwrap_or(JobKind::Install);
+        // Parse kind - return error for unknown values instead of silently defaulting
+        let kind: JobKind = serde_json::from_str(&format!("\"{}\"", kind_str)).map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Text,
+                format!("Unknown job kind: {}", kind_str).into(),
+            )
+        })?;
 
-        // Parse status
+        // Parse status - return error for unknown values instead of silently defaulting
         let status: JobStatus =
-            serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(JobStatus::Queued);
+            serde_json::from_str(&format!("\"{}\"", status_str)).map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    format!("Unknown job status: {}", status_str).into(),
+                )
+            })?;
 
         // Parse spec
         let spec: serde_json::Value =

@@ -320,25 +320,30 @@ impl Stage0Builder {
             }
         }
 
-        // Verify Checksum
-        if let Some(expected) = &self.config.seed_checksum {
-            info!("Verifying seed checksum...");
-            let output = Command::new("sha256sum")
-                .arg(&target_path)
-                .output()
-                .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
+        // Verify Checksum -- require a checksum for seed packages
+        let expected = self.config.seed_checksum.as_ref().ok_or_else(|| {
+            Stage0Error::VerificationFailed(
+                "No seed_checksum configured. A SHA-256 checksum is required for seed packages."
+                    .to_string(),
+            )
+        })?;
 
-            let computed = String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
+        info!("Verifying seed checksum...");
+        let output = Command::new("sha256sum")
+            .arg(&target_path)
+            .output()
+            .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))?;
 
-            if !computed.eq_ignore_ascii_case(expected) {
-                return Err(Stage0Error::VerificationFailed(format!(
-                    "Checksum mismatch! Expected {expected}, got {computed}"
-                )));
-            }
+        let computed = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        if !computed.eq_ignore_ascii_case(expected) {
+            return Err(Stage0Error::VerificationFailed(format!(
+                "Checksum mismatch! Expected {expected}, got {computed}"
+            )));
         }
 
         self.extract_seed(&target_path)

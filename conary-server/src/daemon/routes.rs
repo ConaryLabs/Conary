@@ -517,10 +517,11 @@ fn build_v1_router() -> Router<SharedState> {
         // Transactions
         .route("/transactions", get(list_transactions_handler))
         .route("/transactions", post(create_transaction_handler))
+        // dry-run must come before :id to avoid the wildcard capturing "dry-run"
+        .route("/transactions/dry-run", post(dry_run_handler))
         .route("/transactions/:id", get(get_transaction_handler))
         .route("/transactions/:id", delete(cancel_transaction_handler))
         .route("/transactions/:id/stream", get(transaction_stream_handler))
-        .route("/transactions/dry-run", post(dry_run_handler))
         // Package convenience endpoints
         .route("/packages", get(list_packages_handler))
         .route("/packages/:name", get(get_package_handler))
