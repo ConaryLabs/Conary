@@ -74,6 +74,32 @@ pub const DEFAULT_TOOLS_DIR: &str = "/tools";
 pub const DEFAULT_STAGE1_DIR: &str = "/conary/stage1";
 pub const DEFAULT_SYSROOT_DIR: &str = "/conary/sysroot";
 
+/// Report from a dry-run validation.
+#[derive(Debug, Default)]
+pub struct DryRunReport {
+    /// Number of Stage 1 recipes found
+    pub stage1_count: usize,
+    /// Number of base system recipes found
+    pub base_count: usize,
+    /// Number of Conary recipes found
+    pub conary_count: usize,
+    /// Whether the dependency graph resolved without cycles
+    pub graph_resolved: bool,
+    /// Number of placeholder checksums found
+    pub placeholder_count: usize,
+    /// Errors found during validation
+    pub errors: Vec<String>,
+    /// Warnings found during validation
+    pub warnings: Vec<String>,
+}
+
+impl DryRunReport {
+    /// Returns `true` if no errors and no placeholder checksums were found.
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty() && self.placeholder_count == 0
+    }
+}
+
 /// Bootstrap orchestrator that coordinates the entire bootstrap process
 pub struct Bootstrap {
     /// Configuration for this bootstrap
@@ -255,6 +281,102 @@ impl Bootstrap {
         Ok(())
     }
 
+    /// Validate the full pipeline without building anything.
+    pub fn dry_run(&self, recipe_dir: &Path) -> Result<DryRunReport> {
+        let mut report = DryRunReport::default();
+
+        // Check Stage 1 recipes
+        let stage1_dir = recipe_dir.join("stage1");
+        if stage1_dir.exists() {
+            for name in &[
+                "linux-headers",
+                "binutils",
+                "gcc-pass1",
+                "glibc",
+                "gcc-pass2",
+            ] {
+                let path = stage1_dir.join(format!("{name}.toml"));
+                if path.exists() {
+                    match crate::recipe::parse_recipe_file(&path) {
+                        Ok(recipe) => {
+                            report.stage1_count += 1;
+                            if recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
+                                || recipe.source.checksum.contains("FIXME")
+                            {
+                                report.placeholder_count += 1;
+                                report
+                                    .errors
+                                    .push(format!("Placeholder checksum in {name}"));
+                            }
+                        }
+                        Err(e) => report.errors.push(format!("Failed to parse {name}: {e}")),
+                    }
+                } else {
+                    report
+                        .errors
+                        .push(format!("Missing Stage 1 recipe: {name}"));
+                }
+            }
+        } else {
+            report
+                .warnings
+                .push("Stage 1 recipe directory not found".to_string());
+        }
+
+        // Check Base recipes and graph resolution
+        let base_dir = recipe_dir.join("base");
+        if base_dir.exists() {
+            let mut graph = crate::recipe::RecipeGraph::new();
+            for entry in std::fs::read_dir(&base_dir)? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|e| e == "toml") {
+                    match crate::recipe::parse_recipe_file(&path) {
+                        Ok(recipe) => {
+                            if recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
+                                || recipe.source.checksum.contains("FIXME")
+                            {
+                                report.placeholder_count += 1;
+                            }
+                            graph.add_from_recipe(&recipe);
+                            report.base_count += 1;
+                        }
+                        Err(e) => report
+                            .errors
+                            .push(format!("Failed to parse {}: {e}", path.display())),
+                    }
+                }
+            }
+            match graph.topological_sort() {
+                Ok(_) => report.graph_resolved = true,
+                Err(e) => report
+                    .errors
+                    .push(format!("Dependency cycle in base recipes: {e}")),
+            }
+        } else {
+            report
+                .warnings
+                .push("Base recipe directory not found".to_string());
+        }
+
+        // Check Conary recipes
+        let conary_dir = recipe_dir.join("conary");
+        if conary_dir.exists() {
+            for entry in std::fs::read_dir(&conary_dir)? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|e| e == "toml") {
+                    match crate::recipe::parse_recipe_file(&path) {
+                        Ok(_) => report.conary_count += 1,
+                        Err(e) => report
+                            .errors
+                            .push(format!("Failed to parse {}: {e}", path.display())),
+                    }
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
     /// Resume bootstrap from last checkpoint
     pub fn resume(&mut self) -> Result<BootstrapStage> {
         self.stages.current_stage()
@@ -375,5 +497,70 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = Bootstrap::new(temp.path()).unwrap();
         assert!(bootstrap.work_dir().exists());
+    }
+
+    #[test]
+    fn test_dry_run_with_recipes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let bootstrap = Bootstrap::with_config(dir.path().to_path_buf(), config).unwrap();
+
+        let recipe_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("recipes");
+        if !recipe_dir.exists() {
+            eprintln!("Skipping: recipes not found");
+            return;
+        }
+
+        let report = bootstrap.dry_run(&recipe_dir).unwrap();
+        assert_eq!(report.stage1_count, 5, "Expected 5 Stage 1 recipes");
+        assert!(
+            report.base_count >= 10,
+            "Expected at least 10 base recipes"
+        );
+        assert!(report.graph_resolved, "Graph should resolve");
+        assert_eq!(
+            report.placeholder_count, 0,
+            "No placeholder checksums allowed in stage1"
+        );
+    }
+
+    #[test]
+    fn test_dry_run_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let bootstrap = Bootstrap::with_config(dir.path().to_path_buf(), config).unwrap();
+
+        let recipe_dir = dir.path().join("nonexistent_recipes");
+        let report = bootstrap.dry_run(&recipe_dir).unwrap();
+
+        // With no recipe dirs, we should get warnings but no errors
+        assert_eq!(report.stage1_count, 0);
+        assert_eq!(report.base_count, 0);
+        assert_eq!(report.conary_count, 0);
+        assert!(!report.warnings.is_empty(), "Should have warnings");
+    }
+
+    #[test]
+    fn test_dry_run_report_is_ok() {
+        let report = DryRunReport::default();
+        assert!(report.is_ok(), "Empty report should be ok");
+
+        let report_with_error = DryRunReport {
+            errors: vec!["test error".to_string()],
+            ..Default::default()
+        };
+        assert!(!report_with_error.is_ok(), "Report with error should not be ok");
+
+        let report_with_placeholder = DryRunReport {
+            placeholder_count: 1,
+            ..Default::default()
+        };
+        assert!(
+            !report_with_placeholder.is_ok(),
+            "Report with placeholder should not be ok"
+        );
     }
 }

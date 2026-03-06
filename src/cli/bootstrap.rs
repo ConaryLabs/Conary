@@ -54,6 +54,10 @@ pub enum BootstrapCommands {
         /// Clean work directory before building
         #[arg(long)]
         clean: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Build Stage 1 self-hosted toolchain
@@ -73,6 +77,10 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Build Stage 2 (reproducibility rebuild)
@@ -92,6 +100,10 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Build base system packages
@@ -111,6 +123,10 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Build Conary stage (Rust + self-hosting)
@@ -130,6 +146,10 @@ pub enum BootstrapCommands {
         /// Skip this stage
         #[arg(long)]
         skip: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Generate bootable image
@@ -170,6 +190,21 @@ pub enum BootstrapCommands {
 
         /// Show verbose build output
         #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Validate the full pipeline without building
+    DryRun {
+        /// Working directory
+        #[arg(long, default_value = ".")]
+        work_dir: String,
+
+        /// Recipe directory
+        #[arg(long, default_value = "recipes")]
+        recipe_dir: String,
+
+        /// Verbose output
+        #[arg(long, short)]
         verbose: bool,
     },
 

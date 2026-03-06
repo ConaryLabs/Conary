@@ -1233,6 +1233,7 @@ fn main() -> Result<()> {
                 verbose,
                 download_only,
                 clean,
+                skip_verify,
             } => commands::cmd_bootstrap_stage0(
                 &work_dir,
                 config,
@@ -1240,6 +1241,7 @@ fn main() -> Result<()> {
                 verbose,
                 download_only,
                 clean,
+                skip_verify,
             ),
 
             cli::BootstrapCommands::Stage1 {
@@ -1247,28 +1249,56 @@ fn main() -> Result<()> {
                 recipe_dir,
                 jobs,
                 verbose,
-            } => commands::cmd_bootstrap_stage1(&work_dir, recipe_dir.as_deref(), jobs, verbose),
+                skip_verify,
+            } => commands::cmd_bootstrap_stage1(
+                &work_dir,
+                recipe_dir.as_deref(),
+                jobs,
+                verbose,
+                skip_verify,
+            ),
 
             cli::BootstrapCommands::Stage2 {
                 work_dir,
                 recipe_dir,
                 jobs,
                 verbose,
-            } => commands::cmd_bootstrap_stage2(&work_dir, recipe_dir.as_deref(), jobs, verbose),
+                skip_verify,
+            } => commands::cmd_bootstrap_stage2(
+                &work_dir,
+                recipe_dir.as_deref(),
+                jobs,
+                verbose,
+                skip_verify,
+            ),
 
             cli::BootstrapCommands::Base {
                 work_dir,
                 root,
                 recipe_dir,
                 verbose,
-            } => commands::cmd_bootstrap_base(&work_dir, &root, recipe_dir.as_deref(), verbose),
+                skip_verify,
+            } => commands::cmd_bootstrap_base(
+                &work_dir,
+                &root,
+                recipe_dir.as_deref(),
+                verbose,
+                skip_verify,
+            ),
 
             cli::BootstrapCommands::Conary {
                 work_dir,
                 root,
                 verbose,
                 skip,
-            } => commands::cmd_bootstrap_conary(&work_dir, root.as_deref(), verbose, skip),
+                skip_verify,
+            } => commands::cmd_bootstrap_conary(
+                &work_dir,
+                root.as_deref(),
+                verbose,
+                skip,
+                skip_verify,
+            ),
 
             cli::BootstrapCommands::Image {
                 work_dir,
@@ -1284,6 +1314,12 @@ fn main() -> Result<()> {
             cli::BootstrapCommands::Resume { work_dir, verbose } => {
                 commands::cmd_bootstrap_resume(&work_dir, verbose)
             }
+
+            cli::BootstrapCommands::DryRun {
+                work_dir,
+                recipe_dir,
+                verbose,
+            } => commands::cmd_bootstrap_dry_run(&work_dir, &recipe_dir, verbose),
 
             cli::BootstrapCommands::Clean {
                 work_dir,

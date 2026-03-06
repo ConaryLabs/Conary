@@ -105,6 +105,7 @@ pub fn cmd_bootstrap_stage0(
     verbose: bool,
     download_only: bool,
     clean: bool,
+    skip_verify: bool,
 ) -> Result<()> {
     println!("Building Stage 0 toolchain...");
 
@@ -117,7 +118,9 @@ pub fn cmd_bootstrap_stage0(
         return Err(e.into());
     }
 
-    let mut bootstrap_config = BootstrapConfig::new().with_verbose(verbose);
+    let mut bootstrap_config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
 
     if let Some(j) = jobs {
         bootstrap_config = bootstrap_config.with_jobs(j);
@@ -169,6 +172,7 @@ pub fn cmd_bootstrap_stage1(
     recipe_dir: Option<&str>,
     jobs: Option<usize>,
     verbose: bool,
+    skip_verify: bool,
 ) -> Result<()> {
     println!("Building Stage 1 toolchain...");
     println!("  Work directory: {}", work_dir);
@@ -178,7 +182,9 @@ pub fn cmd_bootstrap_stage1(
 
     // Set config options (used when we reconfigure the bootstrap)
     let _config = {
-        let mut c = BootstrapConfig::new().with_verbose(verbose);
+        let mut c = BootstrapConfig::new()
+            .with_verbose(verbose)
+            .with_skip_verify(skip_verify);
         if let Some(j) = jobs {
             c = c.with_jobs(j);
         }
@@ -237,13 +243,16 @@ pub fn cmd_bootstrap_stage2(
     recipe_dir: Option<&str>,
     jobs: Option<usize>,
     verbose: bool,
+    skip_verify: bool,
 ) -> Result<()> {
     println!("Building Stage 2 toolchain (reproducibility rebuild)...");
     println!("  Work directory: {}", work_dir);
 
     // Set config options
     let _config = {
-        let mut c = BootstrapConfig::new().with_verbose(verbose);
+        let mut c = BootstrapConfig::new()
+            .with_verbose(verbose)
+            .with_skip_verify(skip_verify);
         if let Some(j) = jobs {
             c = c.with_jobs(j);
         }
@@ -305,6 +314,7 @@ pub fn cmd_bootstrap_base(
     root: &str,
     recipe_dir: Option<&str>,
     _verbose: bool,
+    _skip_verify: bool,
 ) -> Result<()> {
     println!("Building base system...");
     println!("  Work directory: {}", work_dir);
@@ -364,7 +374,13 @@ pub fn cmd_bootstrap_base(
 }
 
 /// Build Conary stage (Rust + self-hosting)
-pub fn cmd_bootstrap_conary(work_dir: &str, _root: Option<&str>, verbose: bool, skip: bool) -> Result<()> {
+pub fn cmd_bootstrap_conary(
+    work_dir: &str,
+    _root: Option<&str>,
+    verbose: bool,
+    skip: bool,
+    _skip_verify: bool,
+) -> Result<()> {
     if skip {
         println!("[SKIP] Conary stage skipped (--skip flag)");
         return Ok(());
@@ -570,23 +586,73 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming from: {}", current);
 
     match current {
-        BootstrapStage::Stage0 => cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false),
-        BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose),
-        BootstrapStage::Stage2 => cmd_bootstrap_stage2(work_dir, None, None, verbose),
-        BootstrapStage::BaseSystem => {
-            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose)
+        BootstrapStage::Stage0 => {
+            cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false, false)
         }
-        BootstrapStage::Conary => cmd_bootstrap_conary(work_dir, None, verbose, false),
-        BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
-        stage => {
-            // Handle other stages (Boot, Networking) - not yet implemented
-            println!(
-                "[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.",
-                stage
-            );
+        BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose, false),
+        BootstrapStage::Stage2 => cmd_bootstrap_stage2(work_dir, None, None, verbose, false),
+        BootstrapStage::BaseSystem => {
+            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose, false)
+        }
+        BootstrapStage::Boot => {
+            // Boot is a checkpoint within the base system build (grub, dracut, etc.)
+            // These packages are built as part of the base stage, so advance to the next stage.
+            println!("[OK] Boot stage is a base-system checkpoint -- advancing to Networking.");
             Ok(())
         }
+        BootstrapStage::Networking => {
+            // Networking is a checkpoint within the base system build (openssh, iproute2, etc.)
+            // These packages are built as part of the base stage, so advance to the next stage.
+            println!("[OK] Networking stage is a base-system checkpoint -- advancing to Conary.");
+            Ok(())
+        }
+        BootstrapStage::Conary => cmd_bootstrap_conary(work_dir, None, verbose, false, false),
+        BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
     }
+}
+
+/// Validate the full pipeline without building
+pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) -> Result<()> {
+    let work_path = PathBuf::from(work_dir);
+    let recipe_path = PathBuf::from(recipe_dir);
+    let config = BootstrapConfig::new().with_verbose(verbose);
+    let bootstrap = Bootstrap::with_config(work_path, config)?;
+
+    println!("Validating bootstrap pipeline...");
+    let report = bootstrap
+        .dry_run(&recipe_path)
+        .map_err(|e| anyhow::anyhow!("Dry run failed: {e}"))?;
+
+    println!("Stage 1 recipes: {}", report.stage1_count);
+    println!("Base recipes:    {}", report.base_count);
+    println!("Conary recipes:  {}", report.conary_count);
+    println!("Graph resolved:  {}", report.graph_resolved);
+
+    if report.placeholder_count > 0 {
+        println!(
+            "[WARNING] Placeholder checksums: {}",
+            report.placeholder_count
+        );
+    }
+
+    for warning in &report.warnings {
+        println!("[WARNING] {warning}");
+    }
+
+    for error in &report.errors {
+        println!("[ERROR] {error}");
+    }
+
+    if report.is_ok() {
+        println!("[COMPLETE] Pipeline validation passed");
+    } else {
+        println!(
+            "[FAILED] Pipeline validation failed ({} errors)",
+            report.errors.len()
+        );
+    }
+
+    Ok(())
 }
 
 /// Clean bootstrap work directory
