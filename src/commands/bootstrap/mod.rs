@@ -177,19 +177,16 @@ pub fn cmd_bootstrap_stage1(
     println!("Building Stage 1 toolchain...");
     println!("  Work directory: {}", work_dir);
 
-    // Check if Stage 0 is complete
-    let mut bootstrap = Bootstrap::new(work_dir)?;
+    // Build config with user-specified options
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
 
-    // Set config options (used when we reconfigure the bootstrap)
-    let _config = {
-        let mut c = BootstrapConfig::new()
-            .with_verbose(verbose)
-            .with_skip_verify(skip_verify);
-        if let Some(j) = jobs {
-            c = c.with_jobs(j);
-        }
-        c
-    };
+    // Check if Stage 0 is complete
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
     let stage0_toolchain = bootstrap.get_stage0_toolchain();
 
@@ -313,15 +310,20 @@ pub fn cmd_bootstrap_base(
     work_dir: &str,
     root: &str,
     recipe_dir: Option<&str>,
-    _verbose: bool,
-    _skip_verify: bool,
+    verbose: bool,
+    skip_verify: bool,
 ) -> Result<()> {
     println!("Building base system...");
     println!("  Work directory: {}", work_dir);
     println!("  Target root: {}", root);
 
+    // Build config with user-specified options
+    let config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+
     // Check if Stage 1 is complete
-    let mut bootstrap = Bootstrap::new(work_dir)?;
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
     let stage1_toolchain = bootstrap.get_stage1_toolchain();
 
@@ -645,14 +647,17 @@ pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) ->
 
     if report.is_ok() {
         println!("[COMPLETE] Pipeline validation passed");
+        Ok(())
     } else {
         println!(
             "[FAILED] Pipeline validation failed ({} errors)",
             report.errors.len()
         );
+        Err(anyhow::anyhow!(
+            "Pipeline validation failed with {} errors",
+            report.errors.len()
+        ))
     }
-
-    Ok(())
 }
 
 /// Clean bootstrap work directory
