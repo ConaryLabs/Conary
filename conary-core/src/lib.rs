@@ -7,6 +7,7 @@
 
 pub mod automation;
 pub mod bootstrap;
+pub mod canonical;
 pub mod capability;
 pub mod ccs;
 pub mod components;
