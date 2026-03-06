@@ -45,6 +45,7 @@ mod package;
 mod provenance;
 mod query;
 mod redirect;
+mod registry;
 mod repo;
 mod state;
 mod system;
@@ -70,6 +71,7 @@ pub use model::ModelCommands;
 pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
+pub use registry::RegistryCommands;
 pub use repo::RepoCommands;
 pub use state::StateCommands;
 pub use system::SystemCommands;
@@ -395,6 +397,10 @@ pub enum Commands {
     /// Package group management
     #[command(subcommand)]
     Groups(GroupsCommands),
+
+    /// Canonical registry management
+    #[command(subcommand)]
+    Registry(RegistryCommands),
 
     // =========================================================================
     // Advanced/Developer

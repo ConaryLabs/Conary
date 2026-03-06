@@ -1,0 +1,40 @@
+[[distros]]
+name = "ubuntu-noble"
+display = "Ubuntu 24.04 LTS (Noble Numbat)"
+format = "deb"
+release = "2024-04-25"
+eol = "2029-04-25"
+
+[[distros]]
+name = "ubuntu-oracular"
+display = "Ubuntu 24.10 (Oracular Oriole)"
+format = "deb"
+release = "2024-10-10"
+eol = "2025-07-10"
+
+[[distros]]
+name = "fedora-41"
+display = "Fedora 41"
+format = "rpm"
+release = "2024-10-29"
+eol = "2025-11-15"
+
+[[distros]]
+name = "fedora-42"
+display = "Fedora 42"
+format = "rpm"
+release = "2025-04-15"
+eol = "2026-05-15"
+
+[[distros]]
+name = "debian-12"
+display = "Debian 12 (Bookworm)"
+format = "deb"
+release = "2023-06-10"
+eol = "2028-06-10"
+
+[[distros]]
+name = "arch"
+display = "Arch Linux (rolling)"
+format = "arch"
+release = "rolling"

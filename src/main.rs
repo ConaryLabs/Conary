@@ -1720,6 +1720,18 @@ fn main() -> Result<()> {
             } => commands::groups::cmd_groups_show(&db_path, &name, distro.as_deref()),
         },
 
+        // =====================================================================
+        // Registry Commands
+        // =====================================================================
+        Some(Commands::Registry(reg_cmd)) => match reg_cmd {
+            cli::RegistryCommands::Update { db_path } => {
+                commands::registry::cmd_registry_update(&db_path)
+            }
+            cli::RegistryCommands::Stats { db_path } => {
+                commands::registry::cmd_registry_stats(&db_path)
+            }
+        },
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

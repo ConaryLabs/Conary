@@ -23,6 +23,7 @@ pub mod progress;
 mod provenance;
 mod query;
 mod redirect;
+pub mod registry;
 mod remove;
 mod repo;
 mod restore;

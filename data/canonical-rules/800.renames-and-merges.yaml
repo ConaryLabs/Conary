@@ -1,0 +1,120 @@
+# Curated canonical mappings for cross-distro package equivalence
+# Format: Repology-compatible rules (evaluated in order, first match wins)
+
+rules:
+  # Core system libraries
+  - setname: glibc
+    name: libc6
+    repo: ubuntu_24_04
+  - setname: glibc
+    name: glibc
+    repo: fedora_41
+  - setname: glibc
+    name: glibc
+    repo: arch
+
+  - setname: libgcc
+    name: libgcc-s1
+    repo: ubuntu_24_04
+  - setname: libgcc
+    name: libgcc
+    repo: fedora_41
+  - setname: libgcc
+    name: gcc-libs
+    repo: arch
+
+  - setname: libstdc++
+    name: libstdc++6
+    repo: ubuntu_24_04
+  - setname: libstdc++
+    name: libstdc++
+    repo: fedora_41
+  - setname: libstdc++
+    name: gcc-libs
+    repo: arch
+
+  # Cryptography and security
+  - setname: openssl
+    name: libssl3
+    repo: ubuntu_24_04
+  - setname: openssl
+    name: openssl-libs
+    repo: fedora_41
+  - setname: openssl
+    name: openssl
+    repo: arch
+
+  # Compression
+  - setname: zlib
+    name: zlib1g
+    repo: ubuntu_24_04
+  - setname: zlib
+    name: zlib
+    repo: fedora_41
+  - setname: zlib
+    name: zlib
+    repo: arch
+
+  - setname: zstd
+    name: libzstd1
+    repo: ubuntu_24_04
+  - setname: zstd
+    name: libzstd
+    repo: fedora_41
+  - setname: zstd
+    name: zstd
+    repo: arch
+
+  # Networking
+  - setname: libcurl
+    name: libcurl4
+    repo: ubuntu_24_04
+  - setname: libcurl
+    name: libcurl
+    repo: fedora_41
+  - setname: libcurl
+    name: curl
+    repo: arch
+
+  # Database
+  - setname: sqlite3
+    name: libsqlite3-0
+    repo: ubuntu_24_04
+  - setname: sqlite3
+    name: sqlite-libs
+    repo: fedora_41
+  - setname: sqlite3
+    name: sqlite
+    repo: arch
+
+  # System
+  - setname: systemd
+    name: libsystemd0
+    repo: ubuntu_24_04
+  - setname: systemd
+    name: systemd-libs
+    repo: fedora_41
+  - setname: systemd
+    name: systemd-libs
+    repo: arch
+
+  # Web servers
+  - setname: apache-httpd
+    name: httpd
+    repo: fedora_41
+  - setname: apache-httpd
+    name: apache2
+    repo: ubuntu_24_04
+  - setname: apache-httpd
+    name: apache
+    repo: arch
+
+  # Package groups
+  - setname: dev-tools
+    kind: group
+    name: build-essential
+    repo: ubuntu_24_04
+  - setname: dev-tools
+    kind: group
+    name: base-devel
+    repo: arch
