@@ -69,3 +69,6 @@ packaging/deb/output/
 packaging/deb/build/
 packaging/arch/output/
 vendor/
+
+# Git worktrees
+.worktrees/
