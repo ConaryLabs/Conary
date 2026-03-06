@@ -164,6 +164,24 @@ impl<'db> CanonicalResolver<'db> {
         }
     }
 
+    /// Get packages that conflict with the given package (canonical equivalents).
+    /// All distro implementations of the same canonical package conflict with each other.
+    pub fn get_conflicts(&self, package_name: &str) -> Result<Vec<String>> {
+        let canonical = CanonicalPackage::resolve_name(self.conn, package_name)?;
+        let Some(canonical) = canonical else {
+            return Ok(vec![]);
+        };
+        let canonical_id = canonical.id.expect("resolved row has id");
+
+        let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
+
+        Ok(impls
+            .into_iter()
+            .map(|i| i.distro_name)
+            .filter(|name| name != package_name)
+            .collect())
+    }
+
     /// Get the distro override for a canonical package, if one exists.
     pub fn get_override(&self, canonical_id: i64) -> Result<Option<String>> {
         let ovr = PackageOverride::get(self.conn, canonical_id)?;
@@ -318,5 +336,47 @@ mod tests {
             resolver.get_override(cid).unwrap().as_deref(),
             Some("fedora-41")
         );
+    }
+
+    #[test]
+    fn test_canonical_equivalents_conflict() {
+        let (_t, conn) = create_test_db();
+        let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
+        i1.insert_or_ignore(&conn).unwrap();
+        let mut i2 = PackageImplementation::new(
+            cid,
+            "ubuntu-noble".into(),
+            "apache2".into(),
+            "curated".into(),
+        );
+        i2.insert_or_ignore(&conn).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let conflicts = resolver.get_conflicts("httpd").unwrap();
+        assert!(conflicts.contains(&"apache2".to_string()));
+    }
+
+    #[test]
+    fn test_no_conflict_for_different_canonicals() {
+        let (_t, conn) = create_test_db();
+        let mut c1 = CanonicalPackage::new("curl".into(), "package".into());
+        c1.insert(&conn).unwrap();
+        let mut c2 = CanonicalPackage::new("wget".into(), "package".into());
+        c2.insert(&conn).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let conflicts = resolver.get_conflicts("curl").unwrap();
+        assert!(!conflicts.contains(&"wget".to_string()));
+    }
+
+    #[test]
+    fn test_unknown_package_no_conflicts() {
+        let (_t, conn) = create_test_db();
+        let resolver = CanonicalResolver::new(&conn);
+        let conflicts = resolver.get_conflicts("nonexistent").unwrap();
+        assert!(conflicts.is_empty());
     }
 }
