@@ -8,6 +8,7 @@
 //! - Multi-strategy auto-discovery that groups packages across distros by name,
 //!   provides, binary paths, sonames, and stem matching
 
+pub mod appstream;
 pub mod discovery;
 pub mod repology;
 pub mod rules;
