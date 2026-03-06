@@ -211,6 +211,13 @@ fn read_cmdline_options() -> String {
     cmdline
         .split_whitespace()
         .filter(|param| !param.starts_with("conary.generation="))
+        .map(|param| {
+            param
+                .chars()
+                .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                .collect::<String>()
+        })
+        .filter(|param| !param.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
 }

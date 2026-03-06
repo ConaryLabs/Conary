@@ -98,6 +98,20 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         ));
     }
 
+    // Prevent double rollback: check if another changeset already reversed this one
+    let already_reversed: Option<i64> = conn.query_row(
+        "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    if let Some(reverse_id) = already_reversed {
+        return Err(anyhow::anyhow!(
+            "Changeset {} has already been reversed by changeset {}",
+            changeset_id,
+            reverse_id
+        ));
+    }
+
     // Check if this is a removal changeset (has metadata with trove snapshot)
     let metadata: Option<String> = conn.query_row(
         "SELECT metadata FROM changesets WHERE id = ?1",
@@ -111,16 +125,19 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     }
 
     // Otherwise, this is an install - remove the installed packages
-    let files_to_rollback: Vec<(String, String)> = {
-        let mut stmt =
-            conn.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
-        let rows = stmt.query_map([changeset_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let files_to_rollback = std::cell::RefCell::new(Vec::new());
 
     conary_core::db::transaction(&mut conn, |tx| {
+        // Read file history inside the transaction to ensure consistency (TOCTOU)
+        {
+            let mut stmt =
+                tx.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
+            let rows = stmt.query_map([changeset_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            *files_to_rollback.borrow_mut() = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+
         let troves = {
             let mut stmt = tx.prepare(
                 "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since
@@ -221,6 +238,8 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
         Ok(troves.len())
     })?;
+
+    let files_to_rollback = files_to_rollback.into_inner();
 
     info!("Removing files from filesystem...");
     for (path, action) in &files_to_rollback {

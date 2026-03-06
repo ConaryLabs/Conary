@@ -69,10 +69,16 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)
     let mnt_usr = format!("{staging}/usr");
-    run_command("mount", &["--bind", &mnt_usr, "/usr"])
-        .context("Failed to bind-mount /usr from composefs")?;
-    run_command("mount", &["-o", "remount,ro", "/usr"])
-        .context("Failed to remount /usr read-only")?;
+    if let Err(e) = run_command("mount", &["--bind", &mnt_usr, "/usr"]) {
+        // Clean up staging composefs mount before returning error
+        let _ = run_command("umount", &[staging]);
+        return Err(e).context("Failed to bind-mount /usr from composefs");
+    }
+    if let Err(e) = run_command("mount", &["-o", "remount,ro", "/usr"]) {
+        let _ = run_command("umount", &["/usr"]);
+        let _ = run_command("umount", &[staging]);
+        return Err(e).context("Failed to remount /usr read-only");
+    }
 
     info!("Bind-mounted /usr from generation {gen_number} (read-only)");
 
@@ -100,8 +106,12 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // Step 4: Move staging mount to permanent mount point
     std::fs::create_dir_all(old_mnt)
         .context("Failed to create permanent composefs mount dir")?;
-    run_command("mount", &["--move", staging, old_mnt])
-        .context("Failed to move composefs mount to permanent location")?;
+    if let Err(e) = run_command("mount", &["--move", staging, old_mnt]) {
+        // Clean up mounts before returning error
+        let _ = run_command("umount", &["/usr"]);
+        let _ = run_command("umount", &[staging]);
+        return Err(e).context("Failed to move composefs mount to permanent location");
+    }
 
     // Step 5: Update current symlink
     update_current_symlink(gen_number)

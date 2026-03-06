@@ -381,6 +381,16 @@ fn copy_files_to_temp(files: &[FileEntry], temp_dir: &Path) -> Result<()> {
         let rel_path = file.path.strip_prefix('/').unwrap_or(&file.path);
         let dest = temp_dir.join(rel_path);
 
+        // Guard against path traversal (e.g., "../../etc/shadow")
+        if !dest.starts_with(temp_dir) {
+            warn!(
+                "Skipping file with path traversal: {} -> {}",
+                file.path,
+                dest.display()
+            );
+            continue;
+        }
+
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }

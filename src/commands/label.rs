@@ -6,6 +6,7 @@
 //! for package provenance tracking.
 
 use anyhow::Result;
+use std::collections::HashSet;
 use tracing::info;
 
 /// List all labels
@@ -402,13 +403,25 @@ pub fn cmd_label_delegate(
         return Err(anyhow::anyhow!("Cannot delegate label to itself"));
     }
 
-    // Check for immediate cycles (target delegates back to source)
-    if target_label.delegate_to_label_id == label.id {
-        return Err(anyhow::anyhow!(
-            "Circular delegation detected: '{}' already delegates to '{}'",
-            target_str,
-            label_str
-        ));
+    // Check for delegation cycles by walking the full chain from the target
+    {
+        let mut visited = HashSet::new();
+        if let Some(source_id) = label.id {
+            visited.insert(source_id);
+        }
+        visited.insert(target_id);
+        let mut current_id = target_label.delegate_to_label_id;
+        while let Some(next_id) = current_id {
+            if !visited.insert(next_id) {
+                return Err(anyhow::anyhow!(
+                    "Circular delegation detected: setting '{}' -> '{}' would create a cycle",
+                    label_str,
+                    target_str
+                ));
+            }
+            current_id = conary_core::db::models::LabelEntry::find_by_id(&conn, next_id)?
+                .and_then(|l| l.delegate_to_label_id);
+        }
     }
 
     // Set the delegation

@@ -231,6 +231,10 @@ pub fn cmd_adopt_system(
     let mode_label = if full { "Adopting (full)" } else { "Adopting" };
     let mut progress = AdoptProgress::new(total as u64, mode_label);
 
+    // Single transaction is intentional: adopting hundreds of packages must be
+    // atomic so a crash mid-way does not leave the DB in a half-adopted state.
+    // The trade-off is a longer-held write lock, which is acceptable because
+    // adopt-system is an infrequent, user-initiated operation.
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
@@ -502,10 +506,26 @@ pub fn compute_file_hash(
         }
     }
 
-    // Fallback: use digest or generate a placeholder
-    file_digest
-        .map(String::from)
-        .unwrap_or_else(|| format!("adopted-{}", file_path.replace('/', "_")))
+    // Fallback: use digest from the package manager if available,
+    // otherwise compute SHA-256 from the actual file on disk
+    if let Some(digest) = file_digest {
+        return digest.to_string();
+    }
+    // Try to compute actual hash from the file on disk
+    let path = std::path::Path::new(file_path);
+    if path.is_file() {
+        match std::fs::read(path) {
+            Ok(contents) => return conary_core::hash::sha256(&contents),
+            Err(e) => {
+                debug!(
+                    "Cannot read {} for hashing: {}; using placeholder",
+                    file_path, e
+                );
+            }
+        }
+    }
+    // Last resort: placeholder for files we cannot read (e.g., permission denied)
+    format!("adopted-{}", file_path.replace('/', "_"))
 }
 
 #[cfg(test)]

@@ -72,6 +72,7 @@ pub fn resolve_dependencies(
 /// Check for dependency conflicts and handle missing dependencies
 ///
 /// Returns Ok(()) if all dependencies can be satisfied, or an error with details.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_missing_dependencies(
     conn: &mut Connection,
     pkg: &dyn PackageFormat,
@@ -80,6 +81,7 @@ pub fn handle_missing_dependencies(
     root: &str,
     db_path: &str,
     progress: &InstallProgress,
+    sandbox_mode: SandboxMode,
 ) -> Result<()> {
     // Check for conflicts (fail on any conflict)
     if !plan.conflicts.is_empty() {
@@ -116,6 +118,7 @@ pub fn handle_missing_dependencies(
                     root,
                     db_path,
                     progress,
+                    sandbox_mode,
                 )?;
             } else {
                 // Dependencies not found in Conary repos - check provides table
@@ -133,6 +136,7 @@ pub fn handle_missing_dependencies(
 }
 
 /// Handle dependencies that can be downloaded from repositories
+#[allow(clippy::too_many_arguments)]
 fn handle_downloadable_deps(
     _conn: &mut Connection,
     pkg: &dyn PackageFormat,
@@ -141,6 +145,7 @@ fn handle_downloadable_deps(
     root: &str,
     db_path: &str,
     progress: &InstallProgress,
+    sandbox_mode: SandboxMode,
 ) -> Result<()> {
     if dry_run {
         println!("Would install {} missing dependencies:", to_download.len());
@@ -175,7 +180,7 @@ fn handle_downloadable_deps(
                         root,
                         dry_run,
                         selection_reason: Some(&reason),
-                        sandbox_mode: SandboxMode::None,
+                        sandbox_mode,
                         ..Default::default()
                     },
                 ) {

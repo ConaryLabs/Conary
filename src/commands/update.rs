@@ -12,7 +12,8 @@ use conary_core::repository::{
     self, DownloadOptions, PackageSource, ResolutionOptions, resolve_package,
 };
 use std::path::Path;
-use tracing::{info, warn};
+use conary_core::version::RpmVersion;
+use tracing::{debug, info, warn};
 
 fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Result<(Trove, i64)> {
     let troves = Trove::find_by_name(conn, package_name)?;
@@ -152,6 +153,28 @@ pub fn cmd_update(
             if repo_pkg.version != trove.version
                 && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
             {
+                // Skip if the repository version is not actually newer than installed
+                match (
+                    RpmVersion::parse(&repo_pkg.version),
+                    RpmVersion::parse(&trove.version),
+                ) {
+                    (Ok(repo_ver), Ok(installed_ver)) => {
+                        if repo_ver <= installed_ver {
+                            debug!(
+                                "Skipping {} {} (installed {} is same or newer)",
+                                trove.name, repo_pkg.version, trove.version
+                            );
+                            continue;
+                        }
+                    }
+                    _ => {
+                        debug!(
+                            "Could not compare versions for {}: {} vs {}",
+                            trove.name, repo_pkg.version, trove.version
+                        );
+                    }
+                }
+
                 // Filter by security if requested
                 if security_only && !repo_pkg.is_security_update {
                     continue;
@@ -327,6 +350,7 @@ pub fn cmd_update(
     let mut deltas_applied = 0i32;
     let mut full_downloads = 0i32;
     let mut delta_failures = 0i32;
+    let mut had_failures = false;
 
     // Save counts before consuming the vectors
     let delta_count = delta_updates.len();
@@ -376,6 +400,7 @@ pub fn cmd_update(
                             e
                         );
                         delta_failures += 1;
+                        had_failures = true;
                         // Get repository for fallback download
                         if let Ok(Some(repo)) =
                             Repository::find_by_id(&conn, repo_pkg.repository_id)
@@ -389,6 +414,7 @@ pub fn cmd_update(
             Err(e) => {
                 warn!("  Delta download failed: {}, will download full package", e);
                 delta_failures += 1;
+                had_failures = true;
                 // Get repository for fallback download
                 if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
                     full_updates.push((trove, repo_pkg, repo));
@@ -435,6 +461,7 @@ pub fn cmd_update(
                 Err(e) => {
                     progress.fail_package(&trove.name, &e.to_string());
                     warn!("Failed to resolve {}: {}", trove.name, e);
+                    had_failures = true;
                     continue;
                 }
             };
@@ -453,6 +480,7 @@ pub fn cmd_update(
                     }
                     // Future: handle actual CAS content hashes
                     progress.fail_package(&trove.name, "LocalCas not yet supported");
+                    had_failures = true;
                     warn!(
                         "LocalCas resolution not yet implemented for {}: {}",
                         trove.name, hash
@@ -478,6 +506,7 @@ pub fn cmd_update(
             ) {
                 progress.fail_package(&trove.name, &e.to_string());
                 warn!("  Package installation failed: {}", e);
+                had_failures = true;
                 let _ = std::fs::remove_file(&pkg_path);
                 continue;
             }
@@ -503,7 +532,13 @@ pub fn cmd_update(
 
         let mut changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
             .ok_or_else(|| conary_core::Error::NotFound("Changeset not found".to_string()))?;
-        changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+        if deltas_applied > 0 || full_downloads > 0 {
+            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+        } else if had_failures {
+            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::RolledBack)?;
+        } else {
+            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+        }
 
         Ok(())
     })?;

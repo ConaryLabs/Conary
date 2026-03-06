@@ -75,6 +75,30 @@ pub fn cmd_remove(
         ));
     }
 
+    // Check dependency breakage BEFORE any removal (including adopted packages)
+    let resolver = conary_core::resolver::Resolver::new(&conn)?;
+    let breaking = resolver.check_removal(package_name)?;
+
+    if !breaking.is_empty() {
+        println!(
+            "WARNING: Removing '{}' would break the following packages:",
+            package_name
+        );
+        for pkg in &breaking {
+            println!("  {}", pkg);
+        }
+        println!("\nRefusing to remove package with dependencies.");
+        println!(
+            "Use 'conary whatbreaks {}' for more information.",
+            package_name
+        );
+        return Err(anyhow::anyhow!(
+            "Cannot remove '{}': {} packages depend on it",
+            package_name,
+            breaking.len()
+        ));
+    }
+
     // Check if package is adopted from system PM
     if trove.install_source.is_adopted() && !purge_files {
         // Remove from Conary tracking only -- don't touch files on disk
@@ -122,29 +146,6 @@ pub fn cmd_remove(
         );
     }
 
-    let resolver = conary_core::resolver::Resolver::new(&conn)?;
-    let breaking = resolver.check_removal(package_name)?;
-
-    if !breaking.is_empty() {
-        println!(
-            "WARNING: Removing '{}' would break the following packages:",
-            package_name
-        );
-        for pkg in &breaking {
-            println!("  {}", pkg);
-        }
-        println!("\nRefusing to remove package with dependencies.");
-        println!(
-            "Use 'conary whatbreaks {}' for more information.",
-            package_name
-        );
-        return Err(anyhow::anyhow!(
-            "Cannot remove '{}': {} packages depend on it",
-            package_name,
-            breaking.len()
-        ));
-    }
-
     // Get files BEFORE deleting the trove (cascade delete will remove file records)
     let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
@@ -156,6 +157,10 @@ pub fn cmd_remove(
         .first()
         .and_then(|s| ScriptletPackageFormat::parse(&s.package_format))
         .unwrap_or(ScriptletPackageFormat::Rpm);
+
+    // NOTE: Known limitation -- if the pre-remove scriptlet partially executes
+    // and then fails, there is no automatic recovery. This is consistent with
+    // RPM, dpkg, and pacman which also have no pre-remove rollback mechanism.
 
     // Execute pre-remove scriptlet (before any changes)
     if !no_scripts && !stored_scriptlets.is_empty() {
@@ -198,6 +203,68 @@ pub fn cmd_remove(
     let install_root = PathBuf::from(root);
     let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
+    // Separate files and directories
+    // Directories typically have mode starting with 040xxx (directory bit)
+    // or path ending with /
+    let (directories, regular_files): (Vec<_>, Vec<_>) = files
+        .iter()
+        .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
+
+    // Remove regular files first (BEFORE committing DB changes)
+    progress.set_phase(RemovePhase::RemovingFiles);
+    let mut removed_count = 0;
+    let mut failed_count = 0;
+    for file in &regular_files {
+        match deployer.remove_file(&file.path) {
+            Ok(()) => {
+                removed_count += 1;
+                info!("Removed file: {}", file.path);
+            }
+            Err(e) => {
+                warn!("Failed to remove file {}: {}", file.path, e);
+                failed_count += 1;
+            }
+        }
+    }
+
+    // Guard: if ALL file deletions failed, do not commit DB changes
+    if removed_count == 0 && !regular_files.is_empty() {
+        return Err(anyhow::anyhow!(
+            "All file deletions failed for '{}'. Database not modified.",
+            package_name
+        ));
+    }
+    if failed_count > 0 {
+        warn!(
+            "{} file(s) could not be removed for '{}'; proceeding with DB commit",
+            failed_count, package_name
+        );
+    }
+
+    // Sort directories by path length (deepest first) to remove children before parents
+    let mut sorted_dirs: Vec<_> = directories.iter().collect();
+    sorted_dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+
+    // Remove directories (only if empty)
+    progress.set_phase(RemovePhase::RemovingDirs);
+    let mut dirs_removed = 0;
+    for dir in sorted_dirs {
+        let dir_path = dir.path.trim_end_matches('/');
+        match deployer.remove_directory(dir_path) {
+            Ok(true) => {
+                dirs_removed += 1;
+                info!("Removed directory: {}", dir_path);
+            }
+            Ok(false) => {
+                debug!("Directory not empty or already removed: {}", dir_path);
+            }
+            Err(e) => {
+                warn!("Failed to remove directory {}: {}", dir_path, e);
+            }
+        }
+    }
+
+    // Now commit DB changes after filesystem operations succeeded
     progress.set_phase(RemovePhase::UpdatingDb);
     let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset =
@@ -253,53 +320,6 @@ pub fn cmd_remove(
         changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
-
-    // Separate files and directories
-    // Directories typically have mode starting with 040xxx (directory bit)
-    // or path ending with /
-    let (directories, regular_files): (Vec<_>, Vec<_>) = files
-        .iter()
-        .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
-
-    // Remove regular files first
-    progress.set_phase(RemovePhase::RemovingFiles);
-    let mut removed_count = 0;
-    let mut failed_count = 0;
-    for file in &regular_files {
-        match deployer.remove_file(&file.path) {
-            Ok(()) => {
-                removed_count += 1;
-                info!("Removed file: {}", file.path);
-            }
-            Err(e) => {
-                warn!("Failed to remove file {}: {}", file.path, e);
-                failed_count += 1;
-            }
-        }
-    }
-
-    // Sort directories by path length (deepest first) to remove children before parents
-    let mut sorted_dirs: Vec<_> = directories.iter().collect();
-    sorted_dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
-
-    // Remove directories (only if empty)
-    progress.set_phase(RemovePhase::RemovingDirs);
-    let mut dirs_removed = 0;
-    for dir in sorted_dirs {
-        let dir_path = dir.path.trim_end_matches('/');
-        match deployer.remove_directory(dir_path) {
-            Ok(true) => {
-                dirs_removed += 1;
-                info!("Removed directory: {}", dir_path);
-            }
-            Ok(false) => {
-                debug!("Directory not empty or already removed: {}", dir_path);
-            }
-            Err(e) => {
-                warn!("Failed to remove directory {}: {}", dir_path, e);
-            }
-        }
-    }
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if !no_scripts && !stored_scriptlets.is_empty() {

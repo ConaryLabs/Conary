@@ -199,29 +199,46 @@ fn check_adoption_conflicts(conn: &rusqlite::Connection, verbose: bool) -> Resul
 fn check_stale_files(conn: &rusqlite::Connection, verbose: bool) -> Result<usize> {
     let mut count = 0;
 
-    // Get all tracked files
-    let files: Vec<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT f.path, t.name FROM files f
-             JOIN troves t ON f.trove_id = t.id
-             ORDER BY t.name, f.path",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    // Process files in batches to avoid loading entire file table into memory
+    let batch_size: i64 = 1000;
+    let mut offset: i64 = 0;
 
     let mut missing_by_pkg: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
 
-    for (path, pkg_name) in &files {
-        if !std::path::Path::new(path).exists() {
-            missing_by_pkg
-                .entry(pkg_name.clone())
-                .or_default()
-                .push(path.clone());
-            count += 1;
+    loop {
+        let files: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT f.path, t.name FROM files f
+                 JOIN troves t ON f.trove_id = t.id
+                 ORDER BY t.name, f.path
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![batch_size, offset], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        if files.is_empty() {
+            break;
+        }
+
+        let batch_len = files.len() as i64;
+
+        for (path, pkg_name) in &files {
+            if !std::path::Path::new(path).exists() {
+                missing_by_pkg
+                    .entry(pkg_name.clone())
+                    .or_default()
+                    .push(path.clone());
+                count += 1;
+            }
+        }
+
+        offset += batch_len;
+        if batch_len < batch_size {
+            break;
         }
     }
 

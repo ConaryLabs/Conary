@@ -233,7 +233,16 @@ impl<'a> BatchInstaller<'a> {
         // Phase 2: Run pre-install scriptlets in topological order (dependencies first)
         if !self.no_scripts {
             for pkg in &packages {
-                self.run_pre_scripts(pkg)?;
+                if let Err(e) = self.run_pre_scripts(pkg) {
+                    warn!("Pre-install scriptlet failed for {}: {}", pkg.name, e);
+                    txn.abort()
+                        .context("Failed to abort transaction after pre-script failure")?;
+                    return Err(anyhow::anyhow!(
+                        "Pre-install scriptlet failed for '{}': {}. Transaction aborted.",
+                        pkg.name,
+                        e
+                    ));
+                }
             }
         }
 
