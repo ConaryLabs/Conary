@@ -12,3 +12,4 @@ pub mod appstream;
 pub mod discovery;
 pub mod repology;
 pub mod rules;
+pub mod sync;
