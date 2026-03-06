@@ -1,6 +1,7 @@
 // conary-server/src/server/handlers/mod.rs
 //! HTTP request handlers for the Remi server
 
+pub mod canonical;
 pub mod chunks;
 pub mod detail;
 pub mod federation;

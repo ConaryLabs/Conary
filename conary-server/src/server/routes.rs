@@ -17,7 +17,8 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    chunks, detail, federation, index, jobs, models, oci, packages, recipes, search, sparse, tuf,
+    canonical, chunks, detail, federation, index, jobs, models, oci, packages, recipes, search,
+    sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -354,6 +355,13 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         // === Search ===
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
+        // === Canonical Package Identity ===
+        .route(
+            "/v1/canonical/search",
+            get(canonical::canonical_search),
+        )
+        .route("/v1/canonical/:name", get(canonical::canonical_lookup))
+        .route("/v1/groups", get(canonical::groups_list))
         // === Model Collections (for remote include resolution) ===
         .route("/v1/models/:name", get(models::get_model))
         .route(
