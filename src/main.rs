@@ -1249,6 +1249,13 @@ fn main() -> Result<()> {
                 verbose,
             } => commands::cmd_bootstrap_stage1(&work_dir, recipe_dir.as_deref(), jobs, verbose),
 
+            cli::BootstrapCommands::Stage2 {
+                work_dir,
+                recipe_dir,
+                jobs,
+                verbose,
+            } => commands::cmd_bootstrap_stage2(&work_dir, recipe_dir.as_deref(), jobs, verbose),
+
             cli::BootstrapCommands::Base {
                 work_dir,
                 root,

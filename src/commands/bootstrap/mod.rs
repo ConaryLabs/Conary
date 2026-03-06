@@ -231,6 +231,74 @@ pub fn cmd_bootstrap_stage1(
     Ok(())
 }
 
+/// Build Stage 2 (reproducibility rebuild using Stage 1 toolchain)
+pub fn cmd_bootstrap_stage2(
+    work_dir: &str,
+    recipe_dir: Option<&str>,
+    jobs: Option<usize>,
+    verbose: bool,
+) -> Result<()> {
+    println!("Building Stage 2 toolchain (reproducibility rebuild)...");
+    println!("  Work directory: {}", work_dir);
+
+    // Set config options
+    let _config = {
+        let mut c = BootstrapConfig::new().with_verbose(verbose);
+        if let Some(j) = jobs {
+            c = c.with_jobs(j);
+        }
+        c
+    };
+
+    // Check if Stage 1 is complete
+    let mut bootstrap = Bootstrap::new(work_dir)?;
+
+    let stage1_toolchain = bootstrap.get_stage1_toolchain();
+
+    if stage1_toolchain.is_none() {
+        println!("[ERROR] Stage 1 toolchain not found.");
+        println!("Run 'conary bootstrap stage1' first.");
+        return Err(anyhow::anyhow!("Stage 1 not complete"));
+    }
+
+    let toolchain = stage1_toolchain.unwrap();
+    println!("  Using Stage 1 toolchain: {}", toolchain.path.display());
+
+    // Determine recipe directory
+    let recipe_path = recipe_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("recipes/core"));
+
+    if !recipe_path.exists() {
+        println!(
+            "[ERROR] Recipe directory not found: {}",
+            recipe_path.display()
+        );
+        println!("Specify --recipe-dir or ensure recipes/core exists.");
+        return Err(anyhow::anyhow!("Recipe directory not found"));
+    }
+
+    println!("  Recipe directory: {}", recipe_path.display());
+
+    // Build Stage 2
+    println!("\nThis will rebuild the Stage 1 packages using the Stage 1 compiler.");
+    println!("Purpose: verify that the toolchain can reproduce itself.\n");
+
+    let stage2_toolchain = bootstrap.build_stage2(&recipe_path)?;
+
+    println!("\n[COMPLETE] Stage 2 toolchain built successfully!");
+    println!("  Path: {}", stage2_toolchain.path.display());
+    println!("  Target: {}", stage2_toolchain.target);
+    if let Some(ref ver) = stage2_toolchain.gcc_version {
+        println!("  GCC: {}", ver);
+    }
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap base' to build the base system packages");
+
+    Ok(())
+}
+
 /// Build base system packages
 pub fn cmd_bootstrap_base(
     work_dir: &str,
@@ -459,12 +527,13 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     match current {
         BootstrapStage::Stage0 => cmd_bootstrap_stage0(work_dir, None, None, verbose, false, false),
         BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose),
+        BootstrapStage::Stage2 => cmd_bootstrap_stage2(work_dir, None, None, verbose),
         BootstrapStage::BaseSystem => {
             cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose)
         }
         BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
         stage => {
-            // Handle other stages (Stage2, Boot, Networking, Conary) - not yet implemented
+            // Handle other stages (Boot, Networking, Conary) - not yet implemented
             println!(
                 "[NOT IMPLEMENTED] Resume for stage {} is not yet implemented.",
                 stage

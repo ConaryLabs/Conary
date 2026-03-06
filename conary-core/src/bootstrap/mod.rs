@@ -48,6 +48,7 @@ mod config;
 mod image;
 mod stage0;
 mod stage1;
+mod stage2;
 mod stages;
 mod toolchain;
 
@@ -58,6 +59,7 @@ pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
+pub use stage2::{Stage2Builder, Stage2Error, Stage2Package, Stage2PackageStatus};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use toolchain::{Toolchain, ToolchainKind};
 
@@ -166,6 +168,35 @@ impl Bootstrap {
     pub fn get_stage1_toolchain(&self) -> Option<Toolchain> {
         self.stages
             .get_artifact_path(BootstrapStage::Stage1)
+            .and_then(|p| Toolchain::from_prefix(&p).ok())
+    }
+
+    /// Build Stage 2 (reproducibility rebuild using Stage 1 toolchain).
+    ///
+    /// Rebuilds the same 5 packages as Stage 1 using the Stage 1 compiler
+    /// instead of the Stage 0 cross-compiler. This verifies that the
+    /// toolchain can reproduce itself.
+    pub fn build_stage2(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
+        let stage1 = self
+            .get_stage1_toolchain()
+            .ok_or_else(|| anyhow::anyhow!("Stage 1 toolchain not found. Run stage1 first."))?;
+
+        let mut builder = Stage2Builder::new(&self.work_dir, &self.config, stage1)?;
+        builder.load_recipes(recipe_dir.as_ref())?;
+        builder.validate_toolchain()?;
+
+        let toolchain = builder.build()?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Stage2, &toolchain.path)?;
+
+        Ok(toolchain)
+    }
+
+    /// Get the Stage 2 toolchain if it's already built
+    pub fn get_stage2_toolchain(&self) -> Option<Toolchain> {
+        self.stages
+            .get_artifact_path(BootstrapStage::Stage2)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
 

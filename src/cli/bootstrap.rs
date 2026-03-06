@@ -75,6 +75,25 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
+    /// Build Stage 2 (reproducibility rebuild)
+    Stage2 {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// Directory containing recipes (default: recipes/core)
+        #[arg(short, long)]
+        recipe_dir: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     /// Build base system packages
     Base {
         /// Directory for bootstrap work
