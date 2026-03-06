@@ -484,5 +484,5 @@ Trust Chain:
 ## Related Documentation
 
 - [docs/conaryopedia-v2.md](/docs/conaryopedia-v2.md) - Comprehensive technical guide
-- [ROADMAP.md](/ROADMAP.md) - Feature status and version history
+- [ROADMAP.md](/ROADMAP.md) - Forward-looking development roadmap
 - [docs/SCRIPTLET_SECURITY.md](/docs/SCRIPTLET_SECURITY.md) - Scriptlet isolation details
