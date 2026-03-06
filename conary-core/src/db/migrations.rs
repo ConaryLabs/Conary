@@ -2174,3 +2174,167 @@ pub fn migrate_v44(conn: &Connection) -> Result<()> {
     info!("Schema version 44 applied successfully (mirror health, delta manifests)");
     Ok(())
 }
+
+/// Version 45: Canonical package identity system
+///
+/// Adds tables for cross-distro canonical package mapping:
+/// - canonical_packages: Distro-neutral package identities
+/// - package_implementations: Distro-specific implementations of canonical packages
+/// - distro_pin: System-level distro pinning with mixing policy
+/// - package_overrides: Per-package distro source overrides
+/// - system_affinity: Computed source affinity tracking
+///
+/// Also adds columns:
+/// - provides.canonical_id: Links provides to canonical packages
+/// - repositories.distro: Associates repos with a distro
+/// - repository_packages.distro: Associates repo packages with a distro
+pub fn migrate_v45(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 45");
+
+    conn.execute_batch(
+        "
+        -- Canonical package identities (distro-neutral)
+        CREATE TABLE IF NOT EXISTS canonical_packages (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            appstream_id TEXT,
+            description TEXT,
+            kind TEXT NOT NULL DEFAULT 'package',
+            category TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_packages_name
+            ON canonical_packages(name);
+        CREATE INDEX IF NOT EXISTS idx_canonical_packages_appstream
+            ON canonical_packages(appstream_id);
+
+        -- Distro-specific implementations of canonical packages
+        CREATE TABLE IF NOT EXISTS package_implementations (
+            id INTEGER PRIMARY KEY,
+            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id),
+            distro TEXT NOT NULL,
+            distro_name TEXT NOT NULL,
+            repo_id INTEGER REFERENCES repositories(id),
+            source TEXT NOT NULL DEFAULT 'auto',
+            UNIQUE(canonical_id, distro, distro_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pkg_impl_distro
+            ON package_implementations(distro, distro_name);
+        CREATE INDEX IF NOT EXISTS idx_pkg_impl_canonical
+            ON package_implementations(canonical_id);
+
+        -- System distro pin
+        CREATE TABLE IF NOT EXISTS distro_pin (
+            id INTEGER PRIMARY KEY,
+            distro TEXT NOT NULL,
+            mixing_policy TEXT NOT NULL DEFAULT 'guarded',
+            created_at TEXT NOT NULL
+        );
+
+        -- Per-package distro overrides
+        CREATE TABLE IF NOT EXISTS package_overrides (
+            id INTEGER PRIMARY KEY,
+            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id),
+            from_distro TEXT NOT NULL,
+            reason TEXT
+        );
+
+        -- Source affinity tracking (computed)
+        CREATE TABLE IF NOT EXISTS system_affinity (
+            distro TEXT PRIMARY KEY,
+            package_count INTEGER NOT NULL DEFAULT 0,
+            percentage REAL NOT NULL DEFAULT 0.0,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Add canonical_id to provides for linking to canonical packages
+        ALTER TABLE provides ADD COLUMN canonical_id INTEGER REFERENCES canonical_packages(id);
+
+        -- Add distro column to repositories
+        ALTER TABLE repositories ADD COLUMN distro TEXT;
+
+        -- Add distro column to repository_packages
+        ALTER TABLE repository_packages ADD COLUMN distro TEXT;
+        ",
+    )?;
+
+    info!("Schema version 45 applied successfully (canonical package identity)");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema::migrate;
+
+    #[test]
+    fn test_migrate_v45_canonical_packages() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        // Verify schema version is 45
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 45);
+
+        // Insert into canonical_packages
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind, category) VALUES ('firefox', 'package', 'browser')",
+            [],
+        )
+        .unwrap();
+
+        // Insert into package_implementations
+        conn.execute(
+            "INSERT INTO package_implementations (canonical_id, distro, distro_name, source) VALUES (1, 'fedora', 'firefox', 'auto')",
+            [],
+        )
+        .unwrap();
+
+        // Insert into distro_pin
+        conn.execute(
+            "INSERT INTO distro_pin (distro, mixing_policy, created_at) VALUES ('fedora', 'guarded', '2026-03-05')",
+            [],
+        )
+        .unwrap();
+
+        // Insert into package_overrides
+        conn.execute(
+            "INSERT INTO package_overrides (canonical_id, from_distro, reason) VALUES (1, 'ubuntu', 'user preference')",
+            [],
+        )
+        .unwrap();
+
+        // Insert into system_affinity
+        conn.execute(
+            "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) VALUES ('fedora', 42, 85.5, '2026-03-05')",
+            [],
+        )
+        .unwrap();
+
+        // Verify new columns on provides
+        conn.execute(
+            "SELECT canonical_id FROM provides LIMIT 0",
+            [],
+        )
+        .unwrap();
+
+        // Verify new columns on repositories
+        conn.execute(
+            "SELECT distro FROM repositories LIMIT 0",
+            [],
+        )
+        .unwrap();
+
+        // Verify new columns on repository_packages
+        conn.execute(
+            "SELECT distro FROM repository_packages LIMIT 0",
+            [],
+        )
+        .unwrap();
+    }
+}
