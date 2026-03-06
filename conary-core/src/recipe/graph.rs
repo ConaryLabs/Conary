@@ -120,63 +120,24 @@ impl RecipeGraph {
     }
 
     /// Compute the in-degree of each node (accounting for bootstrap edges)
+    ///
+    /// In-degree here means the number of prerequisites: for each node,
+    /// count its dependencies excluding any bootstrap edges.
     fn compute_in_degrees(&self) -> HashMap<String, usize> {
-        let mut in_degrees: HashMap<String, usize> = HashMap::new();
-
-        // Initialize all nodes with 0 in-degree
-        for name in self.edges.keys() {
-            in_degrees.insert(name.clone(), 0);
-        }
-
-        // Count incoming edges (excluding bootstrap edges)
-        for (name, deps) in &self.edges {
-            for dep in deps {
-                // Skip bootstrap edges
-                if self.bootstrap_edges.contains(&(name.clone(), dep.clone())) {
-                    continue;
-                }
-                // This edge means `name` depends on `dep`, so `dep` has an incoming edge FROM `name`
-                // Wait, that's backwards. Let me reconsider.
-                //
-                // edges[name] contains deps that `name` depends on.
-                // So there's an edge name -> dep (name depends on dep).
-                // For topological sort, we need in-degree of each node.
-                // In-degree of X = number of nodes that depend on X = number of edges pointing TO X.
-                // Since edges[name] contains deps that name depends on,
-                // the edge direction is name -> dep (name points to dep).
-                // So the in-degree of `dep` is increased by this edge.
-                //
-                // Actually, for Kahn's algorithm, we want in-degree = number of prerequisites.
-                // If name depends on dep, then `name` can only be built after `dep`.
-                // So `name` has `dep` as a prerequisite, meaning in-degree of `name` should include dep.
-                //
-                // Let me reconsider the edge direction:
-                // - edges[name] = set of things `name` depends on (prerequisites of name)
-                // - For topological sort, node X has in-degree = |prerequisites of X|
-                // - So in_degrees[name] = |edges[name]|
-
-                // Actually, we're counting in-degree correctly above. The issue is:
-                // We initialized in_degrees, then we're iterating edges and for each dep in edges[name],
-                // we're... doing nothing with in_degrees right now.
-                //
-                // Let me fix this properly.
-            }
-        }
-
-        // Actually compute in-degrees: for each node, count its dependencies
-        for (name, deps) in &self.edges {
-            let effective_deps: usize = deps
-                .iter()
-                .filter(|dep| {
-                    !self
-                        .bootstrap_edges
-                        .contains(&(name.clone(), (*dep).clone()))
-                })
-                .count();
-            *in_degrees.get_mut(name).expect("node initialized in map") = effective_deps;
-        }
-
-        in_degrees
+        self.edges
+            .iter()
+            .map(|(name, deps)| {
+                let effective_deps = deps
+                    .iter()
+                    .filter(|dep| {
+                        !self
+                            .bootstrap_edges
+                            .contains(&(name.clone(), (*dep).clone()))
+                    })
+                    .count();
+                (name.clone(), effective_deps)
+            })
+            .collect()
     }
 
     /// Perform topological sort using Kahn's algorithm

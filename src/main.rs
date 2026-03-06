@@ -542,22 +542,20 @@ fn main() -> Result<()> {
 
             // Nested: system trigger
             cli::SystemCommands::Trigger(trigger_cmd) => match trigger_cmd {
-                cli::TriggerCommands::List {
-                    db_path,
-                    all,
-                    builtin,
-                } => commands::cmd_trigger_list(&db_path, all, builtin),
-
-                cli::TriggerCommands::Show { name, db_path } => {
-                    commands::cmd_trigger_show(&name, &db_path)
+                cli::TriggerCommands::List { db, all, builtin } => {
+                    commands::cmd_trigger_list(&db.db_path, all, builtin)
                 }
 
-                cli::TriggerCommands::Enable { name, db_path } => {
-                    commands::cmd_trigger_enable(&name, &db_path)
+                cli::TriggerCommands::Show { name, db } => {
+                    commands::cmd_trigger_show(&name, &db.db_path)
                 }
 
-                cli::TriggerCommands::Disable { name, db_path } => {
-                    commands::cmd_trigger_disable(&name, &db_path)
+                cli::TriggerCommands::Enable { name, db } => {
+                    commands::cmd_trigger_enable(&name, &db.db_path)
+                }
+
+                cli::TriggerCommands::Disable { name, db } => {
+                    commands::cmd_trigger_disable(&name, &db.db_path)
                 }
 
                 cli::TriggerCommands::Add {
@@ -566,39 +564,39 @@ fn main() -> Result<()> {
                     handler,
                     description,
                     priority,
-                    db_path,
+                    db,
                 } => commands::cmd_trigger_add(
                     &name,
                     &pattern,
                     &handler,
                     description.as_deref(),
                     priority,
-                    &db_path,
+                    &db.db_path,
                 ),
 
-                cli::TriggerCommands::Remove { name, db_path } => {
-                    commands::cmd_trigger_remove(&name, &db_path)
+                cli::TriggerCommands::Remove { name, db } => {
+                    commands::cmd_trigger_remove(&name, &db.db_path)
                 }
 
                 cli::TriggerCommands::Run {
                     changeset_id,
-                    db_path,
+                    db,
                     root,
-                } => commands::cmd_trigger_run(changeset_id, &db_path, &root),
+                } => commands::cmd_trigger_run(changeset_id, &db.db_path, &root),
             },
 
             // Nested: system redirect
             cli::SystemCommands::Redirect(redirect_cmd) => match redirect_cmd {
                 cli::RedirectCommands::List {
-                    db_path,
+                    db,
                     r#type,
                     verbose,
-                } => commands::cmd_redirect_list(&db_path, r#type.as_deref(), verbose),
+                } => commands::cmd_redirect_list(&db.db_path, r#type.as_deref(), verbose),
 
                 cli::RedirectCommands::Add {
                     source,
                     target,
-                    db_path,
+                    db,
                     r#type,
                     source_version,
                     target_version,
@@ -606,7 +604,7 @@ fn main() -> Result<()> {
                 } => commands::cmd_redirect_add(
                     &source,
                     &target,
-                    &db_path,
+                    &db.db_path,
                     &r#type,
                     source_version.as_deref(),
                     target_version.as_deref(),
@@ -615,19 +613,19 @@ fn main() -> Result<()> {
 
                 cli::RedirectCommands::Show {
                     source,
-                    db_path,
+                    db,
                     version,
-                } => commands::cmd_redirect_show(&source, &db_path, version.as_deref()),
+                } => commands::cmd_redirect_show(&source, &db.db_path, version.as_deref()),
 
-                cli::RedirectCommands::Remove { source, db_path } => {
-                    commands::cmd_redirect_remove(&source, &db_path)
+                cli::RedirectCommands::Remove { source, db } => {
+                    commands::cmd_redirect_remove(&source, &db.db_path)
                 }
 
                 cli::RedirectCommands::Resolve {
                     package,
-                    db_path,
+                    db,
                     version,
-                } => commands::cmd_redirect_resolve(&package, &db_path, version.as_deref()),
+                } => commands::cmd_redirect_resolve(&package, &db.db_path, version.as_deref()),
             },
         },
 
@@ -774,64 +772,64 @@ fn main() -> Result<()> {
 
             // Nested: query label
             cli::QueryCommands::Label(label_cmd) => match label_cmd {
-                cli::LabelCommands::List { db_path, verbose } => {
-                    commands::cmd_label_list(&db_path, verbose)
+                cli::LabelCommands::List { db, verbose } => {
+                    commands::cmd_label_list(&db.db_path, verbose)
                 }
 
                 cli::LabelCommands::Add {
                     label,
                     description,
                     parent,
-                    db_path,
+                    db,
                 } => commands::cmd_label_add(
                     &label,
                     description.as_deref(),
                     parent.as_deref(),
-                    &db_path,
+                    &db.db_path,
                 ),
 
                 cli::LabelCommands::Remove {
                     label,
-                    db_path,
+                    db,
                     force,
-                } => commands::cmd_label_remove(&label, &db_path, force),
+                } => commands::cmd_label_remove(&label, &db.db_path, force),
 
                 cli::LabelCommands::Path {
-                    db_path,
+                    db,
                     add,
                     remove,
                     priority,
                 } => {
-                    commands::cmd_label_path(&db_path, add.as_deref(), remove.as_deref(), priority)
+                    commands::cmd_label_path(&db.db_path, add.as_deref(), remove.as_deref(), priority)
                 }
 
-                cli::LabelCommands::Show { package, db_path } => {
-                    commands::cmd_label_show(&package, &db_path)
+                cli::LabelCommands::Show { package, db } => {
+                    commands::cmd_label_show(&package, &db.db_path)
                 }
 
                 cli::LabelCommands::Set {
                     package,
                     label,
-                    db_path,
-                } => commands::cmd_label_set(&package, &label, &db_path),
+                    db,
+                } => commands::cmd_label_set(&package, &label, &db.db_path),
 
-                cli::LabelCommands::Query { label, db_path } => {
-                    commands::cmd_label_query(&label, &db_path)
+                cli::LabelCommands::Query { label, db } => {
+                    commands::cmd_label_query(&label, &db.db_path)
                 }
 
                 cli::LabelCommands::Link {
                     label,
                     repository,
                     unlink,
-                    db_path,
-                } => commands::cmd_label_link(&label, repository.as_deref(), unlink, &db_path),
+                    db,
+                } => commands::cmd_label_link(&label, repository.as_deref(), unlink, &db.db_path),
 
                 cli::LabelCommands::Delegate {
                     label,
                     target,
                     undelegate,
-                    db_path,
-                } => commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db_path),
+                    db,
+                } => commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db.db_path),
             },
         },
 
@@ -1677,17 +1675,17 @@ fn main() -> Result<()> {
             cli::DistroCommands::Set {
                 distro,
                 mixing,
-                db_path,
-            } => commands::distro::cmd_distro_set(&db_path, &distro, &mixing),
-            cli::DistroCommands::Remove { db_path } => {
-                commands::distro::cmd_distro_remove(&db_path)
+                db,
+            } => commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing),
+            cli::DistroCommands::Remove { db } => {
+                commands::distro::cmd_distro_remove(&db.db_path)
             }
             cli::DistroCommands::List => commands::distro::cmd_distro_list(),
-            cli::DistroCommands::Info { db_path } => {
-                commands::distro::cmd_distro_info(&db_path)
+            cli::DistroCommands::Info { db } => {
+                commands::distro::cmd_distro_info(&db.db_path)
             }
-            cli::DistroCommands::Mixing { policy, db_path } => {
-                commands::distro::cmd_distro_mixing(&db_path, &policy)
+            cli::DistroCommands::Mixing { policy, db } => {
+                commands::distro::cmd_distro_mixing(&db.db_path, &policy)
             }
         },
 
@@ -1695,14 +1693,14 @@ fn main() -> Result<()> {
         // Canonical Commands
         // =====================================================================
         Some(Commands::Canonical(can_cmd)) => match can_cmd {
-            cli::CanonicalCommands::Show { name, db_path } => {
-                commands::canonical::cmd_canonical_show(&db_path, &name)
+            cli::CanonicalCommands::Show { name, db } => {
+                commands::canonical::cmd_canonical_show(&db.db_path, &name)
             }
-            cli::CanonicalCommands::Search { query, db_path } => {
-                commands::canonical::cmd_canonical_search(&db_path, &query)
+            cli::CanonicalCommands::Search { query, db } => {
+                commands::canonical::cmd_canonical_search(&db.db_path, &query)
             }
-            cli::CanonicalCommands::Unmapped { db_path } => {
-                commands::canonical::cmd_canonical_unmapped(&db_path)
+            cli::CanonicalCommands::Unmapped { db } => {
+                commands::canonical::cmd_canonical_unmapped(&db.db_path)
             }
         },
 
@@ -1710,25 +1708,25 @@ fn main() -> Result<()> {
         // Groups Commands
         // =====================================================================
         Some(Commands::Groups(grp_cmd)) => match grp_cmd {
-            cli::GroupsCommands::List { db_path } => {
-                commands::groups::cmd_groups_list(&db_path)
+            cli::GroupsCommands::List { db } => {
+                commands::groups::cmd_groups_list(&db.db_path)
             }
             cli::GroupsCommands::Show {
                 name,
                 distro,
-                db_path,
-            } => commands::groups::cmd_groups_show(&db_path, &name, distro.as_deref()),
+                db,
+            } => commands::groups::cmd_groups_show(&db.db_path, &name, distro.as_deref()),
         },
 
         // =====================================================================
         // Registry Commands
         // =====================================================================
         Some(Commands::Registry(reg_cmd)) => match reg_cmd {
-            cli::RegistryCommands::Update { db_path } => {
-                commands::registry::cmd_registry_update(&db_path)
+            cli::RegistryCommands::Update { db } => {
+                commands::registry::cmd_registry_update(&db.db_path)
             }
-            cli::RegistryCommands::Stats { db_path } => {
-                commands::registry::cmd_registry_stats(&db_path)
+            cli::RegistryCommands::Stats { db } => {
+                commands::registry::cmd_registry_stats(&db.db_path)
             }
         },
 

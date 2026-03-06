@@ -1,6 +1,7 @@
 // src/cli/canonical.rs
 //! Canonical package identity commands
 
+use super::DbArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -10,23 +11,20 @@ pub enum CanonicalCommands {
         /// Package name (canonical, distro, or AppStream ID)
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
     /// Search canonical registry
     Search {
         /// Search query
         query: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
     /// List installed packages without canonical mapping
     Unmapped {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

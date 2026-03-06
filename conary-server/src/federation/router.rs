@@ -157,30 +157,39 @@ impl RendezvousRouter {
         peers: &'a [Peer],
         allowlists: &TierAllowlists,
     ) -> HierarchicalSelection<'a> {
-        // Filter peers by allowlist before selection
-        let filtered: Vec<&'a Peer> = peers
-            .iter()
-            .filter(|peer| allowlists.is_allowed(&peer.endpoint, peer.tier))
-            .collect();
+        // Partition filtered peers by tier
+        let mut cell_peers: Vec<&'a Peer> = Vec::new();
+        let mut region_peers: Vec<&'a Peer> = Vec::new();
+        let mut leaf_peers: Vec<&'a Peer> = Vec::new();
 
-        // Convert back to owned references for selection
-        let filtered_owned: Vec<Peer> = filtered.iter().map(|p| (*p).clone()).collect();
+        for peer in peers {
+            if !allowlists.is_allowed(&peer.endpoint, peer.tier) {
+                continue;
+            }
+            match peer.tier {
+                PeerTier::CellHub => cell_peers.push(peer),
+                PeerTier::RegionHub => region_peers.push(peer),
+                PeerTier::Leaf => leaf_peers.push(peer),
+            }
+        }
 
-        // Select from filtered peers
-        let selection = self.select_peers_hierarchical(chunk_hash, &filtered_owned);
-
-        // Map back to original peer references
-        let map_back = |selected: Vec<&Peer>| -> Vec<&'a Peer> {
-            selected
+        // Select up to K from each tier using rendezvous hashing
+        let select_k = |tier_peers: Vec<&'a Peer>| -> Vec<&'a Peer> {
+            if tier_peers.is_empty() {
+                return Vec::new();
+            }
+            let mut weighted: Vec<(u64, &'a Peer)> = tier_peers
                 .into_iter()
-                .filter_map(|sel| peers.iter().find(|p| p.id == sel.id))
-                .collect()
+                .map(|p| (self.compute_weight(chunk_hash, &p.id), p))
+                .collect();
+            weighted.sort_by(|a, b| b.0.cmp(&a.0));
+            weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
         };
 
         HierarchicalSelection {
-            cell_hubs: map_back(selection.cell_hubs),
-            region_hubs: map_back(selection.region_hubs),
-            leaves: map_back(selection.leaves),
+            cell_hubs: select_k(cell_peers),
+            region_hubs: select_k(region_peers),
+            leaves: select_k(leaf_peers),
         }
     }
 

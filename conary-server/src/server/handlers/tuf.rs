@@ -16,6 +16,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use rusqlite::OptionalExtension;
 use rusqlite::params;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -179,7 +180,6 @@ async fn get_tuf_metadata(
 // --- Database query functions (run on blocking threads) ---
 
 fn query_latest_root(db_path: &std::path::Path, distro: &str) -> anyhow::Result<Option<String>> {
-    use rusqlite::OptionalExtension;
     let conn = conary_core::db::open(db_path)?;
     Ok(conn
         .query_row(
@@ -198,7 +198,6 @@ fn query_versioned_root(
     distro: &str,
     version: i64,
 ) -> anyhow::Result<Option<String>> {
-    use rusqlite::OptionalExtension;
     let conn = conary_core::db::open(db_path)?;
     Ok(conn
         .query_row(
@@ -216,7 +215,6 @@ fn query_tuf_role_metadata(
     distro: &str,
     role: &str,
 ) -> anyhow::Result<Option<String>> {
-    use rusqlite::OptionalExtension;
     let conn = conary_core::db::open(db_path)?;
     Ok(conn
         .query_row(

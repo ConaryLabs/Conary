@@ -271,7 +271,6 @@ impl DaemonClient {
         }
 
         // Read SSE events
-        let mut event_type = String::new();
         let mut event_data = String::new();
 
         loop {
@@ -281,14 +280,13 @@ impl DaemonClient {
                 Ok(_) => {
                     let line = line.trim_end();
 
-                    if let Some(stripped) = line.strip_prefix("event:") {
-                        event_type = stripped.trim().to_string();
+                    if line.starts_with("event:") {
+                        // SSE event type (unused; DaemonEvent is self-describing via serde tag)
                     } else if let Some(stripped) = line.strip_prefix("data:") {
                         event_data = stripped.trim().to_string();
                     } else if line.is_empty() && !event_data.is_empty() {
                         // Event complete, process it
                         if let Ok(event) = serde_json::from_str::<DaemonEvent>(&event_data) {
-                            // Check for terminal states
                             let is_terminal = matches!(
                                 &event,
                                 DaemonEvent::JobCompleted { .. }
@@ -303,9 +301,8 @@ impl DaemonClient {
                             }
                         }
 
-                        event_type.clear();
                         event_data.clear();
-                    } else if line.starts_with(":") {
+                    } else if line.starts_with(':') {
                         // Comment/keepalive, ignore
                     }
                 }

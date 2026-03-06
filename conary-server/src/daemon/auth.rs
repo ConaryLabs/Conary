@@ -222,6 +222,7 @@ impl AuthChecker {
     /// Disable admin group access (only root gets full access)
     pub fn disable_admin_groups(mut self) -> Self {
         self.allow_admin_groups = false;
+        self.trusted_gids.retain(|&gid| gid == 0);
         self
     }
 
@@ -270,6 +271,7 @@ impl AuthChecker {
         }
 
         // Check trusted GIDs (primary + supplementary)
+        // This covers admin groups (wheel=10, sudo=27) since they're in trusted_gids
         if self.trusted_gids.contains(&creds.gid) {
             return Permission::Full;
         }
@@ -279,11 +281,6 @@ impl AuthChecker {
                     return Permission::Full;
                 }
             }
-        }
-
-        // Check admin groups
-        if self.allow_admin_groups && creds.is_admin_group() {
-            return Permission::Full;
         }
 
         // Read-only actions are always allowed

@@ -35,24 +35,11 @@ impl HookConverter for RpmHookConverter {
     fn post_install(&self, hooks: &Hooks) -> Option<String> {
         let mut lines = Vec::new();
 
-        // Directory creation
         lines.extend(CommonHookGenerator::directory_commands(hooks));
-
-        // Systemd commands
         lines.extend(CommonHookGenerator::systemd_commands(hooks, true));
-
-        // tmpfiles
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
-
-        // sysctl
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
-
-        // ldconfig
         lines.push("/sbin/ldconfig".to_string());
-
-        if lines.is_empty() {
-            return None;
-        }
 
         Some(lines.join("\n"))
     }
@@ -208,7 +195,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                         .context(format!("Failed to add symlink: {}", file.path))?;
                 }
             }
-            FileType::Directory => {}
+            FileType::Directory => unreachable!("directories filtered above"),
         }
     }
 

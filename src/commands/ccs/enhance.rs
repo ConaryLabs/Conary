@@ -7,8 +7,6 @@ use conary_core::ccs::enhancement::runner::EnhancementOptions;
 use conary_core::ccs::enhancement::{
     ENHANCEMENT_VERSION, EnhancementResult_, EnhancementRunner, EnhancementType,
 };
-use conary_core::db::schema;
-use rusqlite::Connection;
 use std::path::PathBuf;
 
 /// Run the `conary ccs enhance` command
@@ -24,9 +22,8 @@ pub fn cmd_ccs_enhance(
     dry_run: bool,
     install_root: &str,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)
+    let conn = conary_core::db::open(db_path)
         .with_context(|| format!("Failed to open database: {}", db_path))?;
-    schema::migrate(&conn)?;
 
     // Parse enhancement types
     let enhancement_types: Vec<EnhancementType> = if let Some(ref type_strs) = types {

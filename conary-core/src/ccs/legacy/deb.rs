@@ -42,24 +42,11 @@ impl HookConverter for DebHookConverter {
     fn post_install(&self, hooks: &Hooks) -> Option<String> {
         let mut lines = vec!["#!/bin/sh".to_string(), "set -e".to_string()];
 
-        // Directories
         lines.extend(CommonHookGenerator::directory_commands(hooks));
-
-        // Systemd
         lines.extend(CommonHookGenerator::systemd_commands(hooks, true));
-
-        // tmpfiles
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
-
-        // sysctl
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
-
-        // ldconfig for shared libraries
         lines.push("if command -v ldconfig >/dev/null 2>&1; then ldconfig; fi".to_string());
-
-        if lines.len() <= 2 {
-            return None;
-        }
 
         lines.push("exit 0".to_string());
         Some(lines.join("\n"))
@@ -80,17 +67,15 @@ impl HookConverter for DebHookConverter {
     }
 
     fn post_remove(&self, _hooks: &Hooks) -> Option<String> {
-        let mut lines = vec!["#!/bin/sh".to_string(), "set -e".to_string()];
-
-        // ldconfig to update library cache
-        lines.push("if command -v ldconfig >/dev/null 2>&1; then ldconfig; fi".to_string());
-
-        if lines.len() <= 2 {
-            return None;
-        }
-
-        lines.push("exit 0".to_string());
-        Some(lines.join("\n"))
+        Some(
+            [
+                "#!/bin/sh",
+                "set -e",
+                "if command -v ldconfig >/dev/null 2>&1; then ldconfig; fi",
+                "exit 0",
+            ]
+            .join("\n"),
+        )
     }
 }
 
@@ -267,7 +252,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     std::os::unix::fs::symlink(target, &dest_path)?;
                 }
             }
-            FileType::Directory => {}
+            FileType::Directory => unreachable!("directories filtered above"),
         }
     }
 

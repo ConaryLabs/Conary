@@ -20,6 +20,26 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rusqlite::Connection;
 
+/// Format bytes as human-readable string (e.g., "1.50 KB", "700.00 GB")
+pub(crate) fn human_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 /// Supported distribution names for validation
 pub const SUPPORTED_DISTROS: &[&str] = &["arch", "fedora", "ubuntu", "debian"];
 
@@ -108,4 +128,39 @@ pub fn find_repositories_for_distro(
     }
 
     Ok(matched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_human_bytes_bytes() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_human_bytes_kb() {
+        assert_eq!(human_bytes(1024), "1.00 KB");
+        assert_eq!(human_bytes(1536), "1.50 KB");
+    }
+
+    #[test]
+    fn test_human_bytes_mb() {
+        assert_eq!(human_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.00 MB");
+    }
+
+    #[test]
+    fn test_human_bytes_gb() {
+        assert_eq!(human_bytes(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(human_bytes(700 * 1024 * 1024 * 1024), "700.00 GB");
+    }
+
+    #[test]
+    fn test_human_bytes_tb() {
+        assert_eq!(human_bytes(1024 * 1024 * 1024 * 1024), "1.00 TB");
+    }
 }

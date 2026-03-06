@@ -1,15 +1,15 @@
 // src/cli/label.rs
 //! Label and provenance management commands
 
+use super::DbArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum LabelCommands {
     /// List all labels
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show detailed information (description, package count, parent)
         #[arg(short, long)]
@@ -32,9 +32,8 @@ pub enum LabelCommands {
         #[arg(long)]
         parent: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Remove a label
@@ -42,9 +41,8 @@ pub enum LabelCommands {
         /// Label to remove
         label: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Force removal even if packages use this label
         #[arg(short, long)]
@@ -53,9 +51,8 @@ pub enum LabelCommands {
 
     /// Show or modify the label path (search order for packages)
     Path {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Add a label to the path
         #[arg(long)]
@@ -75,9 +72,8 @@ pub enum LabelCommands {
         /// Package name
         package: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Set the label for a package
@@ -88,9 +84,8 @@ pub enum LabelCommands {
         /// Label to set
         label: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Find packages by label
@@ -98,9 +93,8 @@ pub enum LabelCommands {
         /// Label to search for
         label: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Link a label to a repository (for federation)
@@ -118,9 +112,8 @@ pub enum LabelCommands {
         #[arg(long)]
         unlink: bool,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Set up label delegation (for federation chains)
@@ -138,8 +131,7 @@ pub enum LabelCommands {
         #[arg(long)]
         undelegate: bool,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

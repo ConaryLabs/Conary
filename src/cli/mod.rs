@@ -41,7 +41,6 @@ mod generation;
 mod groups;
 mod label;
 mod model;
-mod package;
 mod provenance;
 mod query;
 mod redirect;

@@ -285,6 +285,7 @@ impl BuildPolicy for NormalizeTimestampsPolicy {
 }
 
 /// Policy to strip debug symbols from ELF binaries
+#[derive(Default)]
 pub struct StripBinariesPolicy;
 
 impl StripBinariesPolicy {
@@ -300,12 +301,6 @@ impl StripBinariesPolicy {
     /// Check if file is executable
     fn is_executable(entry: &FileEntry) -> bool {
         entry.mode & 0o111 != 0
-    }
-}
-
-impl Default for StripBinariesPolicy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -496,6 +491,7 @@ impl BuildPolicy for FixShebangsPolicy {
 }
 
 /// Policy to compress man pages
+#[derive(Default)]
 pub struct CompressManpagesPolicy;
 
 impl CompressManpagesPolicy {
@@ -521,12 +517,6 @@ impl CompressManpagesPolicy {
     /// Check if content is already gzipped
     fn is_gzipped(content: &[u8]) -> bool {
         content.len() >= 2 && content[0] == 0x1f && content[1] == 0x8b
-    }
-}
-
-impl Default for CompressManpagesPolicy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

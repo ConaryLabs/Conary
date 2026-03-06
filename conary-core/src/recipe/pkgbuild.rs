@@ -384,17 +384,11 @@ fn convert_pkgbuild_url(url: &str, pkgname: &str, pkgver: &str) -> String {
 
     // Handle ${pkgver%.*} (version without last component)
     // This is common but hard to replicate exactly, so we just use full version
-    let url = url.replace(
-        "${pkgver%.*}",
-        &pkgver
-            .rsplit('.')
-            .skip(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("."),
-    );
+    let version_without_last = match pkgver.rsplit_once('.') {
+        Some((prefix, _)) => prefix,
+        None => pkgver,
+    };
+    let url = url.replace("${pkgver%.*}", version_without_last);
 
     // Replace actual values with placeholders where they appear literally
     let url = url.replace(pkgname, "%(name)s");

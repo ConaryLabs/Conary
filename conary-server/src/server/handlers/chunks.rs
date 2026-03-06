@@ -831,7 +831,7 @@ pub async fn rebuild_bloom(State(state): State<Arc<RwLock<ServerState>>>) -> imp
 }
 
 /// Scan directory for chunk hashes
-async fn scan_chunk_hashes(objects_dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+pub(crate) async fn scan_chunk_hashes(objects_dir: &std::path::Path) -> std::io::Result<Vec<String>> {
     let mut hashes = Vec::new();
 
     if !objects_dir.exists() {
@@ -865,7 +865,7 @@ async fn scan_chunk_hashes(objects_dir: &std::path::Path) -> std::io::Result<Vec
 }
 
 /// Extract hash from chunk path (e.g., /chunks/objects/ab/cdef... -> abcdef...)
-fn extract_hash_from_path(path: &std::path::Path) -> Option<String> {
+pub(crate) fn extract_hash_from_path(path: &std::path::Path) -> Option<String> {
     let file_name = path.file_name()?.to_str()?;
     let parent = path.parent()?;
     let prefix = parent.file_name()?.to_str()?;

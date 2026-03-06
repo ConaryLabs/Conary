@@ -1,15 +1,15 @@
 // src/cli/redirect.rs
 //! Redirect management commands for package aliasing and supersession
 
+use super::DbArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum RedirectCommands {
     /// List all redirects
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Filter by redirect type: rename, obsolete, merge, split
         #[arg(short, long)]
@@ -32,9 +32,8 @@ pub enum RedirectCommands {
         /// Target package name (the name to redirect TO)
         target: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Redirect type: rename, obsolete, merge, split (default: rename)
         #[arg(short, long, default_value = "rename")]
@@ -58,9 +57,8 @@ pub enum RedirectCommands {
         /// Source package name
         source: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Source version (for version-specific redirects)
         #[arg(long)]
@@ -72,9 +70,8 @@ pub enum RedirectCommands {
         /// Source package name
         source: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Resolve a package name through redirect chain
@@ -85,9 +82,8 @@ pub enum RedirectCommands {
         /// Package name to resolve
         package: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Package version (for version-specific resolution)
         #[arg(long)]

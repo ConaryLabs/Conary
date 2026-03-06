@@ -200,79 +200,13 @@ fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Peer credentials from a Unix socket connection
-#[derive(Debug, Clone)]
-pub struct PeerCredentials {
-    /// Process ID of the peer
-    pub pid: u32,
-    /// User ID of the peer
-    pub uid: u32,
-    /// Group ID of the peer
-    pub gid: u32,
-}
-
-impl PeerCredentials {
-    /// Check if the peer is root
-    pub fn is_root(&self) -> bool {
-        self.uid == 0
-    }
-
-    /// Check if the peer is in a specific group
-    #[cfg(unix)]
-    pub fn in_group(&self, group_name: &str) -> bool {
-        use std::ffi::CString;
-
-        let group_cstr = match CString::new(group_name) {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-
-        unsafe {
-            let grp = libc::getgrnam(group_cstr.as_ptr());
-            if grp.is_null() {
-                return false;
-            }
-
-            // Check if primary GID matches
-            if (*grp).gr_gid == self.gid {
-                return true;
-            }
-
-            // Check supplementary groups
-            let mut groups: Vec<libc::gid_t> = vec![0; 64];
-            let mut ngroups: libc::c_int = groups.len() as libc::c_int;
-
-            // Get user name for getgrouplist
-            let pwd = libc::getpwuid(self.uid);
-            if pwd.is_null() {
-                return false;
-            }
-
-            let result = libc::getgrouplist(
-                (*pwd).pw_name,
-                self.gid as libc::gid_t,
-                groups.as_mut_ptr(),
-                &mut ngroups,
-            );
-
-            if result < 0 {
-                return false;
-            }
-
-            groups.truncate(ngroups as usize);
-            groups.contains(&(*grp).gr_gid)
-        }
-    }
-
-    #[cfg(not(unix))]
-    pub fn in_group(&self, _group_name: &str) -> bool {
-        false
-    }
-}
-
 /// Extract peer credentials from a Unix socket connection
+///
+/// Returns `auth::PeerCredentials` directly to avoid a duplicate struct.
 #[cfg(unix)]
-pub fn get_peer_credentials(stream: &tokio::net::UnixStream) -> Option<PeerCredentials> {
+pub fn get_peer_credentials(
+    stream: &tokio::net::UnixStream,
+) -> Option<crate::daemon::auth::PeerCredentials> {
     use std::os::unix::io::AsRawFd;
 
     let fd = stream.as_raw_fd();
@@ -290,7 +224,7 @@ pub fn get_peer_credentials(stream: &tokio::net::UnixStream) -> Option<PeerCrede
         );
 
         if result == 0 {
-            Some(PeerCredentials {
+            Some(crate::daemon::auth::PeerCredentials {
                 pid: cred.pid as u32,
                 uid: cred.uid,
                 gid: cred.gid,
@@ -302,7 +236,9 @@ pub fn get_peer_credentials(stream: &tokio::net::UnixStream) -> Option<PeerCrede
 }
 
 #[cfg(not(unix))]
-pub fn get_peer_credentials(_stream: &tokio::net::UnixStream) -> Option<PeerCredentials> {
+pub fn get_peer_credentials(
+    _stream: &tokio::net::UnixStream,
+) -> Option<crate::daemon::auth::PeerCredentials> {
     None
 }
 
@@ -360,6 +296,8 @@ mod tests {
 
     #[test]
     fn test_peer_credentials_is_root() {
+        use crate::daemon::auth::PeerCredentials;
+
         let root_creds = PeerCredentials {
             pid: 1,
             uid: 0,

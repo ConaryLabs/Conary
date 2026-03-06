@@ -151,8 +151,9 @@ impl MdnsDiscovery {
         hostname: Option<&str>,
     ) -> Result<()> {
         // Build TXT properties
+        let tier_str = tier.to_string();
         let properties: Vec<(&str, &str)> = vec![
-            ("tier", tier.to_string().leak()),
+            ("tier", &tier_str),
             ("node_id", node_id),
             ("version", PROTOCOL_VERSION),
         ];

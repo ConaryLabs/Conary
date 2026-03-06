@@ -50,6 +50,17 @@ pub struct SuggestResponse {
     pub prefix: String,
 }
 
+/// Extract the search engine from server state, returning 503 if unavailable
+async fn get_search_engine(
+    state: &Arc<RwLock<ServerState>>,
+) -> Result<Arc<crate::server::SearchEngine>, Response> {
+    let guard = state.read().await;
+    match &guard.search_engine {
+        Some(engine) => Ok(Arc::clone(engine)),
+        None => Err((StatusCode::SERVICE_UNAVAILABLE, "Search engine not available").into_response()),
+    }
+}
+
 /// GET /v1/search?q=nginx&distro=fedora&limit=20
 ///
 /// Full-text package search. Searches package names and descriptions.
@@ -58,19 +69,10 @@ pub async fn search_packages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<SearchQuery>,
 ) -> Response {
-    let state_guard = state.read().await;
-
-    let search_engine = match &state_guard.search_engine {
-        Some(engine) => Arc::clone(engine),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Search engine not available",
-            )
-                .into_response();
-        }
+    let search_engine = match get_search_engine(&state).await {
+        Ok(engine) => engine,
+        Err(response) => return response,
     };
-    drop(state_guard);
 
     let query = params.q.unwrap_or_default();
     if query.is_empty() {
@@ -131,19 +133,10 @@ pub async fn suggest_packages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<SuggestQuery>,
 ) -> Response {
-    let state_guard = state.read().await;
-
-    let search_engine = match &state_guard.search_engine {
-        Some(engine) => Arc::clone(engine),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Search engine not available",
-            )
-                .into_response();
-        }
+    let search_engine = match get_search_engine(&state).await {
+        Ok(engine) => engine,
+        Err(response) => return response,
     };
-    drop(state_guard);
 
     let prefix = params.prefix.unwrap_or_default();
     if prefix.is_empty() {

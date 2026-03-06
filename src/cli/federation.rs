@@ -1,7 +1,7 @@
 // src/cli/federation.rs
 //! CLI definitions for federation commands
 
-use crate::cli::DbArgs;
+use super::DbArgs;
 use clap::Subcommand;
 
 /// Federation commands for CAS sharing across machines

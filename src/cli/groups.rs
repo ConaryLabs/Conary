@@ -1,15 +1,15 @@
 // src/cli/groups.rs
 //! Package group management commands
 
+use super::DbArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum GroupsCommands {
     /// List all available package groups
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
     /// Show members of a group
     Show {
@@ -20,8 +20,7 @@ pub enum GroupsCommands {
         #[arg(long)]
         distro: Option<String>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

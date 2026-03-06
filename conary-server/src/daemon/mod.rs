@@ -597,12 +597,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
                         systemd_manager.activity();
 
                         // Extract peer credentials from Unix socket (SO_PEERCRED)
-                        let peer_creds = socket::get_peer_credentials(&stream)
-                            .map(|c| auth::PeerCredentials {
-                                pid: c.pid,
-                                uid: c.uid,
-                                gid: c.gid,
-                            });
+                        let peer_creds = socket::get_peer_credentials(&stream);
 
                         // Increment connection counter
                         let conns = active_connections.clone();

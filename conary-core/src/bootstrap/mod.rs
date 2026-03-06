@@ -44,6 +44,7 @@
 //! ```
 
 mod base;
+mod build_helpers;
 mod config;
 mod conary_stage;
 mod image;

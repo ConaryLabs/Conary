@@ -12,11 +12,10 @@ use conary_core::automation::{
 use conary_core::model::{
     AutomationCategory, AutomationConfig, DEFAULT_MODEL_PATH, load_model, model_exists,
 };
-use rusqlite::Connection;
 
 /// Show automation status
 pub fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     // Load model to get automation config
     let config = if model_exists(None) {
@@ -105,7 +104,7 @@ pub fn cmd_automation_check(
     categories: Option<Vec<String>>,
     quiet: bool,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;
@@ -188,7 +187,7 @@ pub fn cmd_automation_apply(
     dry_run: bool,
     _no_scripts: bool,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;
@@ -346,7 +345,7 @@ pub fn cmd_automation_daemon(
     foreground: bool,
     pidfile: &str,
 ) -> Result<()> {
-    let _conn = Connection::open(db_path)?;
+    let _conn = conary_core::db::open(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;

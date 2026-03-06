@@ -235,7 +235,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     std::os::unix::fs::symlink(target, &dest_path)?;
                 }
             }
-            FileType::Directory => {}
+            FileType::Directory => unreachable!("directories filtered above"),
         }
     }
 
@@ -271,6 +271,15 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     Ok(GenerationResult { size, loss_report })
 }
 
+/// Write a shell function block: `name() {\n    body\n}\n\n`
+fn write_shell_function(script: &mut String, name: &str, body: &str) {
+    script.push_str(&format!("{}() {{\n", name));
+    for line in body.lines() {
+        script.push_str(&format!("    {}\n", line));
+    }
+    script.push_str("}\n\n");
+}
+
 /// Generate the .INSTALL script from hooks
 fn generate_install_script(converter: &ArchHookConverter, hooks: &Hooks) -> Option<String> {
     let pre_install = converter.pre_install(hooks);
@@ -289,49 +298,21 @@ fn generate_install_script(converter: &ArchHookConverter, hooks: &Hooks) -> Opti
     let mut script = String::new();
 
     if let Some(content) = pre_install {
-        script.push_str("pre_install() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
-
-        // pre_upgrade uses same content
-        script.push_str("pre_upgrade() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
+        write_shell_function(&mut script, "pre_install", &content);
+        write_shell_function(&mut script, "pre_upgrade", &content);
     }
 
     if let Some(content) = post_install {
-        script.push_str("post_install() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
-
-        // post_upgrade uses same content
-        script.push_str("post_upgrade() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
+        write_shell_function(&mut script, "post_install", &content);
+        write_shell_function(&mut script, "post_upgrade", &content);
     }
 
     if let Some(content) = pre_remove {
-        script.push_str("pre_remove() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
+        write_shell_function(&mut script, "pre_remove", &content);
     }
 
     if let Some(content) = post_remove {
-        script.push_str("post_remove() {\n");
-        for line in content.lines() {
-            script.push_str(&format!("    {}\n", line));
-        }
-        script.push_str("}\n\n");
+        write_shell_function(&mut script, "post_remove", &content);
     }
 
     Some(script)

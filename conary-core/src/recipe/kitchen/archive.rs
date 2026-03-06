@@ -63,43 +63,19 @@ pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<bool> {
 /// Supports: .tar.gz, .tgz, .tar.xz, .txz, .tar.bz2, .tbz2, .tar.zst, .tar
 pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
     let filename = archive.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let archive_str = archive.to_str().expect("archive path must be valid utf-8");
+    let dest_str = dest.to_str().expect("dest path must be valid utf-8");
 
-    let args: Vec<&str> = if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-        vec![
-            "-xzf",
-            archive.to_str().expect("archive path must be valid utf-8"),
-            "-C",
-            dest.to_str().expect("dest path must be valid utf-8"),
-        ]
+    let flags: &[&str] = if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
+        &["-xzf"]
     } else if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-        vec![
-            "-xJf",
-            archive.to_str().expect("archive path must be valid utf-8"),
-            "-C",
-            dest.to_str().expect("dest path must be valid utf-8"),
-        ]
+        &["-xJf"]
     } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-        vec![
-            "-xjf",
-            archive.to_str().expect("archive path must be valid utf-8"),
-            "-C",
-            dest.to_str().expect("dest path must be valid utf-8"),
-        ]
+        &["-xjf"]
     } else if filename.ends_with(".tar.zst") {
-        vec![
-            "--zstd",
-            "-xf",
-            archive.to_str().expect("archive path must be valid utf-8"),
-            "-C",
-            dest.to_str().expect("dest path must be valid utf-8"),
-        ]
+        &["--zstd", "-xf"]
     } else if filename.ends_with(".tar") {
-        vec![
-            "-xf",
-            archive.to_str().expect("archive path must be valid utf-8"),
-            "-C",
-            dest.to_str().expect("dest path must be valid utf-8"),
-        ]
+        &["-xf"]
     } else {
         return Err(Error::ParseError(format!(
             "Unknown archive format: {}",
@@ -108,7 +84,8 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
     };
 
     let output = Command::new("tar")
-        .args(&args)
+        .args(flags)
+        .args([archive_str, "-C", dest_str])
         .output()
         .map_err(|e| Error::IoError(format!("tar failed: {}", e)))?;
 

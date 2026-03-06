@@ -1,5 +1,4 @@
 // src/cli/bootstrap.rs
-
 //! CLI definitions for bootstrap commands
 
 use clap::Subcommand;

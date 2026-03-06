@@ -27,7 +27,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use super::build_helpers;
+use tracing::{info, warn};
 
 /// Errors that can occur during Stage 1 build
 #[derive(Debug, Error)]
@@ -137,38 +138,9 @@ impl Stage1Builder {
         fs::create_dir_all(&sources_dir)?;
         fs::create_dir_all(&logs_dir)?;
 
-        // Create sysroot directory structure
-        for dir in &[
-            "usr",
-            "usr/bin",
-            "usr/lib",
-            "usr/include",
-            "lib",
-            "lib64",
-            "bin",
-        ] {
-            fs::create_dir_all(sysroot.join(dir))?;
-        }
+        build_helpers::create_sysroot_dirs(&sysroot)?;
 
-        // Set up build environment
-        let mut build_env = stage0.env();
-
-        // Add optimization flags (conservative for bootstrap)
-        build_env.insert("CFLAGS".to_string(), "-O2 -pipe".to_string());
-        build_env.insert("CXXFLAGS".to_string(), "-O2 -pipe".to_string());
-
-        // Add sysroot to paths
-        let sysroot_str = sysroot.to_string_lossy().to_string();
-        build_env.insert("SYSROOT".to_string(), sysroot_str.clone());
-
-        // Update PATH to include sysroot binaries
-        let path = format!(
-            "{}:{}/usr/bin:{}",
-            stage0.bin_dir().display(),
-            sysroot_str,
-            std::env::var("PATH").unwrap_or_default()
-        );
-        build_env.insert("PATH".to_string(), path);
+        let build_env = build_helpers::setup_build_env(&stage0, &sysroot);
 
         Ok(Self {
             work_dir: stage1_dir,
@@ -465,44 +437,8 @@ impl Stage1Builder {
         dest: &Path,
         strip_components: bool,
     ) -> Result<(), Stage1Error> {
-        fs::create_dir_all(dest)?;
-
-        let archive_str = archive.to_str().expect("archive path must be valid utf-8");
-        let dest_str = dest.to_str().expect("dest path must be valid utf-8");
-        let filename = archive
-            .file_name()
-            .expect("archive path must have a filename")
-            .to_string_lossy();
-
-        let flag = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            "xJf"
-        } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            "xzf"
-        } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            "xjf"
-        } else {
-            "xf"
-        };
-
-        let mut cmd = Command::new("tar");
-        cmd.args([flag, archive_str, "-C", dest_str]);
-        if strip_components {
-            cmd.arg("--strip-components=1");
-        }
-
-        let output = cmd
-            .output()
-            .map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Stage1Error::BuildFailed(
-                "extract".to_string(),
-                stderr.to_string(),
-            ));
-        }
-
-        Ok(())
+        build_helpers::extract_tar(archive, dest, strip_components)
+            .map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e))
     }
 
     /// Extract a source archive, stripping the top-level directory
@@ -519,16 +455,7 @@ impl Stage1Builder {
 
     /// Find the actual source directory after extraction
     fn find_source_dir(&self, dir: &Path) -> Result<PathBuf, Stage1Error> {
-        let entries: Vec<_> = fs::read_dir(dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
-
-        if entries.len() == 1 {
-            Ok(entries[0].path())
-        } else {
-            Ok(dir.to_path_buf())
-        }
+        build_helpers::find_source_dir(dir).map_err(Stage1Error::DirectoryCreation)
     }
 
     /// Run a recipe build phase (configure, make, or install)
@@ -608,26 +535,13 @@ impl Stage1Builder {
 
     /// Substitute cross-compilation variables in a command
     fn substitute_cross_vars(&self, cmd: &str, idx: usize) -> String {
-        let pkg = &self.packages[idx];
-        let mut result = cmd.to_string();
-
-        // Standard substitutions from Stage1Builder
-        result = result.replace("%(target)s", self.config.triple());
-        result = result.replace("%(jobs)s", &self.config.jobs.to_string());
-        // Special variable for Stage1Builder's sysroot (where linux-headers are installed)
-        result = result.replace("%(stage1_sysroot)s", &self.sysroot.to_string_lossy());
-
-        // Cross-compilation section variables (recipe values)
-        if let Some(cross) = &pkg.recipe.cross {
-            if let Some(target) = &cross.target {
-                result = result.replace("%(target)s", target);
-            }
-            if let Some(sysroot) = &cross.sysroot {
-                result = result.replace("%(sysroot)s", sysroot);
-            }
-        }
-
-        result
+        build_helpers::substitute_build_vars(
+            cmd,
+            self.config.triple(),
+            self.config.jobs,
+            &self.sysroot,
+            &self.packages[idx].recipe,
+        )
     }
 
     /// Run a shell command in the build directory
@@ -638,13 +552,10 @@ impl Stage1Builder {
         workdir: &Path,
         phase: &str,
     ) -> Result<(), Stage1Error> {
-        use crate::container::{BindMount, ContainerConfig, Sandbox};
-
-        // Clone all data upfront to avoid borrow conflicts
         let pkg_name = self.packages[idx].name.clone();
         let cross_env = self.packages[idx].recipe.cross_env();
         let sysroot_str = self.sysroot.to_string_lossy().to_string();
-        let build_environment: HashMap<String, String> = self.packages[idx]
+        let recipe_env: HashMap<String, String> = self.packages[idx]
             .recipe
             .build
             .environment
@@ -656,79 +567,25 @@ impl Stage1Builder {
             .collect();
         let verbose = self.config.verbose;
 
-        // Construct environment vector
-        let mut env_vec: Vec<(String, String)> = Vec::new();
-
-        // Add base environment
-        for (key, value) in &self.build_env {
-            env_vec.push((key.clone(), value.clone()));
-        }
-
-        // Add cross-compilation environment
-        for (key, value) in cross_env {
-            if key == "CFLAGS" || key == "CXXFLAGS" || key == "LDFLAGS" {
-                // Prepend base flags
-                let base_flags = self.build_env.get(&key).map(|s| s.as_str()).unwrap_or("");
-                let merged = format!("{} {}", base_flags, value);
-                // Remove existing if any
-                env_vec.retain(|(k, _)| k != &key);
-                env_vec.push((key, merged.trim().to_string()));
-            } else {
-                env_vec.retain(|(k, _)| k != &key);
-                env_vec.push((key, value));
-            }
-        }
-
-        // Add recipe environment
-        for (key, value) in build_environment {
-            let expanded = self.expand_env_vars(&value);
-            env_vec.retain(|(k, _)| k != &key);
-            env_vec.push((key, expanded));
-        }
-
-        // Prepare environment for sandbox (Vec<(&str, &str)>)
-        let env_refs: Vec<(&str, &str)> = env_vec
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-
-        debug!("Running in sandbox: bash -c \"{}\"", cmd);
-        debug!("Workdir: {}", workdir.display());
-
-        // Configure sandbox
-        // Stage 0 path usually ends in .../bin, we want the root (e.g. /tools)
-        let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
-
-        // We use pristine_for_bootstrap to set up the core mounts
-        // sysroot -> /tools/x86_64.../sysroot (target sysroot)
-        // stage0_root -> /tools (cross compiler)
-        let mut config = ContainerConfig::pristine_for_bootstrap(
-            &self.sysroot,                  // target sysroot (destdir)
-            &self.work_dir.join("sources"), // source dir
-            &self.work_dir.join("build"),   // build dir
-            &self.sysroot,                  // dest dir (same as sysroot)
+        let env_vec = build_helpers::merge_build_env(
+            &self.build_env,
+            cross_env,
+            recipe_env,
+            &self.build_env,
         );
 
-        // Explicitly mount Stage 0 tools at /tools so the cross-compiler is available
-        // This is critical because `gcc` in the recipe refers to /tools/bin/...
-        config.add_bind_mount(BindMount::readonly(stage0_root, "/tools"));
+        let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
 
-        // Set working directory
-        config.workdir = workdir.to_path_buf();
-
-        // Enforce network isolation during build
-        config.deny_network();
-
-        let mut sandbox = Sandbox::new(config);
-
-        let (code, stdout, stderr) = sandbox
-            .execute(
-                "bash",
-                &format!("set -e\n{}", cmd), // Wrap in script, fail fast
-                &[],
-                &env_refs,
-            )
-            .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
+        let (code, stdout, stderr) = build_helpers::run_sandboxed_command(
+            cmd,
+            workdir,
+            &self.sysroot,
+            &self.work_dir.join("sources"),
+            &self.work_dir.join("build"),
+            stage0_root,
+            &env_vec,
+        )
+        .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e))?;
 
         // Log output
         if !stdout.is_empty() {
@@ -766,7 +623,7 @@ impl Stage1Builder {
         let pkg = &self.packages[idx];
         let log_path = self.logs_dir.join(format!("{}.log", pkg.name));
         fs::write(&log_path, &pkg.log)?;
-        debug!("Saved build log: {}", log_path.display());
+        tracing::debug!("Saved build log: {}", log_path.display());
         Ok(())
     }
 
@@ -783,66 +640,6 @@ impl Stage1Builder {
             .collect()
     }
 
-    /// Expand environment variable references in a string
-    ///
-    /// Supports both $VAR and ${VAR} syntax. First checks build_env,
-    /// then falls back to the system environment.
-    fn expand_env_vars(&self, value: &str) -> String {
-        let mut result = value.to_string();
-
-        // Handle ${VAR} syntax
-        while let Some(start) = result.find("${") {
-            if let Some(end) = result[start..].find('}') {
-                let var_name = &result[start + 2..start + end];
-                let replacement = self
-                    .build_env
-                    .get(var_name)
-                    .cloned()
-                    .or_else(|| std::env::var(var_name).ok())
-                    .unwrap_or_default();
-                result = format!(
-                    "{}{}{}",
-                    &result[..start],
-                    replacement,
-                    &result[start + end + 1..]
-                );
-            } else {
-                break;
-            }
-        }
-
-        // Handle $VAR syntax (must come after ${VAR} to avoid conflicts)
-        let mut i = 0;
-        while i < result.len() {
-            if result[i..].starts_with('$') && !result[i..].starts_with("${") {
-                // Find the end of the variable name
-                let rest = &result[i + 1..];
-                let var_end = rest
-                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len());
-                if var_end > 0 {
-                    let var_name = &rest[..var_end];
-                    let replacement = self
-                        .build_env
-                        .get(var_name)
-                        .cloned()
-                        .or_else(|| std::env::var(var_name).ok())
-                        .unwrap_or_default();
-                    result = format!(
-                        "{}{}{}",
-                        &result[..i],
-                        replacement,
-                        &result[i + 1 + var_end..]
-                    );
-                    i += replacement.len();
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        result
-    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@
 use conary_core::{Error, Result};
 use dashmap::DashMap;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -129,47 +128,10 @@ impl Default for RequestCoalescer {
     }
 }
 
-/// Wrapper that makes RequestCoalescer shareable across tasks
-#[allow(dead_code)]
-pub struct SharedCoalescer(Arc<RequestCoalescer>);
-
-#[allow(dead_code)]
-impl SharedCoalescer {
-    /// Create a new shared coalescer
-    pub fn new() -> Self {
-        Self(Arc::new(RequestCoalescer::new()))
-    }
-
-    /// Coalesce concurrent requests
-    pub async fn coalesce<F, Fut>(&self, hash: &str, fetch: F) -> Result<Vec<u8>>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Vec<u8>>>,
-    {
-        self.0.coalesce(hash, fetch).await
-    }
-
-    /// Get the count of coalesced requests
-    pub fn coalesced_count(&self) -> u64 {
-        self.0.coalesced_count()
-    }
-}
-
-impl Default for SharedCoalescer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for SharedCoalescer {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
     use tokio::time::sleep;

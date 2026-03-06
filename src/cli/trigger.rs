@@ -1,15 +1,15 @@
 // src/cli/trigger.rs
 //! Trigger management commands
 
+use super::DbArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum TriggerCommands {
     /// List all triggers
     List {
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Show disabled triggers too
         #[arg(long)]
@@ -25,9 +25,8 @@ pub enum TriggerCommands {
         /// Trigger name
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Enable a trigger
@@ -35,9 +34,8 @@ pub enum TriggerCommands {
         /// Trigger name to enable
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Disable a trigger
@@ -45,9 +43,8 @@ pub enum TriggerCommands {
         /// Trigger name to disable
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Add a custom trigger
@@ -71,9 +68,8 @@ pub enum TriggerCommands {
         #[arg(long)]
         priority: Option<i32>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Remove a custom trigger (built-in triggers cannot be removed)
@@ -81,9 +77,8 @@ pub enum TriggerCommands {
         /// Trigger name to remove
         name: String,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Run pending triggers for a changeset
@@ -91,9 +86,8 @@ pub enum TriggerCommands {
         /// Changeset ID (defaults to most recent)
         changeset_id: Option<i64>,
 
-        /// Path to the database file
-        #[arg(short, long, default_value = "/var/lib/conary/conary.db")]
-        db_path: String,
+        #[command(flatten)]
+        db: DbArgs,
 
         /// Installation root directory
         #[arg(short, long, default_value = "/")]

@@ -30,7 +30,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use super::build_helpers;
+use tracing::{info, warn};
 
 /// Errors that can occur during Stage 2 build
 #[derive(Debug, Error)]
@@ -142,38 +143,9 @@ impl Stage2Builder {
         fs::create_dir_all(&sources_dir)?;
         fs::create_dir_all(&logs_dir)?;
 
-        // Create sysroot directory structure
-        for dir in &[
-            "usr",
-            "usr/bin",
-            "usr/lib",
-            "usr/include",
-            "lib",
-            "lib64",
-            "bin",
-        ] {
-            fs::create_dir_all(sysroot.join(dir))?;
-        }
+        build_helpers::create_sysroot_dirs(&sysroot)?;
 
-        // Set up build environment using Stage 1 toolchain
-        let mut build_env = toolchain.env();
-
-        // Add optimization flags (conservative for bootstrap)
-        build_env.insert("CFLAGS".to_string(), "-O2 -pipe".to_string());
-        build_env.insert("CXXFLAGS".to_string(), "-O2 -pipe".to_string());
-
-        // Add sysroot to paths
-        let sysroot_str = sysroot.to_string_lossy().to_string();
-        build_env.insert("SYSROOT".to_string(), sysroot_str.clone());
-
-        // Update PATH to include sysroot binaries
-        let path = format!(
-            "{}:{}/usr/bin:{}",
-            toolchain.bin_dir().display(),
-            sysroot_str,
-            std::env::var("PATH").unwrap_or_default()
-        );
-        build_env.insert("PATH".to_string(), path);
+        let build_env = build_helpers::setup_build_env(&toolchain, &sysroot);
 
         Ok(Self {
             work_dir: output_dir.clone(),
@@ -474,45 +446,12 @@ impl Stage2Builder {
         dest: &Path,
         strip_components: bool,
     ) -> Result<(), Stage2Error> {
-        fs::create_dir_all(dest)?;
-
-        let archive_str = archive.to_str().expect("archive path must be valid utf-8");
-        let dest_str = dest.to_str().expect("dest path must be valid utf-8");
-        let filename = archive
-            .file_name()
-            .expect("archive path must have a filename")
-            .to_string_lossy();
-
-        let flag = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            "xJf"
-        } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            "xzf"
-        } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            "xjf"
-        } else {
-            "xf"
-        };
-
-        let mut cmd = Command::new("tar");
-        cmd.args([flag, archive_str, "-C", dest_str]);
-        if strip_components {
-            cmd.arg("--strip-components=1");
-        }
-
-        let output = cmd.output().map_err(|e| Stage2Error::BuildFailed {
-            package: "extract".to_string(),
-            reason: e.to_string(),
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Stage2Error::BuildFailed {
+        build_helpers::extract_tar(archive, dest, strip_components).map_err(|e| {
+            Stage2Error::BuildFailed {
                 package: "extract".to_string(),
-                reason: stderr.to_string(),
-            });
-        }
-
-        Ok(())
+                reason: e,
+            }
+        })
     }
 
     /// Extract a source archive, stripping the top-level directory
@@ -527,16 +466,7 @@ impl Stage2Builder {
 
     /// Find the actual source directory after extraction
     fn find_source_dir(&self, dir: &Path) -> Result<PathBuf, Stage2Error> {
-        let entries: Vec<_> = fs::read_dir(dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
-
-        if entries.len() == 1 {
-            Ok(entries[0].path())
-        } else {
-            Ok(dir.to_path_buf())
-        }
+        build_helpers::find_source_dir(dir).map_err(Stage2Error::Io)
     }
 
     /// Run a recipe build phase (configure, make, or install)
@@ -596,23 +526,13 @@ impl Stage2Builder {
 
     /// Substitute build variables in a command string
     fn substitute_vars(&self, cmd: &str, idx: usize) -> String {
-        let pkg = &self.packages[idx];
-        let mut result = cmd.to_string();
-
-        result = result.replace("%(target)s", self.config.triple());
-        result = result.replace("%(jobs)s", &self.config.jobs.to_string());
-        result = result.replace("%(stage1_sysroot)s", &self.sysroot.to_string_lossy());
-
-        if let Some(cross) = &pkg.recipe.cross {
-            if let Some(target) = &cross.target {
-                result = result.replace("%(target)s", target);
-            }
-            if let Some(sysroot) = &cross.sysroot {
-                result = result.replace("%(sysroot)s", sysroot);
-            }
-        }
-
-        result
+        build_helpers::substitute_build_vars(
+            cmd,
+            self.config.triple(),
+            self.config.jobs,
+            &self.sysroot,
+            &self.packages[idx].recipe,
+        )
     }
 
     /// Run a shell command in the build directory
@@ -623,12 +543,10 @@ impl Stage2Builder {
         workdir: &Path,
         phase: &str,
     ) -> Result<(), Stage2Error> {
-        use crate::container::{BindMount, ContainerConfig, Sandbox};
-
         let pkg_name = self.packages[idx].name.clone();
         let cross_env = self.packages[idx].recipe.cross_env();
         let sysroot_str = self.sysroot.to_string_lossy().to_string();
-        let build_environment: HashMap<String, String> = self.packages[idx]
+        let recipe_env: HashMap<String, String> = self.packages[idx]
             .recipe
             .build
             .environment
@@ -640,70 +558,28 @@ impl Stage2Builder {
             .collect();
         let verbose = self.config.verbose;
 
-        // Construct environment vector
-        let mut env_vec: Vec<(String, String)> = Vec::new();
+        let env_vec = build_helpers::merge_build_env(
+            &self.build_env,
+            cross_env,
+            recipe_env,
+            &self.build_env,
+        );
 
-        // Add base environment
-        for (key, value) in &self.build_env {
-            env_vec.push((key.clone(), value.clone()));
-        }
-
-        // Add cross-compilation environment
-        for (key, value) in cross_env {
-            if key == "CFLAGS" || key == "CXXFLAGS" || key == "LDFLAGS" {
-                let base_flags = self.build_env.get(&key).map(|s| s.as_str()).unwrap_or("");
-                let merged = format!("{} {}", base_flags, value);
-                env_vec.retain(|(k, _)| k != &key);
-                env_vec.push((key, merged.trim().to_string()));
-            } else {
-                env_vec.retain(|(k, _)| k != &key);
-                env_vec.push((key, value));
-            }
-        }
-
-        // Add recipe environment
-        for (key, value) in build_environment {
-            let expanded = self.expand_env_vars(&value);
-            env_vec.retain(|(k, _)| k != &key);
-            env_vec.push((key, expanded));
-        }
-
-        let env_refs: Vec<(&str, &str)> = env_vec
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-
-        debug!("Running in sandbox: bash -c \"{}\"", cmd);
-        debug!("Workdir: {}", workdir.display());
-
-        // Configure sandbox -- Stage 2 uses the Stage 1 toolchain path
         let stage1_root = self.toolchain.path.parent().unwrap_or(&self.toolchain.path);
 
-        let mut config = ContainerConfig::pristine_for_bootstrap(
+        let (code, stdout, stderr) = build_helpers::run_sandboxed_command(
+            cmd,
+            workdir,
             &self.sysroot,
             &self.work_dir.join("sources"),
             &self.work_dir.join("build"),
-            &self.sysroot,
-        );
-
-        // Mount Stage 1 tools so the compiler is available
-        config.add_bind_mount(BindMount::readonly(stage1_root, "/tools"));
-        config.workdir = workdir.to_path_buf();
-        config.deny_network();
-
-        let mut sandbox = Sandbox::new(config);
-
-        let (code, stdout, stderr) = sandbox
-            .execute(
-                "bash",
-                &format!("set -e\n{}", cmd),
-                &[],
-                &env_refs,
-            )
-            .map_err(|e| Stage2Error::BuildFailed {
-                package: pkg_name.clone(),
-                reason: e.to_string(),
-            })?;
+            stage1_root,
+            &env_vec,
+        )
+        .map_err(|e| Stage2Error::BuildFailed {
+            package: pkg_name.clone(),
+            reason: e,
+        })?;
 
         // Log output
         if !stdout.is_empty() {
@@ -741,67 +617,7 @@ impl Stage2Builder {
         let pkg = &self.packages[idx];
         let log_path = self.logs_dir.join(format!("{}.log", pkg.name));
         fs::write(&log_path, &pkg.log)?;
-        debug!("Saved build log: {}", log_path.display());
         Ok(())
-    }
-
-    /// Expand environment variable references in a string
-    ///
-    /// Supports both $VAR and ${VAR} syntax.
-    fn expand_env_vars(&self, value: &str) -> String {
-        let mut result = value.to_string();
-
-        // Handle ${VAR} syntax
-        while let Some(start) = result.find("${") {
-            if let Some(end) = result[start..].find('}') {
-                let var_name = &result[start + 2..start + end];
-                let replacement = self
-                    .build_env
-                    .get(var_name)
-                    .cloned()
-                    .or_else(|| std::env::var(var_name).ok())
-                    .unwrap_or_default();
-                result = format!(
-                    "{}{}{}",
-                    &result[..start],
-                    replacement,
-                    &result[start + end + 1..]
-                );
-            } else {
-                break;
-            }
-        }
-
-        // Handle $VAR syntax (must come after ${VAR} to avoid conflicts)
-        let mut i = 0;
-        while i < result.len() {
-            if result[i..].starts_with('$') && !result[i..].starts_with("${") {
-                let rest = &result[i + 1..];
-                let var_end = rest
-                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len());
-                if var_end > 0 {
-                    let var_name = &rest[..var_end];
-                    let replacement = self
-                        .build_env
-                        .get(var_name)
-                        .cloned()
-                        .or_else(|| std::env::var(var_name).ok())
-                        .unwrap_or_default();
-                    result = format!(
-                        "{}{}{}",
-                        &result[..i],
-                        replacement,
-                        &result[i + 1 + var_end..]
-                    );
-                    i += replacement.len();
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        result
     }
 }
 

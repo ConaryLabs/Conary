@@ -14,6 +14,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, RwLock};
 
+/// Column list shared across all DaemonJob queries
+const JOB_COLUMNS: &str = "id, idempotency_key, kind, spec_json, status, result_json, \
+    error_json, requested_by_uid, client_info, created_at, started_at, completed_at";
+
 /// A persisted job record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonJob {
@@ -123,68 +127,54 @@ impl DaemonJob {
 
     /// Find a job by ID
     pub fn find_by_id(conn: &Connection, id: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-             requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE id = ?1",
-        )?;
-
+        let sql = format!("SELECT {} FROM daemon_jobs WHERE id = ?1", JOB_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let job = stmt.query_row([id], Self::from_row).optional()?;
         Ok(job)
     }
 
     /// Find a job by idempotency key
     pub fn find_by_idempotency_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-             requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE idempotency_key = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM daemon_jobs WHERE idempotency_key = ?1",
+            JOB_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let job = stmt.query_row([key], Self::from_row).optional()?;
         Ok(job)
     }
 
     /// List jobs by status
     pub fn list_by_status(conn: &Connection, status: JobStatus) -> Result<Vec<Self>> {
-        let status_str = status.as_str();
-
-        let mut stmt = conn.prepare(
-            "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-             requested_by_uid, client_info, created_at, started_at, completed_at
-             FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC",
+            JOB_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let jobs = stmt
-            .query_map([status_str], Self::from_row)?
+            .query_map([status.as_str()], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-
         Ok(jobs)
     }
 
     /// List all jobs (most recent first)
     pub fn list_all(conn: &Connection, limit: Option<usize>) -> Result<Vec<Self>> {
         let sql = match limit {
-            Some(n) => {
-                let n = n.min(1000);
-                format!(
-                    "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-                     requested_by_uid, client_info, created_at, started_at, completed_at
-                     FROM daemon_jobs ORDER BY created_at DESC LIMIT {}",
-                    n
-                )
-            }
-            None => "SELECT id, idempotency_key, kind, spec_json, status, result_json, error_json,
-                 requested_by_uid, client_info, created_at, started_at, completed_at
-                 FROM daemon_jobs ORDER BY created_at DESC"
-                .to_string(),
+            Some(n) => format!(
+                "SELECT {} FROM daemon_jobs ORDER BY created_at DESC LIMIT {}",
+                JOB_COLUMNS,
+                n.min(1000)
+            ),
+            None => format!(
+                "SELECT {} FROM daemon_jobs ORDER BY created_at DESC",
+                JOB_COLUMNS
+            ),
         };
 
         let mut stmt = conn.prepare(&sql)?;
         let jobs = stmt
             .query_map([], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-
         Ok(jobs)
     }
 

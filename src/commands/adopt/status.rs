@@ -9,6 +9,8 @@ use conary_core::db::models::{InstallReason, InstallSource, Trove};
 use conary_core::packages::SystemPackageManager;
 use std::path::PathBuf;
 
+use crate::commands::format_bytes;
+
 /// Show adoption status
 pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
@@ -152,23 +154,6 @@ fn count_dir_usage(dir: &std::path::Path) -> (u64, u64) {
     }
 
     (files, bytes)
-}
-
-/// Format bytes as human-readable string
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
 }
 
 #[cfg(test)]

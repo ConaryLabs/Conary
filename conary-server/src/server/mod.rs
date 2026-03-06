@@ -570,40 +570,11 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 
     tracing::info!("Scanning existing chunks for Bloom filter...");
 
-    let mut count = 0;
-    let mut stack = vec![objects_dir];
-
-    while let Some(dir) = stack.pop() {
-        let mut entries = tokio::fs::read_dir(&dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let metadata = entry.metadata().await?;
-
-            if metadata.is_dir() {
-                stack.push(path);
-            } else if metadata.is_file() {
-                // Skip temp files
-                if path.extension().is_some_and(|ext| ext == "tmp") {
-                    continue;
-                }
-
-                // Extract hash from path
-                if let Some(hash) = extract_hash_from_path(&path) {
-                    bloom.add(&hash);
-                    count += 1;
-                }
-            }
-        }
+    let hashes = handlers::chunks::scan_chunk_hashes(&objects_dir).await?;
+    for hash in &hashes {
+        bloom.add(hash);
     }
 
-    tracing::info!("Bloom filter initialized with {} chunks", count);
+    tracing::info!("Bloom filter initialized with {} chunks", hashes.len());
     Ok(())
-}
-
-/// Extract hash from chunk path (e.g., /chunks/objects/ab/cdef... -> abcdef...)
-fn extract_hash_from_path(path: &std::path::Path) -> Option<String> {
-    let file_name = path.file_name()?.to_str()?;
-    let parent = path.parent()?;
-    let prefix = parent.file_name()?.to_str()?;
-    Some(format!("{}{}", prefix, file_name))
 }

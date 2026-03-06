@@ -1,5 +1,4 @@
 // src/cli/automation.rs
-
 //! CLI commands for automation system.
 //!
 //! These commands manage the suggest+confirm automation flow,

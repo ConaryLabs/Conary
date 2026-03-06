@@ -47,19 +47,17 @@ pub use mdns::{DiscoveredPeer, MdnsDiscovery, MdnsEvent};
 pub use peer::{Peer, PeerId, PeerRegistry, PeerScore};
 pub use router::{HierarchicalSelection, RendezvousRouter};
 
-use conary_core::{Error, Result};
 use conary_core::hash::verify_sha256;
 use conary_core::repository::chunk_fetcher::{ChunkFetcher, LocalCacheFetcher};
+use conary_core::{Error, Result};
+
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::fs;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-
-use std::fs;
-
-use std::sync::Mutex;
 
 /// Main Federation coordinator
 ///
@@ -161,7 +159,7 @@ impl Federation {
         })?;
 
         // Create identity from PEM
-        let identity = reqwest::Identity::from_pem(&[cert_pem.clone(), key_pem].concat())
+        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat())
             .map_err(|e| Error::InitError(format!("Failed to create mTLS identity: {e}")))?;
 
         let mut builder = reqwest::Client::builder()

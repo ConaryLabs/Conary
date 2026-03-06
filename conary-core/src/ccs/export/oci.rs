@@ -311,131 +311,86 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     Ok(())
 }
 
+/// Deterministic mtime for reproducible layers (2024-01-01 00:00:00 UTC)
+const LAYER_MTIME: u64 = 1_704_067_200;
+
+/// Write file entries into a tar archive, creating parent directories as needed
+fn write_tar_entries<W: std::io::Write>(
+    archive: &mut Builder<W>,
+    files: &[(String, Vec<u8>, u32)],
+) -> Result<()> {
+    let mut created_dirs = std::collections::HashSet::new();
+
+    for (path, content, mode) in files {
+        let clean_path = path.trim_start_matches('/');
+
+        // Create parent directories
+        let path_obj = Path::new(clean_path);
+        if let Some(parent) = path_obj.parent() {
+            let mut current = std::path::PathBuf::new();
+            for component in parent.components() {
+                match component {
+                    std::path::Component::Normal(c) => current.push(c),
+                    _ => continue,
+                }
+                let dir_path = current.to_string_lossy().to_string();
+                if !dir_path.is_empty() && !created_dirs.contains(&dir_path) {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_entry_type(tar::EntryType::Directory);
+                    header.set_mode(0o755);
+                    header.set_size(0);
+                    header.set_mtime(LAYER_MTIME);
+                    header.set_cksum();
+                    archive.append_data(&mut header, &dir_path, std::io::empty())?;
+                    created_dirs.insert(dir_path);
+                }
+            }
+        }
+
+        if content.starts_with(b"symlink:") {
+            let target = String::from_utf8_lossy(&content[8..]);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            header.set_mtime(LAYER_MTIME);
+            header.set_cksum();
+            archive.append_link(&mut header, clean_path, target.as_ref())?;
+        } else {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(*mode);
+            header.set_size(content.len() as u64);
+            header.set_mtime(LAYER_MTIME);
+            header.set_cksum();
+            archive.append_data(&mut header, clean_path, content.as_slice())?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Create a gzipped tar layer from files
 fn create_layer_tarball(files: &[(String, Vec<u8>, u32)]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     {
         let encoder = GzEncoder::new(&mut output, Compression::default());
         let mut archive = Builder::new(encoder);
-
-        // Track directories we've created
-        let mut created_dirs = std::collections::HashSet::new();
-
-        for (path, content, mode) in files {
-            // Clean the path (remove leading slashes)
-            let clean_path = path.trim_start_matches('/');
-
-            // Create parent directories
-            let path_obj = Path::new(clean_path);
-            if let Some(parent) = path_obj.parent() {
-                let mut current = std::path::PathBuf::new();
-                for component in parent.components() {
-                    match component {
-                        std::path::Component::Normal(c) => current.push(c),
-                        _ => continue, // Skip RootDir, CurDir, ParentDir
-                    }
-                    let dir_path = current.to_string_lossy().to_string();
-                    if !dir_path.is_empty() && !created_dirs.contains(&dir_path) {
-                        let mut header = tar::Header::new_gnu();
-                        header.set_entry_type(tar::EntryType::Directory);
-                        header.set_mode(0o755);
-                        header.set_size(0);
-                        header.set_mtime(1704067200); // 2024-01-01
-                        header.set_cksum();
-                        archive.append_data(&mut header, &dir_path, std::io::empty())?;
-                        created_dirs.insert(dir_path);
-                    }
-                }
-            }
-
-            // Handle symlinks
-            if content.starts_with(b"symlink:") {
-                let target = String::from_utf8_lossy(&content[8..]);
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Symlink);
-                header.set_mode(0o777);
-                header.set_size(0);
-                header.set_mtime(1704067200);
-                header.set_cksum();
-
-                archive.append_link(&mut header, clean_path, target.as_ref())?;
-            } else {
-                // Regular file
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_mode(*mode);
-                header.set_size(content.len() as u64);
-                header.set_mtime(1704067200);
-                header.set_cksum();
-
-                archive.append_data(&mut header, clean_path, content.as_slice())?;
-            }
-        }
-
+        write_tar_entries(&mut archive, files)?;
         let encoder = archive.into_inner()?;
         encoder.finish()?;
     }
-
     Ok(output)
 }
 
 /// Calculate SHA256 of uncompressed layer content (for diff_id)
 fn sha256_hex_uncompressed(files: &[(String, Vec<u8>, u32)]) -> Result<String> {
-    // Create uncompressed tar for diff_id calculation
     let mut output = Vec::new();
     {
         let mut archive = Builder::new(&mut output);
-        let mut created_dirs = std::collections::HashSet::new();
-
-        for (path, content, mode) in files {
-            // Clean the path (remove leading slashes)
-            let clean_path = path.trim_start_matches('/');
-            let path_obj = Path::new(clean_path);
-
-            if let Some(parent) = path_obj.parent() {
-                let mut current = std::path::PathBuf::new();
-                for component in parent.components() {
-                    match component {
-                        std::path::Component::Normal(c) => current.push(c),
-                        _ => continue,
-                    }
-                    let dir_path = current.to_string_lossy().to_string();
-                    if !dir_path.is_empty() && !created_dirs.contains(&dir_path) {
-                        let mut header = tar::Header::new_gnu();
-                        header.set_entry_type(tar::EntryType::Directory);
-                        header.set_mode(0o755);
-                        header.set_size(0);
-                        header.set_mtime(1704067200);
-                        header.set_cksum();
-                        archive.append_data(&mut header, &dir_path, std::io::empty())?;
-                        created_dirs.insert(dir_path);
-                    }
-                }
-            }
-
-            if content.starts_with(b"symlink:") {
-                let target = String::from_utf8_lossy(&content[8..]);
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Symlink);
-                header.set_mode(0o777);
-                header.set_size(0);
-                header.set_mtime(1704067200);
-                header.set_cksum();
-                archive.append_link(&mut header, clean_path, target.as_ref())?;
-            } else {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_mode(*mode);
-                header.set_size(content.len() as u64);
-                header.set_mtime(1704067200);
-                header.set_cksum();
-                archive.append_data(&mut header, clean_path, content.as_slice())?;
-            }
-        }
-
+        write_tar_entries(&mut archive, files)?;
         archive.finish()?;
     }
-
     Ok(sha256_hex(&output))
 }
 

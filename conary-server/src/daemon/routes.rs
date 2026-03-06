@@ -585,8 +585,6 @@ async fn version_handler(State(_state): State<SharedState>) -> Json<VersionRespo
 ///
 /// GET /v1/metrics
 async fn metrics_handler(State(state): State<SharedState>) -> String {
-    use std::sync::atomic::Ordering;
-
     let m = &state.metrics;
 
     format!(

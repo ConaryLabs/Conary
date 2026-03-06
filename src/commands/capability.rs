@@ -2,7 +2,6 @@
 //! Command implementations for package capability declarations
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ use conary_core::container::{ContainerConfig, Sandbox};
 
 /// Show declared capabilities for a package
 pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
-    let conn = Connection::open(db_path)
+    let conn = conary_core::db::open(db_path)
         .with_context(|| format!("Failed to open database: {}", db_path))?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -222,7 +221,7 @@ pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
 
 /// List packages by capability status
 pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> Result<()> {
-    let conn = Connection::open(db_path)
+    let conn = conary_core::db::open(db_path)
         .with_context(|| format!("Failed to open database: {}", db_path))?;
 
     let packages = list_packages_with_capabilities(&conn, missing_only)?;
@@ -311,7 +310,7 @@ pub fn cmd_capability_audit(
     _command: Option<&str>,
     _timeout: u32,
 ) -> Result<()> {
-    let conn = Connection::open(db_path)
+    let conn = conary_core::db::open(db_path)
         .with_context(|| format!("Failed to open database: {}", db_path))?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -441,7 +440,7 @@ pub fn cmd_capability_run(
         anyhow::bail!("No command specified. Usage: conary capability run <package> -- <command>");
     }
 
-    let conn = Connection::open(db_path)
+    let conn = conary_core::db::open(db_path)
         .with_context(|| format!("Failed to open database: {}", db_path))?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;

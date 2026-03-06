@@ -188,15 +188,11 @@ pub fn cmd_bootstrap_stage1(
     // Check if Stage 0 is complete
     let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
-    let stage0_toolchain = bootstrap.get_stage0_toolchain();
-
-    if stage0_toolchain.is_none() {
+    let Some(toolchain) = bootstrap.get_stage0_toolchain() else {
         println!("[ERROR] Stage 0 toolchain not found.");
         println!("Run 'conary bootstrap stage0' first.");
         return Err(anyhow::anyhow!("Stage 0 not complete"));
-    }
-
-    let toolchain = stage0_toolchain.unwrap();
+    };
     println!("  Using Stage 0 toolchain: {}", toolchain.path.display());
 
     // Determine recipe directory
@@ -259,15 +255,11 @@ pub fn cmd_bootstrap_stage2(
     // Check if Stage 1 is complete
     let mut bootstrap = Bootstrap::new(work_dir)?;
 
-    let stage1_toolchain = bootstrap.get_stage1_toolchain();
-
-    if stage1_toolchain.is_none() {
+    let Some(toolchain) = bootstrap.get_stage1_toolchain() else {
         println!("[ERROR] Stage 1 toolchain not found.");
         println!("Run 'conary bootstrap stage1' first.");
         return Err(anyhow::anyhow!("Stage 1 not complete"));
-    }
-
-    let toolchain = stage1_toolchain.unwrap();
+    };
     println!("  Using Stage 1 toolchain: {}", toolchain.path.display());
 
     // Determine recipe directory
@@ -325,15 +317,11 @@ pub fn cmd_bootstrap_base(
     // Check if Stage 1 is complete
     let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
-    let stage1_toolchain = bootstrap.get_stage1_toolchain();
-
-    if stage1_toolchain.is_none() {
+    let Some(toolchain) = bootstrap.get_stage1_toolchain() else {
         println!("[ERROR] Stage 1 toolchain not found.");
         println!("Run 'conary bootstrap stage1' first.");
         return Err(anyhow::anyhow!("Stage 1 not complete"));
-    }
-
-    let toolchain = stage1_toolchain.unwrap();
+    };
     println!("  Using Stage 1 toolchain: {}", toolchain.path.display());
 
     // Determine recipe directory
@@ -394,15 +382,11 @@ pub fn cmd_bootstrap_conary(
     // Check if base system is complete
     let mut bootstrap = Bootstrap::new(work_dir)?;
 
-    let sysroot = bootstrap.get_sysroot();
-
-    if sysroot.is_none() {
+    let Some(sysroot) = bootstrap.get_sysroot() else {
         println!("[ERROR] Base system not found.");
         println!("Run 'conary bootstrap base' first.");
         return Err(anyhow::anyhow!("Base system not complete"));
-    }
-
-    let sysroot = sysroot.unwrap();
+    };
     println!("  Sysroot: {}", sysroot.display());
 
     println!("\nThis will build Rust from source and compile Conary.");
@@ -469,15 +453,11 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
 
     // Check if base system exists
     let bootstrap = Bootstrap::new(work_dir)?;
-    let sysroot = bootstrap.get_sysroot();
-
-    if sysroot.is_none() {
+    let Some(sysroot) = bootstrap.get_sysroot() else {
         println!("[ERROR] Base system not found.");
         println!("Run 'conary bootstrap base' first to build the base system.");
         return Err(anyhow::anyhow!("Base system not complete"));
-    }
-
-    let sysroot = sysroot.unwrap();
+    };
     println!("  Base system: {}", sysroot.display());
 
     // Build the image
