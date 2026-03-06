@@ -481,7 +481,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v44). System generations (EROFS + composefs), system takeover, and the bootstrap pipeline are implemented. A production Remi server is running at packages.conary.io.
+**Version 0.1.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 1,800+ tests passing (schema v45). System generations (EROFS + composefs), system takeover, and the bootstrap pipeline are implemented. A production Remi server is running at packages.conary.io.
 
 See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 
@@ -489,11 +489,11 @@ See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 
 ## What's Next
 
-- Shell integration (direnv-style)
+- CI & validation infrastructure (Forgejo, Podman test matrix)
+- End-to-end testing across Fedora, Ubuntu, Arch
+- Shell integration (direnv-style dev environments)
+- Composable systems (group packages, OS composition)
 - P2P chunk distribution plugins
-- Multi-version package support
-- VFS component merging
-- Full repository server with version control
 
 ---
 
@@ -501,7 +501,7 @@ See [ROADMAP.md](ROADMAP.md) for the full feature status and planned work.
 
 | Document | Description |
 |----------|-------------|
-| [ROADMAP.md](ROADMAP.md) | Feature status and planned work |
+| [ROADMAP.md](ROADMAP.md) | Forward-looking development roadmap |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and contribution guidelines |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting policy |
