@@ -145,13 +145,11 @@ impl RulesEngine {
 
             // Check name match (exact or regex) and expand capture groups.
             if let Some(ref re) = compiled.name_regex {
-                if let Some(caps) = re.captures(name) {
-                    if !rule.setname.is_empty() {
-                        // Use Captures::expand for correct single-pass group expansion
-                        let mut result = String::new();
-                        caps.expand(&rule.setname, &mut result);
-                        return Some(result);
-                    }
+                if let Some(caps) = re.captures(name) && !rule.setname.is_empty() {
+                    // Use Captures::expand for correct single-pass group expansion
+                    let mut result = String::new();
+                    caps.expand(&rule.setname, &mut result);
+                    return Some(result);
                 }
             } else if !rule.name.is_empty() && rule.name == name && !rule.setname.is_empty() {
                 return Some(rule.setname.clone());

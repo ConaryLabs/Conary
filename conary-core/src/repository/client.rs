@@ -279,13 +279,11 @@ impl RepositoryClient {
         }
 
         // Check Content-Length if available to reject oversized responses early
-        if let Some(content_length) = response.content_length() {
-            if content_length > MAX_BYTES_RESPONSE_SIZE {
-                return Err(Error::DownloadError(format!(
-                    "Response too large ({} bytes, max {}): {}",
-                    content_length, MAX_BYTES_RESPONSE_SIZE, url
-                )));
-            }
+        if let Some(content_length) = response.content_length() && content_length > MAX_BYTES_RESPONSE_SIZE {
+            return Err(Error::DownloadError(format!(
+                "Response too large ({} bytes, max {}): {}",
+                content_length, MAX_BYTES_RESPONSE_SIZE, url
+            )));
         }
 
         let bytes = response

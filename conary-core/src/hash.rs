@@ -185,16 +185,16 @@ pub struct Hasher {
 }
 
 enum HasherState {
-    Sha256(Sha256),
-    Xxh128(Xxh3Default),
+    Sha256(Box<Sha256>),
+    Xxh128(Box<Xxh3Default>),
 }
 
 impl Hasher {
     /// Create a new hasher with the specified algorithm
     pub fn new(algorithm: HashAlgorithm) -> Self {
         let state = match algorithm {
-            HashAlgorithm::Sha256 => HasherState::Sha256(Sha256::new()),
-            HashAlgorithm::Xxh128 => HasherState::Xxh128(Xxh3Default::new()),
+            HashAlgorithm::Sha256 => HasherState::Sha256(Box::new(Sha256::new())),
+            HashAlgorithm::Xxh128 => HasherState::Xxh128(Box::new(Xxh3Default::new())),
         };
         Self { algorithm, state }
     }

@@ -323,10 +323,8 @@ pub fn rollback_transaction(
             JournalRecord::FileMoved { path, .. } => {
                 // A file was moved from stage to final -- undo by removing from final
                 let final_path = safe_join(root, Path::new(path))?;
-                if final_path.exists() || final_path.symlink_metadata().is_ok() {
-                    if let Err(e) = fs::remove_file(&final_path) {
-                        log::warn!("Failed to remove moved file {:?}: {}", final_path, e);
-                    }
+                if (final_path.exists() || final_path.symlink_metadata().is_ok()) && let Err(e) = fs::remove_file(&final_path) {
+                    log::warn!("Failed to remove moved file {:?}: {}", final_path, e);
                 }
             }
 

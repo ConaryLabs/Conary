@@ -48,7 +48,7 @@ const CONARY_PACKAGES: &[&str] = &["rust", "conary"];
 /// Downloads a Rust bootstrap compiler, builds Rust from source targeting the
 /// new sysroot, then compiles Conary itself with cargo.
 pub struct ConaryStageBuilder {
-    work_dir: PathBuf,
+    _work_dir: PathBuf,
     config: BootstrapConfig,
     sysroot: PathBuf,
 }
@@ -57,7 +57,7 @@ impl ConaryStageBuilder {
     /// Create a new Conary stage builder.
     pub fn new(work_dir: PathBuf, config: BootstrapConfig, sysroot: PathBuf) -> Self {
         Self {
-            work_dir,
+            _work_dir: work_dir,
             config,
             sysroot,
         }

@@ -178,6 +178,19 @@ log "Generating runner config (host executor)..."
 sudo -u "$FORGEJO_USER" "$RUNNER_BIN" generate-config > "$RUNNER_HOME/config.yaml"
 sed -i 's/^  labels: \[\]/  labels: ["linux-native:host"]/' "$RUNNER_HOME/config.yaml"
 
+# Set env vars so runner jobs can find Rust toolchain
+# Use forgejo's own CARGO_HOME (writable) but peter's RUSTUP_HOME (read-only toolchain)
+sed -i '/A_TEST_ENV_NAME_1/,/A_TEST_ENV_NAME_2/c\    RUSTUP_HOME: /home/peter/.rustup\n    CARGO_HOME: /var/lib/forgejo/.cargo\n    PATH: /home/peter/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' "$RUNNER_HOME/config.yaml"
+
+# Create writable cargo home for forgejo user
+mkdir -p /var/lib/forgejo/.cargo/registry
+chown -R "$FORGEJO_USER":"$FORGEJO_USER" /var/lib/forgejo/.cargo
+
+# Ensure forgejo can read peter's rustup toolchains
+chmod o+rx /home/peter/.rustup /home/peter/.cargo
+chmod -R o+rX /home/peter/.rustup/toolchains 2>/dev/null || true
+chmod o+r /home/peter/.rustup/settings.toml 2>/dev/null || true
+
 # ── Runner systemd service ──────────────────────────────────────────────
 log "Creating Runner systemd service..."
 cat > /etc/systemd/system/forgejo-runner.service << 'SVCEOF'
