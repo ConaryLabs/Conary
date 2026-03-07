@@ -268,9 +268,17 @@ def conary(
     *args: str,
     timeout: int = 120,
     check: bool = True,
+    no_db: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the conary binary with --db-path appended (subcommand option)."""
-    cmd = [cfg.conary_bin, *args, "--db-path", cfg.db_path]
+    """Run the conary binary with --db-path appended (subcommand option).
+
+    Pass no_db=True for subcommands that don't accept --db-path
+    (e.g. system generation list/gc/switch/rollback/info).
+    """
+    if no_db:
+        cmd = [cfg.conary_bin, *args]
+    else:
+        cmd = [cfg.conary_bin, *args, "--db-path", cfg.db_path]
     return run_cmd(cmd, timeout=timeout, check=check)
 
 
@@ -806,7 +814,8 @@ def run_phase1(suite: TestSuite) -> None:
     # ── T33: Generation List Empty ───────────────────────────────────
 
     def t33():
-        r = conary(cfg, "system", "generation", "list", timeout=10)
+        r = conary(cfg, "system", "generation", "list", timeout=10,
+                   check=False, no_db=True)
         assert_contains("No generations", r.stdout)
 
     suite.run_test("T33", "generation_list_empty", t33, timeout=10)
@@ -827,7 +836,7 @@ def run_phase1(suite: TestSuite) -> None:
 
     def t35():
         r = conary(cfg, "system", "generation", "gc", timeout=10,
-                   check=False)
+                   check=False, no_db=True)
         output = r.stdout
         if "Nothing to clean" not in output and "No generations" not in output:
             raise AssertionError(
@@ -841,7 +850,7 @@ def run_phase1(suite: TestSuite) -> None:
 
     def t36():
         r = conary(cfg, "system", "generation", "info", "1",
-                   timeout=10, check=False)
+                   timeout=10, check=False, no_db=True)
         # Non-zero is fine (no generation exists yet), just verify no panic
         if r.returncode == 0:
             output = r.stdout
@@ -1079,7 +1088,7 @@ def run_group_b(suite: TestSuite) -> None:
     # ── T52: Generation list ────────────────────────────────────────
 
     def t52():
-        r = conary(cfg, "system", "generation", "list", timeout=30)
+        r = conary(cfg, "system", "generation", "list", timeout=30, no_db=True)
         assert_not_contains("No generations", r.stdout)
 
     suite.run_test("T52", "generation_list", t52, timeout=30)
@@ -1087,7 +1096,8 @@ def run_group_b(suite: TestSuite) -> None:
     # ── T53: Generation info ────────────────────────────────────────
 
     def t53():
-        r = conary(cfg, "system", "generation", "info", "1", timeout=30)
+        r = conary(cfg, "system", "generation", "info", "1", timeout=30,
+                   no_db=True)
         assert_contains("packages", r.stdout)
 
     suite.run_test("T53", "generation_info", t53, timeout=30)
@@ -1100,7 +1110,8 @@ def run_group_b(suite: TestSuite) -> None:
                "--dep-mode", "takeover", "--yes", "--sandbox", "never",
                timeout=300)
         conary(cfg, "system", "generation", "build", timeout=120)
-        conary(cfg, "system", "generation", "switch", "2", timeout=60)
+        conary(cfg, "system", "generation", "switch", "2", timeout=60,
+               no_db=True)
 
     suite.run_test("T54", "switch_generation", t54, timeout=300)
 
@@ -1113,14 +1124,15 @@ def run_group_b(suite: TestSuite) -> None:
         # ── T55: Rollback generation ────────────────────────────────
 
         def t55():
-            conary(cfg, "system", "generation", "switch", "1", timeout=60)
+            conary(cfg, "system", "generation", "switch", "1", timeout=60,
+                   no_db=True)
 
         suite.run_test("T55", "rollback_generation", t55, timeout=60)
 
         # ── T56: GC old generation ──────────────────────────────────
 
         def t56():
-            conary(cfg, "system", "generation", "gc", timeout=60)
+            conary(cfg, "system", "generation", "gc", timeout=60, no_db=True)
 
         suite.run_test("T56", "gc_old_generation", t56, timeout=60)
 
