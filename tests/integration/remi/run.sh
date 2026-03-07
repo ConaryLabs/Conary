@@ -13,6 +13,7 @@
 #   --package PATH  Path to native package (.rpm/.deb/.pkg.tar.zst) to install in container
 #   --no-cache      Rebuild container image from scratch
 #   --keep          Keep results volume after run
+#   --phase2        Run Phase 2 (deep E2E) tests in addition to Phase 1
 #   --help          Show this help
 
 set -euo pipefail
@@ -30,6 +31,7 @@ PACKAGE=""
 DO_BUILD=0
 NO_CACHE=""
 KEEP_RESULTS=0
+PHASE2=0
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --keep)
             KEEP_RESULTS=1
+            shift
+            ;;
+        --phase2)
+            PHASE2=1
             shift
             ;;
         --help)
@@ -96,7 +102,7 @@ CLEANUP_FILES=()
 
 cleanup() {
     for f in "${CLEANUP_FILES[@]}"; do
-        rm -f "$f"
+        rm -rf "$f"
     done
     if [ "$KEEP_RESULTS" -eq 0 ]; then
         podman volume rm "conary-test-results-${DISTRO}" 2>/dev/null || true
@@ -151,6 +157,19 @@ else
     echo ""
 fi
 
+# ── Copy config and fixtures into build context ─────────────────────────────
+cp "$SCRIPT_DIR/config.toml" "$BUILD_CONTEXT/config.toml"
+CLEANUP_FILES+=("$BUILD_CONTEXT/config.toml")
+
+mkdir -p "$BUILD_CONTEXT/fixtures"
+FIXTURES_SRC="$PROJECT_ROOT/tests/fixtures"
+if [ -d "$FIXTURES_SRC" ]; then
+    cp -r "$FIXTURES_SRC/recipes" "$BUILD_CONTEXT/fixtures/recipes" 2>/dev/null || true
+    mkdir -p "$BUILD_CONTEXT/fixtures/pkgbuild"
+    cp "$PROJECT_ROOT/packaging/arch/PKGBUILD" "$BUILD_CONTEXT/fixtures/pkgbuild/" 2>/dev/null || true
+fi
+CLEANUP_FILES+=("$BUILD_CONTEXT/fixtures")
+
 # ── Build container image ────────────────────────────────────────────────────
 
 IMAGE_NAME="conary-test-${DISTRO}"
@@ -178,12 +197,17 @@ echo "[*] Running tests in container..."
 echo ""
 
 CONTAINER_EXIT=0
+CONTAINER_CMD="python3 /opt/remi-tests/runner/test_runner.py"
+if [ "$PHASE2" -eq 1 ]; then
+    CONTAINER_CMD="$CONTAINER_CMD --phase2"
+fi
+
 podman run \
     --rm \
     --name "conary-test-run-${DISTRO}" \
     -v "${VOLUME_NAME}:/results:Z" \
     -e "DISTRO=${DISTRO}" \
-    "$IMAGE_NAME" || CONTAINER_EXIT=$?
+    "$IMAGE_NAME" $CONTAINER_CMD || CONTAINER_EXIT=$?
 
 echo ""
 

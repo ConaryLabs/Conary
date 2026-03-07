@@ -10,7 +10,7 @@ FROM docker.io/library/ubuntu:24.04
 ARG INSTALL_MODE=binary
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl \
+    ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy all conary* files from build context (binary or package)
@@ -25,8 +25,11 @@ RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1
         echo "No conary binary or package found in build context" >&2; exit 1; \
     fi && rm -rf /tmp/install
 
-COPY runner/ /opt/remi-tests/
-RUN chmod +x /opt/remi-tests/*.sh
+COPY runner/ /opt/remi-tests/runner/
+COPY config.toml /opt/remi-tests/config.toml
+# Phase 2 test fixtures (recipes, PKGBUILD)
+COPY fixtures/ /opt/remi-tests/fixtures/
+RUN chmod +x /opt/remi-tests/runner/*.sh 2>/dev/null || true
 
 RUN mkdir -p /var/lib/conary /results
 
@@ -35,4 +38,4 @@ ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
 ENV CONARY_BIN=/usr/bin/conary
 
-CMD ["/opt/remi-tests/test-runner.sh"]
+CMD ["python3", "/opt/remi-tests/runner/test_runner.py"]
