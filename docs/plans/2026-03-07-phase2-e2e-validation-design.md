@@ -12,7 +12,9 @@ disposable Podman containers across Fedora 43, Ubuntu Noble, and Arch.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Priority | Depth first, then breadth | Install flow with real dep resolution is the critical path everything else builds on |
-| Runner architecture | Single test-runner.sh with `--phase2` flag | Reuse existing infrastructure, let CI choose speed vs depth |
+| Runner architecture | Python rewrite with TOML config, `--phase2` flag | Bash fragile for complex test chains; Python gives proper error handling, native JSON/checksums, structured config |
+| Language | Python 3 (stdlib only, no frameworks) | Available in all containers, right weight for integration orchestration, easy to iterate |
+| Configuration | Single `config.toml` with all endpoints, distros, checksums | Reproducible, easy to swap machines/domains, single source of truth |
 | Container privileges | Always root | Containers are disposable, no reason to complicate with privilege splitting |
 | Rollback verification | DB + filesystem + content checksums | Gold standard: prove CAS retrieval works correctly through rollback cycles |
 | Delta testing | Purpose-built test fixtures on Remi | Controlled v1/v2 packages with known content for deterministic delta verification |

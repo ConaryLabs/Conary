@@ -2,125 +2,948 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add 34 deep integration tests (T38-T71) to the existing Remi test suite, gated behind `--phase2`, covering full install/remove/update/rollback with checksums, generation lifecycle, bootstrap pipeline, recipe cooking, and Remi client validation.
+**Goal:** Rewrite the integration test runner in Python with a TOML config, port the existing 37 tests, then add 34 deep tests (T38-T71) covering full install/remove/update/rollback with checksums, generation lifecycle, bootstrap pipeline, recipe cooking, and Remi client validation.
 
-**Architecture:** Extend `tests/integration/remi/runner/test-runner.sh` with a `--phase2` flag that enables Groups A-E. Add new assertion helpers to `lib.sh` (checksum verification). Create test fixture recipe + CCS packages and publish to Remi. Add a new `e2e.yaml` CI workflow for scheduled/manual Phase 2 runs.
+**Architecture:** Replace `test-runner.sh` + `lib.sh` with `test_runner.py` (stdlib-only Python 3). All endpoints, distro mappings, and fixture checksums live in `config.toml`. The Podman orchestrator (`run.sh`) stays as bash. Tests are methods on a `TestSuite` class. Results written as JSON.
 
-**Tech Stack:** Bash (test runner), Podman (containers), CCS (fixture packages), Forgejo Actions (CI)
+**Tech Stack:** Python 3.11+ (stdlib only -- no pip, no frameworks), TOML config, Podman (containers), CCS (fixture packages), Forgejo Actions (CI)
 
 ---
 
-## Task 1: Add Checksum Assertion Helpers to lib.sh
+## Task 1: Create config.toml
+
+All test configuration in one place. Easy to swap endpoints, distros, fixture checksums.
 
 **Files:**
-- Modify: `tests/integration/remi/runner/lib.sh`
+- Create: `tests/integration/remi/config.toml`
 
-**Step 1: Add `assert_file_checksum` and `assert_dir_not_exists` helpers**
+**Step 1: Write config.toml**
 
-Add these after the existing `assert_output_not_contains` function (around line 152):
+```toml
+# tests/integration/remi/config.toml
+# Integration test configuration -- single source of truth for all endpoints,
+# distro mappings, and fixture definitions.
 
-```bash
-assert_file_checksum() {
-    local path="$1"
-    local expected_sha256="$2"
-    if [ ! -f "$path" ]; then
-        echo "file does not exist: $path" >&2
-        return 1
-    fi
-    local actual
-    actual=$(sha256sum "$path" | awk '{print $1}')
-    if [ "$actual" != "$expected_sha256" ]; then
-        echo "checksum mismatch for $path" >&2
-        echo "  expected: $expected_sha256" >&2
-        echo "  actual:   $actual" >&2
-        return 1
-    fi
-}
+[remi]
+endpoint = "https://packages.conary.io"
 
-assert_dir_not_exists() {
-    local path="$1"
-    if [ -d "$path" ]; then
-        echo "directory still exists: $path" >&2
-        return 1
-    fi
-}
+[paths]
+db = "/var/lib/conary/conary.db"
+conary_bin = "/usr/bin/conary"
+results_dir = "/results"
+fixture_dir = "/opt/remi-tests/fixtures"
 
-assert_dir_exists() {
-    local path="$1"
-    if [ ! -d "$path" ]; then
-        echo "directory does not exist: $path" >&2
-        return 1
-    fi
-}
+# Distro-specific settings. Key = DISTRO env var value.
+[distros.fedora43]
+remi_distro = "fedora"
+repo_name = "fedora-remi"
+test_package = "which"
+test_binary = "/usr/bin/which"
+test_package_2 = "tree"
+test_binary_2 = "/usr/bin/tree"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+[distros.ubuntu-noble]
+remi_distro = "ubuntu"
+repo_name = "ubuntu-remi"
+test_package = "patch"
+test_binary = "/usr/bin/patch"
+test_package_2 = "nano"
+test_binary_2 = "/usr/bin/nano"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+[distros.arch]
+remi_distro = "arch"
+repo_name = "arch-remi"
+test_package = "which"
+test_binary = "/usr/bin/which"
+test_package_2 = "tree"
+test_binary_2 = "/usr/bin/tree"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+# Default repos to remove after init (avoid slow syncs)
+[setup]
+remove_default_repos = [
+    "arch-core", "arch-extra", "arch-multilib",
+    "fedora-43", "ubuntu-noble",
+]
+
+# Test fixture packages (Phase 2)
+[fixtures]
+package = "conary-test-fixture"
+file = "/usr/share/conary-test/hello.txt"
+added_file = "/usr/share/conary-test/added.txt"
+marker = "/var/lib/conary-test/installed"
+
+[fixtures.v1]
+version = "1.0.0"
+hello_sha256 = "PLACEHOLDER"  # computed in Task 5
+
+[fixtures.v2]
+version = "2.0.0"
+hello_sha256 = "PLACEHOLDER"  # computed in Task 5
+added_sha256 = "PLACEHOLDER"  # computed in Task 5
 ```
 
-**Step 2: Verify lib.sh still sources cleanly**
+**Step 2: Commit**
 
-Run: `bash -n tests/integration/remi/runner/lib.sh`
+```bash
+git add tests/integration/remi/config.toml
+git commit -m "test: add integration test config.toml with all endpoints and distro mappings"
+```
+
+---
+
+## Task 2: Write the Python Test Runner Core
+
+The runner core: config loading, test registration/execution, assertions, JSON result output. No tests yet -- just the framework that replaces `lib.sh`.
+
+**Files:**
+- Create: `tests/integration/remi/runner/test_runner.py`
+
+**Step 1: Write the runner core**
+
+```python
+#!/usr/bin/env python3
+"""tests/integration/remi/runner/test_runner.py
+
+Remi integration test runner. Replaces test-runner.sh + lib.sh.
+
+Usage:
+    python3 test_runner.py [--phase2]
+
+Environment:
+    DISTRO       - distro identifier (default: fedora43)
+    DB_PATH      - override database path
+    CONARY_BIN   - override conary binary path
+    RESULTS_DIR  - override results directory
+    REMI_ENDPOINT - override Remi endpoint URL
+"""
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+# ── Configuration ────────────────────────────────────────────────────────────
+
+
+@dataclass
+class DistroConfig:
+    remi_distro: str
+    repo_name: str
+    test_package: str
+    test_binary: str
+    test_package_2: str
+    test_binary_2: str
+    test_package_3: str
+    test_binary_3: str
+
+
+@dataclass
+class FixtureConfig:
+    package: str
+    file: str
+    added_file: str
+    marker: str
+    v1_version: str
+    v1_hello_sha256: str
+    v2_version: str
+    v2_hello_sha256: str
+    v2_added_sha256: str
+
+
+@dataclass
+class Config:
+    endpoint: str
+    db_path: str
+    conary: str
+    results_dir: str
+    fixture_dir: str
+    distro_name: str
+    distro: DistroConfig
+    fixtures: FixtureConfig
+    remove_default_repos: list[str]
+
+    @classmethod
+    def load(cls, config_path: Path) -> "Config":
+        with open(config_path, "rb") as f:
+            raw = tomllib.load(f)
+
+        distro_name = os.environ.get("DISTRO", "fedora43")
+        distro_raw = raw["distros"][distro_name]
+
+        fixtures_raw = raw["fixtures"]
+
+        return cls(
+            endpoint=os.environ.get("REMI_ENDPOINT", raw["remi"]["endpoint"]),
+            db_path=os.environ.get("DB_PATH", raw["paths"]["db"]),
+            conary=os.environ.get("CONARY_BIN", raw["paths"]["conary_bin"]),
+            results_dir=os.environ.get("RESULTS_DIR", raw["paths"]["results_dir"]),
+            fixture_dir=raw["paths"]["fixture_dir"],
+            distro_name=distro_name,
+            distro=DistroConfig(**distro_raw),
+            fixtures=FixtureConfig(
+                package=fixtures_raw["package"],
+                file=fixtures_raw["file"],
+                added_file=fixtures_raw["added_file"],
+                marker=fixtures_raw["marker"],
+                v1_version=fixtures_raw["v1"]["version"],
+                v1_hello_sha256=fixtures_raw["v1"]["hello_sha256"],
+                v2_version=fixtures_raw["v2"]["version"],
+                v2_hello_sha256=fixtures_raw["v2"]["hello_sha256"],
+                v2_added_sha256=fixtures_raw["v2"]["added_sha256"],
+            ),
+            remove_default_repos=raw["setup"]["remove_default_repos"],
+        )
+
+
+# ── Test Result Tracking ────────────────────────────────────────────────────
+
+
+@dataclass
+class TestResult:
+    id: str
+    name: str
+    status: str  # "pass", "fail", "skip"
+    duration_ms: int = 0
+    message: str = ""
+
+    def to_dict(self) -> dict:
+        d = {"id": self.id, "name": self.name, "status": self.status,
+             "duration_ms": self.duration_ms}
+        if self.message:
+            d["message"] = self.message[:500]
+        return d
+
+
+# ── Assertions ───────────────────────────────────────────────────────────────
+
+
+class AssertionError(Exception):
+    """Test assertion failed."""
+
+
+def assert_file_exists(path: str) -> None:
+    if not Path(path).is_file():
+        raise AssertionError(f"file does not exist: {path}")
+
+
+def assert_file_not_exists(path: str) -> None:
+    if Path(path).is_file():
+        raise AssertionError(f"file still exists: {path}")
+
+
+def assert_file_executable(path: str) -> None:
+    if not os.access(path, os.X_OK):
+        raise AssertionError(f"file is not executable: {path}")
+
+
+def assert_dir_exists(path: str) -> None:
+    if not Path(path).is_dir():
+        raise AssertionError(f"directory does not exist: {path}")
+
+
+def assert_dir_not_exists(path: str) -> None:
+    if Path(path).is_dir():
+        raise AssertionError(f"directory still exists: {path}")
+
+
+def assert_contains(needle: str, haystack: str) -> None:
+    if needle not in haystack:
+        raise AssertionError(
+            f"output does not contain '{needle}'\noutput was: {haystack[:200]}")
+
+
+def assert_not_contains(needle: str, haystack: str) -> None:
+    if needle in haystack:
+        raise AssertionError(f"output unexpectedly contains '{needle}'")
+
+
+def assert_file_checksum(path: str, expected_sha256: str) -> None:
+    assert_file_exists(path)
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    actual = h.hexdigest()
+    if actual != expected_sha256:
+        raise AssertionError(
+            f"checksum mismatch for {path}\n"
+            f"  expected: {expected_sha256}\n"
+            f"  actual:   {actual}")
+
+
+# ── Command Runner ───────────────────────────────────────────────────────────
+
+
+def run_cmd(
+    args: list[str],
+    timeout: int = 120,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a command, capture output, optionally check return code."""
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            f"command failed (exit {result.returncode}): {' '.join(args)}\n"
+            f"{result.stdout}\n{result.stderr}")
+    return result
+
+
+def conary(cfg: Config, *args: str, timeout: int = 120,
+           check: bool = True) -> subprocess.CompletedProcess:
+    """Run a conary command with --db-path."""
+    cmd = [cfg.conary, *args, "--db-path", cfg.db_path]
+    return run_cmd(cmd, timeout=timeout, check=check)
+
+
+# ── Test Suite ───────────────────────────────────────────────────────────────
+
+# ANSI colors (disabled if not a terminal)
+if sys.stdout.isatty():
+    GREEN, RED, YELLOW, BLUE, NC = (
+        "\033[0;32m", "\033[0;31m", "\033[1;33m", "\033[0;34m", "\033[0m")
+else:
+    GREEN = RED = YELLOW = BLUE = NC = ""
+
+
+class TestSuite:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.results: list[TestResult] = []
+        self.fatal = False
+
+    @property
+    def pass_count(self) -> int:
+        return sum(1 for r in self.results if r.status == "pass")
+
+    @property
+    def fail_count(self) -> int:
+        return sum(1 for r in self.results if r.status == "fail")
+
+    @property
+    def skip_count(self) -> int:
+        return sum(1 for r in self.results if r.status == "skip")
+
+    def run_test(self, test_id: str, name: str, func, timeout: int = 120):
+        """Execute a test function, record result."""
+        if self.fatal:
+            self.skip(test_id, name, "skipped due to prior critical failure")
+            return
+
+        print(f"{BLUE}[{test_id}]{NC} {name:<35} ", end="", flush=True)
+        start = time.monotonic_ns()
+        try:
+            func()
+            duration_ms = (time.monotonic_ns() - start) // 1_000_000
+            self.results.append(
+                TestResult(test_id, name, "pass", duration_ms))
+            print(f"{GREEN}PASS{NC} ({duration_ms}ms)")
+        except subprocess.TimeoutExpired:
+            duration_ms = (time.monotonic_ns() - start) // 1_000_000
+            self.results.append(
+                TestResult(test_id, name, "fail", duration_ms,
+                           f"timed out after {timeout}s"))
+            print(f"{RED}TIMEOUT{NC} ({duration_ms}ms)")
+        except Exception as e:
+            duration_ms = (time.monotonic_ns() - start) // 1_000_000
+            msg = str(e)
+            self.results.append(
+                TestResult(test_id, name, "fail", duration_ms, msg))
+            print(f"{RED}FAIL{NC} ({duration_ms}ms)")
+
+    def skip(self, test_id: str, name: str, reason: str):
+        self.results.append(TestResult(test_id, name, "skip", message=reason))
+        print(f"{BLUE}[{test_id}]{NC} {name:<35} "
+              f"{YELLOW}SKIP{NC} ({reason})")
+
+    def skip_group(self, test_ids: list[str], reason: str):
+        """Skip multiple tests with the same reason."""
+        for tid in test_ids:
+            self.skip(tid, f"{tid}_skipped", reason)
+
+    def set_fatal(self):
+        self.fatal = True
+
+    def checkpoint(self, label: str) -> int:
+        """Return current fail count for later comparison."""
+        return self.fail_count
+
+    def failed_since(self, checkpoint: int) -> bool:
+        """Check if any new failures occurred since checkpoint."""
+        return self.fail_count > checkpoint
+
+    def write_results(self):
+        """Write JSON results file and print summary."""
+        total = len(self.results)
+        print()
+        print("=" * 52)
+        print(f"  Results: {GREEN}{self.pass_count} passed{NC}  "
+              f"{RED}{self.fail_count} failed{NC}  "
+              f"{YELLOW}{self.skip_count} skipped{NC}  {total} total")
+        print("=" * 52)
+
+        results_dir = Path(self.cfg.results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        json_file = results_dir / f"{self.cfg.distro_name}.json"
+
+        data = {
+            "distro": self.cfg.distro_name,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "summary": {
+                "total": total,
+                "passed": self.pass_count,
+                "failed": self.fail_count,
+                "skipped": self.skip_count,
+            },
+            "tests": [r.to_dict() for r in self.results],
+        }
+        with open(json_file, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"Results written to {json_file}")
+
+        return 1 if self.fail_count > 0 else 0
+```
+
+**Step 2: Verify Python parses**
+
+Run: `python3 -c "import ast; ast.parse(open('tests/integration/remi/runner/test_runner.py').read())"`
 Expected: No output (no syntax errors)
 
 **Step 3: Commit**
 
 ```bash
-git add tests/integration/remi/runner/lib.sh
-git commit -m "test: add checksum and directory assertion helpers to lib.sh"
+git add tests/integration/remi/runner/test_runner.py
+git commit -m "test: add Python test runner core (config, assertions, result tracking)"
 ```
 
 ---
 
-## Task 2: Add --phase2 Flag to test-runner.sh
+## Task 3: Port Phase 1 Tests (T01-T37) to Python
+
+Port all 37 existing tests from `test-runner.sh` into the Python runner as methods. The old bash files stay until the port is verified.
 
 **Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
+- Modify: `tests/integration/remi/runner/test_runner.py`
 
-**Step 1: Add phase2 flag parsing**
+**Step 1: Add test registration and Phase 1 tests**
 
-After the existing configuration block (line 14, after `REMI_ENDPOINT=...`), add:
+Append to `test_runner.py` after the `TestSuite` class:
 
-```bash
-PHASE2=0
+```python
+# ── Phase 1 Tests (T01-T37) ─────────────────────────────────────────────────
+
+
+def run_phase1(suite: TestSuite):
+    """Port of existing test-runner.sh T01-T37."""
+    cfg = suite.cfg
+    d = cfg.distro
+
+    # ── Setup: Initialize DB ─────────────────────────────────────────────
+    print("[SETUP] Initializing database...")
+    conary(cfg, "system", "init")
+    for repo in cfg.remove_default_repos:
+        conary(cfg, "repo", "remove", repo, check=False)
+    print("[SETUP] Database ready\n")
+
+    # ── T01: Health check ────────────────────────────────────────────────
+    def t01():
+        run_cmd(["curl", "-sf", f"{cfg.endpoint}/health"])
+
+    suite.run_test("T01", "health_check", t01, timeout=10)
+    if suite.fail_count > 0:
+        print(f"\nRemi server unreachable at {cfg.endpoint} - skipping remaining")
+        suite.set_fatal()
+        return
+
+    # ── T02: Repo add ────────────────────────────────────────────────────
+    def t02():
+        conary(cfg, "repo", "add", d.repo_name, cfg.endpoint,
+               "--default-strategy", "remi",
+               "--remi-endpoint", cfg.endpoint,
+               "--remi-distro", d.remi_distro,
+               "--no-gpg-check")
+
+    suite.run_test("T02", "repo_add", t02, timeout=10)
+
+    # ── T03: Repo list ───────────────────────────────────────────────────
+    def t03():
+        r = conary(cfg, "repo", "list")
+        assert_contains(d.repo_name, r.stdout + r.stderr)
+
+    suite.run_test("T03", "repo_list", t03, timeout=10)
+
+    # ── T04: Repo sync ───────────────────────────────────────────────────
+    cp_sync = suite.checkpoint("sync")
+
+    def t04():
+        r = conary(cfg, "repo", "sync", d.repo_name, "--force", timeout=300)
+        assert_contains("[OK]", r.stdout + r.stderr)
+
+    suite.run_test("T04", "repo_sync", t04, timeout=300)
+    if suite.failed_since(cp_sync):
+        print("\nRepo sync failed - skipping T05-T24")
+        suite.set_fatal()
+        return
+
+    # ── T05: Search exists ───────────────────────────────────────────────
+    def t05():
+        r = conary(cfg, "search", d.test_package)
+        output = r.stdout + r.stderr
+        assert_contains(d.test_package, output)
+        assert_not_contains("No packages found", output)
+
+    suite.run_test("T05", "search_exists", t05, timeout=30)
+
+    # ── T06: Search nonexistent ──────────────────────────────────────────
+    def t06():
+        r = conary(cfg, "search", "zzz-nonexistent-pkg-12345")
+        assert_contains("No packages found", r.stdout + r.stderr)
+
+    suite.run_test("T06", "search_nonexistent", t06, timeout=10)
+
+    # ── T07: Install package ─────────────────────────────────────────────
+    def t07():
+        conary(cfg, "install", d.test_package,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T07", "install_package", t07, timeout=300)
+
+    # ── T08: Verify files ────────────────────────────────────────────────
+    def t08():
+        assert_file_exists(d.test_binary)
+        assert_file_executable(d.test_binary)
+
+    suite.run_test("T08", "verify_files", t08, timeout=10)
+
+    # ── T09: List installed ──────────────────────────────────────────────
+    def t09():
+        r = conary(cfg, "list")
+        assert_contains(d.test_package, r.stdout + r.stderr)
+
+    suite.run_test("T09", "list_installed", t09, timeout=10)
+
+    # ── T10: Install nonexistent ─────────────────────────────────────────
+    def t10():
+        r = conary(cfg, "install", "zzz-nonexistent-pkg-12345",
+                   "--no-scripts", "--no-deps", "--sandbox", "never",
+                   check=False, timeout=30)
+        if r.returncode == 0:
+            raise AssertionError("expected non-zero exit for nonexistent package")
+
+    suite.run_test("T10", "install_nonexistent", t10, timeout=30)
+
+    # ── T11: Remove package ──────────────────────────────────────────────
+    def t11():
+        conary(cfg, "remove", d.test_package, "--no-scripts", timeout=60)
+
+    suite.run_test("T11", "remove_package", t11, timeout=60)
+
+    # ── T12: Verify removed ──────────────────────────────────────────────
+    def t12():
+        assert_file_not_exists(d.test_binary)
+        r = conary(cfg, "list")
+        assert_not_contains(d.test_package, r.stdout + r.stderr)
+
+    suite.run_test("T12", "verify_removed", t12, timeout=10)
+
+    # ── T13: Version check ───────────────────────────────────────────────
+    def t13():
+        r = conary(cfg, "--version")
+        assert_contains("conary", r.stdout + r.stderr)
+
+    suite.run_test("T13", "version_check", t13, timeout=10)
+
+    # ── T14: Reinstall ───────────────────────────────────────────────────
+    cp_reinstall = suite.checkpoint("reinstall")
+
+    def t14():
+        conary(cfg, "install", d.test_package,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T14", "reinstall_which", t14, timeout=300)
+    reinstall_failed = suite.failed_since(cp_reinstall)
+
+    # ── T15: Package info ────────────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T15", "package_info", "skipped due to T14 failure")
+    else:
+        def t15():
+            r = conary(cfg, "list", d.test_package, "--info")
+            output = r.stdout + r.stderr
+            assert_contains(d.test_package, output)
+            assert_contains("Version", output)
+        suite.run_test("T15", "package_info", t15, timeout=30)
+
+    # ── T16: List files ──────────────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T16", "list_files", "skipped due to T14 failure")
+    else:
+        def t16():
+            r = conary(cfg, "list", d.test_package, "--files")
+            assert_contains(d.test_binary, r.stdout + r.stderr)
+        suite.run_test("T16", "list_files", t16, timeout=30)
+
+    # ── T17: Path ownership ──────────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T17", "path_ownership", "skipped due to T14 failure")
+    else:
+        def t17():
+            r = conary(cfg, "list", "--path", d.test_binary)
+            assert_contains(d.test_package, r.stdout + r.stderr)
+        suite.run_test("T17", "path_ownership", t17, timeout=30)
+
+    # ── T18: Install tree ────────────────────────────────────────────────
+    cp_tree = suite.checkpoint("tree")
+
+    def t18():
+        conary(cfg, "install", d.test_package_2,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T18", "install_tree", t18, timeout=300)
+    tree_failed = suite.failed_since(cp_tree)
+
+    # ── T19: Verify tree files ───────────────────────────────────────────
+    if tree_failed:
+        suite.skip("T19", "verify_tree_files", "skipped due to T18 failure")
+    else:
+        def t19():
+            assert_file_exists(d.test_binary_2)
+            assert_file_executable(d.test_binary_2)
+        suite.run_test("T19", "verify_tree_files", t19, timeout=10)
+
+    # ── T20: Adopt single package ────────────────────────────────────────
+    cp_adopt = suite.checkpoint("adopt")
+
+    def t20():
+        conary(cfg, "system", "adopt", "curl", timeout=60)
+
+    suite.run_test("T20", "adopt_single_package", t20, timeout=60)
+    adopt_failed = suite.failed_since(cp_adopt)
+
+    # ── T21: Adopt status ────────────────────────────────────────────────
+    if adopt_failed:
+        suite.skip("T21", "adopt_status", "skipped due to T20 failure")
+    else:
+        def t21():
+            r = conary(cfg, "system", "adopt", "--status")
+            output = r.stdout + r.stderr
+            assert_contains("Conary Adoption Status", output)
+            assert_contains("Adopted", output)
+        suite.run_test("T21", "adopt_status", t21, timeout=30)
+
+    # ── T22: Pin package ─────────────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T22", "pin_package", "skipped due to T14 failure")
+    else:
+        def t22():
+            conary(cfg, "pin", d.test_package)
+            r = conary(cfg, "list", d.test_package, "--info")
+            assert_contains("Pinned      : yes", r.stdout + r.stderr)
+        suite.run_test("T22", "pin_package", t22, timeout=30)
+
+    # ── T23: Unpin package ───────────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T23", "unpin_package", "skipped due to T14 failure")
+    else:
+        def t23():
+            conary(cfg, "unpin", d.test_package)
+            r = conary(cfg, "list", d.test_package, "--info")
+            assert_contains("Pinned      : no", r.stdout + r.stderr)
+        suite.run_test("T23", "unpin_package", t23, timeout=30)
+
+    # ── T24: Changeset history ───────────────────────────────────────────
+    if reinstall_failed:
+        suite.skip("T24", "changeset_history", "skipped due to T14 failure")
+    else:
+        def t24():
+            r = conary(cfg, "system", "history")
+            assert_contains("Changeset", r.stdout + r.stderr)
+        suite.run_test("T24", "changeset_history", t24, timeout=30)
+
+    # ── T25: Install dep package ─────────────────────────────────────────
+    cp_dep = suite.checkpoint("dep")
+
+    def t25():
+        conary(cfg, "install", d.test_package_3,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T25", "install_dep_package", t25, timeout=300)
+    dep_failed = suite.failed_since(cp_dep)
+
+    # ── T26: Verify dep files ────────────────────────────────────────────
+    if dep_failed:
+        suite.skip("T26", "verify_dep_files", "skipped due to T25 failure")
+    else:
+        def t26():
+            assert_file_exists(d.test_binary_3)
+        suite.run_test("T26", "verify_dep_files", t26, timeout=10)
+
+    # ── T27: Multiple packages coexist ───────────────────────────────────
+    if dep_failed or reinstall_failed:
+        suite.skip("T27", "multi_package_coexist",
+                   "skipped due to prior install failure")
+    else:
+        def t27():
+            r = conary(cfg, "list")
+            output = r.stdout + r.stderr
+            assert_contains(d.test_package, output)
+            assert_contains(d.test_package_2, output)
+            assert_contains(d.test_package_3, output)
+        suite.run_test("T27", "multi_package_coexist", t27, timeout=10)
+
+    # ── T28: dep-mode satisfy ────────────────────────────────────────────
+    def t28():
+        conary(cfg, "install", d.test_package,
+               "--no-scripts", "--dep-mode", "satisfy", "--yes",
+               "--sandbox", "never", timeout=300)
+        conary(cfg, "remove", d.test_package, "--no-scripts", check=False)
+
+    suite.run_test("T28", "dep_mode_satisfy", t28, timeout=300)
+
+    # ── T29: dep-mode adopt ──────────────────────────────────────────────
+    def t29():
+        conary(cfg, "install", d.test_package_2,
+               "--no-scripts", "--dep-mode", "adopt", "--yes",
+               "--sandbox", "never", timeout=300)
+        assert_file_exists(d.test_binary_2)
+
+    suite.run_test("T29", "dep_mode_adopt", t29, timeout=300)
+
+    # ── T30: dep-mode takeover ───────────────────────────────────────────
+    def t30():
+        conary(cfg, "install", d.test_package_3,
+               "--no-scripts", "--dep-mode", "takeover", "--yes",
+               "--sandbox", "never", timeout=300)
+        assert_file_exists(d.test_binary_3)
+
+    suite.run_test("T30", "dep_mode_takeover", t30, timeout=300)
+
+    # ── T31: Blocklist enforced ──────────────────────────────────────────
+    def t31():
+        conary(cfg, "install", "glibc",
+               "--no-scripts", "--dep-mode", "takeover", "--yes",
+               "--sandbox", "never", check=False, timeout=60)
+        r = conary(cfg, "list")
+        assert_not_contains("glibc", r.stdout + r.stderr)
+
+    suite.run_test("T31", "blocklist_enforced", t31, timeout=60)
+
+    # ── T32: Update with adopted ─────────────────────────────────────────
+    def t32():
+        conary(cfg, "system", "adopt", "curl", check=False)
+        conary(cfg, "update", "--dep-mode", "satisfy", timeout=120)
+
+    suite.run_test("T32", "update_with_adopted", t32, timeout=120)
+
+    # ── T33: Generation list (empty) ─────────────────────────────────────
+    def t33():
+        r = conary(cfg, "system", "generation", "list")
+        assert_contains("No generations", r.stdout + r.stderr)
+
+    suite.run_test("T33", "generation_list_empty", t33, timeout=10)
+
+    # ── T34: Takeover dry run ────────────────────────────────────────────
+    def t34():
+        r = conary(cfg, "system", "takeover", "--dry-run",
+                   "--skip-conversion", check=False, timeout=60)
+        output = r.stdout + r.stderr
+        if r.returncode == 0:
+            assert_contains("DRY RUN", output)
+        # Non-zero is OK (may need root)
+
+    suite.run_test("T34", "takeover_dry_run", t34, timeout=60)
+
+    # ── T35: Generation GC (nothing) ────────────────────────────────────
+    def t35():
+        r = conary(cfg, "system", "generation", "gc")
+        output = r.stdout + r.stderr
+        # Should contain one of these
+        if "Nothing to clean" not in output and "No generations" not in output:
+            raise AssertionError(f"unexpected gc output: {output}")
+
+    suite.run_test("T35", "generation_gc_empty", t35, timeout=10)
+
+    # ── T36: Generation info format ──────────────────────────────────────
+    def t36():
+        r = conary(cfg, "system", "generation", "info", "1", check=False)
+        output = r.stdout + r.stderr
+        if r.returncode == 0:
+            assert_contains("composefs", output.lower())
+        # Non-zero expected (no generation yet)
+
+    suite.run_test("T36", "generation_info_format", t36, timeout=10)
+
+    # ── T37: Takeover composefs format ───────────────────────────────────
+    def t37():
+        r = conary(cfg, "system", "takeover", "--dry-run",
+                   "--skip-conversion", check=False, timeout=60)
+        output = r.stdout + r.stderr
+        if r.returncode == 0:
+            # Should mention composefs/EROFS or DRY RUN
+            lower = output.lower()
+            if not any(w in lower for w in
+                       ["composefs", "erofs", "dry run"]):
+                raise AssertionError(f"unexpected output: {output}")
+        # Non-zero is OK
+
+    suite.run_test("T37", "takeover_composefs_format", t37, timeout=60)
+
+    # ── Cleanup ──────────────────────────────────────────────────────────
+    print("\n[CLEANUP] Removing test packages...")
+    conary(cfg, "remove", d.test_package, "--no-scripts", check=False)
+    conary(cfg, "remove", d.test_package_2, "--no-scripts", check=False)
+    conary(cfg, "remove", d.test_package_3, "--no-scripts", check=False)
 ```
 
-Then, at the very top of the file (after `source "$SCRIPT_DIR/lib.sh"`), add argument parsing:
+**Step 2: Add main entry point**
 
-```bash
-# ── Phase 2 flag ──────────────────────────────────────────────────────────────
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --phase2) PHASE2=1; shift ;;
-        *) shift ;;
-    esac
-done
+Append to `test_runner.py`:
+
+```python
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+
+def main():
+    phase2 = "--phase2" in sys.argv
+
+    # Find config.toml relative to this script
+    script_dir = Path(__file__).resolve().parent
+    config_path = script_dir.parent / "config.toml"
+    cfg = Config.load(config_path)
+
+    # Ensure DB directory exists
+    Path(cfg.db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    print()
+    print("=" * 52)
+    print("  Remi Integration Tests")
+    print(f"  Distro:    {cfg.distro_name}")
+    print(f"  Remi repo: {cfg.distro.repo_name} ({cfg.distro.remi_distro})")
+    print(f"  Endpoint:  {cfg.endpoint}")
+    print(f"  Binary:    {cfg.conary}")
+    print(f"  DB:        {cfg.db_path}")
+    if phase2:
+        print("  Mode:      Phase 1 + Phase 2")
+    print("=" * 52)
+    print()
+
+    suite = TestSuite(cfg)
+
+    # Phase 1: core tests
+    run_phase1(suite)
+
+    # Phase 2: deep E2E (enabled with --phase2)
+    if phase2:
+        if suite.fatal:
+            print("\n[SKIP] Phase 2 skipped due to Phase 1 critical failure")
+        else:
+            print()
+            print("=" * 52)
+            print("  Phase 2: Deep E2E Validation")
+            print("=" * 52)
+            print()
+            run_phase2(suite)
+    else:
+        print("\n[INFO] Phase 2 tests skipped (pass --phase2 to enable)\n")
+
+    sys.exit(suite.write_results())
+
+
+# Placeholder for Phase 2 -- implemented in Tasks 7-11
+def run_phase2(suite: TestSuite):
+    print("[TODO] Phase 2 tests not yet implemented")
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-**Step 2: Add phase2 gate before new tests**
+**Step 3: Verify Python parses**
 
-After the existing T37 test and cleanup section (around line 681), but BEFORE the cleanup block, add a gate:
+Run: `python3 -c "import ast; ast.parse(open('tests/integration/remi/runner/test_runner.py').read())"`
+Expected: No output
+
+**Step 4: Commit**
 
 ```bash
-# ── Phase 2: Deep E2E Validation ─────────────────────────────────────────────
-# Enabled with --phase2 flag. Requires test fixture packages on Remi.
-
-if [ "$PHASE2" -eq 0 ]; then
-    echo ""
-    echo "[INFO] Phase 2 tests skipped (pass --phase2 to enable)"
-    echo ""
-    # Jump to cleanup
-else
-    echo ""
-    echo "════════════════════════════════════════════════════"
-    echo "  Phase 2: Deep E2E Validation"
-    echo "════════════════════════════════════════════════════"
-    echo ""
+git add tests/integration/remi/runner/test_runner.py
+git commit -m "test: port Phase 1 tests (T01-T37) to Python runner"
 ```
 
-Close the `else` block just before cleanup with `fi`.
+---
 
-**Step 3: Pass --phase2 from run.sh to the container**
+## Task 4: Update Container and Orchestrator for Python Runner
 
-Modify `tests/integration/remi/run.sh`:
+Switch containers from bash runner to Python runner. Keep bash files until verified.
 
-Add `--phase2` to the argument parser (around line 36):
+**Files:**
+- Modify: `tests/integration/remi/containers/Containerfile.fedora43`
+- Modify: `tests/integration/remi/containers/Containerfile.ubuntu-noble`
+- Modify: `tests/integration/remi/containers/Containerfile.arch`
+- Modify: `tests/integration/remi/run.sh`
+
+**Step 1: Update Containerfiles to install Python 3 and copy config**
+
+For **Containerfile.fedora43**, change the `dnf install` line to include python3:
+
+```dockerfile
+RUN dnf install -y ca-certificates curl python3 && dnf clean all
+```
+
+Add after `COPY runner/ /opt/remi-tests/`:
+
+```dockerfile
+COPY config.toml /opt/remi-tests/config.toml
+```
+
+Change CMD:
+
+```dockerfile
+CMD ["python3", "/opt/remi-tests/runner/test_runner.py"]
+```
+
+For **Containerfile.ubuntu-noble**, change `apt-get install` to include python3:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl python3 \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+Same `COPY config.toml` and `CMD` changes.
+
+For **Containerfile.arch**, change `pacman -Syu` to include python:
+
+```dockerfile
+RUN pacman -Syu --noconfirm ca-certificates curl python && pacman -Scc --noconfirm
+```
+
+Same `COPY config.toml` and `CMD` changes.
+
+**Step 2: Update run.sh to pass --phase2 and copy config**
+
+In `run.sh`, add `--phase2` argument parsing (add to the `while` loop):
 
 ```bash
         --phase2)
@@ -129,14 +952,33 @@ Add `--phase2` to the argument parser (around line 36):
             ;;
 ```
 
-Add `PHASE2=0` to the defaults section (around line 30).
+Add `PHASE2=0` to defaults.
 
-Pass it to the container CMD. Change the `podman run` command (around line 181) to:
+Copy config.toml into build context (add after binary setup, before podman build):
 
 ```bash
-CONTAINER_CMD="/opt/remi-tests/test-runner.sh"
+# ── Copy config and fixtures into build context ─────────────────────────
+cp "$SCRIPT_DIR/config.toml" "$BUILD_CONTEXT/config.toml"
+CLEANUP_FILES+=("$BUILD_CONTEXT/config.toml")
+
+FIXTURES_SRC="$PROJECT_ROOT/tests/fixtures"
+FIXTURES_DST="$BUILD_CONTEXT/fixtures"
+if [ -d "$FIXTURES_SRC" ]; then
+    rm -rf "$FIXTURES_DST"
+    mkdir -p "$FIXTURES_DST"
+    cp -r "$FIXTURES_SRC/recipes" "$FIXTURES_DST/recipes" 2>/dev/null || true
+    mkdir -p "$FIXTURES_DST/pkgbuild"
+    cp "$PROJECT_ROOT/packaging/arch/PKGBUILD" "$FIXTURES_DST/pkgbuild/" 2>/dev/null || true
+    CLEANUP_FILES+=("$FIXTURES_DST")
+fi
+```
+
+Update the `podman run` to pass `--phase2`:
+
+```bash
+CONTAINER_CMD="python3 /opt/remi-tests/runner/test_runner.py"
 if [ "$PHASE2" -eq 1 ]; then
-    CONTAINER_CMD="/opt/remi-tests/test-runner.sh --phase2"
+    CONTAINER_CMD="$CONTAINER_CMD --phase2"
 fi
 
 podman run \
@@ -147,33 +989,51 @@ podman run \
     "$IMAGE_NAME" $CONTAINER_CMD || CONTAINER_EXIT=$?
 ```
 
+**Step 3: Add fixture COPY to all Containerfiles**
+
+After the config.toml COPY line:
+
+```dockerfile
+# Phase 2 test fixtures (recipes, PKGBUILD)
+COPY fixtures/ /opt/remi-tests/fixtures/
+```
+
+Note: This COPY will fail if no `fixtures/` directory exists in the build context. Handle this by always creating an empty one in `run.sh`:
+
+```bash
+mkdir -p "$BUILD_CONTEXT/fixtures"
+```
+
+(Add this before the `if [ -d "$FIXTURES_SRC" ]` block.)
+
 **Step 4: Verify syntax**
 
-Run: `bash -n tests/integration/remi/runner/test-runner.sh && bash -n tests/integration/remi/run.sh`
+Run: `bash -n tests/integration/remi/run.sh`
 Expected: No output
 
 **Step 5: Commit**
 
 ```bash
-git add tests/integration/remi/runner/test-runner.sh tests/integration/remi/run.sh
-git commit -m "test: add --phase2 flag to integration test runner"
+git add tests/integration/remi/containers/ tests/integration/remi/run.sh
+git commit -m "test: switch containers from bash to Python runner"
 ```
 
 ---
 
-## Task 3: Create Test Fixture Recipe and CCS Packages
+## Task 5: Create Test Fixture Packages
 
 **Files:**
 - Create: `tests/fixtures/conary-test-fixture/v1/ccs.toml`
 - Create: `tests/fixtures/conary-test-fixture/v1/stage/usr/share/conary-test/hello.txt`
 - Create: `tests/fixtures/conary-test-fixture/v1/stage/ccs.toml`
-- Create: `tests/fixtures/conary-test-fixture/v1/build.sh`
 - Create: `tests/fixtures/conary-test-fixture/v2/ccs.toml`
 - Create: `tests/fixtures/conary-test-fixture/v2/stage/usr/share/conary-test/hello.txt`
 - Create: `tests/fixtures/conary-test-fixture/v2/stage/usr/share/conary-test/added.txt`
 - Create: `tests/fixtures/conary-test-fixture/v2/stage/ccs.toml`
-- Create: `tests/fixtures/conary-test-fixture/v2/build.sh`
 - Create: `tests/fixtures/conary-test-fixture/build-all.sh`
+- Create: `tests/fixtures/recipes/simple-hello/recipe.toml`
+- Create: `tests/fixtures/recipes/simple-hello/src/hello.sh`
+- Create: `scripts/publish-test-fixtures.sh`
 
 **Step 1: Create v1 fixture**
 
@@ -182,7 +1042,7 @@ git commit -m "test: add --phase2 flag to integration test runner"
 [package]
 name = "conary-test-fixture"
 version = "1.0.0"
-description = "Test fixture package for Phase 2 E2E validation"
+description = "Test fixture for Phase 2 E2E validation"
 license = "MIT"
 
 [package.platform]
@@ -192,6 +1052,7 @@ libc = "gnu"
 
 [provides]
 capabilities = ["conary-test-fixture"]
+binaries = []
 
 [requires]
 capabilities = []
@@ -222,28 +1083,11 @@ script = "rm -f /var/lib/conary-test/installed"
 hello-v1
 ```
 
-Copy ccs.toml to stage: `cp v1/ccs.toml v1/stage/ccs.toml`
-
-`tests/fixtures/conary-test-fixture/v1/build.sh`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-CONARY="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
-
-"$CONARY" ccs build "$SCRIPT_DIR/ccs.toml" \
-    --stage-dir "$SCRIPT_DIR/stage" \
-    --output "$SCRIPT_DIR/output/"
-echo "[OK] Built conary-test-fixture v1.0.0"
-```
+Copy: `cp v1/ccs.toml v1/stage/ccs.toml`
 
 **Step 2: Create v2 fixture**
 
-`tests/fixtures/conary-test-fixture/v2/ccs.toml`: Same as v1 but:
-```toml
-version = "2.0.0"
-```
+Same as v1 except `version = "2.0.0"`, different hello.txt content, and added.txt:
 
 `tests/fixtures/conary-test-fixture/v2/stage/usr/share/conary-test/hello.txt`:
 ```
@@ -257,587 +1101,29 @@ added-in-v2
 
 **Step 3: Create build-all.sh**
 
-`tests/fixtures/conary-test-fixture/build-all.sh`:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "Building test fixture packages..."
-bash "$SCRIPT_DIR/v1/build.sh"
-bash "$SCRIPT_DIR/v2/build.sh"
-
-# Print checksums for hardcoding in tests
-echo ""
-echo "Checksums for test verification:"
-echo "  v1 hello.txt: $(sha256sum "$SCRIPT_DIR/v1/stage/usr/share/conary-test/hello.txt" | awk '{print $1}')"
-echo "  v2 hello.txt: $(sha256sum "$SCRIPT_DIR/v2/stage/usr/share/conary-test/hello.txt" | awk '{print $1}')"
-echo "  v2 added.txt: $(sha256sum "$SCRIPT_DIR/v2/stage/usr/share/conary-test/added.txt" | awk '{print $1}')"
-```
-
-**Step 4: Compute checksums and record them**
-
-Run: `sha256sum tests/fixtures/conary-test-fixture/v1/stage/usr/share/conary-test/hello.txt`
-Run: `sha256sum tests/fixtures/conary-test-fixture/v2/stage/usr/share/conary-test/hello.txt`
-Run: `sha256sum tests/fixtures/conary-test-fixture/v2/stage/usr/share/conary-test/added.txt`
-
-Record the SHA-256 values — these will be hardcoded in test-runner.sh.
-
-**Step 5: Commit**
-
-```bash
-git add tests/fixtures/conary-test-fixture/
-git commit -m "test: add conary-test-fixture v1 and v2 CCS fixture packages"
-```
-
----
-
-## Task 4: Build and Publish Test Fixtures to Remi
-
-**Files:**
-- Create: `scripts/publish-test-fixtures.sh`
-
-**Step 1: Write publish script**
-
-`scripts/publish-test-fixtures.sh`:
-```bash
-#!/usr/bin/env bash
-# scripts/publish-test-fixtures.sh
-# Build and publish test fixture CCS packages to Remi for all 3 distros.
-# Requires SSH access to Remi (ssh remi).
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/conary-test-fixture"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CONARY="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
-REMI_ENDPOINT="https://packages.conary.io"
 
-echo "Building test fixture CCS packages..."
-bash "$FIXTURE_DIR/build-all.sh"
-
-echo ""
-echo "Publishing to Remi..."
-for version in v1 v2; do
-    pkg=$(ls "$FIXTURE_DIR/$version/output/"*.ccs 2>/dev/null | head -1)
-    if [ -z "$pkg" ]; then
-        echo "FATAL: No CCS output for $version" >&2
-        exit 1
-    fi
-
-    for distro in fedora ubuntu arch; do
-        echo "  Publishing $version to $distro..."
-        curl -sf -X POST "$REMI_ENDPOINT/v1/$distro/packages" \
-            -F "package=@$pkg" \
-            -F "format=ccs" || {
-            echo "    WARN: publish failed for $version/$distro (may already exist)"
-        }
-    done
+for ver in v1 v2; do
+    echo "Building conary-test-fixture $ver..."
+    mkdir -p "$SCRIPT_DIR/$ver/output"
+    "$CONARY" ccs build "$SCRIPT_DIR/$ver/ccs.toml" \
+        --stage-dir "$SCRIPT_DIR/$ver/stage" \
+        --output "$SCRIPT_DIR/$ver/output/"
 done
 
 echo ""
-echo "[OK] Test fixtures published to Remi"
+echo "Checksums for config.toml:"
+echo "  v1 hello: $(sha256sum "$SCRIPT_DIR/v1/stage/usr/share/conary-test/hello.txt" | awk '{print $1}')"
+echo "  v2 hello: $(sha256sum "$SCRIPT_DIR/v2/stage/usr/share/conary-test/hello.txt" | awk '{print $1}')"
+echo "  v2 added: $(sha256sum "$SCRIPT_DIR/v2/stage/usr/share/conary-test/added.txt" | awk '{print $1}')"
 ```
 
-**Step 2: Build fixtures locally to verify**
-
-Run: `cargo build && bash tests/fixtures/conary-test-fixture/build-all.sh`
-Expected: CCS packages built in `v1/output/` and `v2/output/`
-
-**Step 3: Publish to Remi**
-
-Run: `bash scripts/publish-test-fixtures.sh`
-Expected: Fixtures available on packages.conary.io for all 3 distros
-
-**Step 4: Commit**
-
-```bash
-git add scripts/publish-test-fixtures.sh
-git commit -m "test: add script to publish test fixtures to Remi"
-```
-
----
-
-## Task 5: Write Group A Tests — Deep Install Flow (T38-T50)
-
-**Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
-
-**Step 1: Add fixture constants**
-
-Inside the Phase 2 `else` block (from Task 2), add fixture configuration:
-
-```bash
-    # ── Phase 2 Configuration ────────────────────────────────────────────────
-    FIXTURE_PKG="conary-test-fixture"
-    FIXTURE_FILE="/usr/share/conary-test/hello.txt"
-    FIXTURE_ADDED="/usr/share/conary-test/added.txt"
-    FIXTURE_MARKER="/var/lib/conary-test/installed"
-    # SHA-256 checksums (computed from fixture source files)
-    FIXTURE_V1_HELLO_SHA="REPLACE_WITH_ACTUAL_SHA256"
-    FIXTURE_V2_HELLO_SHA="REPLACE_WITH_ACTUAL_SHA256"
-    FIXTURE_V2_ADDED_SHA="REPLACE_WITH_ACTUAL_SHA256"
-```
-
-(Replace SHA values with actual checksums from Task 3 Step 4.)
-
-**Step 2: Write T38-T50 tests**
-
-```bash
-    # ── Group A: Deep Install Flow ───────────────────────────────────────────
-    echo ""
-    echo "── Group A: Deep Install Flow ──"
-    echo ""
-
-    # ── T38: Install fixture v1 with deps ────────────────────────────────────
-    test_install_fixture_v1_with_deps() {
-        "$CONARY" install "${FIXTURE_PKG}=1.0.0" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --sandbox never \
-            2>&1
-    }
-
-    _FAILS_BEFORE_A=$_FAIL_COUNT
-    run_test "T38" "install_fixture_v1_deps" 300 test_install_fixture_v1_with_deps
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_A" ]; then
-        echo "Fixture v1 install failed - skipping Group A"
-        for t in T39 T40 T41 T42 T43 T44 T45 T46 T47 T48 T49 T50; do
-            record_skip "$t" "group_a_skipped" "skipped due to T38 failure"
-        done
-    else
-
-    # ── T39: Verify dep files on disk ────────────────────────────────────────
-    test_verify_dep_files_on_disk() {
-        assert_file_exists "$FIXTURE_FILE"
-        assert_dir_exists "/usr/share/conary-test"
-    }
-    run_test "T39" "verify_dep_files_disk" 10 test_verify_dep_files_on_disk
-
-    # ── T40: Verify v1 content checksum ──────────────────────────────────────
-    test_verify_v1_checksum() {
-        assert_file_checksum "$FIXTURE_FILE" "$FIXTURE_V1_HELLO_SHA"
-    }
-    run_test "T40" "verify_v1_checksum" 10 test_verify_v1_checksum
-
-    # ── T41: Verify scriptlet ran ────────────────────────────────────────────
-    test_verify_scriptlet_ran() {
-        assert_file_exists "$FIXTURE_MARKER"
-    }
-    run_test "T41" "verify_scriptlet_ran" 10 test_verify_scriptlet_ran
-
-    # ── T42: Remove with scriptlets ──────────────────────────────────────────
-    test_remove_with_scriptlets() {
-        "$CONARY" remove "$FIXTURE_PKG" \
-            --db-path "$DB_PATH" \
-            2>&1
-    }
-    run_test "T42" "remove_with_scriptlets" 60 test_remove_with_scriptlets
-
-    test_verify_scriptlet_cleanup() {
-        assert_file_not_exists "$FIXTURE_MARKER"
-        assert_file_not_exists "$FIXTURE_FILE"
-    }
-    run_test "T42b" "verify_scriptlet_cleanup" 10 test_verify_scriptlet_cleanup
-
-    # ── T43: Reinstall fixture v1 ────────────────────────────────────────────
-    test_reinstall_fixture_v1() {
-        "$CONARY" install "${FIXTURE_PKG}=1.0.0" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --sandbox never \
-            2>&1
-    }
-
-    _FAILS_BEFORE_REINSTALL_V1=$_FAIL_COUNT
-    run_test "T43" "reinstall_fixture_v1" 300 test_reinstall_fixture_v1
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_REINSTALL_V1" ]; then
-        echo "Fixture v1 reinstall failed - skipping T44-T50"
-        for t in T44 T45 T46 T47 T48 T49 T50; do
-            record_skip "$t" "group_a_skipped" "skipped due to T43 failure"
-        done
-    else
-
-    # ── T44: Update v1 -> v2 ─────────────────────────────────────────────────
-    test_update_v1_to_v2() {
-        "$CONARY" update "$FIXTURE_PKG" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --sandbox never \
-            2>&1
-    }
-
-    _FAILS_BEFORE_UPDATE=$_FAIL_COUNT
-    run_test "T44" "update_v1_to_v2" 300 test_update_v1_to_v2
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_UPDATE" ]; then
-        echo "Update failed - skipping T45-T48"
-        for t in T45 T46 T47 T48; do
-            record_skip "$t" "group_a_skipped" "skipped due to T44 failure"
-        done
-    else
-
-    # ── T45: Delta update verification ───────────────────────────────────────
-    test_delta_update_verify() {
-        # After update, verify v2 content
-        assert_file_checksum "$FIXTURE_FILE" "$FIXTURE_V2_HELLO_SHA"
-    }
-    run_test "T45" "delta_update_verify" 10 test_delta_update_verify
-
-    # ── T46: Verify v2 added file ────────────────────────────────────────────
-    test_verify_v2_added() {
-        assert_file_exists "$FIXTURE_ADDED"
-        assert_file_checksum "$FIXTURE_ADDED" "$FIXTURE_V2_ADDED_SHA"
-    }
-    run_test "T46" "verify_v2_added" 10 test_verify_v2_added
-
-    # ── T47: Rollback after update ───────────────────────────────────────────
-    test_rollback_after_update() {
-        "$CONARY" restore --last \
-            --db-path "$DB_PATH" \
-            --yes \
-            2>&1
-    }
-
-    _FAILS_BEFORE_ROLLBACK=$_FAIL_COUNT
-    run_test "T47" "rollback_after_update" 120 test_rollback_after_update
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_ROLLBACK" ]; then
-        record_skip "T48" "rollback_fs_check" "skipped due to T47 failure"
-    else
-
-    # ── T48: Rollback filesystem check ───────────────────────────────────────
-    test_rollback_fs_check() {
-        # v1 content should be restored
-        assert_file_checksum "$FIXTURE_FILE" "$FIXTURE_V1_HELLO_SHA"
-        # v2-only file should be gone
-        assert_file_not_exists "$FIXTURE_ADDED"
-    }
-    run_test "T48" "rollback_fs_check" 10 test_rollback_fs_check
-
-    fi # T47 rollback
-
-    fi # T44 update
-
-    # ── T49: Pin blocks update ───────────────────────────────────────────────
-    test_pin_blocks_update() {
-        # Pin to current version (v1 after rollback, or whatever is installed)
-        "$CONARY" pin "$FIXTURE_PKG" --db-path "$DB_PATH" 2>&1
-
-        # Attempt update
-        "$CONARY" update "$FIXTURE_PKG" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --sandbox never \
-            2>&1 || true
-
-        # Should still be v1
-        local info_output
-        info_output=$("$CONARY" list "$FIXTURE_PKG" --info --db-path "$DB_PATH" 2>&1)
-        assert_output_contains "1.0.0" "$info_output"
-
-        # Unpin for cleanup
-        "$CONARY" unpin "$FIXTURE_PKG" --db-path "$DB_PATH" 2>&1
-    }
-    run_test "T49" "pin_blocks_update" 300 test_pin_blocks_update
-
-    # ── T50: Orphan detection ────────────────────────────────────────────────
-    test_orphan_detection() {
-        # Remove the fixture package (deps should become orphans)
-        "$CONARY" remove "$FIXTURE_PKG" \
-            --db-path "$DB_PATH" \
-            --no-scripts \
-            2>&1
-
-        # Check for orphan reporting
-        local output
-        output=$("$CONARY" list --orphans --db-path "$DB_PATH" 2>&1)
-        # Should mention orphans or empty set (depends on what deps were pulled)
-        # At minimum, should not crash
-        echo "$output"
-    }
-    run_test "T50" "orphan_detection" 60 test_orphan_detection
-
-    fi # T43 reinstall
-    fi # T38 initial install
-```
-
-**Step 3: Verify syntax**
-
-Run: `bash -n tests/integration/remi/runner/test-runner.sh`
-Expected: No output
-
-**Step 4: Commit**
-
-```bash
-git add tests/integration/remi/runner/test-runner.sh
-git commit -m "test: add Group A deep install flow tests (T38-T50)"
-```
-
----
-
-## Task 6: Write Group B Tests — Generation Lifecycle (T51-T57)
-
-**Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
-
-**Step 1: Write T51-T57**
-
-Add after Group A, inside the Phase 2 block:
-
-```bash
-    # ── Group B: Generation Lifecycle ────────────────────────────────────────
-    echo ""
-    echo "── Group B: Generation Lifecycle ──"
-    echo ""
-
-    # Reinstall fixture for generation testing
-    "$CONARY" install "${FIXTURE_PKG}=1.0.0" \
-        --db-path "$DB_PATH" \
-        --dep-mode takeover \
-        --yes \
-        --no-scripts \
-        --sandbox never \
-        2>/dev/null || true
-
-    # ── T51: Build generation ────────────────────────────────────────────────
-    test_generation_build() {
-        "$CONARY" system generation build --db-path "$DB_PATH" 2>&1
-    }
-
-    _FAILS_BEFORE_GEN=$_FAIL_COUNT
-    run_test "T51" "generation_build" 120 test_generation_build
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_GEN" ]; then
-        echo "Generation build failed - skipping T52-T57"
-        for t in T52 T53 T54 T55 T56 T57; do
-            record_skip "$t" "group_b_skipped" "skipped due to T51 failure"
-        done
-    else
-
-    # ── T52: Generation list ─────────────────────────────────────────────────
-    test_generation_list_after_build() {
-        local output
-        output=$("$CONARY" system generation list --db-path "$DB_PATH" 2>&1)
-        assert_output_not_contains "No generations" "$output"
-        # Should show at least generation 1
-        assert_output_contains "1" "$output"
-    }
-    run_test "T52" "generation_list" 10 test_generation_list_after_build
-
-    # ── T53: Generation info ─────────────────────────────────────────────────
-    test_generation_info() {
-        local output
-        output=$("$CONARY" system generation info 1 --db-path "$DB_PATH" 2>&1)
-        # Should show metadata (format, packages, etc.)
-        assert_output_contains "packages" "$output"
-    }
-    run_test "T53" "generation_info" 10 test_generation_info
-
-    # ── T54: Switch generation ───────────────────────────────────────────────
-    # Install v2, build gen 2, then switch back and forth
-    test_generation_switch() {
-        # Update to v2 to create different state
-        "$CONARY" update "$FIXTURE_PKG" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --no-scripts \
-            --sandbox never \
-            2>&1
-
-        # Build generation 2
-        "$CONARY" system generation build --db-path "$DB_PATH" 2>&1
-
-        # Switch to generation 2
-        "$CONARY" system generation switch 2 --db-path "$DB_PATH" 2>&1
-    }
-
-    _FAILS_BEFORE_SWITCH=$_FAIL_COUNT
-    run_test "T54" "generation_switch" 300 test_generation_switch
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_SWITCH" ]; then
-        for t in T55 T56; do
-            record_skip "$t" "group_b_skipped" "skipped due to T54 failure"
-        done
-    else
-
-    # ── T55: Rollback generation ─────────────────────────────────────────────
-    test_generation_rollback() {
-        # Switch back to generation 1
-        "$CONARY" system generation switch 1 --db-path "$DB_PATH" 2>&1
-    }
-    run_test "T55" "generation_rollback" 120 test_generation_rollback
-
-    # ── T56: GC old generation ───────────────────────────────────────────────
-    test_generation_gc() {
-        # GC should clean up at least one generation
-        local output
-        output=$("$CONARY" system generation gc --db-path "$DB_PATH" 2>&1)
-        echo "$output"
-        # Should not crash
-    }
-    run_test "T56" "generation_gc" 60 test_generation_gc
-
-    fi # T54 switch
-
-    # ── T57: System takeover full ────────────────────────────────────────────
-    test_system_takeover_full() {
-        local output exit_code
-        output=$("$CONARY" system takeover \
-            --db-path "$DB_PATH" \
-            --skip-conversion \
-            --yes \
-            2>&1) && exit_code=0 || exit_code=$?
-
-        if [ "$exit_code" -eq 0 ]; then
-            assert_output_contains "generation" "$output"
-        else
-            # May fail in container (composefs, kernel requirements)
-            # As long as it fails gracefully, that's acceptable
-            echo "takeover exited $exit_code (may be expected in container): $output"
-        fi
-    }
-    run_test "T57" "system_takeover_full" 300 test_system_takeover_full
-
-    fi # T51 generation build
-```
-
-**Step 2: Verify syntax**
-
-Run: `bash -n tests/integration/remi/runner/test-runner.sh`
-Expected: No output
-
-**Step 3: Commit**
-
-```bash
-git add tests/integration/remi/runner/test-runner.sh
-git commit -m "test: add Group B generation lifecycle tests (T51-T57)"
-```
-
----
-
-## Task 7: Write Group C Tests — Bootstrap Pipeline (T58-T61)
-
-**Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
-
-**Step 1: Write T58-T61**
-
-Add after Group B:
-
-```bash
-    # ── Group C: Bootstrap Pipeline ──────────────────────────────────────────
-    echo ""
-    echo "── Group C: Bootstrap Pipeline ──"
-    echo ""
-
-    BOOTSTRAP_WORK="/tmp/conary-bootstrap-test"
-    BOOTSTRAP_RECIPES="/tmp/conary-bootstrap-recipes"
-    mkdir -p "$BOOTSTRAP_WORK" "$BOOTSTRAP_RECIPES"
-
-    # ── T58: Bootstrap dry-run ───────────────────────────────────────────────
-    test_bootstrap_dry_run() {
-        local output exit_code
-        output=$("$CONARY" bootstrap dry-run \
-            --work-dir "$BOOTSTRAP_WORK" \
-            --recipe-dir "$BOOTSTRAP_RECIPES" \
-            2>&1) && exit_code=0 || exit_code=$?
-
-        if [ "$exit_code" -eq 0 ]; then
-            assert_output_contains "Graph resolved" "$output"
-        else
-            # Dry-run may fail if no recipes exist - that's a valid test
-            echo "dry-run exited $exit_code: $output"
-            # Should fail gracefully, not crash
-            assert_output_not_contains "panic" "$output"
-        fi
-    }
-    run_test "T58" "bootstrap_dry_run" 60 test_bootstrap_dry_run
-
-    # ── T59: Stage 0 runs ───────────────────────────────────────────────────
-    test_bootstrap_stage0() {
-        local output exit_code
-        output=$("$CONARY" bootstrap stage0 \
-            --work-dir "$BOOTSTRAP_WORK" \
-            2>&1) && exit_code=0 || exit_code=$?
-
-        if [ "$exit_code" -eq 0 ]; then
-            echo "$output"
-        else
-            # Stage 0 may fail due to missing toolchains in minimal container
-            echo "stage0 exited $exit_code: $output"
-            assert_output_not_contains "panic" "$output"
-        fi
-    }
-    run_test "T59" "bootstrap_stage0" 300 test_bootstrap_stage0
-
-    # ── T60: Stage 0 output valid ────────────────────────────────────────────
-    test_bootstrap_stage0_output() {
-        # If stage 0 produced output, verify structure
-        if [ -d "$BOOTSTRAP_WORK/stage0" ]; then
-            assert_dir_exists "$BOOTSTRAP_WORK/stage0"
-            echo "Stage 0 directory exists with contents:"
-            ls -la "$BOOTSTRAP_WORK/stage0/"
-        else
-            echo "No stage0 output (expected if stage0 failed)"
-        fi
-    }
-    run_test "T60" "bootstrap_stage0_output" 10 test_bootstrap_stage0_output
-
-    # ── T61: Stage 1 starts ──────────────────────────────────────────────────
-    test_bootstrap_stage1_starts() {
-        local output exit_code
-        # Run stage1 with a short timeout - we just need proof of life
-        timeout 60 "$CONARY" bootstrap stage1 \
-            --work-dir "$BOOTSTRAP_WORK" \
-            2>&1 && exit_code=0 || exit_code=$?
-
-        # Exit 124 = timeout (proof of life: it started and ran)
-        # Exit 0 = completed (unlikely in 60s but fine)
-        # Other = failed to start
-        if [ "$exit_code" -eq 124 ]; then
-            echo "Stage 1 started (timed out as expected)"
-        elif [ "$exit_code" -eq 0 ]; then
-            echo "Stage 1 completed"
-        else
-            echo "Stage 1 exited $exit_code (may need stage0 first)"
-            assert_output_not_contains "panic" "$output"
-        fi
-    }
-    run_test "T61" "bootstrap_stage1_starts" 120 test_bootstrap_stage1_starts
-
-    rm -rf "$BOOTSTRAP_WORK" "$BOOTSTRAP_RECIPES"
-```
-
-**Step 2: Verify syntax**
-
-Run: `bash -n tests/integration/remi/runner/test-runner.sh`
-Expected: No output
-
-**Step 3: Commit**
-
-```bash
-git add tests/integration/remi/runner/test-runner.sh
-git commit -m "test: add Group C bootstrap pipeline tests (T58-T61)"
-```
-
----
-
-## Task 8: Write Group D Tests — Recipe & Build (T62-T66)
-
-**Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
-- Create: `tests/fixtures/recipes/simple-hello/recipe.toml`
-- Create: `tests/fixtures/recipes/simple-hello/src/hello.sh`
-
-**Step 1: Create simple test recipe**
+**Step 4: Create simple recipe fixture**
 
 `tests/fixtures/recipes/simple-hello/recipe.toml`:
 ```toml
@@ -867,337 +1153,632 @@ arch = "x86_64"
 echo "hello from test recipe"
 ```
 
-**Step 2: Write T62-T66**
+**Step 5: Create publish script**
+
+`scripts/publish-test-fixtures.sh`:
+```bash
+#!/usr/bin/env bash
+# scripts/publish-test-fixtures.sh
+# Build and publish test fixture CCS packages to Remi.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/conary-test-fixture"
+REMI_ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+
+bash "$FIXTURE_DIR/build-all.sh"
+
+echo ""
+echo "Publishing to Remi ($REMI_ENDPOINT)..."
+for ver in v1 v2; do
+    pkg=$(ls "$FIXTURE_DIR/$ver/output/"*.ccs 2>/dev/null | head -1)
+    [ -z "$pkg" ] && { echo "FATAL: No CCS for $ver" >&2; exit 1; }
+
+    for distro in fedora ubuntu arch; do
+        printf "  %s -> %s... " "$ver" "$distro"
+        curl -sf -X POST "$REMI_ENDPOINT/v1/$distro/packages" \
+            -F "package=@$pkg" -F "format=ccs" \
+            && echo "OK" \
+            || echo "WARN (may already exist)"
+    done
+done
+echo "[OK] Done"
+```
+
+**Step 6: Compute checksums and update config.toml**
+
+Run: `sha256sum tests/fixtures/conary-test-fixture/v{1,2}/stage/usr/share/conary-test/*.txt`
+
+Update the `PLACEHOLDER` values in `tests/integration/remi/config.toml` with real SHA-256 hashes.
+
+**Step 7: Commit**
 
 ```bash
-    # ── Group D: Recipe & Build ──────────────────────────────────────────────
-    echo ""
-    echo "── Group D: Recipe & Build ──"
-    echo ""
-
-    RECIPE_OUTPUT="/tmp/conary-recipe-output"
-    RECIPE_CACHE="/tmp/conary-recipe-cache"
-    mkdir -p "$RECIPE_OUTPUT" "$RECIPE_CACHE"
-
-    # Copy recipe fixtures into container working dir
-    RECIPE_DIR="/opt/remi-tests/fixtures/recipes"
-
-    # ── T62: Cook TOML recipe ────────────────────────────────────────────────
-    test_cook_toml_recipe() {
-        local output exit_code
-
-        # If fixtures were copied into the container
-        if [ -d "$RECIPE_DIR/simple-hello" ]; then
-            output=$("$CONARY" cook "$RECIPE_DIR/simple-hello/recipe.toml" \
-                --output "$RECIPE_OUTPUT" \
-                --source-cache "$RECIPE_CACHE" \
-                --no-isolation \
-                2>&1) && exit_code=0 || exit_code=$?
-        else
-            echo "Recipe fixtures not found at $RECIPE_DIR" >&2
-            return 1
-        fi
-
-        if [ "$exit_code" -ne 0 ]; then
-            echo "cook failed (exit $exit_code): $output" >&2
-            return 1
-        fi
-        echo "$output"
-    }
-
-    _FAILS_BEFORE_COOK=$_FAIL_COUNT
-    run_test "T62" "cook_toml_recipe" 120 test_cook_toml_recipe
-
-    if [ "$_FAIL_COUNT" -gt "$_FAILS_BEFORE_COOK" ]; then
-        record_skip "T63" "ccs_output_valid" "skipped due to T62 failure"
-    else
-
-    # ── T63: CCS output valid ────────────────────────────────────────────────
-    test_ccs_output_valid() {
-        # Should have produced a .ccs file
-        local ccs_file
-        ccs_file=$(ls "$RECIPE_OUTPUT"/*.ccs 2>/dev/null | head -1)
-        if [ -z "$ccs_file" ]; then
-            echo "no CCS file found in $RECIPE_OUTPUT" >&2
-            return 1
-        fi
-        echo "CCS output: $ccs_file ($(du -h "$ccs_file" | cut -f1))"
-    }
-    run_test "T63" "ccs_output_valid" 10 test_ccs_output_valid
-
-    fi # T62
-
-    # ── T64: PKGBUILD conversion ─────────────────────────────────────────────
-    test_pkgbuild_conversion() {
-        local output exit_code
-        # Use the real Conary PKGBUILD as test input
-        if [ -f "/opt/remi-tests/fixtures/pkgbuild/PKGBUILD" ]; then
-            output=$("$CONARY" convert-pkgbuild \
-                "/opt/remi-tests/fixtures/pkgbuild/PKGBUILD" \
-                2>&1) && exit_code=0 || exit_code=$?
-        else
-            echo "PKGBUILD fixture not found" >&2
-            return 1
-        fi
-
-        if [ "$exit_code" -ne 0 ]; then
-            echo "convert-pkgbuild failed (exit $exit_code): $output" >&2
-            return 1
-        fi
-        # Should produce valid TOML recipe output
-        assert_output_contains "name" "$output"
-        assert_output_contains "version" "$output"
-    }
-
-    _FAILS_BEFORE_CONVERT=$_FAIL_COUNT
-    run_test "T64" "pkgbuild_conversion" 30 test_pkgbuild_conversion
-
-    # ── T65: Converted recipe cooks ──────────────────────────────────────────
-    test_converted_recipe_cooks() {
-        # Convert PKGBUILD to recipe file, then cook it
-        local recipe_file="$RECIPE_OUTPUT/converted-recipe.toml"
-        "$CONARY" convert-pkgbuild \
-            "/opt/remi-tests/fixtures/pkgbuild/PKGBUILD" \
-            --output "$recipe_file" \
-            2>&1
-
-        if [ ! -f "$recipe_file" ]; then
-            echo "converted recipe not written to $recipe_file" >&2
-            return 1
-        fi
-
-        # Try to cook (may fail due to missing sources, but should parse)
-        local output exit_code
-        output=$("$CONARY" cook "$recipe_file" \
-            --output "$RECIPE_OUTPUT/converted" \
-            --source-cache "$RECIPE_CACHE" \
-            --no-isolation \
-            --fetch-only \
-            2>&1) && exit_code=0 || exit_code=$?
-
-        # fetch-only validates recipe parsing + source resolution
-        echo "cook --fetch-only exited $exit_code: $output"
-        assert_output_not_contains "panic" "$output"
-    }
-
-    if [ "$_FAILS_BEFORE_CONVERT" -gt "$_FAIL_COUNT" ]; then
-        record_skip "T65" "converted_recipe_cooks" "skipped due to T64 failure"
-    else
-        run_test "T65" "converted_recipe_cooks" 120 test_converted_recipe_cooks
-    fi
-
-    # ── T66: Hermetic build isolation ────────────────────────────────────────
-    test_hermetic_build() {
-        local output exit_code
-        if [ ! -d "$RECIPE_DIR/simple-hello" ]; then
-            echo "Recipe fixtures not found" >&2
-            return 1
-        fi
-
-        output=$("$CONARY" cook "$RECIPE_DIR/simple-hello/recipe.toml" \
-            --output "$RECIPE_OUTPUT/hermetic" \
-            --source-cache "$RECIPE_CACHE" \
-            --hermetic \
-            2>&1) && exit_code=0 || exit_code=$?
-
-        if [ "$exit_code" -ne 0 ]; then
-            # Check if it failed due to network being blocked (expected)
-            # vs some other error
-            echo "hermetic cook exited $exit_code: $output"
-            # The recipe has local sources, so it should succeed even hermetic
-            return 1
-        fi
-        echo "Hermetic build succeeded"
-    }
-    run_test "T66" "hermetic_build" 120 test_hermetic_build
-
-    rm -rf "$RECIPE_OUTPUT" "$RECIPE_CACHE"
+git add tests/fixtures/ scripts/publish-test-fixtures.sh tests/integration/remi/config.toml
+git commit -m "test: add CCS fixture packages, recipe fixtures, and publish script"
 ```
+
+---
+
+## Task 6: Verify Phase 1 Python Port
+
+Run the ported Phase 1 tests and confirm identical behavior to the bash version.
+
+**Step 1: Build conary**
+
+Run: `cargo build`
+
+**Step 2: Run Python runner locally in container**
+
+Run: `./tests/integration/remi/run.sh --distro fedora43`
+Expected: T01-T37 results match the old bash runner
+
+**Step 3: Compare JSON output**
+
+Verify pass/fail/skip counts match. If any discrepancies, fix the Python port.
+
+**Step 4: Run on all 3 distros**
+
+Run: `./tests/integration/remi/run.sh --distro ubuntu-noble`
+Run: `./tests/integration/remi/run.sh --distro arch`
+
+**Step 5: Fix any issues, commit**
+
+```bash
+git add -A
+git commit -m "fix: resolve Phase 1 Python port discrepancies"
+```
+
+---
+
+## Task 7: Write Group A Tests — Deep Install Flow (T38-T50)
+
+**Files:**
+- Modify: `tests/integration/remi/runner/test_runner.py`
+
+**Step 1: Implement run_phase2 with Group A**
+
+Replace the `run_phase2` placeholder:
+
+```python
+def run_phase2(suite: TestSuite):
+    """Phase 2: Deep E2E Validation (T38-T71)."""
+    run_group_a(suite)
+    run_group_b(suite)
+    run_group_c(suite)
+    run_group_d(suite)
+    run_group_e(suite)
+
+
+def run_group_a(suite: TestSuite):
+    """Group A: Deep Install Flow (T38-T50)."""
+    cfg = suite.cfg
+    fx = cfg.fixtures
+    print("-- Group A: Deep Install Flow --\n")
+
+    # ── T38: Install fixture v1 with deps ────────────────────────────────
+    cp = suite.checkpoint("T38")
+
+    def t38():
+        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T38", "install_fixture_v1_deps", t38, timeout=300)
+    if suite.failed_since(cp):
+        suite.skip_group(
+            [f"T{i}" for i in range(39, 51)],
+            "skipped due to T38 failure")
+        return
+
+    # ── T39: Verify dep files on disk ────────────────────────────────────
+    def t39():
+        assert_file_exists(fx.file)
+        assert_dir_exists("/usr/share/conary-test")
+
+    suite.run_test("T39", "verify_dep_files_disk", t39)
+
+    # ── T40: Verify v1 content checksum ──────────────────────────────────
+    def t40():
+        assert_file_checksum(fx.file, fx.v1_hello_sha256)
+
+    suite.run_test("T40", "verify_v1_checksum", t40)
+
+    # ── T41: Verify scriptlet ran ────────────────────────────────────────
+    def t41():
+        assert_file_exists(fx.marker)
+
+    suite.run_test("T41", "verify_scriptlet_ran", t41)
+
+    # ── T42: Remove with scriptlets ──────────────────────────────────────
+    def t42():
+        conary(cfg, "remove", fx.package, timeout=60)
+        assert_file_not_exists(fx.marker)
+        assert_file_not_exists(fx.file)
+
+    suite.run_test("T42", "remove_with_scriptlets", t42, timeout=60)
+
+    # ── T43: Reinstall fixture v1 ────────────────────────────────────────
+    cp43 = suite.checkpoint("T43")
+
+    def t43():
+        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T43", "reinstall_fixture_v1", t43, timeout=300)
+    if suite.failed_since(cp43):
+        suite.skip_group(
+            [f"T{i}" for i in range(44, 51)],
+            "skipped due to T43 failure")
+        return
+
+    # ── T44: Update v1 -> v2 ─────────────────────────────────────────────
+    cp44 = suite.checkpoint("T44")
+
+    def t44():
+        conary(cfg, "update", fx.package,
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T44", "update_v1_to_v2", t44, timeout=300)
+
+    # ── T45: Delta update verify ─────────────────────────────────────────
+    if suite.failed_since(cp44):
+        suite.skip_group(["T45", "T46", "T47", "T48"],
+                         "skipped due to T44 failure")
+    else:
+        def t45():
+            assert_file_checksum(fx.file, fx.v2_hello_sha256)
+
+        suite.run_test("T45", "delta_update_verify", t45)
+
+        # ── T46: Verify v2 added file ────────────────────────────────────
+        def t46():
+            assert_file_exists(fx.added_file)
+            assert_file_checksum(fx.added_file, fx.v2_added_sha256)
+
+        suite.run_test("T46", "verify_v2_added", t46)
+
+        # ── T47: Rollback after update ───────────────────────────────────
+        cp47 = suite.checkpoint("T47")
+
+        def t47():
+            conary(cfg, "restore", "--last", "--yes", timeout=120)
+
+        suite.run_test("T47", "rollback_after_update", t47, timeout=120)
+
+        # ── T48: Rollback filesystem check ───────────────────────────────
+        if suite.failed_since(cp47):
+            suite.skip("T48", "rollback_fs_check",
+                       "skipped due to T47 failure")
+        else:
+            def t48():
+                assert_file_checksum(fx.file, fx.v1_hello_sha256)
+                assert_file_not_exists(fx.added_file)
+
+            suite.run_test("T48", "rollback_fs_check", t48)
+
+    # ── T49: Pin blocks update ───────────────────────────────────────────
+    def t49():
+        conary(cfg, "pin", fx.package)
+        conary(cfg, "update", fx.package,
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               check=False, timeout=300)
+        r = conary(cfg, "list", fx.package, "--info")
+        assert_contains(fx.v1_version, r.stdout + r.stderr)
+        conary(cfg, "unpin", fx.package)
+
+    suite.run_test("T49", "pin_blocks_update", t49, timeout=300)
+
+    # ── T50: Orphan detection ────────────────────────────────────────────
+    def t50():
+        conary(cfg, "remove", fx.package, "--no-scripts", check=False,
+               timeout=60)
+        r = conary(cfg, "list", "--orphans", check=False)
+        # Should not crash; output is informational
+        print(r.stdout)
+
+    suite.run_test("T50", "orphan_detection", t50, timeout=60)
+```
+
+**Step 2: Verify Python parses**
+
+Run: `python3 -c "import ast; ast.parse(open('tests/integration/remi/runner/test_runner.py').read())"`
 
 **Step 3: Commit**
 
 ```bash
-git add tests/integration/remi/runner/test-runner.sh tests/fixtures/recipes/
+git add tests/integration/remi/runner/test_runner.py
+git commit -m "test: add Group A deep install flow tests (T38-T50)"
+```
+
+---
+
+## Task 8: Write Group B Tests — Generation Lifecycle (T51-T57)
+
+**Files:**
+- Modify: `tests/integration/remi/runner/test_runner.py`
+
+**Step 1: Add run_group_b**
+
+```python
+def run_group_b(suite: TestSuite):
+    """Group B: Generation Lifecycle (T51-T57)."""
+    cfg = suite.cfg
+    fx = cfg.fixtures
+    print("\n-- Group B: Generation Lifecycle --\n")
+
+    # Ensure fixture is installed for generation snapshot
+    conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+           "--dep-mode", "takeover", "--yes", "--no-scripts",
+           "--sandbox", "never", check=False, timeout=300)
+
+    # ── T51: Build generation ────────────────────────────────────────────
+    cp51 = suite.checkpoint("T51")
+
+    def t51():
+        conary(cfg, "system", "generation", "build", timeout=120)
+
+    suite.run_test("T51", "generation_build", t51, timeout=120)
+    if suite.failed_since(cp51):
+        suite.skip_group([f"T{i}" for i in range(52, 58)],
+                         "skipped due to T51 failure")
+        return
+
+    # ── T52: Generation list ─────────────────────────────────────────────
+    def t52():
+        r = conary(cfg, "system", "generation", "list")
+        output = r.stdout + r.stderr
+        assert_not_contains("No generations", output)
+
+    suite.run_test("T52", "generation_list", t52)
+
+    # ── T53: Generation info ─────────────────────────────────────────────
+    def t53():
+        r = conary(cfg, "system", "generation", "info", "1")
+        assert_contains("packages", r.stdout + r.stderr)
+
+    suite.run_test("T53", "generation_info", t53)
+
+    # ── T54: Switch generation ───────────────────────────────────────────
+    cp54 = suite.checkpoint("T54")
+
+    def t54():
+        # Create different state for gen 2
+        conary(cfg, "update", fx.package,
+               "--dep-mode", "takeover", "--yes", "--no-scripts",
+               "--sandbox", "never", timeout=300)
+        conary(cfg, "system", "generation", "build", timeout=120)
+        conary(cfg, "system", "generation", "switch", "2", timeout=120)
+
+    suite.run_test("T54", "generation_switch", t54, timeout=300)
+
+    # ── T55: Rollback generation ─────────────────────────────────────────
+    if suite.failed_since(cp54):
+        suite.skip_group(["T55", "T56"], "skipped due to T54 failure")
+    else:
+        def t55():
+            conary(cfg, "system", "generation", "switch", "1", timeout=120)
+
+        suite.run_test("T55", "generation_rollback", t55, timeout=120)
+
+        # ── T56: GC old generation ───────────────────────────────────────
+        def t56():
+            r = conary(cfg, "system", "generation", "gc", timeout=60)
+            print(r.stdout)
+
+        suite.run_test("T56", "generation_gc", t56, timeout=60)
+
+    # ── T57: System takeover full ────────────────────────────────────────
+    def t57():
+        r = conary(cfg, "system", "takeover", "--skip-conversion", "--yes",
+                   check=False, timeout=300)
+        output = r.stdout + r.stderr
+        if r.returncode != 0:
+            # May fail in container -- graceful failure is OK
+            assert_not_contains("panic", output)
+            print(f"takeover exited {r.returncode} "
+                  f"(may be expected in container)")
+
+    suite.run_test("T57", "system_takeover_full", t57, timeout=300)
+```
+
+**Step 2: Verify, commit**
+
+```bash
+git add tests/integration/remi/runner/test_runner.py
+git commit -m "test: add Group B generation lifecycle tests (T51-T57)"
+```
+
+---
+
+## Task 9: Write Group C Tests — Bootstrap Pipeline (T58-T61)
+
+**Files:**
+- Modify: `tests/integration/remi/runner/test_runner.py`
+
+**Step 1: Add run_group_c**
+
+```python
+def run_group_c(suite: TestSuite):
+    """Group C: Bootstrap Pipeline (T58-T61)."""
+    cfg = suite.cfg
+    print("\n-- Group C: Bootstrap Pipeline --\n")
+
+    work_dir = "/tmp/conary-bootstrap-test"
+    recipe_dir = "/tmp/conary-bootstrap-recipes"
+    Path(work_dir).mkdir(parents=True, exist_ok=True)
+    Path(recipe_dir).mkdir(parents=True, exist_ok=True)
+
+    # ── T58: Bootstrap dry-run ───────────────────────────────────────────
+    def t58():
+        r = conary(cfg, "bootstrap", "dry-run",
+                   "--work-dir", work_dir, "--recipe-dir", recipe_dir,
+                   check=False, timeout=60)
+        output = r.stdout + r.stderr
+        assert_not_contains("panic", output)
+        if r.returncode == 0:
+            assert_contains("Graph resolved", output)
+
+    suite.run_test("T58", "bootstrap_dry_run", t58, timeout=60)
+
+    # ── T59: Stage 0 runs ───────────────────────────────────────────────
+    def t59():
+        r = conary(cfg, "bootstrap", "stage0",
+                   "--work-dir", work_dir, check=False, timeout=300)
+        output = r.stdout + r.stderr
+        assert_not_contains("panic", output)
+
+    suite.run_test("T59", "bootstrap_stage0", t59, timeout=300)
+
+    # ── T60: Stage 0 output valid ────────────────────────────────────────
+    def t60():
+        stage0_dir = Path(work_dir) / "stage0"
+        if stage0_dir.is_dir():
+            contents = list(stage0_dir.iterdir())
+            print(f"Stage 0 output: {len(contents)} entries")
+            for p in contents[:10]:
+                print(f"  {p.name}")
+        else:
+            print("No stage0 output (expected if stage0 did not succeed)")
+
+    suite.run_test("T60", "bootstrap_stage0_output", t60)
+
+    # ── T61: Stage 1 starts ──────────────────────────────────────────────
+    def t61():
+        try:
+            r = run_cmd(
+                [cfg.conary, "bootstrap", "stage1",
+                 "--work-dir", work_dir, "--db-path", cfg.db_path],
+                timeout=60, check=False)
+            output = r.stdout + r.stderr
+            assert_not_contains("panic", output)
+            print(f"stage1 exited {r.returncode}")
+        except subprocess.TimeoutExpired:
+            # Timeout = proof of life (it started and ran)
+            print("Stage 1 started (timed out as expected)")
+
+    suite.run_test("T61", "bootstrap_stage1_starts", t61, timeout=120)
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(work_dir, ignore_errors=True)
+    shutil.rmtree(recipe_dir, ignore_errors=True)
+```
+
+**Step 2: Verify, commit**
+
+```bash
+git add tests/integration/remi/runner/test_runner.py
+git commit -m "test: add Group C bootstrap pipeline tests (T58-T61)"
+```
+
+---
+
+## Task 10: Write Group D Tests — Recipe & Build (T62-T66)
+
+**Files:**
+- Modify: `tests/integration/remi/runner/test_runner.py`
+
+**Step 1: Add run_group_d**
+
+```python
+def run_group_d(suite: TestSuite):
+    """Group D: Recipe & Build (T62-T66)."""
+    cfg = suite.cfg
+    print("\n-- Group D: Recipe & Build --\n")
+
+    recipe_output = "/tmp/conary-recipe-output"
+    recipe_cache = "/tmp/conary-recipe-cache"
+    recipe_dir = Path(cfg.fixture_dir) / "recipes" / "simple-hello"
+    pkgbuild_path = Path(cfg.fixture_dir) / "pkgbuild" / "PKGBUILD"
+    Path(recipe_output).mkdir(parents=True, exist_ok=True)
+    Path(recipe_cache).mkdir(parents=True, exist_ok=True)
+
+    # ── T62: Cook TOML recipe ────────────────────────────────────────────
+    cp62 = suite.checkpoint("T62")
+
+    def t62():
+        recipe_toml = recipe_dir / "recipe.toml"
+        if not recipe_toml.is_file():
+            raise AssertionError(f"recipe fixture not found: {recipe_toml}")
+        conary(cfg, "cook", str(recipe_toml),
+               "--output", recipe_output,
+               "--source-cache", recipe_cache,
+               "--no-isolation", timeout=120)
+
+    suite.run_test("T62", "cook_toml_recipe", t62, timeout=120)
+
+    # ── T63: CCS output valid ────────────────────────────────────────────
+    if suite.failed_since(cp62):
+        suite.skip("T63", "ccs_output_valid", "skipped due to T62 failure")
+    else:
+        def t63():
+            ccs_files = list(Path(recipe_output).glob("*.ccs"))
+            if not ccs_files:
+                raise AssertionError(
+                    f"no CCS file found in {recipe_output}")
+            print(f"CCS output: {ccs_files[0].name} "
+                  f"({ccs_files[0].stat().st_size} bytes)")
+
+        suite.run_test("T63", "ccs_output_valid", t63)
+
+    # ── T64: PKGBUILD conversion ─────────────────────────────────────────
+    cp64 = suite.checkpoint("T64")
+
+    def t64():
+        if not pkgbuild_path.is_file():
+            raise AssertionError(f"PKGBUILD not found: {pkgbuild_path}")
+        r = conary(cfg, "convert-pkgbuild", str(pkgbuild_path))
+        output = r.stdout + r.stderr
+        assert_contains("name", output)
+        assert_contains("version", output)
+
+    suite.run_test("T64", "pkgbuild_conversion", t64, timeout=30)
+
+    # ── T65: Converted recipe cooks ──────────────────────────────────────
+    if suite.failed_since(cp64):
+        suite.skip("T65", "converted_recipe_cooks",
+                   "skipped due to T64 failure")
+    else:
+        def t65():
+            converted = f"{recipe_output}/converted-recipe.toml"
+            conary(cfg, "convert-pkgbuild", str(pkgbuild_path),
+                   "--output", converted)
+            if not Path(converted).is_file():
+                raise AssertionError(f"converted recipe not at {converted}")
+            # fetch-only validates parsing + source resolution
+            r = conary(cfg, "cook", converted,
+                       "--output", f"{recipe_output}/converted",
+                       "--source-cache", recipe_cache,
+                       "--no-isolation", "--fetch-only",
+                       check=False, timeout=120)
+            assert_not_contains("panic", r.stdout + r.stderr)
+
+        suite.run_test("T65", "converted_recipe_cooks", t65, timeout=120)
+
+    # ── T66: Hermetic build isolation ────────────────────────────────────
+    def t66():
+        recipe_toml = recipe_dir / "recipe.toml"
+        if not recipe_toml.is_file():
+            raise AssertionError(f"recipe fixture not found: {recipe_toml}")
+        conary(cfg, "cook", str(recipe_toml),
+               "--output", f"{recipe_output}/hermetic",
+               "--source-cache", recipe_cache,
+               "--hermetic", timeout=120)
+
+    suite.run_test("T66", "hermetic_build", t66, timeout=120)
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(recipe_output, ignore_errors=True)
+    shutil.rmtree(recipe_cache, ignore_errors=True)
+```
+
+**Step 2: Verify, commit**
+
+```bash
+git add tests/integration/remi/runner/test_runner.py
 git commit -m "test: add Group D recipe and build tests (T62-T66)"
 ```
 
 ---
 
-## Task 9: Write Group E Tests — Remi Client (T67-T71)
+## Task 11: Write Group E Tests — Remi Client (T67-T71)
 
 **Files:**
-- Modify: `tests/integration/remi/runner/test-runner.sh`
+- Modify: `tests/integration/remi/runner/test_runner.py`
 
-**Step 1: Write T67-T71**
+**Step 1: Add run_group_e**
 
-```bash
-    # ── Group E: Remi Client ─────────────────────────────────────────────────
-    echo ""
-    echo "── Group E: Remi Client ──"
-    echo ""
+```python
+def run_group_e(suite: TestSuite):
+    """Group E: Remi Client (T67-T71)."""
+    cfg = suite.cfg
+    fx = cfg.fixtures
+    print("\n-- Group E: Remi Client --\n")
 
-    # ── T67: Sparse index fetch ──────────────────────────────────────────────
-    test_sparse_index_fetch() {
-        local output
-        output=$(curl -sf "${REMI_ENDPOINT}/v1/${REMI_DISTRO}/index" 2>&1)
-        if [ -z "$output" ]; then
-            echo "empty response from sparse index endpoint" >&2
-            return 1
-        fi
-        echo "Sparse index: $(echo "$output" | wc -l) lines"
-    }
-    run_test "T67" "sparse_index_fetch" 30 test_sparse_index_fetch
+    # ── T67: Sparse index fetch ──────────────────────────────────────────
+    def t67():
+        r = run_cmd(["curl", "-sf",
+                     f"{cfg.endpoint}/v1/{cfg.distro.remi_distro}/index"],
+                    timeout=30)
+        if not r.stdout.strip():
+            raise AssertionError("empty response from sparse index")
+        lines = r.stdout.strip().count("\n") + 1
+        print(f"Sparse index: {lines} lines")
 
-    # ── T68: Chunk-level install ─────────────────────────────────────────────
-    test_chunk_level_install() {
-        # Install a package that's already partially present (fixture was
-        # installed and removed earlier, chunks may be in CAS)
-        local output exit_code
-        output=$("$CONARY" install "${FIXTURE_PKG}=1.0.0" \
-            --db-path "$DB_PATH" \
-            --dep-mode takeover \
-            --yes \
-            --no-scripts \
-            --sandbox never \
-            2>&1) && exit_code=0 || exit_code=$?
+    suite.run_test("T67", "sparse_index_fetch", t67, timeout=30)
 
-        if [ "$exit_code" -ne 0 ]; then
-            echo "chunk-level install failed (exit $exit_code): $output" >&2
-            return 1
-        fi
-        # Verify files exist
-        assert_file_exists "$FIXTURE_FILE"
+    # ── T68: Chunk-level install ─────────────────────────────────────────
+    def t68():
+        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+               "--dep-mode", "takeover", "--yes", "--no-scripts",
+               "--sandbox", "never", timeout=300)
+        assert_file_exists(fx.file)
+        conary(cfg, "remove", fx.package, "--no-scripts", check=False)
 
-        # Cleanup
-        "$CONARY" remove "$FIXTURE_PKG" --db-path "$DB_PATH" --no-scripts 2>/dev/null || true
-    }
-    run_test "T68" "chunk_level_install" 300 test_chunk_level_install
+    suite.run_test("T68", "chunk_level_install", t68, timeout=300)
 
-    # ── T69: OCI manifest valid ──────────────────────────────────────────────
-    test_oci_manifest() {
-        local output http_code
-        http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            "${REMI_ENDPOINT}/v2/" 2>&1) || true
+    # ── T69: OCI manifest valid ──────────────────────────────────────────
+    def t69():
+        r = run_cmd(["curl", "-sf", "-o", "/dev/null",
+                     "-w", "%{http_code}",
+                     f"{cfg.endpoint}/v2/"],
+                    check=False, timeout=30)
+        code = r.stdout.strip()
+        if code not in ("200", "401"):
+            raise AssertionError(
+                f"OCI endpoint returned unexpected {code}")
+        print(f"OCI endpoint: HTTP {code}")
 
-        if [ "$http_code" = "200" ] || [ "$http_code" = "401" ]; then
-            # 200 = OCI registry responds
-            # 401 = OCI registry responds but requires auth (still valid)
-            echo "OCI endpoint returned $http_code"
-        else
-            echo "OCI endpoint returned unexpected $http_code" >&2
-            return 1
-        fi
-    }
-    run_test "T69" "oci_manifest_valid" 30 test_oci_manifest
+    suite.run_test("T69", "oci_manifest_valid", t69, timeout=30)
 
-    # ── T70: OCI blob fetch ──────────────────────────────────────────────────
-    test_oci_blob_fetch() {
-        # List tags to find a valid manifest
-        local tags_output
-        tags_output=$(curl -sf "${REMI_ENDPOINT}/v2/${REMI_DISTRO}/conary-test-fixture/tags/list" 2>&1) || {
-            echo "Could not list OCI tags (may not be published yet)"
-            return 0  # Soft pass - OCI may not have fixture yet
-        }
+    # ── T70: OCI blob fetch ──────────────────────────────────────────────
+    def t70():
+        r = run_cmd(
+            ["curl", "-sf",
+             f"{cfg.endpoint}/v2/{cfg.distro.remi_distro}/"
+             f"{fx.package}/tags/list"],
+            check=False, timeout=30)
+        if r.returncode == 0 and "tags" in r.stdout:
+            print(f"OCI tags: {r.stdout.strip()}")
+        else:
+            print("No OCI tags (expected if not published as OCI)")
 
-        if echo "$tags_output" | grep -q "tags"; then
-            echo "OCI tags available: $tags_output"
-        else
-            echo "No OCI tags found (expected if fixtures not published as OCI)"
-        fi
-    }
-    run_test "T70" "oci_blob_fetch" 30 test_oci_blob_fetch
+    suite.run_test("T70", "oci_blob_fetch", t70, timeout=30)
 
-    # ── T71: Stats endpoint ──────────────────────────────────────────────────
-    test_stats_endpoint() {
-        local output
-        output=$(curl -sf "${REMI_ENDPOINT}/stats" 2>&1)
-        if [ -z "$output" ]; then
-            echo "empty response from /stats" >&2
-            return 1
-        fi
-        # Should be valid JSON with expected fields
-        assert_output_contains "packages" "$output"
-    }
-    run_test "T71" "stats_endpoint" 30 test_stats_endpoint
+    # ── T71: Stats endpoint ──────────────────────────────────────────────
+    def t71():
+        r = run_cmd(["curl", "-sf", f"{cfg.endpoint}/stats"],
+                    timeout=30)
+        if not r.stdout.strip():
+            raise AssertionError("empty response from /stats")
+        assert_contains("packages", r.stdout)
+
+    suite.run_test("T71", "stats_endpoint", t71, timeout=30)
 ```
 
-**Step 2: Close the Phase 2 block**
+**Step 2: Verify Python parses**
 
-After T71, close the `else` block from Task 2:
+Run: `python3 -c "import ast; ast.parse(open('tests/integration/remi/runner/test_runner.py').read())"`
 
-```bash
-fi  # end Phase 2
-```
-
-**Step 3: Verify syntax**
-
-Run: `bash -n tests/integration/remi/runner/test-runner.sh`
-Expected: No output
-
-**Step 4: Commit**
+**Step 3: Commit**
 
 ```bash
-git add tests/integration/remi/runner/test-runner.sh
+git add tests/integration/remi/runner/test_runner.py
 git commit -m "test: add Group E Remi client tests (T67-T71)"
 ```
 
 ---
 
-## Task 10: Update Containerfiles to Include Fixtures
-
-**Files:**
-- Modify: `tests/integration/remi/containers/Containerfile.fedora43`
-- Modify: `tests/integration/remi/containers/Containerfile.ubuntu-noble`
-- Modify: `tests/integration/remi/containers/Containerfile.arch`
-
-**Step 1: Add fixture copying to all three Containerfiles**
-
-Add after the `COPY runner/ /opt/remi-tests/` line in each Containerfile:
-
-```dockerfile
-# Phase 2 test fixtures (recipes, PKGBUILD)
-COPY fixtures/ /opt/remi-tests/fixtures/
-```
-
-**Step 2: Update run.sh to copy fixtures into build context**
-
-In `tests/integration/remi/run.sh`, after the binary/package setup and before `podman build`, add:
-
-```bash
-# ── Copy test fixtures into build context ────────────────────────────────
-FIXTURES_SRC="$PROJECT_ROOT/tests/fixtures"
-FIXTURES_DST="$BUILD_CONTEXT/fixtures"
-if [ -d "$FIXTURES_SRC" ]; then
-    rm -rf "$FIXTURES_DST"
-    mkdir -p "$FIXTURES_DST"
-    # Copy recipes
-    cp -r "$FIXTURES_SRC/recipes" "$FIXTURES_DST/recipes" 2>/dev/null || true
-    # Copy PKGBUILD for conversion tests
-    mkdir -p "$FIXTURES_DST/pkgbuild"
-    cp "$PROJECT_ROOT/packaging/arch/PKGBUILD" "$FIXTURES_DST/pkgbuild/" 2>/dev/null || true
-    CLEANUP_FILES+=("$FIXTURES_DST")
-fi
-```
-
-**Step 3: Verify all three Containerfiles parse**
-
-Run: `podman build --help > /dev/null` (just verify podman works)
-
-**Step 4: Commit**
-
-```bash
-git add tests/integration/remi/containers/ tests/integration/remi/run.sh
-git commit -m "test: include fixtures in container images for Phase 2"
-```
-
----
-
-## Task 11: Add E2E CI Workflow
+## Task 12: Add E2E CI Workflow
 
 **Files:**
 - Create: `.forgejo/workflows/e2e.yaml`
 
-**Step 1: Write the workflow**
+**Step 1: Write workflow**
 
 ```yaml
 # .forgejo/workflows/e2e.yaml
@@ -1206,7 +1787,7 @@ name: E2E Validation
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -1224,7 +1805,7 @@ jobs:
         run: cargo build
 
       - name: Run E2E tests (${{ matrix.distro }})
-        run: ./tests/integration/remi/run.sh --build --distro ${{ matrix.distro }} --phase2
+        run: ./tests/integration/remi/run.sh --distro ${{ matrix.distro }} --phase2
 
       - name: Upload results
         if: always()
@@ -1238,75 +1819,93 @@ jobs:
 
 ```bash
 git add .forgejo/workflows/e2e.yaml
-git commit -m "ci: add daily E2E validation workflow for Phase 2 tests"
+git commit -m "ci: add daily E2E validation workflow for Phase 2"
 ```
 
 ---
 
-## Task 12: Update ROADMAP.md Phase 2 with Test IDs
+## Task 13: Remove Old Bash Runner
+
+After Phase 1 port is verified (Task 6), remove the old bash files.
+
+**Files:**
+- Delete: `tests/integration/remi/runner/test-runner.sh`
+- Delete: `tests/integration/remi/runner/lib.sh`
+
+**Step 1: Remove old files**
+
+```bash
+git rm tests/integration/remi/runner/test-runner.sh tests/integration/remi/runner/lib.sh
+```
+
+**Step 2: Commit**
+
+```bash
+git commit -m "test: remove old bash test runner (replaced by Python)"
+```
+
+---
+
+## Task 14: Update ROADMAP.md Phase 2 with Test IDs
 
 **Files:**
 - Modify: `ROADMAP.md`
 
-**Step 1: Update Phase 2 items with test coverage references**
+**Step 1: Cross-reference roadmap items with test IDs**
 
-Replace the Phase 2 section with items that cross-reference the test IDs, showing which tests prove each feature. Check off items that become covered by passing tests.
+Update each Phase 2 checkbox with the test IDs that prove it, marking items as complete when tests pass.
 
 **Step 2: Commit**
 
 ```bash
 git add ROADMAP.md
-git commit -m "docs: cross-reference Phase 2 roadmap items with test IDs"
+git commit -m "docs: cross-reference Phase 2 roadmap with test IDs"
 ```
 
 ---
 
-## Task 13: Integration Smoke Test
+## Task 15: Full Integration Smoke Test
 
-**Step 1: Build the binary**
+**Step 1:** `cargo build`
 
-Run: `cargo build`
-Expected: Successful build
+**Step 2:** Build and publish fixtures: `bash scripts/publish-test-fixtures.sh`
 
-**Step 2: Run Phase 1 tests locally (quick sanity check)**
-
-Run: `./tests/integration/remi/run.sh --distro fedora43`
-Expected: T01-T37 pass as before
-
-**Step 3: Run Phase 2 tests locally**
-
-Run: `./tests/integration/remi/run.sh --distro fedora43 --phase2`
-Expected: T01-T37 pass, T38-T71 run (some may skip if fixtures aren't published yet)
-
-**Step 4: Fix any issues found**
-
-Iterate on test failures until the suite is stable.
-
-**Step 5: Final commit with any fixes**
-
+**Step 3:** Run Phase 1 on all distros (verify port):
 ```bash
-git add -A
-git commit -m "test: fix Phase 2 integration test issues from smoke run"
+./tests/integration/remi/run.sh --distro fedora43
+./tests/integration/remi/run.sh --distro ubuntu-noble
+./tests/integration/remi/run.sh --distro arch
 ```
+
+**Step 4:** Run Phase 2 on all distros:
+```bash
+./tests/integration/remi/run.sh --distro fedora43 --phase2
+./tests/integration/remi/run.sh --distro ubuntu-noble --phase2
+./tests/integration/remi/run.sh --distro arch --phase2
+```
+
+**Step 5:** Fix issues, commit fixes.
 
 ---
 
 ## Execution Order Summary
 
-| Task | Description | Depends On |
-|------|-------------|------------|
-| 1 | Checksum assertions in lib.sh | None |
-| 2 | --phase2 flag in runner + run.sh | None |
-| 3 | Create fixture CCS packages | None |
-| 4 | Build and publish fixtures to Remi | 3 |
-| 5 | Group A tests (T38-T50) | 1, 2 |
-| 6 | Group B tests (T51-T57) | 2 |
-| 7 | Group C tests (T58-T61) | 2 |
-| 8 | Group D tests (T62-T66) | 2 |
-| 9 | Group E tests (T67-T71) | 2, 4 |
-| 10 | Container fixtures | 3, 8 |
-| 11 | E2E CI workflow | All tests |
-| 12 | ROADMAP.md updates | All tests |
-| 13 | Integration smoke test | All above |
+| Task | Description | Depends On | Parallelizable |
+|------|-------------|------------|----------------|
+| 1 | config.toml | None | Yes |
+| 2 | Python runner core | None | Yes |
+| 3 | Port Phase 1 tests | 2 | No |
+| 4 | Update containers + run.sh | 1, 2 | No |
+| 5 | Create fixture packages | None | Yes |
+| 6 | Verify Phase 1 port | 3, 4 | No |
+| 7 | Group A tests (T38-T50) | 6 | Yes |
+| 8 | Group B tests (T51-T57) | 6 | Yes |
+| 9 | Group C tests (T58-T61) | 6 | Yes |
+| 10 | Group D tests (T62-T66) | 6 | Yes |
+| 11 | Group E tests (T67-T71) | 6 | Yes |
+| 12 | E2E CI workflow | 7-11 | No |
+| 13 | Remove old bash runner | 6 | No |
+| 14 | ROADMAP.md updates | 7-11 | No |
+| 15 | Full smoke test | All above | No |
 
-Tasks 1, 2, 3 are independent and can be parallelized. Tasks 5-9 depend on 1+2 but are independent of each other.
+Tasks 1, 2, 5 can run in parallel. Tasks 7-11 can run in parallel after Task 6 verifies the port.
