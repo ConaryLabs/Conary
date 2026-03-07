@@ -955,18 +955,17 @@ def run_group_a(suite: TestSuite) -> None:
     suite.run_test("T40", "verify_v1_checksum", t40, timeout=10)
 
     # ── T41: Verify scriptlet ran ───────────────────────────────────
-    # CCS install uses declarative hooks only (directories, systemd,
-    # tmpfiles, etc.) -- it does not execute post_install.script.
-    # The marker file will not exist.  Skip until script hooks are
-    # implemented in ccs install.
-    suite.skip("T41", "verify_scriptlet_ran",
-               "ccs install does not execute post_install.script hooks")
+
+    def t41():
+        assert_file_exists(fx.marker)
+
+    suite.run_test("T41", "verify_scriptlet_ran", t41, timeout=10)
 
     # ── T42: Remove with scriptlets ─────────────────────────────────
 
     def t42():
         conary(cfg, "remove", fx.package, timeout=60)
-        # marker was never created (T41 skipped), just verify files removed
+        assert_file_not_exists(fx.marker)
         assert_file_not_exists(fx.file)
 
     suite.run_test("T42", "remove_with_scriptlets", t42, timeout=60)
@@ -1027,14 +1026,39 @@ def run_group_a(suite: TestSuite) -> None:
         suite.run_test("T46", "verify_v2_added_file", t46, timeout=10)
 
         # ── T47: Rollback after update ──────────────────────────────
-        # CCS install does not create changeset history records, so
-        # system history/rollback is not available for CCS-installed
-        # packages.  Skip T47 + T48 until changeset tracking is added
-        # to ccs install.
-        suite.skip("T47", "rollback_after_update",
-                   "ccs install does not create changeset history")
-        suite.skip("T48", "rollback_filesystem_check",
-                   "skipped due to T47 skip")
+        cp_rollback = suite.checkpoint("fixture_rollback")
+
+        def t47():
+            # Get the last changeset ID from history
+            hist = conary(cfg, "system", "history", timeout=30)
+            lines = hist.stdout.strip().splitlines()
+            # Find the first changeset ID (typically first numeric field)
+            cs_id = None
+            for line in lines:
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    cs_id = parts[0]
+                    break
+            if cs_id is None:
+                raise AssertionError(
+                    f"No changeset ID found in history output: "
+                    f"{hist.stdout[:200]}")
+            conary(cfg, "system", "state", "rollback", cs_id, timeout=120)
+
+        suite.run_test("T47", "rollback_after_update", t47, timeout=120)
+
+        if suite.failed_since(cp_rollback):
+            suite.skip("T48", "rollback_filesystem_check",
+                       "skipped due to T47 failure")
+        else:
+            # ── T48: Rollback filesystem check ──────────────────────
+
+            def t48():
+                assert_file_checksum(fx.file, fx.v1_hello_sha256)
+                assert_file_not_exists(fx.added_file)
+
+            suite.run_test("T48", "rollback_filesystem_check", t48,
+                           timeout=10)
 
     # ── T49: Pin blocks update ──────────────────────────────────────
 

@@ -7,7 +7,9 @@
 
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
+use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::packages::traits::PackageFormat;
+use rusqlite::params;
 use std::path::Path;
 
 /// Install a CCS package
@@ -189,13 +191,28 @@ pub fn cmd_ccs_install(
 
     println!("Deployed {} files to {}", files_deployed, root);
 
-    // Step 8: Register in database
+    // Step 8: Register in database with changeset tracking
     println!("Updating database...");
+    let is_upgrade = !existing.is_empty();
     {
         let tx = conn.unchecked_transaction()?;
 
+        // Create changeset for history and rollback support
+        let description = if is_upgrade {
+            format!(
+                "CCS upgrade {} {} -> {}",
+                ccs_pkg.name(),
+                existing[0].version,
+                ccs_pkg.version()
+            )
+        } else {
+            format!("CCS install {} {}", ccs_pkg.name(), ccs_pkg.version())
+        };
+        let mut changeset = Changeset::new(description);
+        let changeset_id = changeset.insert(&tx)?;
+
         // Remove old version if upgrading
-        if !existing.is_empty() {
+        if is_upgrade {
             let old = &existing[0];
             if let Some(old_id) = old.id {
                 // Delete old files
@@ -207,21 +224,30 @@ pub fn cmd_ccs_install(
             }
         }
 
-        // Create trove
+        // Create trove linked to changeset
         let mut trove = ccs_pkg.to_trove();
+        trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(&tx)?;
 
-        // Register files
+        // Register files and record history
         for file in &extracted_files {
             let hash = file.sha256.clone().unwrap_or_default();
             let mut file_entry = conary_core::db::models::FileEntry::new(
                 file.path.clone(),
-                hash,
+                hash.clone(),
                 file.size,
                 file.mode,
                 trove_id,
             );
             file_entry.insert(&tx)?;
+
+            // Record in file_history for rollback
+            let action = if is_upgrade { "modify" } else { "add" };
+            tx.execute(
+                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![changeset_id, &file.path, &hash, action],
+            )?;
         }
 
         // Create provides entry for the package itself
@@ -241,14 +267,18 @@ pub fn cmd_ccs_install(
             }
         }
 
+        // Mark changeset as applied
+        changeset.update_status(&tx, ChangesetStatus::Applied)?;
+
         tx.commit()?;
     }
 
-    // Step 9: Execute post-hooks
+    // Step 9: Execute post-hooks (including post_install script)
     if !hooks.systemd.is_empty()
         || !hooks.tmpfiles.is_empty()
         || !hooks.sysctl.is_empty()
         || !hooks.alternatives.is_empty()
+        || hooks.post_install.is_some()
     {
         println!("Executing post-install hooks...");
         if let Err(e) = hook_executor.execute_post_hooks(hooks) {

@@ -779,6 +779,8 @@ fn convert_hooks_to_binary(
                 priority: a.priority,
             })
             .collect(),
+        post_install: hooks.post_install.as_ref().map(|h| h.script.clone()),
+        pre_remove: hooks.pre_remove.as_ref().map(|h| h.script.clone()),
     };
 
     if binary.is_empty() {

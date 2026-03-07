@@ -193,6 +193,12 @@ pub struct BinaryHooks {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<BinaryAlternativeHook>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_remove: Option<String>,
 }
 
 impl BinaryHooks {
@@ -202,6 +208,8 @@ impl BinaryHooks {
             && self.directories.is_empty()
             && self.systemd.is_empty()
             && self.tmpfiles.is_empty()
+            && self.post_install.is_none()
+            && self.pre_remove.is_none()
             && self.sysctl.is_empty()
             && self.alternatives.is_empty()
     }

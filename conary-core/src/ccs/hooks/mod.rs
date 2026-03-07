@@ -72,6 +72,8 @@ pub enum HookType {
     Sysctl,
     /// Update-alternatives
     Alternatives,
+    /// Arbitrary script (post_install / pre_remove)
+    Script,
 }
 
 impl std::fmt::Display for HookType {
@@ -84,6 +86,7 @@ impl std::fmt::Display for HookType {
             Self::Tmpfiles => write!(f, "tmpfiles"),
             Self::Sysctl => write!(f, "sysctl"),
             Self::Alternatives => write!(f, "alternatives"),
+            Self::Script => write!(f, "script"),
         }
     }
 }
@@ -355,6 +358,39 @@ impl HookExecutor {
         results
     }
 
+    /// Execute a script hook (post_install or pre_remove) as a shell command.
+    ///
+    /// The script is run via `/bin/sh -c` in the target root. If root != "/",
+    /// the command is run with `chroot` (best-effort -- requires root).
+    pub fn execute_script(&self, label: &str, script: &str) -> Result<()> {
+        use std::process::Command;
+        use tracing::info;
+
+        info!("Running {} script: {}", label, script);
+
+        let status = if self.root == Path::new("/") {
+            Command::new("/bin/sh").arg("-c").arg(script).status()
+        } else {
+            // When installing to a target root, use chroot
+            Command::new("chroot")
+                .arg(&self.root)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .status()
+        };
+
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => anyhow::bail!(
+                "{} script failed with exit code {}",
+                label,
+                s.code().unwrap_or(-1)
+            ),
+            Err(e) => anyhow::bail!("{} script failed to execute: {}", label, e),
+        }
+    }
+
     /// Execute post-install hooks with detailed results for journaling
     ///
     /// Same as `execute_post_hooks` but returns detailed results that can be
@@ -440,6 +476,21 @@ impl HookExecutor {
             results.add(HookResult::from_outcome(
                 HookType::Alternatives,
                 alt.name.clone(),
+                result,
+                hook_start.elapsed(),
+            ));
+        }
+
+        // Post-install script
+        if let Some(ref hook) = hooks.post_install {
+            let hook_start = Instant::now();
+            let result = self.execute_script("post_install", &hook.script);
+            if let Err(ref e) = result {
+                warn!("Post-install script failed: {}", e);
+            }
+            results.add(HookResult::from_outcome(
+                HookType::Script,
+                "post_install".to_string(),
                 result,
                 hook_start.elapsed(),
             ));

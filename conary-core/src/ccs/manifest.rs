@@ -318,6 +318,20 @@ pub struct Hooks {
 
     #[serde(default)]
     pub alternatives: Vec<AlternativeHook>,
+
+    /// Post-install script hook (runs after files are deployed)
+    #[serde(default)]
+    pub post_install: Option<ScriptHook>,
+
+    /// Pre-remove script hook (runs before files are removed)
+    #[serde(default)]
+    pub pre_remove: Option<ScriptHook>,
+}
+
+/// Script hook -- an arbitrary shell command run during install/remove
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptHook {
+    pub script: String,
 }
 
 pub type User = UserHook;
