@@ -31,6 +31,7 @@ Two servers, one CI system.
 |----------|---------|------|----------|
 | `ci.yaml` | Push to main, manual | build, test, clippy, remi-smoke | ~5 min |
 | `integration.yaml` | Push to main, manual | 3-distro Podman matrix (fedora43, ubuntu-noble, arch) | ~15 min |
+| `e2e.yaml` | Daily 06:00 UTC, manual | 3-distro Phase 1+2 deep E2E | ~20-30 min |
 | `remi-health.yaml` | Every 6 hours, manual | Full endpoint verification | ~60s |
 
 **Trigger manually:** Forgejo API `POST /api/v1/repos/peter/Conary/actions/workflows/{name}/dispatches` with `{"ref":"main"}`.
@@ -46,13 +47,18 @@ Two servers, one CI system.
 | `scripts/release.sh [conary\|erofs\|server\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
+| `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
 
 ## Integration Tests
 
-- **Location:** `tests/integration/remi/` (37 tests, T01-T37)
-- **Run locally on Forge:** `./tests/integration/remi/run.sh --build --distro fedora43`
+- **Location:** `tests/integration/remi/` (71 tests: T01-T37 Phase 1, T38-T71 Phase 2)
+- **Runner:** Python 3.11+ (`runner/test_runner.py`), stdlib-only
+- **Config:** `tests/integration/remi/config.toml` (single source of truth)
+- **Run on Forge:** `./tests/integration/remi/run.sh --build --distro fedora43`
+- **Phase 2:** `./tests/integration/remi/run.sh --build --distro fedora43 --phase2`
 - **Containers:** `tests/integration/remi/containers/Containerfile.{fedora43,ubuntu-noble,arch}`
 - **Output:** JSON results in `tests/integration/remi/results/`
+- **Full docs:** See `.claude/rules/integration-tests.md` and `docs/INTEGRATION-TESTING.md`
 
 ## Version Groups
 
