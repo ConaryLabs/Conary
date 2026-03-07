@@ -82,10 +82,19 @@ pub fn build_generation(
                 continue;
             }
 
-            // Parse hex digest to bytes
-            let digest = hex_to_digest(&file.sha256_hash).with_context(|| {
-                format!("Invalid digest for {}", file.path)
-            })?;
+            // Parse hex digest to bytes -- skip files with invalid hashes
+            // (e.g. directories, adopted files with placeholder hashes)
+            let digest = match hex_to_digest(&file.sha256_hash) {
+                Ok(d) => d,
+                Err(_) => {
+                    debug!(
+                        "Skipping file with invalid digest ({} chars): {}",
+                        file.sha256_hash.len(),
+                        file.path
+                    );
+                    continue;
+                }
+            };
 
             #[allow(clippy::cast_sign_loss)]
             let permissions = file.permissions as u32;

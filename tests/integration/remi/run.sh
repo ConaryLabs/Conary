@@ -94,6 +94,11 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
+# Load erofs kernel module if available (needed for composefs/generation tests)
+if [ ! -d /sys/module/erofs ] && command -v modprobe &>/dev/null; then
+    sudo modprobe erofs 2>/dev/null || true
+fi
+
 # ── Determine install mode ───────────────────────────────────────────────────
 
 BUILD_CONTEXT="$SCRIPT_DIR"

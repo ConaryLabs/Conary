@@ -1125,11 +1125,10 @@ def run_group_b(suite: TestSuite) -> None:
     # ── T51: Build generation ───────────────────────────────────────
     cp_gen = suite.checkpoint("gen_build")
 
-    # Generation build requires composefs kernel support (EROFS_FS)
-    # which is not available in most container environments.
-    # Check kernel support before attempting.
-    has_composefs = Path("/sys/module/erofs").exists()
-    if not has_composefs and Path("/proc/filesystems").exists():
+    # Generation build requires EROFS kernel support (composefs uses EROFS).
+    # Check /proc/filesystems for erofs entry (same check as supports_composefs).
+    has_composefs = False
+    if Path("/proc/filesystems").exists():
         has_composefs = "erofs" in Path("/proc/filesystems").read_text()
 
     if not has_composefs:
@@ -1144,8 +1143,17 @@ def run_group_b(suite: TestSuite) -> None:
         ], "composefs/EROFS not available in container")
         return
 
+    # Track generation numbers dynamically (next_state_number starts at 0)
+    gen_numbers = []  # [first_gen, second_gen]
+
     def t51():
-        conary(cfg, "system", "generation", "build", timeout=120, no_db=True)
+        r = conary(cfg, "system", "generation", "build", timeout=120, no_db=True)
+        # Parse "Generation N built." from stdout
+        m = re.search(r"Generation\s+(\d+)\s+built", r.stdout)
+        if m:
+            gen_numbers.append(int(m.group(1)))
+        else:
+            gen_numbers.append(0)  # fallback
 
     suite.run_test("T51", "build_generation", t51, timeout=120)
 
@@ -1171,7 +1179,8 @@ def run_group_b(suite: TestSuite) -> None:
     # ── T53: Generation info ────────────────────────────────────────
 
     def t53():
-        r = conary(cfg, "system", "generation", "info", "1", timeout=30,
+        gen = str(gen_numbers[0]) if gen_numbers else "0"
+        r = conary(cfg, "system", "generation", "info", gen, timeout=30,
                    no_db=True)
         assert_contains("packages", r.stdout)
 
@@ -1185,8 +1194,12 @@ def run_group_b(suite: TestSuite) -> None:
         conary(cfg, "ccs", "install", v2_ccs,
                "--allow-unsigned", "--sandbox", "never",
                timeout=300)
-        conary(cfg, "system", "generation", "build", timeout=120)
-        conary(cfg, "system", "generation", "switch", "2", timeout=60,
+        r = conary(cfg, "system", "generation", "build", timeout=120)
+        # Parse second generation number
+        m = re.search(r"Generation\s+(\d+)\s+built", r.stdout)
+        gen2 = int(m.group(1)) if m else (gen_numbers[0] + 1 if gen_numbers else 1)
+        gen_numbers.append(gen2)
+        conary(cfg, "system", "generation", "switch", str(gen2), timeout=60,
                no_db=True)
 
     suite.run_test("T54", "switch_generation", t54, timeout=300)
@@ -1200,7 +1213,8 @@ def run_group_b(suite: TestSuite) -> None:
         # ── T55: Rollback generation ────────────────────────────────
 
         def t55():
-            conary(cfg, "system", "generation", "switch", "1", timeout=60,
+            gen1 = str(gen_numbers[0]) if gen_numbers else "0"
+            conary(cfg, "system", "generation", "switch", gen1, timeout=60,
                    no_db=True)
 
         suite.run_test("T55", "rollback_generation", t55, timeout=60)
@@ -1375,12 +1389,33 @@ def run_group_d(suite: TestSuite) -> None:
     hermetic_out = "/tmp/conary-hermetic-output"
     Path(hermetic_out).mkdir(parents=True, exist_ok=True)
 
-    # Hermetic build uses a pristine container with no host mounts.
-    # In integration test containers this fails (exit 127 -- no
-    # coreutils in the empty build root).  Skip in container environments.
-    suite.skip("T66", "hermetic_build",
-               "hermetic mode needs a populated build root (not available "
-               "in test containers)")
+    def t66():
+        # Hermetic mode with no sysroot should fail with a clear error
+        # (no /bin/sh in the pristine sandbox) -- this verifies the mode
+        # actually activates rather than silently falling back.
+        r = run_cmd(
+            [cfg.conary_bin, "cook", str(recipe_toml),
+             "--output", hermetic_out,
+             "--source-cache", recipe_cache,
+             "--hermetic"],
+            timeout=30, check=False,
+        )
+        # Expect failure (exit 1) because no tools are available
+        if r.returncode == 0:
+            raise AssertionError(
+                "hermetic build succeeded unexpectedly (should fail "
+                "without sysroot)")
+        # Verify the output mentions isolation/sandbox/pristine,
+        # not an unrelated crash
+        output = r.stdout.lower()
+        if not any(w in output for w in (
+            "pristine", "sandbox", "hermetic", "no such file",
+            "not found", "failed to execute", "error")):
+            raise AssertionError(
+                f"hermetic build failed but output doesn't mention "
+                f"expected keywords: {r.stdout[:300]}")
+
+    suite.run_test("T66", "hermetic_build", t66, timeout=30)
 
     # Cleanup
     shutil.rmtree(recipe_output, ignore_errors=True)

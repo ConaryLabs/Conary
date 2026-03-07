@@ -15,11 +15,12 @@ pub struct ComposefsCaps {
 
 /// Check if the running kernel supports composefs.
 ///
-/// Checks /proc/filesystems for "composefs" entry, which is present
-/// when the composefs kernel module is loaded or built-in.
+/// Modern composefs uses EROFS under the hood (not a separate filesystem type).
+/// Checks /proc/filesystems for "erofs" entry, which is present when the
+/// erofs kernel module is loaded or built-in (CONFIG_EROFS_FS).
 pub fn supports_composefs() -> bool {
     match std::fs::read_to_string("/proc/filesystems") {
-        Ok(contents) => contents.lines().any(|line| line.trim().ends_with("composefs")),
+        Ok(contents) => contents.lines().any(|line| line.trim().ends_with("erofs")),
         Err(_) => false,
     }
 }
