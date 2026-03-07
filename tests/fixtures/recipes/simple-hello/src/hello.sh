@@ -1,2 +1,2 @@
 #!/bin/sh
-echo "hello from test recipe"
+echo hello

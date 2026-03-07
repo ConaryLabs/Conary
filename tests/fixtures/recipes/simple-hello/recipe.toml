@@ -5,8 +5,8 @@ description = "Simple test recipe for E2E validation"
 license = "MIT"
 
 [source]
-type = "local"
-path = "src/"
+archive = "file:///opt/remi-tests/fixtures/recipes/simple-hello/source.tar.gz"
+checksum = "sha256:745b8ee9e74cf9f8c4310be3377c0a0ba5e16555eecbb8ff3680641c0a7f82c9"
 
 [build]
 steps = [
