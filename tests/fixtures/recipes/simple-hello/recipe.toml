@@ -2,6 +2,7 @@
 name = "test-hello"
 version = "1.0.0"
 description = "Simple test recipe for E2E validation"
+summary = "Test hello script"
 license = "MIT"
 
 [source]
@@ -9,9 +10,7 @@ archive = "file:///opt/remi-tests/fixtures/recipes/simple-hello/source.tar.gz"
 checksum = "sha256:745b8ee9e74cf9f8c4310be3377c0a0ba5e16555eecbb8ff3680641c0a7f82c9"
 
 [build]
-steps = [
-    "install -Dm755 hello.sh ${DESTDIR}/usr/bin/test-hello",
-]
+install = "install -Dm755 hello.sh ${DESTDIR}/usr/bin/test-hello"
 
 [package.platform]
 os = "linux"
