@@ -45,41 +45,41 @@ Prove the features work on real systems. Each scenario becomes a CI job.
 
 ### Install Flow (per distro: Fedora, Ubuntu, Arch)
 
-- [ ] Adopt existing system packages into Conary DB
-- [ ] Install a package from Remi (with dependencies)
-- [ ] Remove a package (verify clean removal + orphan detection)
-- [ ] Update a package (verify delta application)
-- [ ] Rollback an operation (verify DB + filesystem revert)
-- [ ] Pin/unpin a package, verify update skips it
+- [ ] Adopt existing system packages into Conary DB (T20-T21)
+- [ ] Install a package from Remi with dependencies (T38-T41)
+- [ ] Remove a package, verify clean removal + orphan detection (T42, T50)
+- [ ] Update a package, verify delta application + checksums (T44-T46)
+- [ ] Rollback an operation, verify DB + filesystem + checksums (T47-T48)
+- [ ] Pin/unpin a package, verify update skips it (T49)
 
 ### Generation Lifecycle
 
-- [ ] Build a generation from current state
-- [ ] Switch to new generation
-- [ ] Rollback to previous generation
-- [ ] GC old generations
-- [ ] System takeover flow (full adopt -> generation)
+- [ ] Build a generation from current state (T51)
+- [ ] Switch to new generation (T54)
+- [ ] Rollback to previous generation (T55)
+- [ ] GC old generations (T56)
+- [ ] System takeover flow -- full adopt -> generation (T57)
 
 ### Bootstrap Pipeline
 
-- [ ] Dry-run validation passes
-- [ ] Stage 0 -> Stage 1 toolchain builds
+- [ ] Dry-run validation passes (T58)
+- [ ] Stage 0 -> Stage 1 toolchain builds (T59-T61)
 - [ ] Base system builds with checkpointing
 - [ ] Image generation produces bootable output
 - [ ] (Stretch) Boot the image in QEMU and verify
 
 ### Remi Integration
 
-- [ ] Client fetches sparse index from packages.conary.io
-- [ ] Chunk-level install (client has partial chunks, fetches missing)
+- [ ] Client fetches sparse index from packages.conary.io (T67)
+- [ ] Chunk-level install -- client has partial chunks, fetches missing (T68)
 - [ ] Federation peer discovery and chunk routing
-- [ ] OCI distribution API serves valid manifests
+- [ ] OCI distribution API serves valid manifests (T69-T70)
 
 ### Recipe & Build
 
-- [ ] Cook a recipe from TOML, verify CCS output
-- [ ] PKGBUILD converter produces valid recipe
-- [ ] Hermetic build isolation works (network blocked)
+- [ ] Cook a recipe from TOML, verify CCS output (T62-T63)
+- [ ] PKGBUILD converter produces valid recipe (T64-T65)
+- [ ] Hermetic build isolation works -- network blocked (T66)
 
 ---
 
