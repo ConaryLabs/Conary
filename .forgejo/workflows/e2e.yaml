@@ -1,0 +1,32 @@
+# .forgejo/workflows/e2e.yaml
+# Phase 2 E2E validation -- daily + manual (~20-30 min)
+name: E2E Validation
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: linux-native
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora43, ubuntu-noble, arch]
+    name: E2E (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build conary
+        run: cargo build
+
+      - name: Run E2E tests (${{ matrix.distro }})
+        run: ./tests/integration/remi/run.sh --distro ${{ matrix.distro }} --phase2
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.distro }}
+          path: tests/integration/remi/results/${{ matrix.distro }}.json
