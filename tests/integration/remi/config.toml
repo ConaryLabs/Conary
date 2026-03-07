@@ -1,0 +1,73 @@
+# tests/integration/remi/config.toml
+# Integration test configuration -- single source of truth for all endpoints,
+# distro mappings, and fixture definitions.
+#
+# Environment variable overrides:
+#   REMI_ENDPOINT  - override [remi] endpoint
+#   DB_PATH        - override [paths] db
+#   CONARY_BIN     - override [paths] conary_bin
+#   RESULTS_DIR    - override [paths] results_dir
+#   DISTRO         - select which [distros.*] section to use
+
+[remi]
+endpoint = "https://packages.conary.io"
+
+[paths]
+db = "/var/lib/conary/conary.db"
+conary_bin = "/usr/bin/conary"
+results_dir = "/results"
+fixture_dir = "/opt/remi-tests/fixtures"
+
+# Distro-specific settings. Key = DISTRO env var value.
+[distros.fedora43]
+remi_distro = "fedora"
+repo_name = "fedora-remi"
+test_package = "which"
+test_binary = "/usr/bin/which"
+test_package_2 = "tree"
+test_binary_2 = "/usr/bin/tree"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+[distros.ubuntu-noble]
+remi_distro = "ubuntu"
+repo_name = "ubuntu-remi"
+test_package = "patch"
+test_binary = "/usr/bin/patch"
+test_package_2 = "nano"
+test_binary_2 = "/usr/bin/nano"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+[distros.arch]
+remi_distro = "arch"
+repo_name = "arch-remi"
+test_package = "which"
+test_binary = "/usr/bin/which"
+test_package_2 = "tree"
+test_binary_2 = "/usr/bin/tree"
+test_package_3 = "jq"
+test_binary_3 = "/usr/bin/jq"
+
+# Default repos to remove after init (avoid slow syncs)
+[setup]
+remove_default_repos = [
+    "arch-core", "arch-extra", "arch-multilib",
+    "fedora-43", "ubuntu-noble",
+]
+
+# Test fixture packages (Phase 2)
+[fixtures]
+package = "conary-test-fixture"
+file = "/usr/share/conary-test/hello.txt"
+added_file = "/usr/share/conary-test/added.txt"
+marker = "/var/lib/conary-test/installed"
+
+[fixtures.v1]
+version = "1.0.0"
+hello_sha256 = "PLACEHOLDER"
+
+[fixtures.v2]
+version = "2.0.0"
+hello_sha256 = "PLACEHOLDER"
+added_sha256 = "PLACEHOLDER"
