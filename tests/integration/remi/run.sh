@@ -171,15 +171,22 @@ case "$DISTRO" in
     ubuntu-*) NEEDS_SOURCE_BUILD=1 ;;
 esac
 
-if [ "$NEEDS_SOURCE_BUILD" -eq 1 ] && [ "$INSTALL_MODE" = "binary" ]; then
-    echo "[*] Copying source tree for in-container build..."
+if [ "$NEEDS_SOURCE_BUILD" -eq 1 ]; then
     SOURCE_DIR="$BUILD_CONTEXT/source"
-    mkdir -p "$SOURCE_DIR"
-    # Use git archive to get a clean copy (respects .gitignore)
-    git -C "$PROJECT_ROOT" archive HEAD | tar -x -C "$SOURCE_DIR"
+    if [ "$INSTALL_MODE" = "binary" ]; then
+        echo "[*] Copying source tree for in-container build..."
+        mkdir -p "$SOURCE_DIR"
+        # Use git archive to get a clean copy (respects .gitignore)
+        git -C "$PROJECT_ROOT" archive HEAD | tar -x -C "$SOURCE_DIR"
+        echo "[*] Source tree ready ($(du -sh "$SOURCE_DIR" | cut -f1))"
+        echo ""
+    else
+        # Package mode: create empty source dir so Containerfile COPY doesn't fail
+        # (the builder stage won't actually be used)
+        mkdir -p "$SOURCE_DIR"
+        touch "$SOURCE_DIR/.placeholder"
+    fi
     CLEANUP_FILES+=("$SOURCE_DIR")
-    echo "[*] Source tree ready ($(du -sh "$SOURCE_DIR" | cut -f1))"
-    echo ""
 fi
 
 # ── Copy config and fixtures into build context ─────────────────────────────

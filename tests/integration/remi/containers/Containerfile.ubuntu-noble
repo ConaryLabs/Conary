@@ -5,7 +5,8 @@
 #   binary  - builds from source in-container (avoids OpenSSL ABI mismatch)
 #   package - installs from DEB via apt
 
-# ── Builder stage: compile from source ──────────────────────────────────────
+# ── Builder stage: compile from source (binary mode only) ─────────────────
+# In package mode, source/ contains only a placeholder; the build is skipped.
 FROM docker.io/library/ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,10 +18,16 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain 1.93.0 --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Copy source and build
+ARG INSTALL_MODE=binary
+
+# Copy source and build (only in binary mode; package mode has placeholder)
 COPY source/ /build/
 WORKDIR /build
-RUN cargo build --release 2>&1 && strip target/release/conary
+RUN if [ "$INSTALL_MODE" = "binary" ] && [ -f Cargo.toml ]; then \
+        cargo build --release 2>&1 && strip target/release/conary; \
+    else \
+        mkdir -p target/release && touch target/release/conary; \
+    fi
 
 # ── Runtime stage ───────────────────────────────────────────────────────────
 FROM docker.io/library/ubuntu:24.04
@@ -34,13 +41,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy all conary* files from build context (package mode)
 COPY conary* /tmp/install/
 
-# Copy built binary from builder stage (binary mode)
+# Copy built binary from builder stage (only meaningful in binary mode)
 COPY --from=builder /build/target/release/conary /tmp/install/conary-built
 
-# Install: DEB package if present, built binary from source, or raw binary
+# Install: DEB package or built binary from source
 RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1; then \
         apt-get update && apt-get install -y /tmp/install/*.deb && rm -rf /var/lib/apt/lists/*; \
-    elif [ -f /tmp/install/conary-built ]; then \
+    elif [ "$INSTALL_MODE" = "binary" ] && [ -f /tmp/install/conary-built ] && [ -s /tmp/install/conary-built ]; then \
         install -m 755 /tmp/install/conary-built /usr/bin/conary; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
