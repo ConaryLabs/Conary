@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -234,6 +235,13 @@ def assert_file_checksum(path: str, expected_sha256: str) -> None:
 # Command runner
 # ---------------------------------------------------------------------------
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return _ANSI_RE.sub("", text)
+
 
 def run_cmd(
     args: list[str],
@@ -241,7 +249,7 @@ def run_cmd(
     timeout: int = 60,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command, capturing combined stdout+stderr."""
+    """Run a command, capturing combined stdout+stderr (ANSI stripped)."""
     result = subprocess.run(
         args,
         capture_output=False,
@@ -251,6 +259,7 @@ def run_cmd(
         timeout=timeout,
         check=check,
     )
+    result.stdout = _strip_ansi(result.stdout)
     return result
 
 
