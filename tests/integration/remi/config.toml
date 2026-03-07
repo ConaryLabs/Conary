@@ -65,9 +65,9 @@ marker = "/var/lib/conary-test/installed"
 
 [fixtures.v1]
 version = "1.0.0"
-hello_sha256 = "PLACEHOLDER"
+hello_sha256 = "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53"
 
 [fixtures.v2]
 version = "2.0.0"
-hello_sha256 = "PLACEHOLDER"
-added_sha256 = "PLACEHOLDER"
+hello_sha256 = "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db"
+added_sha256 = "9767b0b4d55db9aee6638c9875b5cefea50c952cc77fbc5703ebc866b0daba3c"
