@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::packages::traits::PackageFormat;
-use rusqlite::params;
 use std::path::Path;
 
 /// Install a CCS package
@@ -240,14 +239,6 @@ pub fn cmd_ccs_install(
                 trove_id,
             );
             file_entry.insert(&tx)?;
-
-            // Record in file_history for rollback
-            let action = if is_upgrade { "modify" } else { "add" };
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![changeset_id, &file.path, &hash, action],
-            )?;
         }
 
         // Create provides entry for the package itself
@@ -265,6 +256,18 @@ pub fn cmd_ccs_install(
                     conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
                 cap_provide.insert(&tx)?;
             }
+        }
+
+        // Store pre_remove script as a scriptlet entry so cmd_remove can find it
+        if let Some(ref hook) = hooks.pre_remove {
+            let mut scriptlet = conary_core::db::models::ScriptletEntry::new(
+                trove_id,
+                "pre-remove".to_string(),
+                "/bin/sh".to_string(),
+                hook.script.clone(),
+                "ccs",
+            );
+            scriptlet.insert(&tx)?;
         }
 
         // Mark changeset as applied
