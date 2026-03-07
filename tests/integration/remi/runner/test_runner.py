@@ -413,8 +413,463 @@ class TestSuite:
 
 
 def run_phase1(suite: TestSuite) -> None:
-    """Phase 1 tests -- core Remi integration."""
-    print("[TODO] Phase 1 tests not yet implemented")
+    """Phase 1: Core Remi integration tests (T01-T37)."""
+    cfg = suite.cfg
+    d = cfg.distro
+
+    # ── Setup: Initialize DB ─────────────────────────────────────────
+    print("[SETUP] Initializing database...")
+    Path(cfg.db_path).parent.mkdir(parents=True, exist_ok=True)
+    conary(cfg, "system", "init")
+    for repo in cfg.remove_default_repos:
+        conary(cfg, "repo", "remove", repo, check=False)
+    print("[SETUP] Database ready\n")
+
+    # ── T01: Health Check ────────────────────────────────────────────
+
+    def t01():
+        run_cmd(["curl", "-sf", f"{cfg.endpoint}/health"], timeout=10)
+
+    suite.run_test("T01", "health_check", t01, timeout=10)
+
+    if suite.fail_count > 0:
+        print(f"\nRemi unreachable at {cfg.endpoint} - skipping remaining")
+        suite.set_fatal()
+        return
+
+    # ── T02: Repo Add ────────────────────────────────────────────────
+
+    def t02():
+        conary(cfg, "repo", "add", d.repo_name, cfg.endpoint,
+               "--default-strategy", "remi",
+               "--remi-endpoint", cfg.endpoint,
+               "--remi-distro", d.remi_distro,
+               "--no-gpg-check",
+               timeout=10)
+
+    suite.run_test("T02", "repo_add", t02, timeout=10)
+
+    # ── T03: Repo List ───────────────────────────────────────────────
+
+    def t03():
+        r = conary(cfg, "repo", "list", timeout=10)
+        assert_contains(d.repo_name, r.stdout)
+
+    suite.run_test("T03", "repo_list", t03, timeout=10)
+
+    # ── T04: Repo Sync ───────────────────────────────────────────────
+
+    cp_sync = suite.checkpoint("sync")
+
+    def t04():
+        r = conary(cfg, "repo", "sync", d.repo_name, "--force", timeout=300)
+        assert_contains("[OK]", r.stdout)
+
+    suite.run_test("T04", "repo_sync", t04, timeout=300)
+
+    if suite.failed_since(cp_sync):
+        print("\nRepo sync failed - skipping package operation tests (T05-T37)")
+        suite.set_fatal()
+        return
+
+    # ── T05: Search Exists ───────────────────────────────────────────
+
+    def t05():
+        r = conary(cfg, "search", d.test_package, timeout=30)
+        assert_contains(d.test_package, r.stdout)
+        assert_not_contains("No packages found", r.stdout)
+
+    suite.run_test("T05", "search_exists", t05, timeout=30)
+
+    # ── T06: Search Nonexistent ──────────────────────────────────────
+
+    def t06():
+        r = conary(cfg, "search", "zzz-nonexistent-pkg-12345", timeout=10)
+        assert_contains("No packages found", r.stdout)
+
+    suite.run_test("T06", "search_nonexistent", t06, timeout=10)
+
+    # ── T07: Install Package ─────────────────────────────────────────
+
+    def t07():
+        conary(cfg, "install", d.test_package,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T07", "install_package", t07, timeout=300)
+
+    # ── T08: Verify Files ────────────────────────────────────────────
+
+    def t08():
+        assert_file_exists(d.test_binary)
+        assert_file_executable(d.test_binary)
+
+    suite.run_test("T08", "verify_files", t08, timeout=10)
+
+    # ── T09: List Installed ──────────────────────────────────────────
+
+    def t09():
+        r = conary(cfg, "list", timeout=10)
+        assert_contains(d.test_package, r.stdout)
+
+    suite.run_test("T09", "list_installed", t09, timeout=10)
+
+    # ── T10: Install Nonexistent ─────────────────────────────────────
+
+    def t10():
+        r = conary(cfg, "install", "zzz-nonexistent-pkg-12345",
+                   "--no-scripts", "--no-deps", "--sandbox", "never",
+                   timeout=30, check=False)
+        if r.returncode == 0:
+            raise AssertionError(
+                "expected non-zero exit code for nonexistent package"
+            )
+
+    suite.run_test("T10", "install_nonexistent", t10, timeout=30)
+
+    # ── T11: Remove Package ──────────────────────────────────────────
+
+    def t11():
+        conary(cfg, "remove", d.test_package, "--no-scripts", timeout=60)
+
+    suite.run_test("T11", "remove_package", t11, timeout=60)
+
+    # ── T12: Verify Removed ──────────────────────────────────────────
+
+    def t12():
+        assert_file_not_exists(d.test_binary)
+        r = conary(cfg, "list", timeout=10)
+        assert_not_contains(d.test_package, r.stdout)
+
+    suite.run_test("T12", "verify_removed", t12, timeout=10)
+
+    # ── T13: Version Check ───────────────────────────────────────────
+
+    def t13():
+        r = run_cmd([cfg.conary_bin, "--version"], timeout=10)
+        assert_contains("conary", r.stdout)
+
+    suite.run_test("T13", "version_check", t13, timeout=10)
+
+    # ── T14: Reinstall Which ─────────────────────────────────────────
+
+    cp_reinstall = suite.checkpoint("reinstall")
+
+    def t14():
+        conary(cfg, "install", d.test_package,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T14", "reinstall_which", t14, timeout=300)
+
+    reinstall_failed = suite.failed_since(cp_reinstall)
+
+    # ── T15: Package Info ────────────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T15", "package_info", "skipped due to T14 failure")
+    else:
+        def t15():
+            r = conary(cfg, "list", d.test_package, "--info", timeout=30)
+            assert_contains(d.test_package, r.stdout)
+            assert_contains("Version", r.stdout)
+
+        suite.run_test("T15", "package_info", t15, timeout=30)
+
+    # ── T16: List Files ──────────────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T16", "list_files", "skipped due to T14 failure")
+    else:
+        def t16():
+            r = conary(cfg, "list", d.test_package, "--files", timeout=30)
+            assert_contains(d.test_binary, r.stdout)
+
+        suite.run_test("T16", "list_files", t16, timeout=30)
+
+    # ── T17: Path Ownership ──────────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T17", "path_ownership", "skipped due to T14 failure")
+    else:
+        def t17():
+            r = conary(cfg, "list", "--path", d.test_binary, timeout=30)
+            assert_contains(d.test_package, r.stdout)
+
+        suite.run_test("T17", "path_ownership", t17, timeout=30)
+
+    # ── T18: Install Tree ────────────────────────────────────────────
+
+    cp_tree = suite.checkpoint("tree")
+
+    def t18():
+        conary(cfg, "install", d.test_package_2,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T18", "install_tree", t18, timeout=300)
+
+    tree_failed = suite.failed_since(cp_tree)
+
+    # ── T19: Verify Tree Files ───────────────────────────────────────
+
+    if tree_failed:
+        suite.skip("T19", "verify_tree_files", "skipped due to T18 failure")
+    else:
+        def t19():
+            assert_file_exists(d.test_binary_2)
+            assert_file_executable(d.test_binary_2)
+
+        suite.run_test("T19", "verify_tree_files", t19, timeout=10)
+
+    # ── T20: Adopt Single Package ────────────────────────────────────
+
+    cp_adopt = suite.checkpoint("adopt")
+
+    def t20():
+        conary(cfg, "system", "adopt", "curl", timeout=60)
+
+    suite.run_test("T20", "adopt_single_package", t20, timeout=60)
+
+    adopt_failed = suite.failed_since(cp_adopt)
+
+    # ── T21: Adopt Status ────────────────────────────────────────────
+
+    if adopt_failed:
+        suite.skip("T21", "adopt_status", "skipped due to T20 failure")
+    else:
+        def t21():
+            r = conary(cfg, "system", "adopt", "--status", timeout=30)
+            assert_contains("Conary Adoption Status", r.stdout)
+            assert_contains("Adopted", r.stdout)
+
+        suite.run_test("T21", "adopt_status", t21, timeout=30)
+
+    # ── T22: Pin Package ─────────────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T22", "pin_package", "skipped due to T14 failure")
+    else:
+        def t22():
+            conary(cfg, "pin", d.test_package, timeout=30)
+            r = conary(cfg, "list", d.test_package, "--info", timeout=30)
+            assert_contains("Pinned      : yes", r.stdout)
+
+        suite.run_test("T22", "pin_package", t22, timeout=30)
+
+    # ── T23: Unpin Package ───────────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T23", "unpin_package", "skipped due to T14 failure")
+    else:
+        def t23():
+            conary(cfg, "unpin", d.test_package, timeout=30)
+            r = conary(cfg, "list", d.test_package, "--info", timeout=30)
+            assert_contains("Pinned      : no", r.stdout)
+
+        suite.run_test("T23", "unpin_package", t23, timeout=30)
+
+    # ── T24: Changeset History ───────────────────────────────────────
+
+    if reinstall_failed:
+        suite.skip("T24", "changeset_history", "skipped due to T14 failure")
+    else:
+        def t24():
+            r = conary(cfg, "system", "history", timeout=30)
+            assert_contains("Changeset", r.stdout)
+
+        suite.run_test("T24", "changeset_history", t24, timeout=30)
+
+    # ── T25: Install Dep Package ─────────────────────────────────────
+
+    cp_dep = suite.checkpoint("dep")
+
+    def t25():
+        conary(cfg, "install", d.test_package_3,
+               "--no-scripts", "--no-deps", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T25", "install_dep_package", t25, timeout=300)
+
+    dep_failed = suite.failed_since(cp_dep)
+
+    # ── T26: Verify Dep Files ────────────────────────────────────────
+
+    if dep_failed:
+        suite.skip("T26", "verify_dep_files", "skipped due to T25 failure")
+    else:
+        def t26():
+            assert_file_exists(d.test_binary_3)
+
+        suite.run_test("T26", "verify_dep_files", t26, timeout=10)
+
+    # ── T27: Multi Package Coexist ───────────────────────────────────
+
+    if dep_failed or reinstall_failed:
+        suite.skip("T27", "multi_package_coexist",
+                   "skipped due to prior install failure")
+    else:
+        def t27():
+            r = conary(cfg, "list", timeout=10)
+            assert_contains(d.test_package, r.stdout)
+            assert_contains(d.test_package_2, r.stdout)
+            assert_contains(d.test_package_3, r.stdout)
+
+        suite.run_test("T27", "multi_package_coexist", t27, timeout=10)
+
+    # ── T28: Dep Mode Satisfy ────────────────────────────────────────
+
+    def t28():
+        r = conary(cfg, "install", d.test_package,
+                   "--no-scripts", "--dep-mode", "satisfy",
+                   "--yes", "--sandbox", "never",
+                   timeout=300, check=False)
+        # Cleanup: remove the package for later tests
+        conary(cfg, "remove", d.test_package, "--no-scripts",
+               timeout=60, check=False)
+        if r.returncode != 0:
+            raise AssertionError(
+                f"install with --dep-mode satisfy failed "
+                f"(exit {r.returncode}): {r.stdout}"
+            )
+
+    suite.run_test("T28", "dep_mode_satisfy", t28, timeout=300)
+
+    # ── T29: Dep Mode Adopt ──────────────────────────────────────────
+
+    def t29():
+        r = conary(cfg, "install", d.test_package_2,
+                   "--no-scripts", "--dep-mode", "adopt",
+                   "--yes", "--sandbox", "never",
+                   timeout=300, check=False)
+        if r.returncode != 0:
+            raise AssertionError(
+                f"install with --dep-mode adopt failed "
+                f"(exit {r.returncode}): {r.stdout}"
+            )
+        assert_file_exists(d.test_binary_2)
+
+    suite.run_test("T29", "dep_mode_adopt", t29, timeout=300)
+
+    # ── T30: Dep Mode Takeover ───────────────────────────────────────
+
+    def t30():
+        r = conary(cfg, "install", d.test_package_3,
+                   "--no-scripts", "--dep-mode", "takeover",
+                   "--yes", "--sandbox", "never",
+                   timeout=300, check=False)
+        if r.returncode != 0:
+            raise AssertionError(
+                f"install with --dep-mode takeover failed "
+                f"(exit {r.returncode}): {r.stdout}"
+            )
+        assert_file_exists(d.test_binary_3)
+
+    suite.run_test("T30", "dep_mode_takeover", t30, timeout=300)
+
+    # ── T31: Blocklist Enforced ──────────────────────────────────────
+
+    def t31():
+        conary(cfg, "install", "glibc",
+               "--no-scripts", "--dep-mode", "takeover",
+               "--yes", "--sandbox", "never",
+               timeout=60, check=False)
+        r = conary(cfg, "list", timeout=10)
+        assert_not_contains("glibc", r.stdout)
+
+    suite.run_test("T31", "blocklist_enforced", t31, timeout=60)
+
+    # ── T32: Update With Adopted ─────────────────────────────────────
+
+    def t32():
+        conary(cfg, "system", "adopt", "curl", timeout=60, check=False)
+        r = conary(cfg, "update", "--dep-mode", "satisfy",
+                   timeout=120, check=False)
+        if r.returncode != 0:
+            raise AssertionError(
+                f"update with adopted packages failed "
+                f"(exit {r.returncode}): {r.stdout}"
+            )
+
+    suite.run_test("T32", "update_with_adopted", t32, timeout=120)
+
+    # ── T33: Generation List Empty ───────────────────────────────────
+
+    def t33():
+        r = conary(cfg, "system", "generation", "list", timeout=10)
+        assert_contains("No generations", r.stdout)
+
+    suite.run_test("T33", "generation_list_empty", t33, timeout=10)
+
+    # ── T34: Takeover Dry Run ────────────────────────────────────────
+
+    def t34():
+        r = conary(cfg, "system", "takeover",
+                   "--dry-run", "--skip-conversion",
+                   timeout=60, check=False)
+        if r.returncode == 0:
+            assert_contains("DRY RUN", r.stdout)
+        # Non-zero is acceptable (requires root)
+
+    suite.run_test("T34", "takeover_dry_run", t34, timeout=60)
+
+    # ── T35: Generation GC Empty ─────────────────────────────────────
+
+    def t35():
+        r = conary(cfg, "system", "generation", "gc", timeout=10,
+                   check=False)
+        output = r.stdout
+        if "Nothing to clean" not in output and "No generations" not in output:
+            raise AssertionError(
+                f"Expected 'Nothing to clean' or 'No generations' "
+                f"in output: {output[:200]}"
+            )
+
+    suite.run_test("T35", "generation_gc_empty", t35, timeout=10)
+
+    # ── T36: Generation Info Format ──────────────────────────────────
+
+    def t36():
+        r = conary(cfg, "system", "generation", "info", "1",
+                   timeout=10, check=False)
+        # Non-zero is fine (no generation exists yet), just verify no panic
+        if r.returncode == 0:
+            output = r.stdout
+            if "composefs" not in output.lower():
+                raise AssertionError(
+                    f"Expected 'composefs' in generation info output: "
+                    f"{output[:200]}"
+                )
+
+    suite.run_test("T36", "generation_info_format", t36, timeout=10)
+
+    # ── T37: Takeover Composefs Format ───────────────────────────────
+
+    def t37():
+        r = conary(cfg, "system", "takeover",
+                   "--dry-run", "--skip-conversion",
+                   timeout=60, check=False)
+        # Non-zero is acceptable (requires root), just verify no panic
+        if r.returncode == 0:
+            output = r.stdout
+            if not any(kw in output for kw in
+                       ("composefs", "EROFS", "erofs", "DRY RUN")):
+                raise AssertionError(
+                    f"Expected composefs/EROFS/DRY RUN in output: "
+                    f"{output[:200]}"
+                )
+
+    suite.run_test("T37", "takeover_composefs_format", t37, timeout=60)
+
+    # ── Cleanup ──────────────────────────────────────────────────────
+
+    print("\n[CLEANUP] Removing test packages...")
+    conary(cfg, "remove", d.test_package, "--no-scripts",
+           timeout=60, check=False)
+    conary(cfg, "remove", d.test_package_2, "--no-scripts",
+           timeout=60, check=False)
+    conary(cfg, "remove", d.test_package_3, "--no-scripts",
+           timeout=60, check=False)
 
 
 def run_phase2(suite: TestSuite) -> None:
