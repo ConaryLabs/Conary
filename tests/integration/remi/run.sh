@@ -162,6 +162,26 @@ else
     echo ""
 fi
 
+# ── Copy source for in-container builds (non-Fedora distros) ────────────────
+# Some distros (e.g. Ubuntu) have different OpenSSL versions than the build
+# host, so we build from source inside the container via multi-stage build.
+
+NEEDS_SOURCE_BUILD=0
+case "$DISTRO" in
+    ubuntu-*) NEEDS_SOURCE_BUILD=1 ;;
+esac
+
+if [ "$NEEDS_SOURCE_BUILD" -eq 1 ] && [ "$INSTALL_MODE" = "binary" ]; then
+    echo "[*] Copying source tree for in-container build..."
+    SOURCE_DIR="$BUILD_CONTEXT/source"
+    mkdir -p "$SOURCE_DIR"
+    # Use git archive to get a clean copy (respects .gitignore)
+    git -C "$PROJECT_ROOT" archive HEAD | tar -x -C "$SOURCE_DIR"
+    CLEANUP_FILES+=("$SOURCE_DIR")
+    echo "[*] Source tree ready ($(du -sh "$SOURCE_DIR" | cut -f1))"
+    echo ""
+fi
+
 # ── Copy config and fixtures into build context ─────────────────────────────
 # config.toml is already in BUILD_CONTEXT (same dir), no copy needed.
 

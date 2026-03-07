@@ -2,9 +2,27 @@
 # Ubuntu Noble (24.04) container for Remi integration testing
 #
 # Modes:
-#   binary  - copies pre-built binary (requires glibc-compatible build)
-#   package - installs from DEB via apt (recommended: avoids glibc mismatch)
+#   binary  - builds from source in-container (avoids OpenSSL ABI mismatch)
+#   package - installs from DEB via apt
 
+# ── Builder stage: compile from source ──────────────────────────────────────
+FROM docker.io/library/ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain 1.93.0 --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Copy source and build
+COPY source/ /build/
+WORKDIR /build
+RUN cargo build --release 2>&1 && strip target/release/conary
+
+# ── Runtime stage ───────────────────────────────────────────────────────────
 FROM docker.io/library/ubuntu:24.04
 
 ARG INSTALL_MODE=binary
@@ -13,12 +31,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy all conary* files from build context (binary or package)
+# Copy all conary* files from build context (package mode)
 COPY conary* /tmp/install/
 
-# Install: DEB package if present, otherwise raw binary
+# Copy built binary from builder stage (binary mode)
+COPY --from=builder /build/target/release/conary /tmp/install/conary-built
+
+# Install: DEB package if present, built binary from source, or raw binary
 RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1; then \
         apt-get update && apt-get install -y /tmp/install/*.deb && rm -rf /var/lib/apt/lists/*; \
+    elif [ -f /tmp/install/conary-built ]; then \
+        install -m 755 /tmp/install/conary-built /usr/bin/conary; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \
