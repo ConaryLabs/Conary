@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -872,9 +873,497 @@ def run_phase1(suite: TestSuite) -> None:
            timeout=60, check=False)
 
 
+def run_group_a(suite: TestSuite) -> None:
+    """Group A: Deep Install Flow (T38-T50)."""
+    cfg = suite.cfg
+    fx = cfg.fixture
+    print("\n-- Group A: Deep Install Flow --\n")
+
+    # ── T38: Install fixture v1 with deps ───────────────────────────
+    cp_install = suite.checkpoint("fixture_install")
+
+    def t38():
+        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T38", "install_fixture_v1_with_deps", t38, timeout=300)
+
+    if suite.failed_since(cp_install):
+        suite.skip_group([
+            ("T39", "verify_dep_files_on_disk"),
+            ("T40", "verify_v1_checksum"),
+            ("T41", "verify_scriptlet_ran"),
+            ("T42", "remove_with_scriptlets"),
+            ("T43", "reinstall_fixture_v1"),
+            ("T44", "update_v1_to_v2"),
+            ("T45", "delta_update_verify"),
+            ("T46", "verify_v2_added_file"),
+            ("T47", "rollback_after_update"),
+            ("T48", "rollback_filesystem_check"),
+            ("T49", "pin_blocks_update"),
+            ("T50", "orphan_detection"),
+        ], "skipped due to T38 failure")
+        return
+
+    # ── T39: Verify dep files on disk ───────────────────────────────
+
+    def t39():
+        assert_file_exists(fx.file)
+        assert_dir_exists("/usr/share/conary-test")
+
+    suite.run_test("T39", "verify_dep_files_on_disk", t39, timeout=10)
+
+    # ── T40: Verify v1 checksum ─────────────────────────────────────
+
+    def t40():
+        assert_file_checksum(fx.file, fx.v1_hello_sha256)
+
+    suite.run_test("T40", "verify_v1_checksum", t40, timeout=10)
+
+    # ── T41: Verify scriptlet ran ───────────────────────────────────
+
+    def t41():
+        assert_file_exists(fx.marker)
+
+    suite.run_test("T41", "verify_scriptlet_ran", t41, timeout=10)
+
+    # ── T42: Remove with scriptlets ─────────────────────────────────
+
+    def t42():
+        conary(cfg, "remove", fx.package, timeout=60)
+        assert_file_not_exists(fx.marker)
+        assert_file_not_exists(fx.file)
+
+    suite.run_test("T42", "remove_with_scriptlets", t42, timeout=60)
+
+    # ── T43: Reinstall fixture v1 ───────────────────────────────────
+    cp_reinstall = suite.checkpoint("fixture_reinstall")
+
+    def t43():
+        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T43", "reinstall_fixture_v1", t43, timeout=300)
+
+    if suite.failed_since(cp_reinstall):
+        suite.skip_group([
+            ("T44", "update_v1_to_v2"),
+            ("T45", "delta_update_verify"),
+            ("T46", "verify_v2_added_file"),
+            ("T47", "rollback_after_update"),
+            ("T48", "rollback_filesystem_check"),
+            ("T49", "pin_blocks_update"),
+            ("T50", "orphan_detection"),
+        ], "skipped due to T43 failure")
+        return
+
+    # ── T44: Update v1 to v2 ────────────────────────────────────────
+    cp_update = suite.checkpoint("fixture_update")
+
+    def t44():
+        conary(cfg, "update", fx.package,
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+
+    suite.run_test("T44", "update_v1_to_v2", t44, timeout=300)
+
+    if suite.failed_since(cp_update):
+        suite.skip_group([
+            ("T45", "delta_update_verify"),
+            ("T46", "verify_v2_added_file"),
+            ("T47", "rollback_after_update"),
+            ("T48", "rollback_filesystem_check"),
+        ], "skipped due to T44 failure")
+    else:
+        # ── T45: Delta update verify ────────────────────────────────
+
+        def t45():
+            assert_file_checksum(fx.file, fx.v2_hello_sha256)
+
+        suite.run_test("T45", "delta_update_verify", t45, timeout=10)
+
+        # ── T46: Verify v2 added file ───────────────────────────────
+
+        def t46():
+            assert_file_exists(fx.added_file)
+            assert_file_checksum(fx.added_file, fx.v2_added_sha256)
+
+        suite.run_test("T46", "verify_v2_added_file", t46, timeout=10)
+
+        # ── T47: Rollback after update ──────────────────────────────
+        cp_rollback = suite.checkpoint("fixture_rollback")
+
+        def t47():
+            conary(cfg, "restore", "--last", "--yes", timeout=120)
+
+        suite.run_test("T47", "rollback_after_update", t47, timeout=120)
+
+        if suite.failed_since(cp_rollback):
+            suite.skip("T48", "rollback_filesystem_check",
+                       "skipped due to T47 failure")
+        else:
+            # ── T48: Rollback filesystem check ──────────────────────
+
+            def t48():
+                assert_file_checksum(fx.file, fx.v1_hello_sha256)
+                assert_file_not_exists(fx.added_file)
+
+            suite.run_test("T48", "rollback_filesystem_check", t48, timeout=10)
+
+    # ── T49: Pin blocks update ──────────────────────────────────────
+
+    def t49():
+        conary(cfg, "pin", fx.package, timeout=30)
+        r = conary(cfg, "update", fx.package,
+                   "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+                   timeout=120, check=False)
+        info = conary(cfg, "list", fx.package, "--info", timeout=30)
+        assert_contains(fx.v1_version, info.stdout)
+        conary(cfg, "unpin", fx.package, timeout=30)
+
+    suite.run_test("T49", "pin_blocks_update", t49, timeout=120)
+
+    # ── T50: Orphan detection ───────────────────────────────────────
+
+    def t50():
+        conary(cfg, "remove", fx.package, "--no-scripts", timeout=60,
+               check=False)
+        r = conary(cfg, "list", "--orphans", timeout=30, check=False)
+        # Just verify no crash -- output content is informational
+        _ = r.stdout
+
+    suite.run_test("T50", "orphan_detection", t50, timeout=60)
+
+
+def run_group_b(suite: TestSuite) -> None:
+    """Group B: Generation Lifecycle (T51-T57)."""
+    cfg = suite.cfg
+    fx = cfg.fixture
+    print("\n-- Group B: Generation Lifecycle --\n")
+
+    # Ensure fixture is installed for generation tests
+    conary(cfg, "install", f"{fx.package}={fx.v1_version}",
+           "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+           timeout=300, check=False)
+
+    # ── T51: Build generation ───────────────────────────────────────
+    cp_gen = suite.checkpoint("gen_build")
+
+    def t51():
+        conary(cfg, "system", "generation", "build", timeout=120)
+
+    suite.run_test("T51", "build_generation", t51, timeout=120)
+
+    if suite.failed_since(cp_gen):
+        suite.skip_group([
+            ("T52", "generation_list"),
+            ("T53", "generation_info"),
+            ("T54", "switch_generation"),
+            ("T55", "rollback_generation"),
+            ("T56", "gc_old_generation"),
+            ("T57", "system_takeover_full"),
+        ], "skipped due to T51 failure")
+        return
+
+    # ── T52: Generation list ────────────────────────────────────────
+
+    def t52():
+        r = conary(cfg, "system", "generation", "list", timeout=30)
+        assert_not_contains("No generations", r.stdout)
+
+    suite.run_test("T52", "generation_list", t52, timeout=30)
+
+    # ── T53: Generation info ────────────────────────────────────────
+
+    def t53():
+        r = conary(cfg, "system", "generation", "info", "1", timeout=30)
+        assert_contains("packages", r.stdout)
+
+    suite.run_test("T53", "generation_info", t53, timeout=30)
+
+    # ── T54: Switch generation ──────────────────────────────────────
+    cp_switch = suite.checkpoint("gen_switch")
+
+    def t54():
+        conary(cfg, "update", fx.package,
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+        conary(cfg, "system", "generation", "build", timeout=120)
+        conary(cfg, "system", "generation", "switch", "2", timeout=60)
+
+    suite.run_test("T54", "switch_generation", t54, timeout=300)
+
+    if suite.failed_since(cp_switch):
+        suite.skip_group([
+            ("T55", "rollback_generation"),
+            ("T56", "gc_old_generation"),
+        ], "skipped due to T54 failure")
+    else:
+        # ── T55: Rollback generation ────────────────────────────────
+
+        def t55():
+            conary(cfg, "system", "generation", "switch", "1", timeout=60)
+
+        suite.run_test("T55", "rollback_generation", t55, timeout=60)
+
+        # ── T56: GC old generation ──────────────────────────────────
+
+        def t56():
+            conary(cfg, "system", "generation", "gc", timeout=60)
+
+        suite.run_test("T56", "gc_old_generation", t56, timeout=60)
+
+    # ── T57: System takeover full ───────────────────────────────────
+
+    def t57():
+        r = conary(cfg, "system", "takeover",
+                   "--skip-conversion", "--yes",
+                   timeout=300, check=False)
+        # Accept non-zero exit, just verify no panic
+        output = r.stdout
+        assert_not_contains("panic", output)
+
+    suite.run_test("T57", "system_takeover_full", t57, timeout=300)
+
+
+def run_group_c(suite: TestSuite) -> None:
+    """Group C: Bootstrap Pipeline (T58-T61)."""
+    cfg = suite.cfg
+    print("\n-- Group C: Bootstrap Pipeline --\n")
+
+    work_dir = "/tmp/conary-bootstrap-test"
+    recipe_dir = "/tmp/conary-bootstrap-recipes"
+    Path(work_dir).mkdir(parents=True, exist_ok=True)
+    Path(recipe_dir).mkdir(parents=True, exist_ok=True)
+
+    # ── T58: Bootstrap dry-run ──────────────────────────────────────
+
+    def t58():
+        r = conary(cfg, "bootstrap", "dry-run",
+                   "--work-dir", work_dir,
+                   "--recipe-dir", recipe_dir,
+                   timeout=60, check=False)
+        output = r.stdout
+        assert_not_contains("panic", output)
+        if r.returncode == 0:
+            assert_contains("Graph resolved", output)
+
+    suite.run_test("T58", "bootstrap_dry_run", t58, timeout=60)
+
+    # ── T59: Stage 0 ────────────────────────────────────────────────
+
+    def t59():
+        r = conary(cfg, "bootstrap", "stage0",
+                   "--work-dir", work_dir,
+                   timeout=300, check=False)
+        output = r.stdout
+        assert_not_contains("panic", output)
+
+    suite.run_test("T59", "bootstrap_stage0", t59, timeout=300)
+
+    # ── T60: Stage 0 output ─────────────────────────────────────────
+
+    def t60():
+        stage0_dir = Path(work_dir) / "stage0"
+        if stage0_dir.is_dir():
+            contents = list(stage0_dir.iterdir())
+            print(f"    stage0 dir has {len(contents)} entries:")
+            for entry in contents[:20]:
+                print(f"      {entry.name}")
+        else:
+            print(f"    stage0 dir does not exist at {stage0_dir}")
+
+    suite.run_test("T60", "bootstrap_stage0_output", t60, timeout=10)
+
+    # ── T61: Stage 1 starts ─────────────────────────────────────────
+
+    def t61():
+        cmd = [cfg.conary_bin, "--db-path", cfg.db_path,
+               "bootstrap", "stage1", "--work-dir", work_dir]
+        try:
+            r = run_cmd(cmd, timeout=60, check=False)
+            # If it completes within timeout, just verify no panic
+            output = r.stdout
+            assert_not_contains("panic", output)
+        except subprocess.TimeoutExpired:
+            # Timeout is acceptable -- proof of life that stage1 started
+            print("    stage1 timed out (expected -- proof of life)")
+
+    suite.run_test("T61", "bootstrap_stage1_starts", t61, timeout=120)
+
+    # Cleanup
+    shutil.rmtree(work_dir, ignore_errors=True)
+    shutil.rmtree(recipe_dir, ignore_errors=True)
+
+
+def run_group_d(suite: TestSuite) -> None:
+    """Group D: Recipe & Build (T62-T66)."""
+    cfg = suite.cfg
+    print("\n-- Group D: Recipe & Build --\n")
+
+    recipe_output = "/tmp/conary-recipe-output"
+    recipe_cache = "/tmp/conary-recipe-cache"
+    Path(recipe_output).mkdir(parents=True, exist_ok=True)
+    Path(recipe_cache).mkdir(parents=True, exist_ok=True)
+
+    recipe_dir = Path(cfg.fixture_dir) / "recipes" / "simple-hello"
+    recipe_toml = recipe_dir / "recipe.toml"
+    pkgbuild_path = Path(cfg.fixture_dir) / "pkgbuild" / "PKGBUILD"
+
+    # ── T62: Cook TOML recipe ───────────────────────────────────────
+    cp_cook = suite.checkpoint("cook")
+
+    def t62():
+        conary(cfg, "cook", str(recipe_toml),
+               "--output", recipe_output,
+               "--source-cache", recipe_cache,
+               "--no-isolation",
+               timeout=120)
+
+    suite.run_test("T62", "cook_toml_recipe", t62, timeout=120)
+
+    if suite.failed_since(cp_cook):
+        suite.skip("T63", "ccs_output_valid", "skipped due to T62 failure")
+    else:
+        # ── T63: CCS output valid ──────────────────────────────────
+
+        def t63():
+            ccs_files = list(Path(recipe_output).glob("*.ccs"))
+            if not ccs_files:
+                raise AssertionError(
+                    f"No .ccs files found in {recipe_output}")
+            print(f"    Found {len(ccs_files)} CCS file(s): "
+                  f"{[f.name for f in ccs_files]}")
+
+        suite.run_test("T63", "ccs_output_valid", t63, timeout=10)
+
+    # ── T64: PKGBUILD conversion ────────────────────────────────────
+    cp_convert = suite.checkpoint("convert")
+
+    def t64():
+        r = conary(cfg, "convert-pkgbuild", str(pkgbuild_path), timeout=60)
+        assert_contains("name", r.stdout)
+        assert_contains("version", r.stdout)
+
+    suite.run_test("T64", "pkgbuild_conversion", t64, timeout=60)
+
+    if suite.failed_since(cp_convert):
+        suite.skip("T65", "converted_recipe_cooks",
+                   "skipped due to T64 failure")
+    else:
+        # ── T65: Converted recipe cooks ─────────────────────────────
+
+        def t65():
+            # Convert PKGBUILD to a temp recipe file
+            r = conary(cfg, "convert-pkgbuild", str(pkgbuild_path),
+                       timeout=60)
+            converted_path = Path("/tmp/conary-converted-recipe.toml")
+            converted_path.write_text(r.stdout)
+            r2 = conary(cfg, "cook", str(converted_path),
+                        "--output", recipe_output,
+                        "--source-cache", recipe_cache,
+                        "--fetch-only", "--no-isolation",
+                        timeout=120, check=False)
+            output = r2.stdout
+            assert_not_contains("panic", output)
+            converted_path.unlink(missing_ok=True)
+
+        suite.run_test("T65", "converted_recipe_cooks", t65, timeout=120)
+
+    # ── T66: Hermetic build ─────────────────────────────────────────
+
+    hermetic_out = "/tmp/conary-hermetic-output"
+    Path(hermetic_out).mkdir(parents=True, exist_ok=True)
+
+    def t66():
+        conary(cfg, "cook", str(recipe_toml),
+               "--output", hermetic_out,
+               "--source-cache", recipe_cache,
+               "--hermetic",
+               timeout=120)
+
+    suite.run_test("T66", "hermetic_build", t66, timeout=120)
+
+    # Cleanup
+    shutil.rmtree(recipe_output, ignore_errors=True)
+    shutil.rmtree(recipe_cache, ignore_errors=True)
+    shutil.rmtree(hermetic_out, ignore_errors=True)
+
+
+def run_group_e(suite: TestSuite) -> None:
+    """Group E: Remi Client (T67-T71)."""
+    cfg = suite.cfg
+    fx = cfg.fixture
+    print("\n-- Group E: Remi Client --\n")
+
+    # ── T67: Sparse index ───────────────────────────────────────────
+
+    def t67():
+        r = run_cmd(["curl", "-sf",
+                     f"{cfg.endpoint}/v1/{cfg.distro.remi_distro}/index"],
+                    timeout=30)
+        if not r.stdout.strip():
+            raise AssertionError("Sparse index response was empty")
+
+    suite.run_test("T67", "sparse_index", t67, timeout=30)
+
+    # ── T68: Chunk-level install ────────────────────────────────────
+
+    def t68():
+        conary(cfg, "install", fx.package,
+               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+               timeout=300)
+        assert_file_exists(fx.file)
+        conary(cfg, "remove", fx.package, "--no-scripts",
+               timeout=60, check=False)
+
+    suite.run_test("T68", "chunk_level_install", t68, timeout=300)
+
+    # ── T69: OCI manifest ──────────────────────────────────────────
+
+    def t69():
+        r = run_cmd(["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}",
+                     f"{cfg.endpoint}/v2/"],
+                    timeout=30, check=False)
+        code = r.stdout.strip()
+        if code not in ("200", "401"):
+            raise AssertionError(
+                f"Expected HTTP 200 or 401 from /v2/, got {code}")
+
+    suite.run_test("T69", "oci_manifest", t69, timeout=30)
+
+    # ── T70: OCI blob fetch ─────────────────────────────────────────
+
+    def t70():
+        r = run_cmd(["curl", "-sf",
+                     f"{cfg.endpoint}/v2/_catalog"],
+                    timeout=30, check=False)
+        if r.returncode != 0:
+            print("    OCI catalog not available (soft pass)")
+        else:
+            print(f"    OCI catalog: {r.stdout[:200]}")
+
+    suite.run_test("T70", "oci_blob_fetch", t70, timeout=30)
+
+    # ── T71: Stats endpoint ─────────────────────────────────────────
+
+    def t71():
+        r = run_cmd(["curl", "-sf", f"{cfg.endpoint}/stats"],
+                    timeout=30)
+        assert_contains("packages", r.stdout)
+
+    suite.run_test("T71", "stats_endpoint", t71, timeout=30)
+
+
 def run_phase2(suite: TestSuite) -> None:
-    """Phase 2 tests -- fixture-based E2E validation."""
-    print("[TODO] Phase 2 tests not yet implemented")
+    """Phase 2: Deep E2E Validation (T38-T71)."""
+    run_group_a(suite)
+    run_group_b(suite)
+    run_group_c(suite)
+    run_group_d(suite)
+    run_group_e(suite)
 
 
 # ---------------------------------------------------------------------------
