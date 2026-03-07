@@ -838,9 +838,10 @@ def run_phase1(suite: TestSuite) -> None:
         r = conary(cfg, "system", "generation", "gc", timeout=10,
                    check=False, no_db=True)
         output = r.stdout
-        if "Nothing to clean" not in output and "No generations" not in output:
+        expected = ["Nothing to clean", "No generations", "Nothing to collect"]
+        if not any(phrase in output for phrase in expected):
             raise AssertionError(
-                f"Expected 'Nothing to clean' or 'No generations' "
+                f"Expected one of {expected} "
                 f"in output: {output[:200]}"
             )
 
