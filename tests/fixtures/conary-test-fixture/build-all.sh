@@ -9,7 +9,7 @@ for ver in v1 v2; do
     echo "Building conary-test-fixture $ver..."
     mkdir -p "$SCRIPT_DIR/$ver/output"
     "$CONARY" ccs build "$SCRIPT_DIR/$ver/ccs.toml" \
-        --stage-dir "$SCRIPT_DIR/$ver/stage" \
+        --source "$SCRIPT_DIR/$ver/stage" \
         --output "$SCRIPT_DIR/$ver/output/"
 done
 

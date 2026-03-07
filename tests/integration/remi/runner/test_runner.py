@@ -64,10 +64,20 @@ class FixtureConfig:
     added_file: str
     marker: str
     v1_version: str
+    v1_ccs_file: str
     v1_hello_sha256: str
     v2_version: str
+    v2_ccs_file: str
     v2_hello_sha256: str
     v2_added_sha256: str
+
+    def v1_ccs_path(self, fixture_dir: str) -> str:
+        """Full path to v1 CCS fixture inside the container."""
+        return str(Path(fixture_dir) / "ccs" / self.v1_ccs_file)
+
+    def v2_ccs_path(self, fixture_dir: str) -> str:
+        """Full path to v2 CCS fixture inside the container."""
+        return str(Path(fixture_dir) / "ccs" / self.v2_ccs_file)
 
 
 @dataclass
@@ -118,8 +128,10 @@ class Config:
             added_file=fix.get("added_file", ""),
             marker=fix.get("marker", ""),
             v1_version=fix.get("v1", {}).get("version", ""),
+            v1_ccs_file=fix.get("v1", {}).get("ccs_file", ""),
             v1_hello_sha256=fix.get("v1", {}).get("hello_sha256", ""),
             v2_version=fix.get("v2", {}).get("version", ""),
+            v2_ccs_file=fix.get("v2", {}).get("ccs_file", ""),
             v2_hello_sha256=fix.get("v2", {}).get("hello_sha256", ""),
             v2_added_sha256=fix.get("v2", {}).get("added_sha256", ""),
         )
@@ -898,12 +910,14 @@ def run_group_a(suite: TestSuite) -> None:
     fx = cfg.fixture
     print("\n-- Group A: Deep Install Flow --\n")
 
-    # ── T38: Install fixture v1 with deps ───────────────────────────
+    # ── T38: Install fixture v1 ──────────────────────────────────────
     cp_install = suite.checkpoint("fixture_install")
+    v1_ccs = fx.v1_ccs_path(cfg.fixture_dir)
+    v2_ccs = fx.v2_ccs_path(cfg.fixture_dir)
 
     def t38():
-        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
-               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+        conary(cfg, "ccs", "install", v1_ccs,
+               "--allow-unsigned", "--sandbox", "never",
                timeout=300)
 
     suite.run_test("T38", "install_fixture_v1_with_deps", t38, timeout=300)
@@ -960,8 +974,8 @@ def run_group_a(suite: TestSuite) -> None:
     cp_reinstall = suite.checkpoint("fixture_reinstall")
 
     def t43():
-        conary(cfg, "install", f"{fx.package}={fx.v1_version}",
-               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+        conary(cfg, "ccs", "install", v1_ccs,
+               "--allow-unsigned", "--sandbox", "never",
                timeout=300)
 
     suite.run_test("T43", "reinstall_fixture_v1", t43, timeout=300)
@@ -982,8 +996,8 @@ def run_group_a(suite: TestSuite) -> None:
     cp_update = suite.checkpoint("fixture_update")
 
     def t44():
-        conary(cfg, "update", fx.package,
-               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+        conary(cfg, "ccs", "install", v2_ccs,
+               "--allow-unsigned", "--sandbox", "never",
                timeout=300)
 
     suite.run_test("T44", "update_v1_to_v2", t44, timeout=300)
@@ -1035,9 +1049,10 @@ def run_group_a(suite: TestSuite) -> None:
 
     def t49():
         conary(cfg, "pin", fx.package, timeout=30)
-        r = conary(cfg, "update", fx.package,
-                   "--dep-mode", "takeover", "--yes", "--sandbox", "never",
-                   timeout=120, check=False)
+        # Try to install v2 over pinned v1 -- should be blocked or ignored
+        conary(cfg, "ccs", "install", v2_ccs,
+               "--allow-unsigned", "--sandbox", "never",
+               timeout=120, check=False)
         info = conary(cfg, "list", fx.package, "--info", timeout=30)
         assert_contains(fx.v1_version, info.stdout)
         conary(cfg, "unpin", fx.package, timeout=30)
@@ -1063,8 +1078,9 @@ def run_group_b(suite: TestSuite) -> None:
     print("\n-- Group B: Generation Lifecycle --\n")
 
     # Ensure fixture is installed for generation tests
-    conary(cfg, "install", f"{fx.package}={fx.v1_version}",
-           "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+    v1_ccs = fx.v1_ccs_path(cfg.fixture_dir)
+    conary(cfg, "ccs", "install", v1_ccs,
+           "--allow-unsigned", "--sandbox", "never",
            timeout=300, check=False)
 
     # ── T51: Build generation ───────────────────────────────────────
@@ -1107,8 +1123,9 @@ def run_group_b(suite: TestSuite) -> None:
     cp_switch = suite.checkpoint("gen_switch")
 
     def t54():
-        conary(cfg, "update", fx.package,
-               "--dep-mode", "takeover", "--yes", "--sandbox", "never",
+        v2_ccs = fx.v2_ccs_path(cfg.fixture_dir)
+        conary(cfg, "ccs", "install", v2_ccs,
+               "--allow-unsigned", "--sandbox", "never",
                timeout=300)
         conary(cfg, "system", "generation", "build", timeout=120)
         conary(cfg, "system", "generation", "switch", "2", timeout=60,

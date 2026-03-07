@@ -166,6 +166,21 @@ if [ -d "$FIXTURES_SRC" ]; then
     cp -r "$FIXTURES_SRC/recipes" "$BUILD_CONTEXT/fixtures/recipes" 2>/dev/null || true
     mkdir -p "$BUILD_CONTEXT/fixtures/pkgbuild"
     cp "$PROJECT_ROOT/packaging/arch/PKGBUILD" "$BUILD_CONTEXT/fixtures/pkgbuild/" 2>/dev/null || true
+
+    # Build and copy CCS fixture packages for Phase 2 tests
+    if [ "$PHASE2" -eq 1 ]; then
+        FIXTURE_CCS_DIR="$FIXTURES_SRC/conary-test-fixture"
+        if [ -f "$FIXTURE_CCS_DIR/build-all.sh" ]; then
+            echo "[*] Building test fixture CCS packages..."
+            CONARY_BIN="${BINARY:-$PROJECT_ROOT/target/debug/conary}" \
+                bash "$FIXTURE_CCS_DIR/build-all.sh" 2>&1
+            mkdir -p "$BUILD_CONTEXT/fixtures/ccs"
+            cp "$FIXTURE_CCS_DIR/v1/output/"*.ccs "$BUILD_CONTEXT/fixtures/ccs/" 2>/dev/null || true
+            cp "$FIXTURE_CCS_DIR/v2/output/"*.ccs "$BUILD_CONTEXT/fixtures/ccs/" 2>/dev/null || true
+            echo "[*] Fixture CCS packages ready"
+            echo ""
+        fi
+    fi
 fi
 CLEANUP_FILES+=("$BUILD_CONTEXT/fixtures")
 
