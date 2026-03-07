@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::packages::traits::PackageFormat;
+use rusqlite::params;
 use std::path::Path;
 
 /// Install a CCS package
@@ -155,9 +156,10 @@ pub fn cmd_ccs_install(
         }
     }
 
-    // Step 7: Deploy files to filesystem
+    // Step 7: Deploy files to filesystem and store in CAS
     println!("Deploying files to filesystem...");
     let root_path = std::path::Path::new(root);
+    let objects_dir = conary_core::db::paths::objects_dir(db_path);
     let mut files_deployed = 0;
 
     for file in &extracted_files {
@@ -185,6 +187,16 @@ pub fn cmd_ccs_install(
             )?;
         }
 
+        // Store in CAS for rollback support
+        if let Some(ref hash) = file.sha256 && hash.len() == 64 {
+            let cas_dir = objects_dir.join(&hash[0..2]);
+            let cas_path = cas_dir.join(&hash[2..]);
+            if !cas_path.exists() {
+                std::fs::create_dir_all(&cas_dir)?;
+                std::fs::write(&cas_path, &file.content)?;
+            }
+        }
+
         files_deployed += 1;
     }
 
@@ -210,10 +222,35 @@ pub fn cmd_ccs_install(
         let mut changeset = Changeset::new(description);
         let changeset_id = changeset.insert(&tx)?;
 
-        // Remove old version if upgrading
+        // Remove old version if upgrading (snapshot first for rollback)
         if is_upgrade {
             let old = &existing[0];
             if let Some(old_id) = old.id {
+                // Snapshot old trove for rollback support
+                let old_files =
+                    conary_core::db::models::FileEntry::find_by_trove(&tx, old_id)?;
+                let snapshot = crate::commands::TroveSnapshot {
+                    name: old.name.clone(),
+                    version: old.version.clone(),
+                    architecture: old.architecture.clone(),
+                    description: old.description.clone(),
+                    install_source: old.install_source.as_str().to_string(),
+                    files: old_files
+                        .iter()
+                        .map(|f| crate::commands::FileSnapshot {
+                            path: f.path.clone(),
+                            sha256_hash: f.sha256_hash.clone(),
+                            size: f.size,
+                            permissions: f.permissions,
+                        })
+                        .collect(),
+                };
+                let snapshot_json = serde_json::to_string(&snapshot)?;
+                tx.execute(
+                    "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+                    params![&snapshot_json, changeset_id],
+                )?;
+
                 // Delete old files
                 tx.execute("DELETE FROM files WHERE trove_id = ?1", [old_id])?;
                 // Delete old provides
@@ -228,7 +265,7 @@ pub fn cmd_ccs_install(
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(&tx)?;
 
-        // Register files and record history
+        // Register files, store in CAS index, and record history for rollback
         for file in &extracted_files {
             let hash = file.sha256.clone().unwrap_or_default();
             let mut file_entry = conary_core::db::models::FileEntry::new(
@@ -239,6 +276,26 @@ pub fn cmd_ccs_install(
                 trove_id,
             );
             file_entry.insert(&tx)?;
+
+            // Register in file_contents (CAS index) and file_history
+            if hash.len() == 64 {
+                tx.execute(
+                    "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) \
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        &hash,
+                        format!("objects/{}/{}", &hash[0..2], &hash[2..]),
+                        file.size
+                    ],
+                )?;
+
+                let action = if is_upgrade { "modify" } else { "add" };
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![changeset_id, &file.path, &hash, action],
+                )?;
+            }
         }
 
         // Create provides entry for the package itself

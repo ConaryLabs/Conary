@@ -114,7 +114,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         ));
     }
 
-    // Check if this is a removal changeset (has metadata with trove snapshot)
+    // Check if this changeset has metadata (trove snapshot for rollback)
     let metadata: Option<String> = conn.query_row(
         "SELECT metadata FROM changesets WHERE id = ?1",
         [changeset_id],
@@ -122,11 +122,22 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     )?;
 
     if let Some(ref json) = metadata {
-        // This is a removal - restore the package
+        // Check if this changeset also has installed troves (= upgrade vs removal)
+        let has_troves: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM troves WHERE installed_by_changeset_id = ?1)",
+            [changeset_id],
+            |row| row.get(0),
+        )?;
+
+        if has_troves {
+            // Upgrade: remove new version, restore old version from snapshot
+            return rollback_upgrade(changeset_id, json, &mut conn, &deployer, &changeset);
+        }
+        // Removal: restore the package from snapshot
         return rollback_removal(changeset_id, json, &mut conn, &deployer, &changeset);
     }
 
-    // Otherwise, this is an install - remove the installed packages
+    // Otherwise, this is a fresh install - remove the installed packages
     let files_to_rollback = std::cell::RefCell::new(Vec::new());
 
     conary_core::db::transaction(&mut conn, |tx| {
@@ -378,6 +389,143 @@ fn rollback_removal(
     );
     println!("  Restored {} version {}", snapshot.name, snapshot.version);
     println!("  Files restored: {}/{}", restored_count, file_count);
+
+    Ok(())
+}
+
+/// Rollback an upgrade by removing the new version and restoring the old
+fn rollback_upgrade(
+    changeset_id: i64,
+    snapshot_json: &str,
+    conn: &mut rusqlite::Connection,
+    deployer: &conary_core::filesystem::FileDeployer,
+    changeset: &conary_core::db::models::Changeset,
+) -> Result<()> {
+    info!("Rolling back upgrade changeset: {}", changeset_id);
+
+    let snapshot: TroveSnapshot = serde_json::from_str(snapshot_json)?;
+    println!(
+        "Rolling back upgrade: restoring {} version {}",
+        snapshot.name, snapshot.version
+    );
+
+    // Collect new version's files for filesystem cleanup
+    let files_to_remove = std::cell::RefCell::new(Vec::new());
+
+    conary_core::db::transaction(conn, |tx| {
+        // Find and remove the new trove installed by this changeset
+        let new_troves: Vec<(i64, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, version FROM troves WHERE installed_by_changeset_id = ?1",
+            )?;
+            stmt.query_map([changeset_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        for (trove_id, version) in &new_troves {
+            // Collect files for filesystem removal
+            let files = conary_core::db::models::FileEntry::find_by_trove(tx, *trove_id)?;
+            files_to_remove
+                .borrow_mut()
+                .extend(files.iter().map(|f| f.path.clone()));
+
+            // Delete from DB
+            conary_core::db::models::Trove::delete(tx, *trove_id)?;
+            println!("  Removed new version {}", version);
+        }
+
+        // Create rollback changeset
+        let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
+            "Rollback of changeset {} ({})",
+            changeset_id, changeset.description
+        ));
+        let rollback_changeset_id = rollback_changeset.insert(tx)?;
+
+        // Restore the old trove from snapshot
+        let install_source: conary_core::db::models::InstallSource =
+            snapshot.install_source.parse().map_err(|e| {
+                conary_core::Error::InitError(format!(
+                    "Invalid install_source in snapshot '{}': {}",
+                    snapshot.install_source, e
+                ))
+            })?;
+
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            snapshot.name.clone(),
+            snapshot.version.clone(),
+            conary_core::db::models::TroveType::Package,
+            install_source,
+        );
+        trove.architecture = snapshot.architecture.clone();
+        trove.description = snapshot.description.clone();
+        trove.installed_by_changeset_id = Some(rollback_changeset_id);
+        let trove_id = trove.insert(tx)?;
+
+        // Restore file entries
+        for file in &snapshot.files {
+            let mut file_entry = conary_core::db::models::FileEntry::new(
+                file.path.clone(),
+                file.sha256_hash.clone(),
+                file.size,
+                file.permissions,
+                trove_id,
+            );
+            file_entry.insert(tx)?;
+        }
+
+        rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+
+        // Mark original changeset as rolled back
+        tx.execute(
+            "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
+             reversed_by_changeset_id = ?1 WHERE id = ?2",
+            [rollback_changeset_id, changeset_id],
+        )?;
+
+        Ok(())
+    })?;
+
+    // Remove new version's files that aren't in the old version
+    let old_paths: std::collections::HashSet<&str> =
+        snapshot.files.iter().map(|f| f.path.as_str()).collect();
+    let files_to_remove = files_to_remove.into_inner();
+    for path in &files_to_remove {
+        if !old_paths.contains(path.as_str()) {
+            match deployer.remove_file(path) {
+                Ok(()) => info!("Removed new file: {}", path),
+                Err(e) => warn!("Failed to remove file during rollback: {}: {}", path, e),
+            }
+        }
+    }
+
+    // Restore old version's files from CAS
+    info!("Restoring old version files from CAS...");
+    let mut restored_count = 0;
+    for file in &snapshot.files {
+        match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
+            Ok(()) => {
+                restored_count += 1;
+                info!("Restored file: {}", file.path);
+            }
+            Err(e) => {
+                info!("Could not restore file {}: {}", file.path, e);
+            }
+        }
+    }
+
+    println!(
+        "Rollback complete. Changeset {} has been reversed.",
+        changeset_id
+    );
+    println!(
+        "  Restored {} version {} ({}/{} files)",
+        snapshot.name,
+        snapshot.version,
+        restored_count,
+        snapshot.files.len()
+    );
 
     Ok(())
 }

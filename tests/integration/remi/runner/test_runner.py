@@ -1040,13 +1040,40 @@ def run_group_a(suite: TestSuite) -> None:
         suite.run_test("T46", "verify_v2_added_file", t46, timeout=10)
 
         # ── T47: Rollback after update ──────────────────────────────
-        # CCS rollback requires CAS integration (file_contents + file_history)
-        # which is not yet implemented for CCS packages. Skip until CAS support
-        # is added to the CCS install path.
-        suite.skip("T47", "rollback_after_update",
-                   "CCS rollback needs CAS integration (not yet implemented)")
-        suite.skip("T48", "rollback_filesystem_check",
-                   "CCS rollback needs CAS integration (not yet implemented)")
+        cp_rollback = suite.checkpoint("fixture_rollback")
+
+        def t47():
+            # Get the most recent changeset ID from history (newest first)
+            hist = conary(cfg, "system", "history", timeout=30)
+            lines = hist.stdout.strip().splitlines()
+            # Find the first changeset ID -- format: "  [ID] TIMESTAMP - DESC"
+            # History is ordered newest-first, so first match is the update
+            cs_id = None
+            for line in lines:
+                m = re.search(r'\[(\d+)\]', line)
+                if m:
+                    cs_id = m.group(1)
+                    break
+            if cs_id is None:
+                raise AssertionError(
+                    f"No changeset ID found in history output: "
+                    f"{hist.stdout[:200]}")
+            conary(cfg, "system", "state", "rollback", cs_id, timeout=120)
+
+        suite.run_test("T47", "rollback_after_update", t47, timeout=120)
+
+        if suite.failed_since(cp_rollback):
+            suite.skip("T48", "rollback_filesystem_check",
+                       "skipped due to T47 failure")
+        else:
+            # ── T48: Rollback filesystem check ──────────────────────
+
+            def t48():
+                assert_file_checksum(fx.file, fx.v1_hello_sha256)
+                assert_file_not_exists(fx.added_file)
+
+            suite.run_test("T48", "rollback_filesystem_check", t48,
+                           timeout=10)
 
     # ── T49: Pin blocks update ──────────────────────────────────────
 
