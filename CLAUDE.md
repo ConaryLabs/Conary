@@ -59,7 +59,7 @@ Database schema is currently **v45** (40+ tables across 45 migrations). See ROAD
 - Context7 (`resolve-library-id` then `query-docs`) for external library APIs
 - Use Grep/Glob for code searches, exact filenames, or pattern matching
 
-See `.claude/rules/` for detailed tool selection guides and architecture reference.
+See `.claude/rules/` for detailed tool selection guides, architecture reference, and infrastructure/CI docs.
 
 ## Doc Versioning
 
