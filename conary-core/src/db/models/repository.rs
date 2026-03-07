@@ -517,17 +517,14 @@ impl RepositoryPackage {
             return Ok(0);
         }
 
-        let tx = conn.unchecked_transaction()?;
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
+              is_security_update, severity, cve_ids, advisory_id, advisory_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )?;
 
-        {
-            let mut stmt = conn.prepare_cached(
-                "INSERT INTO repository_packages
-                 (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-                  is_security_update, severity, cve_ids, advisory_id, advisory_url)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            )?;
-
-            for pkg in packages {
+        for pkg in packages {
             stmt.execute(params![
                 &pkg.repository_id,
                 &pkg.name,
@@ -545,10 +542,8 @@ impl RepositoryPackage {
                 &pkg.advisory_id,
                 &pkg.advisory_url,
             ])?;
-            }
         }
 
-        tx.commit()?;
         Ok(packages.len())
     }
 }
