@@ -1,0 +1,18 @@
+[package]
+name = "test-hello"
+version = "1.0.0"
+description = "Simple test recipe for E2E validation"
+license = "MIT"
+
+[source]
+type = "local"
+path = "src/"
+
+[build]
+steps = [
+    "install -Dm755 hello.sh ${DESTDIR}/usr/bin/test-hello",
+]
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
