@@ -158,8 +158,7 @@ else
 fi
 
 # ── Copy config and fixtures into build context ─────────────────────────────
-cp "$SCRIPT_DIR/config.toml" "$BUILD_CONTEXT/config.toml"
-CLEANUP_FILES+=("$BUILD_CONTEXT/config.toml")
+# config.toml is already in BUILD_CONTEXT (same dir), no copy needed.
 
 mkdir -p "$BUILD_CONTEXT/fixtures"
 FIXTURES_SRC="$PROJECT_ROOT/tests/fixtures"
