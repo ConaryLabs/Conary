@@ -11,16 +11,18 @@ RUN pacman -Syu --noconfirm && \
         openssl \
         xz \
         pkg-config \
+        cmake \
+        perl \
         rustup && \
     pacman -Scc --noconfirm
-
-RUN rustup default stable
 
 # makepkg refuses to run as root; create a build user
 RUN useradd -m builder && \
     echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
+# Install Rust toolchain as builder user (rustup is per-user)
 RUN mkdir -p /build /output && chown builder:builder /build /output
 
 USER builder
+RUN rustup default stable
 WORKDIR /build

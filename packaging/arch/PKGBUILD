@@ -11,7 +11,8 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/ConaryLabs/Conary'
 license=('MIT' 'Apache-2.0')
 depends=('openssl' 'xz')
-makedepends=('cargo' 'pkg-config')
+makedepends=('cargo' 'pkg-config' 'cmake' 'perl')
+options=(!lto)
 install=conary.install
 source=("$pkgname-$pkgver.tar.gz"
         "vendor.tar.gz")

@@ -13,6 +13,8 @@ Source1:        vendor.tar.gz
 BuildRequires:  openssl-devel
 BuildRequires:  xz-devel
 BuildRequires:  pkg-config
+BuildRequires:  cmake
+BuildRequires:  perl
 
 Requires:       openssl-libs
 Requires:       xz-libs

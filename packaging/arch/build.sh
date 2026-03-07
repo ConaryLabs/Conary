@@ -29,7 +29,11 @@ echo "Building $NAME $VERSION Arch package"
 # --- Vendor dependencies ---
 echo "[1/4] Vendoring dependencies..."
 cd "$REPO_ROOT"
-cargo vendor --locked vendor > /dev/null 2>&1
+if [ ! -d vendor ] || [ -z "$(ls -A vendor 2>/dev/null)" ]; then
+    cargo vendor --locked vendor > /dev/null 2>&1
+else
+    echo "  Using existing vendor directory"
+fi
 
 # --- Create source tarballs ---
 echo "[2/4] Creating source tarballs..."
@@ -52,8 +56,10 @@ tar cf - \
 
 tar czf "$TMPDIR/$TARNAME.tar.gz" -C "$TMPDIR" "$TARNAME"
 
-# Vendor tarball
-tar czf "$TMPDIR/vendor.tar.gz" -C "$REPO_ROOT" vendor
+# Vendor tarball (copy to tmpdir first to avoid races with concurrent builds)
+cp -a "$REPO_ROOT/vendor" "$TMPDIR/vendor"
+tar czf "$TMPDIR/vendor.tar.gz" -C "$TMPDIR" vendor
+rm -rf "$TMPDIR/vendor"
 
 mkdir -p "$SCRIPT_DIR/output"
 
@@ -74,7 +80,7 @@ if $USE_PODMAN; then
         bash -c '
             cd /build && \
             makepkg -sf --noconfirm --skipchecksums && \
-            cp /build/*.pkg.tar.zst /output/
+            sudo cp /build/*.pkg.tar.zst /output/
         '
 
     echo "[4/4] Done."

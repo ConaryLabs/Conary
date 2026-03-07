@@ -17,7 +17,7 @@ arch = "x86_64"
 libc = "gnu"
 
 [package.authors]
-maintainers = ["Conary Contributors <contributors@conary.io>"]
+maintainers = ["Peter <peter@conary.io>"]
 
 [provides]
 capabilities = ["package-manager", "conary"]

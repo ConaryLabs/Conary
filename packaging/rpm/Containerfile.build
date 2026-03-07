@@ -6,13 +6,15 @@
 FROM registry.fedoraproject.org/fedora:43
 
 RUN dnf install -y \
-        rust >= 1.93 \
-        cargo >= 1.93 \
+        rust \
+        cargo \
         rpm-build \
         openssl-devel \
         xz-devel \
         pkg-config \
         gcc \
+        cmake \
+        perl \
     && dnf clean all
 
 RUN mkdir -p /rpmbuild/{BUILD,RPMS,SRPMS,SOURCES,SPECS} /output

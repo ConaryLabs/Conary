@@ -28,7 +28,11 @@ echo "Building $NAME $VERSION DEB"
 # --- Vendor dependencies ---
 echo "[1/4] Vendoring dependencies..."
 cd "$REPO_ROOT"
-cargo vendor --locked vendor > /dev/null 2>&1
+if [ ! -d vendor ] || [ -z "$(ls -A vendor 2>/dev/null)" ]; then
+    cargo vendor --locked vendor > /dev/null 2>&1
+else
+    echo "  Using existing vendor directory"
+fi
 
 # --- Create build tree ---
 echo "[2/4] Creating build tree..."
@@ -51,8 +55,8 @@ tar cf - \
     --exclude='.git' \
     . | tar xf - -C "$BUILDDIR"
 
-# Copy vendored deps
-cp -a vendor "$BUILDDIR/vendor"
+# Copy vendored deps (from repo root, snapshot to avoid races)
+cp -a "$REPO_ROOT/vendor" "$BUILDDIR/vendor"
 
 # Copy debian directory into build tree
 cp -a "$SCRIPT_DIR/debian" "$BUILDDIR/debian"

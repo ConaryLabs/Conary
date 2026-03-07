@@ -2,7 +2,7 @@ Source: conary
 Section: admin
 Priority: optional
 Maintainer: Conary Contributors <contributors@conary.io>
-Build-Depends: debhelper-compat (= 13), libssl-dev, liblzma-dev, pkg-config
+Build-Depends: debhelper-compat (= 13), libssl-dev, liblzma-dev, pkg-config, cmake, perl
 Standards-Version: 4.6.2
 Homepage: https://github.com/ConaryLabs/Conary
 

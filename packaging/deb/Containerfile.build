@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         liblzma-dev \
         pkg-config \
+        cmake \
+        perl \
         curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*

@@ -168,6 +168,49 @@ update_cargo_version() {
     sed -i "0,/^version = \".*\"/s/^version = \".*\"/version = \"${new_version}\"/" "$file"
 }
 
+update_packaging_versions() {
+    local new_version="$1"
+    local today
+    today=$(date +"%a %b %d %Y")
+    local deb_date
+    deb_date=$(date -R)
+
+    # RPM spec
+    if [[ -f packaging/rpm/conary.spec ]]; then
+        sed -i "s/^Version:.*$/Version:        ${new_version}/" packaging/rpm/conary.spec
+        echo "  Updated packaging/rpm/conary.spec"
+    fi
+
+    # Arch PKGBUILD
+    if [[ -f packaging/arch/PKGBUILD ]]; then
+        sed -i "s/^pkgver=.*$/pkgver=${new_version}/" packaging/arch/PKGBUILD
+        echo "  Updated packaging/arch/PKGBUILD"
+    fi
+
+    # Debian changelog (prepend new entry)
+    if [[ -f packaging/deb/debian/changelog ]]; then
+        local tmp
+        tmp=$(mktemp)
+        cat > "$tmp" <<DEBEOF
+conary (${new_version}-1) unstable; urgency=medium
+
+  * Release ${new_version}
+
+ -- Conary Contributors <contributors@conary.io>  ${deb_date}
+
+DEBEOF
+        cat packaging/deb/debian/changelog >> "$tmp"
+        mv "$tmp" packaging/deb/debian/changelog
+        echo "  Updated packaging/deb/debian/changelog"
+    fi
+
+    # CCS package manifest
+    if [[ -f packaging/ccs/ccs.toml ]]; then
+        sed -i "s/^version = \".*\"/version = \"${new_version}\"/" packaging/ccs/ccs.toml
+        echo "  Updated packaging/ccs/ccs.toml"
+    fi
+}
+
 for group in "${RELEASE_GROUPS[@]}"; do
     echo "=== Releasing: $group ==="
 
@@ -207,6 +250,9 @@ for group in "${RELEASE_GROUPS[@]}"; do
             update_cargo_version "Cargo.toml" "$new_version"
             update_cargo_version "conary-core/Cargo.toml" "$new_version"
             echo "  Updated Cargo.toml and conary-core/Cargo.toml"
+
+            # Update distro packaging versions
+            update_packaging_versions "$new_version"
             ;;
         erofs)
             update_cargo_version "conary-erofs/Cargo.toml" "$new_version"
