@@ -12,30 +12,30 @@ Everything else depends on this. We have 1,800+ unit tests and 45 schema migrati
 
 ### Forgejo Setup (Forge server)
 
-- [ ] Install Forgejo on forge.conarylabs.com
-- [ ] Mirror GitHub repo to Forgejo
-- [ ] Set up Forgejo Actions runner (Podman-based)
-- [ ] Configure push/PR triggers
+- [x] Install Forgejo on forge.conarylabs.com
+- [x] Mirror GitHub repo to Forgejo
+- [x] Set up Forgejo Actions runner (host-based, linux-native label)
+- [x] Configure push/PR triggers
 
 ### Test Container Images
 
-- [ ] Fedora 43 base image (current target)
-- [ ] Ubuntu 24.04 base image
-- [ ] Arch Linux base image
-- [ ] Each image: Conary built from source, test fixtures, system packages
+- [x] Fedora 43 base image (current target)
+- [x] Ubuntu 24.04 base image
+- [x] Arch Linux base image
+- [x] Each image: Conary built from source, test fixtures, system packages
 
 ### CI Pipeline
 
-- [ ] `cargo build` + `cargo test` on every push (basic gate)
-- [ ] `cargo clippy -- -D warnings` lint gate
-- [ ] Integration test suite trigger (Podman containers on Forge)
-- [ ] Remi server health check (packages.conary.io endpoints)
+- [x] `cargo build` + `cargo test` on every push (basic gate)
+- [x] `cargo clippy -- -D warnings` lint gate
+- [x] Integration test suite trigger (Podman containers on Forge)
+- [x] Remi server health check (packages.conary.io endpoints)
 
 ### Remi Health Monitoring
 
-- [ ] Endpoint smoke tests (sparse index, chunk fetch, stats, OCI)
-- [ ] Conversion pipeline test (submit package, poll, verify chunks)
-- [ ] Scheduled cron job (catch production regressions, not just on push)
+- [x] Endpoint smoke tests (sparse index, chunk fetch, stats, OCI)
+- [x] Conversion pipeline test (submit package, poll, verify chunks)
+- [x] Scheduled cron job (catch production regressions, not just on push)
 
 ---
 
