@@ -260,8 +260,8 @@ def conary(
     timeout: int = 120,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the conary binary with --db-path prepended."""
-    cmd = [cfg.conary_bin, "--db-path", cfg.db_path, *args]
+    """Run the conary binary with --db-path appended (subcommand option)."""
+    cmd = [cfg.conary_bin, *args, "--db-path", cfg.db_path]
     return run_cmd(cmd, timeout=timeout, check=check)
 
 
