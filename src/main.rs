@@ -1730,6 +1730,16 @@ fn main() -> Result<()> {
             }
         },
 
+        // =====================================================================
+        // Self-Update
+        // =====================================================================
+        Some(Commands::SelfUpdate {
+            db,
+            check,
+            force,
+            version,
+        }) => commands::cmd_self_update(&db.db_path, check, force, version),
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

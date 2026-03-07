@@ -27,6 +27,7 @@ pub mod registry;
 mod remove;
 mod repo;
 mod restore;
+mod self_update;
 mod state;
 mod system;
 mod triggers;
@@ -103,6 +104,7 @@ pub use repo::{
     cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use restore::{cmd_restore, cmd_restore_all};
+pub use self_update::cmd_self_update;
 pub use state::{
     cmd_state_create, cmd_state_diff, cmd_state_list, cmd_state_prune, cmd_state_restore,
     cmd_state_show,

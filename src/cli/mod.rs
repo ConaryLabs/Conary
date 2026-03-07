@@ -438,6 +438,28 @@ pub enum Commands {
     #[command(subcommand)]
     Bootstrap(BootstrapCommands),
 
+    // =========================================================================
+    // Self-Update
+    // =========================================================================
+    /// Update conary itself to the latest version
+    #[command(name = "self-update")]
+    SelfUpdate {
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Check for updates without installing
+        #[arg(long)]
+        check: bool,
+
+        /// Reinstall even if already at latest version
+        #[arg(long)]
+        force: bool,
+
+        /// Install a specific version
+        #[arg(long)]
+        version: Option<String>,
+    },
+
     /// Package DNA / Provenance queries
     ///
     /// Query complete package lineage: source origin, build environment,
