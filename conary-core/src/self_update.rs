@@ -186,6 +186,45 @@ pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
     ))
 }
 
+/// Atomically replace the running conary binary and register in CAS
+///
+/// 1. rename() temp binary -> target path (atomic on same filesystem)
+/// 2. Store new binary hash in CAS (best-effort)
+pub fn apply_update(
+    new_binary_path: &Path,
+    target_path: &Path,
+    objects_dir: &str,
+) -> Result<()> {
+    use crate::filesystem::CasStore;
+
+    // Atomic rename (source and target must be on same filesystem)
+    fs::rename(new_binary_path, target_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            Error::IoError(format!(
+                "Permission denied: cannot replace {}. Try running with sudo.",
+                target_path.display()
+            ))
+        } else {
+            Error::IoError(format!(
+                "Failed to replace binary at {}: {e}",
+                target_path.display()
+            ))
+        }
+    })?;
+
+    // Register new binary in CAS (best-effort: if this fails, binary still works)
+    let content = fs::read(target_path).unwrap_or_default();
+    if !content.is_empty() {
+        if let Ok(cas) = CasStore::new(objects_dir) {
+            if let Err(e) = cas.store(&content) {
+                eprintln!("Warning: failed to register in CAS: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Verify the extracted binary runs and reports the expected version
 pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
     let output = Command::new(binary_path)
@@ -284,6 +323,28 @@ mod tests {
             }
             _ => panic!("Expected UpdateAvailable"),
         }
+    }
+
+    #[test]
+    fn test_apply_update_atomic_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("conary-new");
+        let target = dir.path().join("conary");
+
+        // Create source binary
+        fs::write(&source, b"new-binary-content").unwrap();
+        // Create existing target
+        fs::write(&target, b"old-binary-content").unwrap();
+
+        let objects_dir = dir.path().join("objects");
+        fs::create_dir_all(&objects_dir).unwrap();
+
+        apply_update(&source, &target, objects_dir.to_str().unwrap()).unwrap();
+
+        // Source should be gone (renamed)
+        assert!(!source.exists());
+        // Target should have new content
+        assert_eq!(fs::read(&target).unwrap(), b"new-binary-content");
     }
 
     #[test]
