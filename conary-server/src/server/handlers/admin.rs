@@ -108,7 +108,7 @@ pub async fn create_token(
     let name_owned = name.to_string();
     let scopes_clone = scopes_str.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::admin_token::create(&conn, &name_owned, &token_hash, &scopes_clone)
     })
     .await;
@@ -160,7 +160,7 @@ pub async fn list_tokens(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::admin_token::list(&conn)
     })
     .await;
@@ -205,7 +205,7 @@ pub async fn delete_token(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::admin_token::delete(&conn, id)
     })
     .await;
@@ -606,7 +606,7 @@ pub async fn list_repos(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::Repository::list_all(&conn)
     })
     .await;
@@ -672,7 +672,7 @@ pub async fn create_repo(
 
     let name_clone = name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let mut repo =
             conary_core::db::models::Repository::new(name_clone, url);
         repo.content_url = content_url;
@@ -727,7 +727,7 @@ pub async fn get_repo(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::Repository::find_by_name(&conn, &name)
     })
     .await;
@@ -772,7 +772,7 @@ pub async fn update_repo(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let repo =
             conary_core::db::models::Repository::find_by_name(&conn, &name)?;
         let mut repo = match repo {
@@ -843,7 +843,7 @@ pub async fn delete_repo(
 
     let name_clone = name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let repo =
             conary_core::db::models::Repository::find_by_name(&conn, &name_clone)?;
         match repo {
@@ -903,7 +903,7 @@ pub async fn sync_repo(
 
     let name_clone = name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::Repository::find_by_name(&conn, &name_clone)
     })
     .await;
@@ -1057,7 +1057,7 @@ pub async fn list_peers(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let mut stmt = conn.prepare(
             "SELECT id, endpoint, node_name, tier, first_seen, last_seen,
                     latency_ms, success_count, failure_count, consecutive_failures, is_enabled
@@ -1145,7 +1145,7 @@ pub async fn add_peer(
     let now_clone = now.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conn.execute(
             "INSERT INTO federation_peers (id, endpoint, node_name, tier, first_seen, last_seen,
              latency_ms, success_count, failure_count, consecutive_failures, is_enabled)
@@ -1218,7 +1218,7 @@ pub async fn delete_peer(
 
     let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let affected = conn.execute(
             "DELETE FROM federation_peers WHERE id = ?1",
             rusqlite::params![id_clone],
@@ -1270,7 +1270,7 @@ pub async fn peer_health(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let peer = conn
             .query_row(
                 "SELECT id, endpoint, node_name, tier, first_seen, last_seen,
@@ -1351,7 +1351,7 @@ pub async fn get_federation_config(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         let json_str: Option<String> = conn
             .query_row(
                 "SELECT value FROM metadata WHERE key = 'federation_config'",
@@ -1415,7 +1415,7 @@ pub async fn update_federation_config(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES ('federation_config', ?1)",
             rusqlite::params![json_str],
@@ -1472,7 +1472,7 @@ pub async fn query_audit(
     }
     let db_path = { state.read().await.config.db_path.clone() };
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::audit_log::query(
             &conn,
             query.limit,
@@ -1507,7 +1507,7 @@ pub async fn purge_audit(
     let db_path = { state.read().await.config.db_path.clone() };
     let before = query.before.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = conary_core::db::open_fast(&db_path)?;
         conary_core::db::models::audit_log::purge(&conn, &before)
     })
     .await;

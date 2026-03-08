@@ -125,7 +125,7 @@ pub async fn auth_middleware(
     let hash_for_lookup = token_hash.clone();
     let db_path_for_lookup = db_path.clone();
     let lookup_result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open(&db_path_for_lookup)?;
+        let conn = conary_core::db::open_fast(&db_path_for_lookup)?;
         conary_core::db::models::admin_token::find_by_hash(&conn, &hash_for_lookup)
     })
     .await;
@@ -160,7 +160,7 @@ pub async fn auth_middleware(
     let bg_db_path = db_path;
     let bg_id = token_record.id;
     tokio::task::spawn_blocking(move || {
-        if let Ok(conn) = conary_core::db::open(&bg_db_path)
+        if let Ok(conn) = conary_core::db::open_fast(&bg_db_path)
             && let Err(e) = conary_core::db::models::admin_token::touch(&conn, bg_id)
         {
             tracing::warn!("Failed to update token last_used_at: {}", e);

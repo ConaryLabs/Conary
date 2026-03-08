@@ -344,7 +344,7 @@ impl RemiMcpServer {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conary_core::db::models::admin_token::list(&conn)
                 .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
@@ -395,7 +395,7 @@ impl RemiMcpServer {
         let name_clone = name.clone();
         let scopes_clone = scopes.clone();
         let id = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conary_core::db::models::admin_token::create(&conn, &name_clone, &token_hash, &scopes_clone)
                 .map_err(|e| McpError::internal_error(format!("DB insert error: {e}"), None))
@@ -427,7 +427,7 @@ impl RemiMcpServer {
         };
 
         let deleted = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conary_core::db::models::admin_token::delete(&conn, params.token_id)
                 .map_err(|e| McpError::internal_error(format!("DB delete error: {e}"), None))
@@ -457,7 +457,7 @@ impl RemiMcpServer {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conary_core::db::models::Repository::list_all(&conn)
                 .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
@@ -501,7 +501,7 @@ impl RemiMcpServer {
 
         let name = params.name.clone();
         let repo = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conary_core::db::models::Repository::find_by_name(&conn, &name)
                 .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
@@ -546,7 +546,7 @@ impl RemiMcpServer {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             let mut stmt = conn
                 .prepare(
@@ -629,7 +629,7 @@ impl RemiMcpServer {
         let tier_clone = tier.clone();
         let id_clone = peer_id.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conn.execute(
                 "INSERT INTO federation_peers
@@ -668,7 +668,7 @@ impl RemiMcpServer {
 
         let id = params.peer_id.clone();
         let affected = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
             conn.execute(
                 "DELETE FROM federation_peers WHERE id = ?1",
@@ -701,7 +701,7 @@ impl RemiMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let db_path = { self.state.read().await.config.db_path.clone() };
         let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
             conary_core::db::models::audit_log::query(
                 &conn,
@@ -731,7 +731,7 @@ impl RemiMcpServer {
         let db_path = { self.state.read().await.config.db_path.clone() };
         let before = params.before.clone();
         let deleted = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)
+            let conn = conary_core::db::open_fast(&db_path)
                 .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
             conary_core::db::models::audit_log::purge(&conn, &before)
                 .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))

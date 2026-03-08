@@ -148,7 +148,7 @@ pub async fn audit_middleware(
 
     // Log asynchronously -- don't block the response
     tokio::task::spawn_blocking(move || {
-        if let Ok(conn) = conary_core::db::open(&db_path)
+        if let Ok(conn) = conary_core::db::open_fast(&db_path)
             && let Err(e) = conary_core::db::models::audit_log::insert(
                 &conn,
                 token_name.as_deref(),

@@ -93,6 +93,43 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open an existing Conary database without running migrations
+///
+/// This is identical to [`open`] but skips `schema::migrate()`, making it
+/// faster for server hot paths where the schema is already known-good from
+/// startup. The caller is responsible for ensuring migrations have already
+/// been applied (e.g., via a prior `open()` or `init()` call).
+///
+/// # Arguments
+///
+/// * `path` - Path to the database file
+///
+/// # Returns
+///
+/// * `Result<Connection>` - Database connection if successful
+pub fn open_fast(path: impl AsRef<Path>) -> Result<Connection> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
+    }
+
+    let conn = Connection::open(path)?;
+
+    // Set pragmas (WAL persists in file but synchronous is session-level)
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA foreign_keys = ON;
+        PRAGMA busy_timeout = 5000;
+        ",
+    )?;
+
+    // No migration check -- caller guarantees schema is up-to-date
+
+    Ok(conn)
+}
+
 /// Execute a function within a transaction
 ///
 /// If the function returns Ok, the transaction is committed.
@@ -152,5 +189,41 @@ mod tests {
         let result = open("/nonexistent/path/db.sqlite");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::DatabaseNotFound(_)));
+    }
+
+    #[test]
+    fn test_open_fast_skips_migration() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().to_str().unwrap();
+
+        // Initialize the database (runs migrations)
+        init(db_path).unwrap();
+
+        // Open with open_fast (no migration check)
+        let conn = open_fast(db_path).unwrap();
+
+        // Verify the schema version is correct (tracked in schema_version table)
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            version,
+            schema::SCHEMA_VERSION,
+            "Schema version should match SCHEMA_VERSION after init()"
+        );
+
+        // Verify we can query a table that only exists after migration
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='troves'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1, "troves table should exist");
     }
 }
