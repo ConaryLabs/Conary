@@ -627,6 +627,19 @@ fn main() -> Result<()> {
                     version,
                 } => commands::cmd_redirect_resolve(&package, &db.db_path, version.as_deref()),
             },
+
+            // Nested: system update-channel
+            cli::SystemCommands::UpdateChannel { action } => match action {
+                cli::UpdateChannelAction::Get { db } => {
+                    commands::cmd_update_channel_get(&db.db_path)
+                }
+                cli::UpdateChannelAction::Set { url, db } => {
+                    commands::cmd_update_channel_set(&db.db_path, &url)
+                }
+                cli::UpdateChannelAction::Reset { db } => {
+                    commands::cmd_update_channel_reset(&db.db_path)
+                }
+            },
         },
 
         // =====================================================================

@@ -33,6 +33,7 @@ mod system;
 mod triggers;
 pub mod trust;
 mod update;
+mod update_channel;
 
 // Re-export all command handlers
 pub use adopt::{
@@ -120,6 +121,7 @@ pub use trust::{
 };
 #[cfg(feature = "server")]
 pub use trust::{cmd_trust_rotate_key, cmd_trust_sign_targets};
+pub use update_channel::{cmd_update_channel_get, cmd_update_channel_reset, cmd_update_channel_set};
 pub use update::{
     cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
 };

@@ -317,4 +317,32 @@ pub enum SystemCommands {
     /// Package redirect management (renames, obsoletes)
     #[command(subcommand)]
     Redirect(RedirectCommands),
+
+    /// Manage self-update channel
+    #[command(name = "update-channel")]
+    UpdateChannel {
+        #[command(subcommand)]
+        action: UpdateChannelAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UpdateChannelAction {
+    /// Show current update channel URL
+    Get {
+        #[command(flatten)]
+        db: DbArgs,
+    },
+    /// Set a custom update channel URL
+    Set {
+        /// Update channel URL
+        url: String,
+        #[command(flatten)]
+        db: DbArgs,
+    },
+    /// Reset to default update channel
+    Reset {
+        #[command(flatten)]
+        db: DbArgs,
+    },
 }
