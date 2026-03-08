@@ -590,6 +590,27 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         Default::default(),
     );
 
+    // MCP routes require admin scope (MCP tools provide full admin control)
+    let mcp_router = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn(
+            |request: Request<Body>, next: Next| async move {
+                let has_admin = request
+                    .extensions()
+                    .get::<crate::server::auth::TokenScopes>()
+                    .map(|s| s.has_scope("admin"))
+                    .unwrap_or(false);
+                if !has_admin {
+                    return crate::server::auth::json_error(
+                        403,
+                        "Admin scope required for MCP",
+                        "FORBIDDEN",
+                    );
+                }
+                next.run(request).await
+            },
+        ));
+
     // Auth-protected routes
     let protected = Router::new()
         // Token management
@@ -624,8 +645,8 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/audit", get(admin::query_audit).delete(admin::purge_audit))
         // SSE event stream
         .route("/v1/admin/events", get(admin::sse_events))
-        // MCP endpoint
-        .nest_service("/mcp", mcp_service)
+        // MCP endpoint (admin scope enforced by mcp_router's route_layer)
+        .merge(mcp_router)
         // Audit middleware (FIRST route_layer = runs LAST = after auth, so TokenName is available)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

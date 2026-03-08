@@ -376,6 +376,14 @@ impl RemiMcpServer {
         }
 
         let scopes = params.scopes.unwrap_or_else(|| "admin".to_string());
+
+        if let Err(invalid) = crate::server::auth::validate_scopes(&scopes) {
+            return Err(McpError::invalid_params(
+                format!("Invalid scope: '{invalid}'"),
+                None,
+            ));
+        }
+
         let raw_token = generate_token();
         let token_hash = hash_token(&raw_token);
 

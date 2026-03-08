@@ -93,11 +93,15 @@ pub async fn audit_middleware(
         .get::<TokenName>()
         .map(|tn| tn.0.clone());
 
-    // Extract client IP from ConnectInfo (set by axum's into_make_service_with_connect_info)
-    let source_ip = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|ci| ci.0.ip().to_string());
+    // Extract client IP using the shared helper
+    let source_ip = Some(crate::server::rate_limit::extract_ip(&request).to_string());
+
+    // Extract db_path before running the handler so we don't need to
+    // acquire the RwLock after the response is already built.
+    let db_path = {
+        let s = state.read().await;
+        s.config.db_path.clone()
+    };
 
     // For write operations, capture the request body
     let (request, request_body) = if is_write {
@@ -143,11 +147,6 @@ pub async fn audit_middleware(
     let action = derive_action(&method, &path);
 
     // Log asynchronously -- don't block the response
-    let db_path = {
-        let s = state.read().await;
-        s.config.db_path.clone()
-    };
-
     tokio::task::spawn_blocking(move || {
         if let Ok(conn) = conary_core::db::open(&db_path)
             && let Err(e) = conary_core::db::models::audit_log::insert(

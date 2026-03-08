@@ -11,7 +11,6 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rand::Rng;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -34,18 +33,39 @@ impl TokenScopes {
     /// The "admin" scope grants access to everything. Otherwise, the
     /// required scope must appear as an exact match in the comma-separated list.
     pub fn has_scope(&self, required: &str) -> bool {
-        if self.0.split(',').any(|s| s.trim() == "admin") {
-            return true;
-        }
-        self.0.split(',').any(|s| s.trim() == required)
+        self.0.split(',').any(|s| {
+            let t = s.trim();
+            t == "admin" || t == required
+        })
     }
+}
+
+/// Valid token scopes for the admin API.
+pub const VALID_SCOPES: &[&str] = &[
+    "admin",
+    "ci:read",
+    "ci:trigger",
+    "repos:read",
+    "repos:write",
+    "federation:read",
+    "federation:write",
+];
+
+/// Validate that all scopes in a comma-separated string are valid.
+/// Returns Err with the first invalid scope found.
+pub fn validate_scopes(scopes: &str) -> Result<(), String> {
+    for scope in scopes.split(',') {
+        let trimmed = scope.trim();
+        if !VALID_SCOPES.contains(&trimmed) {
+            return Err(trimmed.to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Hash a raw token using SHA-256, returning a 64-character hex string.
 pub fn hash_token(raw: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    hex::encode(hasher.finalize())
+    conary_core::hash::sha256(raw.as_bytes())
 }
 
 /// Generate a cryptographically random token (32 bytes, 64 hex chars).
@@ -78,16 +98,13 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    // Extract rate limiters and client IP for auth-fail tracking
-    let (limiters, client_ip) = {
+    // Extract rate limiters, client IP, and db_path in a single lock acquisition
+    let (limiters, client_ip, db_path) = {
         let s = state.read().await;
         let limiters = s.rate_limiters.clone();
-        let ip = request
-            .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip())
-            .unwrap_or_else(|| std::net::IpAddr::from([127, 0, 0, 1]));
-        (limiters, ip)
+        let ip = crate::server::rate_limit::extract_ip(&request);
+        let db_path = s.config.db_path.clone();
+        (limiters, ip, db_path)
     };
 
     let token = match extract_bearer(request.headers()) {
@@ -104,12 +121,6 @@ pub async fn auth_middleware(
     };
 
     let token_hash = hash_token(&token);
-
-    // Clone db_path once from state for both the lookup and the background touch
-    let db_path = {
-        let state_guard = state.read().await;
-        state_guard.config.db_path.clone()
-    };
 
     let hash_for_lookup = token_hash.clone();
     let db_path_for_lookup = db_path.clone();
@@ -240,5 +251,18 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Basic abc123".parse().unwrap());
         assert_eq!(extract_bearer(&headers), None);
+    }
+
+    #[test]
+    fn test_validate_scopes_valid() {
+        assert!(validate_scopes("admin").is_ok());
+        assert!(validate_scopes("ci:read,ci:trigger").is_ok());
+        assert!(validate_scopes("repos:read, repos:write").is_ok());
+    }
+
+    #[test]
+    fn test_validate_scopes_invalid() {
+        let err = validate_scopes("admin,bogus").unwrap_err();
+        assert_eq!(err, "bogus");
     }
 }

@@ -87,6 +87,15 @@ pub async fn create_token(
 
     let scopes_str = body.scopes.unwrap_or_else(|| "admin".to_string());
 
+    // Validate scopes
+    if let Err(invalid) = crate::server::auth::validate_scopes(&scopes_str) {
+        return json_error(
+            400,
+            &format!("Invalid scope: '{invalid}'"),
+            "INVALID_SCOPE",
+        );
+    }
+
     // Generate and hash the token
     let raw_token = generate_token();
     let token_hash = hash_token(&raw_token);
@@ -957,7 +966,7 @@ pub async fn sse_events(
             match rx.recv().await {
                 Ok(event) => {
                     if let Some(ref filters) = filters
-                        && !filters.iter().any(|f| f == &event.event_type)
+                        && !filters.iter().any(|f| event.event_type.starts_with(f.as_str()))
                     {
                         continue;
                     }

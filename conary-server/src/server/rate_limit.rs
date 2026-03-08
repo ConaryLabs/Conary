@@ -49,7 +49,7 @@ impl AdminRateLimiters {
 /// Extract client IP from the request.
 ///
 /// Tries `ConnectInfo` first, falls back to 127.0.0.1.
-fn extract_ip(request: &Request<Body>) -> IpAddr {
+pub(crate) fn extract_ip(request: &Request<Body>) -> IpAddr {
     request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
