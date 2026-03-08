@@ -23,6 +23,7 @@ pub mod config;
 mod conversion;
 pub mod delta_manifests;
 pub mod federated_index;
+pub mod forgejo;
 mod handlers;
 mod index_gen;
 mod jobs;

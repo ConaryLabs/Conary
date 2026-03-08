@@ -236,121 +236,40 @@ pub async fn delete_token(
 // CI proxy helpers
 // ---------------------------------------------------------------------------
 
-/// Proxy a GET request to Forgejo API, returning parsed JSON.
-async fn forgejo_get(
+/// Map a [`crate::server::forgejo::ForgejoError`] to an axum JSON error response.
+///
+/// Uses the upstream HTTP status if available; defaults to 502 Bad Gateway.
+fn forgejo_err_to_response(e: crate::server::forgejo::ForgejoError) -> Response {
+    let status = e.status.unwrap_or(502);
+    json_error(status, &e.message, "UPSTREAM_ERROR")
+}
+
+/// Call `crate::server::forgejo::get` and parse the response text as JSON.
+async fn forgejo_get_json(
     state: &Arc<RwLock<ServerState>>,
     path: &str,
 ) -> Result<serde_json::Value, Response> {
-    let (url, token, client) = {
-        let s = state.read().await;
-        let base = s.forgejo_url.as_ref().ok_or_else(|| {
-            json_error(
-                503,
-                "Forgejo not configured",
-                "UPSTREAM_ERROR",
-            )
-        })?;
-        let token = s.forgejo_token.clone().unwrap_or_default();
-        (
-            format!("{}/api/v1{path}", base.trim_end_matches('/')),
-            token,
-            s.http_client.clone(),
-        )
-    };
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("token {token}"))
-        .send()
+    let text = crate::server::forgejo::get(state, path)
         .await
-        .map_err(|e| {
-            tracing::error!("Forgejo proxy error: {e}");
-            json_error(
-                502,
-                "Forgejo unreachable",
-                "UPSTREAM_ERROR",
-            )
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        return Err(json_error(
-            502,
-            &format!("Forgejo returned {status}"),
-            "UPSTREAM_ERROR",
-        ));
-    }
-
-    resp.json().await.map_err(|e| {
+        .map_err(forgejo_err_to_response)?;
+    serde_json::from_str(&text).map_err(|e| {
         tracing::error!("Forgejo response parse error: {e}");
-        json_error(
-            502,
-            "Invalid Forgejo response",
-            "UPSTREAM_ERROR",
-        )
+        json_error(502, "Invalid Forgejo response", "UPSTREAM_ERROR")
     })
 }
 
-/// Proxy a POST request to Forgejo API, returning parsed JSON.
-async fn forgejo_post(
+/// Call `crate::server::forgejo::post` and parse the response text as JSON.
+async fn forgejo_post_json(
     state: &Arc<RwLock<ServerState>>,
     path: &str,
-    body: serde_json::Value,
+    body: &serde_json::Value,
 ) -> Result<serde_json::Value, Response> {
-    let (url, token, client) = {
-        let s = state.read().await;
-        let base = s.forgejo_url.as_ref().ok_or_else(|| {
-            json_error(
-                503,
-                "Forgejo not configured",
-                "UPSTREAM_ERROR",
-            )
-        })?;
-        let token = s.forgejo_token.clone().unwrap_or_default();
-        (
-            format!("{}/api/v1{path}", base.trim_end_matches('/')),
-            token,
-            s.http_client.clone(),
-        )
-    };
-
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("token {token}"))
-        .json(&body)
-        .send()
+    let text = crate::server::forgejo::post(state, path, Some(body))
         .await
-        .map_err(|e| {
-            tracing::error!("Forgejo proxy error: {e}");
-            json_error(
-                502,
-                "Forgejo unreachable",
-                "UPSTREAM_ERROR",
-            )
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        return Err(json_error(
-            502,
-            &format!("Forgejo returned {status}"),
-            "UPSTREAM_ERROR",
-        ));
-    }
-
-    // Some Forgejo POST responses return 204 with no body
-    let status = resp.status();
-    if status == reqwest::StatusCode::NO_CONTENT {
-        return Ok(serde_json::json!({"status": "ok"}));
-    }
-
-    resp.json().await.map_err(|e| {
+        .map_err(forgejo_err_to_response)?;
+    serde_json::from_str(&text).map_err(|e| {
         tracing::error!("Forgejo response parse error: {e}");
-        json_error(
-            502,
-            "Invalid Forgejo response",
-            "UPSTREAM_ERROR",
-        )
+        json_error(502, "Invalid Forgejo response", "UPSTREAM_ERROR")
     })
 }
 
@@ -368,7 +287,7 @@ pub async fn ci_list_workflows(
     if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
-    match forgejo_get(&state, "/repos/peter/Conary/actions/workflows").await {
+    match forgejo_get_json(&state, "/repos/peter/Conary/actions/workflows").await {
         Ok(data) => Json(data).into_response(),
         Err(e) => e,
     }
@@ -388,7 +307,7 @@ pub async fn ci_list_runs(
     if let Some(err) = validate_path_param(&name, "workflow name") {
         return err;
     }
-    match forgejo_get(
+    match forgejo_get_json(
         &state,
         &format!("/repos/peter/Conary/actions/workflows/{name}/runs"),
     )
@@ -410,7 +329,7 @@ pub async fn ci_get_run(
     if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
-    match forgejo_get(&state, &format!("/repos/peter/Conary/actions/runs/{id}")).await {
+    match forgejo_get_json(&state, &format!("/repos/peter/Conary/actions/runs/{id}")).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => e,
     }
@@ -428,70 +347,15 @@ pub async fn ci_get_logs(
         return err;
     }
 
-    let (url, token, client) = {
-        let s = state.read().await;
-        let base = match s.forgejo_url.as_ref() {
-            Some(b) => b.clone(),
-            None => {
-                return json_error(
-                    503,
-                    "Forgejo not configured",
-                    "UPSTREAM_ERROR",
-                );
-            }
-        };
-        let token = s.forgejo_token.clone().unwrap_or_default();
-        (
-            format!(
-                "{}/api/v1/repos/peter/Conary/actions/runs/{id}/logs",
-                base.trim_end_matches('/')
-            ),
-            token,
-            s.http_client.clone(),
-        )
-    };
-
-    let resp = match client
-        .get(&url)
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Forgejo proxy error: {e}");
-            return json_error(
-                502,
-                "Forgejo unreachable",
-                "UPSTREAM_ERROR",
-            );
-        }
-    };
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        return json_error(
-            502,
-            &format!("Forgejo returned {status}"),
-            "UPSTREAM_ERROR",
-        );
-    }
-
-    match resp.text().await {
+    let path = format!("/repos/peter/Conary/actions/runs/{id}/logs");
+    match crate::server::forgejo::get(&state, &path).await {
         Ok(text) => (
             StatusCode::OK,
             [("content-type", "text/plain; charset=utf-8")],
             text,
         )
             .into_response(),
-        Err(e) => {
-            tracing::error!("Forgejo log body error: {e}");
-            json_error(
-                502,
-                "Invalid Forgejo response",
-                "UPSTREAM_ERROR",
-            )
-        }
+        Err(e) => forgejo_err_to_response(e),
     }
 }
 
@@ -509,10 +373,11 @@ pub async fn ci_dispatch(
     if let Some(err) = validate_path_param(&name, "workflow name") {
         return err;
     }
-    match forgejo_post(
+    let body = serde_json::json!({"ref": "main"});
+    match forgejo_post_json(
         &state,
         &format!("/repos/peter/Conary/actions/workflows/{name}/dispatches"),
-        serde_json::json!({"ref": "main"}),
+        &body,
     )
     .await
     {
@@ -531,10 +396,11 @@ pub async fn ci_mirror_sync(
     if let Some(err) = check_scope(&scopes, Scope::CiTrigger) {
         return err;
     }
-    match forgejo_post(
+    let body = serde_json::json!({});
+    match forgejo_post_json(
         &state,
         "/repos/peter/Conary/mirror-sync",
-        serde_json::json!({}),
+        &body,
     )
     .await
     {
