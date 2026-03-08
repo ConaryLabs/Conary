@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.2.1] - 2026-03-07
+
+### Fixed
+- codebase-wide simplify pass — bug fixes, deduplication, performance
+
+### Other
+- feat(db): add federation_peer model to replace raw SQL in handlers
+- perf(db): add open_fast() to skip migrations on server hot paths
+- feat(server): Add Remi Admin API P2 — rate limiting, audit logging
+- feat(server): Add Remi Admin API P0 — auth, tokens, CI proxy, SSE, OpenAPI, MCP
+
 ## [server-v0.2.0] - 2026-03-07
 
 ### Added

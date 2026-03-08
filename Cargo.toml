@@ -83,7 +83,7 @@ regex = "1.10"
 
 [package]
 name = "conary"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.93"
 authors = ["Conary Contributors"]
