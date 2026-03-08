@@ -7,6 +7,9 @@
 //!
 //! The MCP endpoint is mounted on the external admin router at `/mcp` and
 //! sits behind the same Bearer-token auth middleware as other admin endpoints.
+//!
+//! DB-touching tools delegate to [`crate::server::admin_service`] so that
+//! business logic is shared with the HTTP admin handlers.
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -23,12 +26,15 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::server::ServerState;
-use crate::server::auth::{generate_token, hash_token};
+use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 
 /// Validate a path parameter against a safe pattern for URL interpolation.
 ///
 /// Rejects values containing slashes, `..`, null bytes, or characters
 /// outside `[a-zA-Z0-9._-]`.
+///
+/// Used by the Forgejo CI proxy tools which interpolate user-supplied
+/// values into URL paths.
 fn validate_path_param(value: &str, param_name: &str) -> Result<(), McpError> {
     if value.is_empty()
         || value.contains('/')
@@ -42,6 +48,16 @@ fn validate_path_param(value: &str, param_name: &str) -> Result<(), McpError> {
         ))
     } else {
         Ok(())
+    }
+}
+
+/// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
+fn service_err_to_mcp(e: ServiceError) -> McpError {
+    match e {
+        ServiceError::BadRequest(msg) | ServiceError::NotFound(msg) | ServiceError::Conflict(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        ServiceError::Internal(msg) => McpError::internal_error(msg, None),
     }
 }
 
@@ -68,7 +84,7 @@ impl RemiMcpServer {
 }
 
 // ---------------------------------------------------------------------------
-// Forgejo proxy helpers (map ForgejoError → McpError)
+// Forgejo proxy helpers (map ForgejoError -> McpError)
 // ---------------------------------------------------------------------------
 
 /// Map a [`crate::server::forgejo::ForgejoError`] to an MCP internal error.
@@ -225,8 +241,8 @@ impl RemiMcpServer {
 
     /// Trigger a new CI workflow run on the main branch.
     ///
-    /// **Not idempotent** — every call queues a new run.
-    #[tool(description = "Trigger a new CI workflow run on main. NOT idempotent — every call queues a new run.")]
+    /// **Not idempotent** -- every call queues a new run.
+    #[tool(description = "Trigger a new CI workflow run on main. NOT idempotent -- every call queues a new run.")]
     async fn ci_dispatch(
         &self,
         Parameters(params): Parameters<WorkflowParams>,
@@ -258,26 +274,20 @@ impl RemiMcpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
+    // -----------------------------------------------------------------------
+    // Token management (delegates to admin_service)
+    // -----------------------------------------------------------------------
+
     /// List all admin API tokens with names, scopes, and last-used timestamps.
     ///
-    /// Token hashes are redacted — only metadata is returned.
+    /// Token hashes are redacted -- only metadata is returned.
     #[tool(description = "List all admin API tokens with names, scopes, and last-used timestamps. Token hashes are redacted.")]
     async fn list_tokens(&self) -> Result<CallToolResult, McpError> {
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
+        let tokens = admin_service::list_tokens(&self.state)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conary_core::db::models::admin_token::list(&conn)
-                .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
-
-        let text = serde_json::to_string_pretty(&result)
+        let text = serde_json::to_string_pretty(&tokens)
             .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -285,54 +295,26 @@ impl RemiMcpServer {
 
     /// Create a new admin API token. Returns the plaintext token once.
     ///
-    /// The plaintext token is only shown in this response — store it
+    /// The plaintext token is only shown in this response -- store it
     /// securely. Subsequent `list_tokens` calls only return metadata.
-    #[tool(description = "Create a new admin API token. Returns the plaintext token once — store it securely.")]
+    #[tool(description = "Create a new admin API token. Returns the plaintext token once -- store it securely.")]
     async fn create_token(
         &self,
         Parameters(params): Parameters<CreateTokenParams>,
     ) -> Result<CallToolResult, McpError> {
-        let name = params.name.trim().to_string();
-        if name.is_empty() || name.len() > 128 {
-            return Err(McpError::invalid_params(
-                "Token name must be 1-128 characters",
-                None,
-            ));
-        }
-
-        let scopes = params.scopes.unwrap_or_else(|| "admin".to_string());
-
-        if let Err(invalid) = crate::server::auth::validate_scopes(&scopes) {
-            return Err(McpError::invalid_params(
-                format!("Invalid scope: '{invalid}'"),
-                None,
-            ));
-        }
-
-        let raw_token = generate_token();
-        let token_hash = hash_token(&raw_token);
-
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
-
-        let name_clone = name.clone();
-        let scopes_clone = scopes.clone();
-        let id = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conary_core::db::models::admin_token::create(&conn, &name_clone, &token_hash, &scopes_clone)
-                .map_err(|e| McpError::internal_error(format!("DB insert error: {e}"), None))
-        })
+        let created = admin_service::create_token(
+            &self.state,
+            &params.name,
+            params.scopes.as_deref(),
+        )
         .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
+        .map_err(service_err_to_mcp)?;
 
         let result = serde_json::json!({
-            "id": id,
-            "name": name,
-            "token": raw_token,
-            "scopes": scopes,
+            "id": created.id,
+            "name": created.name,
+            "token": created.raw_token,
+            "scopes": created.scopes,
         });
         let text = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
@@ -346,19 +328,9 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<DeleteTokenParams>,
     ) -> Result<CallToolResult, McpError> {
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
-
-        let deleted = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conary_core::db::models::admin_token::delete(&conn, params.token_id)
-                .map_err(|e| McpError::internal_error(format!("DB delete error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
+        let deleted = admin_service::delete_token(&self.state, params.token_id)
+            .await
+            .map_err(service_err_to_mcp)?;
 
         if deleted {
             let result = serde_json::json!({"status": "deleted", "token_id": params.token_id});
@@ -373,24 +345,18 @@ impl RemiMcpServer {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Repository management (delegates to admin_service)
+    // -----------------------------------------------------------------------
+
     /// List all configured repositories.
     #[tool(description = "List all configured repositories with name, URL, enabled status, priority, last sync, and GPG settings.")]
     async fn list_repos(&self) -> Result<CallToolResult, McpError> {
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
+        let repos = admin_service::list_repos(&self.state)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conary_core::db::models::Repository::list_all(&conn)
-                .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
-
-        let repos: Vec<serde_json::Value> = result
+        let json: Vec<serde_json::Value> = repos
             .iter()
             .map(|r| {
                 serde_json::json!({
@@ -405,7 +371,7 @@ impl RemiMcpServer {
             })
             .collect();
 
-        let text = serde_json::to_string_pretty(&repos)
+        let text = serde_json::to_string_pretty(&json)
             .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -417,22 +383,9 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<RepoNameParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_path_param(&params.name, "name")?;
-
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
-
-        let name = params.name.clone();
-        let repo = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conary_core::db::models::Repository::find_by_name(&conn, &name)
-                .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
+        let repo = admin_service::get_repo(&self.state, &params.name)
+            .await
+            .map_err(service_err_to_mcp)?;
 
         match repo {
             Some(r) => {
@@ -462,60 +415,41 @@ impl RemiMcpServer {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Federation peer management (delegates to admin_service)
+    // -----------------------------------------------------------------------
+
     /// List all federation peers with health information.
     #[tool(description = "List all federation peers with endpoint, tier, last seen, success rate, and enabled status.")]
     async fn list_peers(&self) -> Result<CallToolResult, McpError> {
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
+        let peers = admin_service::list_peers(&self.state)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, endpoint, node_name, tier, last_seen,
-                            success_count, failure_count, consecutive_failures, is_enabled
-                     FROM federation_peers
-                     ORDER BY tier, endpoint",
-                )
-                .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))?;
-
-            let rows = stmt
-                .query_map([], |row| {
-                    let success: i64 = row.get(5)?;
-                    let failure: i64 = row.get(6)?;
-                    let total = success + failure;
-                    let rate = if total > 0 {
-                        format!("{:.1}%", (success as f64 / total as f64) * 100.0)
-                    } else {
-                        "N/A".to_string()
-                    };
-                    Ok(serde_json::json!({
-                        "id": row.get::<_, String>(0)?,
-                        "endpoint": row.get::<_, String>(1)?,
-                        "node_name": row.get::<_, Option<String>>(2)?,
-                        "tier": row.get::<_, String>(3)?,
-                        "last_seen": row.get::<_, String>(4)?,
-                        "success_rate": rate,
-                        "total_requests": total,
-                        "consecutive_failures": row.get::<_, i64>(7)?,
-                        "enabled": row.get::<_, bool>(8)?,
-                    }))
+        let json: Vec<serde_json::Value> = peers
+            .iter()
+            .map(|p| {
+                let total = p.success_count + p.failure_count;
+                let success_rate = if total > 0 {
+                    format!("{:.1}%", (p.success_count as f64 / total as f64) * 100.0)
+                } else {
+                    "N/A".to_string()
+                };
+                serde_json::json!({
+                    "id": p.id,
+                    "endpoint": p.endpoint,
+                    "node_name": p.node_name,
+                    "tier": p.tier,
+                    "last_seen": p.last_seen,
+                    "success_rate": success_rate,
+                    "total_requests": total,
+                    "consecutive_failures": p.consecutive_failures,
+                    "enabled": p.is_enabled,
                 })
-                .map_err(|e| McpError::internal_error(format!("DB query error: {e}"), None))?;
+            })
+            .collect();
 
-            let peers: Vec<serde_json::Value> = rows
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| McpError::internal_error(format!("DB row error: {e}"), None))?;
-
-            Ok::<_, McpError>(peers)
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
-
-        let text = serde_json::to_string_pretty(&result)
+        let text = serde_json::to_string_pretty(&json)
             .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -530,49 +464,20 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<AddPeerParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate endpoint URL
-        let _url = url::Url::parse(&params.endpoint).map_err(|e| {
-            McpError::invalid_params(format!("Invalid endpoint URL: {e}"), None)
-        })?;
-
-        let tier = params.tier.unwrap_or_else(|| "leaf".to_string());
-        if !["leaf", "cell_hub", "region_hub"].contains(&tier.as_str()) {
-            return Err(McpError::invalid_params(
-                "Tier must be 'leaf', 'cell_hub', or 'region_hub'",
-                None,
-            ));
-        }
-
-        let peer_id = conary_core::hash::sha256(params.endpoint.as_bytes());
-
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
+        let input = AddPeerInput {
+            endpoint: params.endpoint,
+            tier: params.tier,
+            node_name: None,
         };
 
-        let endpoint = params.endpoint.clone();
-        let tier_clone = tier.clone();
-        let id_clone = peer_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conn.execute(
-                "INSERT INTO federation_peers
-                 (id, endpoint, tier, first_seen, last_seen,
-                  latency_ms, success_count, failure_count, consecutive_failures, is_enabled)
-                 VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, 0, 0, 1)",
-                rusqlite::params![id_clone, endpoint, tier_clone],
-            )
-            .map_err(|e| McpError::internal_error(format!("DB insert error: {e}"), None))?;
-            Ok::<_, McpError>(())
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
+        let (peer_id, peer) = admin_service::add_peer(&self.state, input)
+            .await
+            .map_err(service_err_to_mcp)?;
 
         let result = serde_json::json!({
             "id": peer_id,
-            "endpoint": params.endpoint,
-            "tier": tier,
+            "endpoint": peer.endpoint,
+            "tier": peer.tier,
         });
         let text = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
@@ -586,25 +491,11 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<PeerIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        let db_path = {
-            let s = self.state.read().await;
-            s.config.db_path.clone()
-        };
+        let deleted = admin_service::delete_peer(&self.state, &params.peer_id)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let id = params.peer_id.clone();
-        let affected = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB open error: {e}"), None))?;
-            conn.execute(
-                "DELETE FROM federation_peers WHERE id = ?1",
-                rusqlite::params![id],
-            )
-            .map_err(|e| McpError::internal_error(format!("DB delete error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))??;
-
-        if affected > 0 {
+        if deleted {
             let result = serde_json::json!({"status": "deleted", "peer_id": params.peer_id});
             let text = serde_json::to_string_pretty(&result)
                 .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
@@ -617,6 +508,10 @@ impl RemiMcpServer {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Audit log (delegates to admin_service)
+    // -----------------------------------------------------------------------
+
     /// Query the admin audit log. Returns recent API operations with timing
     /// and (for writes) request/response bodies.
     #[tool(description = "Query admin audit log. Supports filters: limit, action prefix, since timestamp, token_name.")]
@@ -624,25 +519,20 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<QueryAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        let db_path = { self.state.read().await.config.db_path.clone() };
-        let result = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
-            conary_core::db::models::audit_log::query(
-                &conn,
-                params.limit,
-                params.action.as_deref(),
-                params.since.as_deref(),
-                params.token_name.as_deref(),
-            )
-            .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))
-        })
+        let entries = admin_service::query_audit(
+            &self.state,
+            params.limit,
+            params.action,
+            params.since,
+            params.token_name,
+        )
         .await
-        .map_err(|e| McpError::internal_error(format!("Task error: {e}"), None))??;
+        .map_err(service_err_to_mcp)?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap_or_default(),
-        )]))
+        let text = serde_json::to_string_pretty(&entries)
+            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     /// Purge old audit log entries. Deletes entries older than the given date.
@@ -653,24 +543,18 @@ impl RemiMcpServer {
         &self,
         Parameters(params): Parameters<PurgeAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        let db_path = { self.state.read().await.config.db_path.clone() };
-        let before = params.before.clone();
-        let deleted = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)
-                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
-            conary_core::db::models::audit_log::purge(&conn, &before)
-                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task error: {e}"), None))??;
+        let deleted = admin_service::purge_audit(&self.state, &params.before)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&serde_json::json!({
-                "deleted": deleted,
-                "before": params.before,
-            }))
-            .unwrap_or_default(),
-        )]))
+        let result = serde_json::json!({
+            "deleted": deleted,
+            "before": params.before,
+        });
+        let text = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
 
