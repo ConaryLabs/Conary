@@ -145,8 +145,11 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 
     let solvable_count = provider.solvable_count();
 
-    // Find direct + transitive reverse deps
-    let mut breaking = Vec::new();
+    // Single pass: find directly broken packages and build reverse dependency map
+    let mut breaking_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut reverse_deps: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
     for i in 0..solvable_count {
         let sid = resolvo::SolvableId(i as u32);
         let pkg = provider.get_solvable(sid);
@@ -154,10 +157,18 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
             continue;
         }
 
-        // Check if any of this package's dependencies are being removed
         if let Some(deps) = provider.get_dependency_list(sid) {
             for (dep_name, constraint) in deps {
-                if remove_set.contains(dep_name.as_str()) {
+                // Build reverse deps for transitive expansion
+                reverse_deps
+                    .entry(dep_name.to_string())
+                    .or_default()
+                    .push(pkg.name.clone());
+
+                // Check if this dependency is being removed with no alternative
+                if remove_set.contains(dep_name.as_str())
+                    && !breaking_set.contains(&pkg.name)
+                {
                     let has_alternative = (0..solvable_count).any(|j| {
                         let alt_sid = resolvo::SolvableId(j as u32);
                         let alt = provider.get_solvable(alt_sid);
@@ -167,36 +178,16 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                             && constraint.satisfies(&alt.version)
                     });
                     if !has_alternative {
-                        breaking.push(pkg.name.clone());
-                        break;
+                        breaking_set.insert(pkg.name.clone());
                     }
                 }
             }
         }
     }
 
-    // Build reverse dependency map for O(N+E) transitive expansion
-    let mut reverse_deps: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for i in 0..solvable_count {
-        let sid = resolvo::SolvableId(i as u32);
-        let pkg = provider.get_solvable(sid);
-        if pkg.trove_id.is_none() || remove_set.contains(pkg.name.as_str()) {
-            continue;
-        }
-        if let Some(deps) = provider.get_dependency_list(sid) {
-            for (dep_name, _) in deps {
-                reverse_deps
-                    .entry(dep_name.to_string())
-                    .or_default()
-                    .push(pkg.name.clone());
-            }
-        }
-    }
-
     // BFS from breaking packages through reverse deps
-    let mut breaking_set: std::collections::HashSet<String> = breaking.iter().cloned().collect();
-    let mut queue: std::collections::VecDeque<String> = breaking.iter().cloned().collect();
+    let mut queue: std::collections::VecDeque<String> =
+        breaking_set.iter().cloned().collect();
     while let Some(broken) = queue.pop_front() {
         if let Some(rdeps) = reverse_deps.get(&broken) {
             for rdep in rdeps {

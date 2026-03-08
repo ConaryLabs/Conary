@@ -50,21 +50,12 @@ impl SystemLock {
     /// This will block if another process holds the lock.
     /// Use `try_acquire` for non-blocking behavior.
     pub fn acquire<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        let (file, path) = Self::open_lock_file(path)?;
 
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = File::create(&path)?;
-
-        // Block until lock is acquired
         file.lock_exclusive()
             .map_err(|e| conary_core::Error::IoError(format!("Failed to acquire system lock: {}", e)))?;
 
         log::info!("Acquired system lock at {:?}", path);
-
         Ok(Self { file, path })
     }
 
@@ -75,14 +66,7 @@ impl SystemLock {
     /// - `Ok(None)` if lock is held by another process
     /// - `Err` on I/O errors
     pub fn try_acquire<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
-        let path = path.as_ref().to_path_buf();
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = File::create(&path)?;
+        let (file, path) = Self::open_lock_file(path)?;
 
         match file.try_lock_exclusive() {
             Ok(()) => {
@@ -98,6 +82,16 @@ impl SystemLock {
                 e
             ))),
         }
+    }
+
+    /// Open (or create) the lock file, ensuring parent directories exist
+    fn open_lock_file<P: AsRef<Path>>(path: P) -> Result<(File, PathBuf)> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = File::create(&path)?;
+        Ok((file, path))
     }
 
     /// Check if a lock is currently held (by any process)

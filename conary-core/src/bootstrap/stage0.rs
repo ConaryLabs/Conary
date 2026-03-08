@@ -264,24 +264,23 @@ impl Stage0Builder {
             .map_err(|e| Stage0Error::VerificationFailed(e.to_string()))
     }
 
-    /// Check if a cached seed tarball exists in the downloads directory.
-    pub fn has_cached_seed(downloads_dir: &Path, triple: &str) -> bool {
-        let patterns = [
+    /// Seed archive filename patterns for a given triple.
+    fn seed_patterns(triple: &str) -> [String; 3] {
+        [
             format!("{triple}-seed.tar.xz"),
             format!("{triple}-seed.tar.gz"),
             format!("{triple}-seed.tar.bz2"),
-        ];
-        patterns.iter().any(|name| downloads_dir.join(name).exists())
+        ]
+    }
+
+    /// Check if a cached seed tarball exists in the downloads directory.
+    pub fn has_cached_seed(downloads_dir: &Path, triple: &str) -> bool {
+        Self::find_cached_seed(downloads_dir, triple).is_some()
     }
 
     /// Find the cached seed path if it exists.
     pub fn find_cached_seed(downloads_dir: &Path, triple: &str) -> Option<PathBuf> {
-        let patterns = [
-            format!("{triple}-seed.tar.xz"),
-            format!("{triple}-seed.tar.gz"),
-            format!("{triple}-seed.tar.bz2"),
-        ];
-        patterns
+        Self::seed_patterns(triple)
             .iter()
             .map(|name| downloads_dir.join(name))
             .find(|p| p.exists())

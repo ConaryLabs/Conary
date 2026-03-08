@@ -209,20 +209,16 @@ impl<'db> Resolver<'db> {
                 }
 
                 if constraints.len() > 1 {
-                    let mut conflicting = false;
-                    for i in 0..constraints.len() {
-                        for j in (i + 1)..constraints.len() {
-                            if !constraints[i].1.is_compatible_with(&constraints[j].1) {
-                                conflicting = true;
-                                break;
-                            }
-                        }
-                        if conflicting {
-                            break;
-                        }
-                    }
+                    let has_conflict = constraints
+                        .iter()
+                        .enumerate()
+                        .any(|(i, (_, ci))| {
+                            constraints[i + 1..]
+                                .iter()
+                                .any(|(_, cj)| !ci.is_compatible_with(cj))
+                        });
 
-                    if conflicting {
+                    if has_conflict {
                         conflicts.push(Conflict::ConflictingConstraints {
                             package: package_name.clone(),
                             constraints: constraints

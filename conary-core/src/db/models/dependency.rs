@@ -6,6 +6,10 @@ use super::trove::Trove;
 use crate::error::Result;
 use rusqlite::{Connection, Row, params};
 
+/// Column list for DependencyEntry SELECT queries (avoids repetition across methods)
+const DEP_COLUMNS: &str = "id, trove_id, depends_on_name, depends_on_version, \
+    dependency_type, version_constraint, kind";
+
 /// Dependency entry linking troves to their dependencies
 #[derive(Debug, Clone)]
 pub struct DependencyEntry {
@@ -81,10 +85,8 @@ impl DependencyEntry {
 
     /// Find all dependencies for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind
-             FROM dependencies WHERE trove_id = ?1",
-        )?;
+        let sql = format!("SELECT {DEP_COLUMNS} FROM dependencies WHERE trove_id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
 
         let deps = stmt
             .query_map([trove_id], Self::from_row)?

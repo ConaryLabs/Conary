@@ -125,12 +125,9 @@ fn is_trusted_proxy_source(ip: &IpAddr) -> bool {
 
 /// Parse a CIDR notation string into (network_u32, prefix_length)
 fn parse_cidr(cidr: &str) -> Option<(u32, u32)> {
-    let parts: Vec<&str> = cidr.split('/').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let ip: std::net::Ipv4Addr = parts[0].parse().ok()?;
-    let prefix_len: u32 = parts[1].parse().ok()?;
+    let (ip_str, prefix_str) = cidr.split_once('/')?;
+    let ip: std::net::Ipv4Addr = ip_str.parse().ok()?;
+    let prefix_len: u32 = prefix_str.parse().ok()?;
     Some((u32::from(ip), prefix_len))
 }
 

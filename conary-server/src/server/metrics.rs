@@ -81,6 +81,7 @@ impl ServerMetrics {
 
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
+        let bytes_served = self.bytes_served.load(Ordering::Relaxed);
         let total = hits + misses;
         let hit_rate = if total > 0 {
             (hits as f64 / total as f64) * 100.0
@@ -94,8 +95,8 @@ impl ServerMetrics {
             misses,
             hit_rate,
             bloom_rejects: self.bloom_rejects.load(Ordering::Relaxed),
-            bytes_served: self.bytes_served.load(Ordering::Relaxed),
-            bytes_served_human: human_bytes(self.bytes_served.load(Ordering::Relaxed)),
+            bytes_served,
+            bytes_served_human: human_bytes(bytes_served),
             upstream_fetches: self.upstream_fetches.load(Ordering::Relaxed),
             upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
             uptime_secs: uptime.as_secs(),

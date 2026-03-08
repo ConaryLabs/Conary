@@ -62,12 +62,11 @@ pub use filters::{FilterRule, FilterSet, FilteredClassifier};
 /// assert_eq!(parse_component_spec(":lib"), None);
 /// ```
 pub fn parse_component_spec(spec: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = spec.splitn(2, ':').collect();
-    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Some((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        None
+    let (package, component) = spec.split_once(':')?;
+    if package.is_empty() || component.is_empty() {
+        return None;
     }
+    Some((package.to_string(), component.to_string()))
 }
 
 /// Format a component spec from package and component names

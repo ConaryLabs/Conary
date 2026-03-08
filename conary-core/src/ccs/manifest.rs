@@ -784,6 +784,17 @@ fn default_sig_scope() -> String {
     "build".to_string()
 }
 
+/// Parse an octal mode string (e.g., "0755", "0o755", or "755") to a `u32`.
+///
+/// Returns the parsed value or `0o755` as a fallback if parsing fails.
+pub fn parse_octal_mode(mode: &str) -> u32 {
+    let mode_str = mode
+        .strip_prefix("0o")
+        .or_else(|| mode.strip_prefix('0'))
+        .unwrap_or(mode);
+    u32::from_str_radix(mode_str, 8).unwrap_or(0o755)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

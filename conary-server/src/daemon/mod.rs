@@ -506,12 +506,14 @@ pub fn is_daemon_running() -> bool {
 }
 
 /// Get the PID of the running daemon (if any)
+///
+/// Returns `Some(pid)` only when the lock is held AND the .pid file exists.
+/// `holder_pid` already returns `None` if the file is missing, and
+/// `is_daemon_running` would redundantly open the lock file just to
+/// probe it, so we skip that check.
 pub fn get_daemon_pid() -> Option<u32> {
-    if is_daemon_running() {
-        SystemLock::holder_pid(SystemLock::DEFAULT_PATH)
-    } else {
-        None
-    }
+    SystemLock::holder_pid(SystemLock::DEFAULT_PATH)
+        .filter(|_| is_daemon_running())
 }
 
 /// Run the daemon
