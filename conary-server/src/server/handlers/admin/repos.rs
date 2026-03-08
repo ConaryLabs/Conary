@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::admin_service::{self, CreateRepoInput, UpdateRepoInput};
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::ServerState;
 
@@ -69,29 +70,14 @@ pub async fn list_repos(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::Repository::list_all(&conn)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(repos)) => {
+    match admin_service::list_repos(&state).await {
+        Ok(repos) => {
             let response: Vec<RepoResponse> = repos.into_iter().map(RepoResponse::from).collect();
             Json(response).into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to list repos: {}", e);
-            json_error(500, "Failed to list repositories", "DB_ERROR")
-        }
         Err(e) => {
-            tracing::error!("Task join error listing repos: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to list repos: {e}");
+            json_error(500, "Failed to list repositories", "INTERNAL_ERROR")
         }
     }
 }
@@ -128,45 +114,26 @@ pub async fn create_repo(
         return json_error(400, "Invalid URL format", "INVALID_INPUT");
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
+    let input = CreateRepoInput {
+        name: name.clone(),
+        url,
+        content_url: body.content_url,
+        enabled: body.enabled.unwrap_or(true),
+        priority: body.priority.unwrap_or(0),
+        gpg_check: body.gpg_check.unwrap_or(true),
+        metadata_expire: body.metadata_expire.unwrap_or(3600),
     };
 
-    let content_url = body.content_url;
-    let enabled = body.enabled.unwrap_or(true);
-    let priority = body.priority.unwrap_or(0);
-    let gpg_check = body.gpg_check.unwrap_or(true);
-    let metadata_expire = body.metadata_expire.unwrap_or(3600);
-
-    let name_clone = name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let mut repo = conary_core::db::models::Repository::new(name_clone, url);
-        repo.content_url = content_url;
-        repo.enabled = enabled;
-        repo.priority = priority;
-        repo.gpg_check = gpg_check;
-        repo.metadata_expire = metadata_expire;
-        repo.insert(&conn)?;
-        Ok::<_, conary_core::Error>(repo)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(repo)) => {
+    match admin_service::create_repo(&state, input).await {
+        Ok(repo) => {
             let guard = state.read().await;
             guard.publish_event("repo.created", serde_json::json!({"name": &name}));
             drop(guard);
             (StatusCode::CREATED, Json(RepoResponse::from(repo))).into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to create repo: {}", e);
-            json_error(500, "Failed to create repository", "DB_ERROR")
-        }
         Err(e) => {
-            tracing::error!("Task join error creating repo: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to create repo: {e}");
+            json_error(500, "Failed to create repository", "INTERNAL_ERROR")
         }
     }
 }
@@ -186,27 +153,12 @@ pub async fn get_repo(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::Repository::find_by_name(&conn, &name)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some(repo))) => Json(RepoResponse::from(repo)).into_response(),
-        Ok(Ok(None)) => json_error(404, "Repository not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to get repo: {}", e);
-            json_error(500, "Failed to get repository", "DB_ERROR")
-        }
+    match admin_service::get_repo(&state, &name).await {
+        Ok(Some(repo)) => Json(RepoResponse::from(repo)).into_response(),
+        Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error getting repo: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to get repo: {e}");
+            json_error(500, "Failed to get repository", "INTERNAL_ERROR")
         }
     }
 }
@@ -231,40 +183,17 @@ pub async fn update_repo(
         return json_error(400, "URL is required", "INVALID_INPUT");
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
+    let input = UpdateRepoInput {
+        url: body.url.trim().to_string(),
+        content_url: body.content_url,
+        enabled: body.enabled,
+        priority: body.priority,
+        gpg_check: body.gpg_check,
+        metadata_expire: body.metadata_expire,
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let repo = conary_core::db::models::Repository::find_by_name(&conn, &name)?;
-        let mut repo = match repo {
-            Some(r) => r,
-            None => return Ok::<_, conary_core::Error>(None),
-        };
-
-        repo.url = body.url.trim().to_string();
-        repo.content_url = body.content_url;
-        if let Some(enabled) = body.enabled {
-            repo.enabled = enabled;
-        }
-        if let Some(priority) = body.priority {
-            repo.priority = priority;
-        }
-        if let Some(gpg_check) = body.gpg_check {
-            repo.gpg_check = gpg_check;
-        }
-        if let Some(metadata_expire) = body.metadata_expire {
-            repo.metadata_expire = metadata_expire;
-        }
-        repo.update(&conn)?;
-        Ok(Some(repo))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some(repo))) => {
+    match admin_service::update_repo(&state, &name, input).await {
+        Ok(Some(repo)) => {
             let guard = state.read().await;
             guard.publish_event(
                 "repo.updated",
@@ -273,14 +202,10 @@ pub async fn update_repo(
             drop(guard);
             Json(RepoResponse::from(repo)).into_response()
         }
-        Ok(Ok(None)) => json_error(404, "Repository not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to update repo: {}", e);
-            json_error(500, "Failed to update repository", "DB_ERROR")
-        }
+        Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error updating repo: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to update repo: {e}");
+            json_error(500, "Failed to update repository", "INTERNAL_ERROR")
         }
     }
 }
@@ -300,30 +225,8 @@ pub async fn delete_repo(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let name_clone = name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let repo = conary_core::db::models::Repository::find_by_name(&conn, &name_clone)?;
-        match repo {
-            Some(r) => {
-                let id = r
-                    .id
-                    .ok_or_else(|| conary_core::Error::MissingId("Repository has no ID".to_string()))?;
-                conary_core::db::models::Repository::delete(&conn, id)?;
-                Ok::<_, conary_core::Error>(true)
-            }
-            None => Ok(false),
-        }
-    })
-    .await;
-
-    match result {
-        Ok(Ok(true)) => {
+    match admin_service::delete_repo(&state, &name).await {
+        Ok(true) => {
             let guard = state.read().await;
             guard.publish_event(
                 "repo.deleted",
@@ -332,14 +235,10 @@ pub async fn delete_repo(
             drop(guard);
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Ok(false)) => json_error(404, "Repository not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to delete repo {}: {}", name, e);
-            json_error(500, "Failed to delete repository", "DB_ERROR")
-        }
+        Ok(false) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error deleting repo: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to delete repo {name}: {e}");
+            json_error(500, "Failed to delete repository", "INTERNAL_ERROR")
         }
     }
 }
@@ -361,20 +260,8 @@ pub async fn sync_repo(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let name_clone = name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::Repository::find_by_name(&conn, &name_clone)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some(_))) => {
+    match admin_service::repo_exists(&state, &name).await {
+        Ok(true) => {
             let guard = state.read().await;
             guard.publish_event(
                 "repo.sync_requested",
@@ -387,14 +274,10 @@ pub async fn sync_repo(
             )
                 .into_response()
         }
-        Ok(Ok(None)) => json_error(404, "Repository not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to find repo for sync: {}", e);
-            json_error(500, "Failed to sync repository", "DB_ERROR")
-        }
+        Ok(false) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error syncing repo: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to find repo for sync: {e}");
+            json_error(500, "Failed to sync repository", "INTERNAL_ERROR")
         }
     }
 }

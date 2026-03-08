@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 
 use rusqlite::OptionalExtension;
 
+use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::ServerState;
 
@@ -30,6 +31,24 @@ pub struct PeerResponse {
     pub failure_count: i64,
     pub consecutive_failures: i64,
     pub is_enabled: bool,
+}
+
+impl From<conary_core::db::models::federation_peer::FederationPeer> for PeerResponse {
+    fn from(p: conary_core::db::models::federation_peer::FederationPeer) -> Self {
+        Self {
+            id: p.id,
+            endpoint: p.endpoint,
+            node_name: p.node_name,
+            tier: p.tier,
+            first_seen: p.first_seen,
+            last_seen: p.last_seen,
+            latency_ms: p.latency_ms as f64,
+            success_count: p.success_count,
+            failure_count: p.failure_count,
+            consecutive_failures: p.consecutive_failures,
+            is_enabled: p.is_enabled,
+        }
+    }
 }
 
 /// Request body for adding a federation peer.
@@ -66,49 +85,14 @@ pub async fn list_peers(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, endpoint, node_name, tier, first_seen, last_seen,
-                    latency_ms, success_count, failure_count, consecutive_failures, is_enabled
-             FROM federation_peers
-             ORDER BY tier, endpoint",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok(PeerResponse {
-                id: row.get(0)?,
-                endpoint: row.get(1)?,
-                node_name: row.get(2)?,
-                tier: row.get(3)?,
-                first_seen: row.get::<_, String>(4)?,
-                last_seen: row.get::<_, String>(5)?,
-                latency_ms: row.get::<_, i64>(6)? as f64,
-                success_count: row.get(7)?,
-                failure_count: row.get(8)?,
-                consecutive_failures: row.get(9)?,
-                is_enabled: row.get::<_, i64>(10)? != 0,
-            })
-        })?;
-
-        Ok::<_, conary_core::Error>(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(peers)) => Json(peers).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to list federation peers: {}", e);
-            json_error(500, "Failed to list peers", "DB_ERROR")
+    match admin_service::list_peers(&state).await {
+        Ok(peers) => {
+            let response: Vec<PeerResponse> = peers.into_iter().map(PeerResponse::from).collect();
+            Json(response).into_response()
         }
         Err(e) => {
-            tracing::error!("Task join error listing peers: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to list federation peers: {e}");
+            json_error(500, "Failed to list peers", "INTERNAL_ERROR")
         }
     }
 }
@@ -125,88 +109,28 @@ pub async fn add_peer(
         return err;
     }
 
-    let endpoint = body.endpoint.trim().to_string();
-    if endpoint.is_empty() {
-        return json_error(400, "Endpoint must not be empty", "INVALID_ENDPOINT");
-    }
-
-    // Validate URL
-    if url::Url::parse(&endpoint).is_err() {
-        return json_error(400, "Invalid endpoint URL", "INVALID_URL");
-    }
-
-    let tier = body.tier.unwrap_or_else(|| "leaf".to_string());
-    if !["leaf", "cell_hub", "region_hub"].contains(&tier.as_str()) {
-        return json_error(
-            400,
-            "Tier must be one of: leaf, cell_hub, region_hub",
-            "INVALID_TIER",
-        );
-    }
-
-    let node_name = body.node_name;
-    let peer_id = conary_core::hash::sha256(endpoint.as_bytes());
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
+    let input = AddPeerInput {
+        endpoint: body.endpoint,
+        tier: body.tier,
+        node_name: body.node_name,
     };
 
-    let peer_id_clone = peer_id.clone();
-    let endpoint_clone = endpoint.clone();
-    let tier_clone = tier.clone();
-    let node_name_clone = node_name.clone();
-    let now_clone = now.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conn.execute(
-            "INSERT INTO federation_peers (id, endpoint, node_name, tier, first_seen, last_seen,
-             latency_ms, success_count, failure_count, consecutive_failures, is_enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, 0, 0, 1)",
-            rusqlite::params![peer_id_clone, endpoint_clone, node_name_clone, tier_clone, now_clone, now_clone],
-        )?;
-        Ok::<_, conary_core::Error>(())
-    })
-    .await;
-
-    match result {
-        Ok(Ok(())) => {
+    match admin_service::add_peer(&state, input).await {
+        Ok((peer_id, peer)) => {
             let guard = state.read().await;
             guard.publish_event(
                 "federation.peer_added",
-                serde_json::json!({"id": &peer_id, "endpoint": &endpoint}),
+                serde_json::json!({"id": &peer_id, "endpoint": &peer.endpoint}),
             );
             drop(guard);
 
-            let response = PeerResponse {
-                id: peer_id,
-                endpoint,
-                node_name,
-                tier,
-                first_seen: now.clone(),
-                last_seen: now,
-                latency_ms: 0.0,
-                success_count: 0,
-                failure_count: 0,
-                consecutive_failures: 0,
-                is_enabled: true,
-            };
-            (StatusCode::CREATED, Json(response)).into_response()
+            (StatusCode::CREATED, Json(PeerResponse::from(peer))).into_response()
         }
-        Ok(Err(e)) => {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE constraint") {
-                json_error(409, "Peer with this endpoint already exists", "DUPLICATE_PEER")
-            } else {
-                tracing::error!("Failed to add peer: {}", e);
-                json_error(500, "Failed to add peer", "DB_ERROR")
-            }
-        }
+        Err(ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
+        Err(ServiceError::Conflict(msg)) => json_error(409, &msg, "DUPLICATE_PEER"),
         Err(e) => {
-            tracing::error!("Task join error adding peer: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to add peer: {e}");
+            json_error(500, "Failed to add peer", "INTERNAL_ERROR")
         }
     }
 }
@@ -226,25 +150,8 @@ pub async fn delete_peer(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let id_clone = id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let affected = conn.execute(
-            "DELETE FROM federation_peers WHERE id = ?1",
-            rusqlite::params![id_clone],
-        )?;
-        Ok::<_, conary_core::Error>(affected)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(0)) => json_error(404, "Peer not found", "NOT_FOUND"),
-        Ok(Ok(_)) => {
+    match admin_service::delete_peer(&state, &id).await {
+        Ok(true) => {
             let guard = state.read().await;
             guard.publish_event(
                 "federation.peer_removed",
@@ -253,13 +160,10 @@ pub async fn delete_peer(
             drop(guard);
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to delete peer {}: {}", id, e);
-            json_error(500, "Failed to delete peer", "DB_ERROR")
-        }
+        Ok(false) => json_error(404, "Peer not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error deleting peer: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to delete peer {id}: {e}");
+            json_error(500, "Failed to delete peer", "INTERNAL_ERROR")
         }
     }
 }
@@ -279,42 +183,9 @@ pub async fn peer_health(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let peer = conn
-            .query_row(
-                "SELECT id, endpoint, node_name, tier, first_seen, last_seen,
-                        latency_ms, success_count, failure_count, consecutive_failures, is_enabled
-                 FROM federation_peers WHERE id = ?1",
-                rusqlite::params![id],
-                |row| {
-                    Ok(PeerResponse {
-                        id: row.get(0)?,
-                        endpoint: row.get(1)?,
-                        node_name: row.get(2)?,
-                        tier: row.get(3)?,
-                        first_seen: row.get::<_, String>(4)?,
-                        last_seen: row.get::<_, String>(5)?,
-                        latency_ms: row.get::<_, i64>(6)? as f64,
-                        success_count: row.get(7)?,
-                        failure_count: row.get(8)?,
-                        consecutive_failures: row.get(9)?,
-                        is_enabled: row.get::<_, i64>(10)? != 0,
-                    })
-                },
-            )
-            .optional()?;
-        Ok::<_, conary_core::Error>(peer)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(Some(peer))) => {
+    match admin_service::get_peer(&state, &id).await {
+        Ok(Some(model_peer)) => {
+            let peer = PeerResponse::from(model_peer);
             let total = peer.success_count + peer.failure_count;
             let success_rate = if total > 0 {
                 peer.success_count as f64 / total as f64
@@ -336,14 +207,10 @@ pub async fn peer_health(
             };
             Json(PeerHealthResponse { peer, health }).into_response()
         }
-        Ok(Ok(None)) => json_error(404, "Peer not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to get peer health: {}", e);
-            json_error(500, "Failed to get peer health", "DB_ERROR")
-        }
+        Ok(None) => json_error(404, "Peer not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error getting peer health: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to get peer health: {e}");
+            json_error(500, "Failed to get peer health", "INTERNAL_ERROR")
         }
     }
 }

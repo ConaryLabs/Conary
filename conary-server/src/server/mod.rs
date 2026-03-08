@@ -14,6 +14,7 @@
 //! - Metrics tracking for observability
 //! - Rate limiting per IP/peer
 
+pub mod admin_service;
 pub mod analytics;
 pub mod audit;
 pub mod auth;

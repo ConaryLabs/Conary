@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::server::auth::{Scope, TokenScopes, generate_token, hash_token, json_error};
+use crate::server::admin_service::{self, ServiceError};
+use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::ServerState;
 
 use super::check_scope;
@@ -45,61 +46,20 @@ pub async fn create_token(
         return err;
     }
 
-    // Validate name length
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 128 {
-        return json_error(
-            400,
-            "Token name must be 1-128 characters",
-            "INVALID_NAME",
-        );
-    }
-
-    let scopes_str = body.scopes.unwrap_or_else(|| "admin".to_string());
-
-    // Validate scopes
-    if let Err(invalid) = crate::server::auth::validate_scopes(&scopes_str) {
-        return json_error(
-            400,
-            &format!("Invalid scope: '{invalid}'"),
-            "INVALID_SCOPE",
-        );
-    }
-
-    // Generate and hash the token
-    let raw_token = generate_token();
-    let token_hash = hash_token(&raw_token);
-
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let name_owned = name.to_string();
-    let scopes_clone = scopes_str.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::admin_token::create(&conn, &name_owned, &token_hash, &scopes_clone)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(id)) => {
+    match admin_service::create_token(&state, &body.name, body.scopes.as_deref()).await {
+        Ok(created) => {
             let resp = CreateTokenResponse {
-                id,
-                name: name.to_string(),
-                token: raw_token,
-                scopes: scopes_str,
+                id: created.id,
+                name: created.name,
+                token: created.raw_token,
+                scopes: created.scopes,
             };
             (StatusCode::CREATED, Json(resp)).into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to create admin token: {}", e);
-            json_error(500, "Failed to create token", "DB_ERROR")
-        }
+        Err(ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
         Err(e) => {
-            tracing::error!("Task join error creating admin token: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to create admin token: {e}");
+            json_error(500, "Failed to create token", "INTERNAL_ERROR")
         }
     }
 }
@@ -116,26 +76,11 @@ pub async fn list_tokens(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::admin_token::list(&conn)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(tokens)) => Json(tokens).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to list admin tokens: {}", e);
-            json_error(500, "Failed to list tokens", "DB_ERROR")
-        }
+    match admin_service::list_tokens(&state).await {
+        Ok(tokens) => Json(tokens).into_response(),
         Err(e) => {
-            tracing::error!("Task join error listing admin tokens: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to list admin tokens: {e}");
+            json_error(500, "Failed to list tokens", "INTERNAL_ERROR")
         }
     }
 }
@@ -153,27 +98,12 @@ pub async fn delete_token(
         return err;
     }
 
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::admin_token::delete(&conn, id)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Ok(false)) => json_error(404, "Token not found", "NOT_FOUND"),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to delete admin token {}: {}", id, e);
-            json_error(500, "Failed to delete token", "DB_ERROR")
-        }
+    match admin_service::delete_token(&state, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => json_error(404, "Token not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Task join error deleting admin token: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to delete admin token {id}: {e}");
+            json_error(500, "Failed to delete token", "INTERNAL_ERROR")
         }
     }
 }

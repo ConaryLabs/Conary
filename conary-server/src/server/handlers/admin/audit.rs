@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::admin_service;
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::ServerState;
 
@@ -37,27 +38,20 @@ pub async fn query_audit(
     if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
-    let db_path = { state.read().await.config.db_path.clone() };
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::audit_log::query(
-            &conn,
-            query.limit,
-            query.action.as_deref(),
-            query.since.as_deref(),
-            query.token_name.as_deref(),
-        )
-    })
-    .await;
-    match result {
-        Ok(Ok(entries)) => Json(entries).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to query audit log: {e}");
-            json_error(500, "Failed to query audit log", "DB_ERROR")
-        }
+
+    match admin_service::query_audit(
+        &state,
+        query.limit,
+        query.action,
+        query.since,
+        query.token_name,
+    )
+    .await
+    {
+        Ok(entries) => Json(entries).into_response(),
         Err(e) => {
-            tracing::error!("Task join error querying audit: {e}");
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to query audit log: {e}");
+            json_error(500, "Failed to query audit log", "INTERNAL_ERROR")
         }
     }
 }
@@ -71,24 +65,14 @@ pub async fn purge_audit(
     if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
-    let db_path = { state.read().await.config.db_path.clone() };
-    let before = query.before.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        conary_core::db::models::audit_log::purge(&conn, &before)
-    })
-    .await;
-    match result {
-        Ok(Ok(deleted)) => {
+
+    match admin_service::purge_audit(&state, &query.before).await {
+        Ok(deleted) => {
             Json(serde_json::json!({"deleted": deleted, "before": query.before})).into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to purge audit log: {e}");
-            json_error(500, "Failed to purge audit log", "DB_ERROR")
-        }
         Err(e) => {
-            tracing::error!("Task join error purging audit: {e}");
-            json_error(500, "Internal error", "INTERNAL_ERROR")
+            tracing::error!("Failed to purge audit log: {e}");
+            json_error(500, "Failed to purge audit log", "INTERNAL_ERROR")
         }
     }
 }
