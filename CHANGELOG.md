@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [erofs-v0.1.1] - 2026-03-07
+
+### Fixed
+- Apply all code review findings across 8 batches
+
+### Other
+- build: Add workspace.dependencies to deduplicate version specs
+- fix(erofs): Remove dead chunk indexes, fix mode passthrough, fix probe race
+- fix(erofs): Fix inode field layout, wire fs-verity, unmount old composefs
+- fix(erofs): Set DEVICE_TABLE feature flag in composefs images
+- feat(erofs): Add EROFS image verification
+- feat(erofs): Add high-level ErofsBuilder API
+- feat(erofs): Add tail-end packing for small files
+- feat(erofs): Add LZ4 and LZMA metadata compression
+- feat(erofs): Add xattr support for composefs digests
+- feat(erofs): Add chunk-based external data references
+- feat(erofs): Add directory entry packing
+- feat(erofs): Add compact and extended inode layouts
+- feat(erofs): Add EROFS superblock structure
+- feat(erofs): Initialize conary-erofs workspace crate
+
 ## [v0.2.0] - 2026-03-07
 
 ### Added
