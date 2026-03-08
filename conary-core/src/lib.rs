@@ -30,6 +30,7 @@ pub mod recipe;
 pub mod repository;
 pub mod resolver;
 pub mod scriptlet;
+pub mod self_update;
 pub mod transaction;
 pub mod trigger;
 pub mod trust;
