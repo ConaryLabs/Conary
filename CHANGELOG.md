@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [server-v0.2.0] - 2026-03-07
+
+### Added
+- Add Remi canonical metadata API endpoints
+- Add standalone remi and conaryd binaries
+
+### Fixed
+- Apply all code review findings across 8 batches
+- P1/P2 findings in filesystem, canonical, and model modules
+- P1/P2 findings in remi server, daemon, and federation
+- Address crate split review findings
+
+### Other
+- feat(server): add self-update Remi endpoints
+- build: Add workspace.dependencies to deduplicate version specs
+- build: Create conary-server crate skeleton
+
 ## [erofs-v0.1.1] - 2026-03-07
 
 ### Fixed
