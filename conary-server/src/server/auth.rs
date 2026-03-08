@@ -24,6 +24,10 @@ use crate::server::ServerState;
 #[derive(Clone, Debug)]
 pub struct TokenScopes(pub String);
 
+/// The name of the authenticated token, stored in request extensions.
+#[derive(Clone, Debug)]
+pub struct TokenName(pub String);
+
 impl TokenScopes {
     /// Check if this token has the required scope.
     ///
@@ -74,10 +78,27 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    // Extract rate limiters and client IP for auth-fail tracking
+    let (limiters, client_ip) = {
+        let s = state.read().await;
+        let limiters = s.rate_limiters.clone();
+        let ip = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0.ip())
+            .unwrap_or_else(|| std::net::IpAddr::from([127, 0, 0, 1]));
+        (limiters, ip)
+    };
+
     let token = match extract_bearer(request.headers()) {
         Some(t) => t.to_owned(),
         None => {
             tracing::warn!("Auth failed: missing or invalid Authorization header");
+            if let Some(ref l) = limiters
+                && crate::server::rate_limit::check_auth_failure(l, client_ip)
+            {
+                return json_error(429, "Too many authentication failures", "RATE_LIMITED");
+            }
             return json_error(401, "Missing or invalid Authorization header", "UNAUTHORIZED");
         }
     };
@@ -102,6 +123,11 @@ pub async fn auth_middleware(
         Ok(Ok(Some(record))) => record,
         Ok(Ok(None)) => {
             tracing::warn!("Auth failed: unknown token (hash prefix: {}...)", &token_hash[..8]);
+            if let Some(ref l) = limiters
+                && crate::server::rate_limit::check_auth_failure(l, client_ip)
+            {
+                return json_error(429, "Too many authentication failures", "RATE_LIMITED");
+            }
             return json_error(401, "Invalid token", "INVALID_TOKEN");
         }
         Ok(Err(e)) => {
@@ -117,6 +143,7 @@ pub async fn auth_middleware(
     // Store scopes in request extensions
     let scopes = TokenScopes(token_record.scopes.clone());
     request.extensions_mut().insert(scopes);
+    request.extensions_mut().insert(TokenName(token_record.name.clone()));
 
     // Update last_used_at in background (fire-and-forget, reusing db_path)
     let bg_db_path = db_path;

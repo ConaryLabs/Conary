@@ -34,6 +34,7 @@ mod trigger;
 mod trove;
 
 pub mod admin_token;
+pub mod audit_log;
 pub mod settings;
 
 pub use canonical::{CanonicalPackage, PackageImplementation};

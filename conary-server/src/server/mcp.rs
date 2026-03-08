@@ -210,6 +210,30 @@ pub struct PeerIdParams {
     pub peer_id: String,
 }
 
+/// Parameters for querying the audit log.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct QueryAuditParams {
+    /// Max entries to return (default 50, max 500).
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Filter by action prefix (e.g., "repo" matches "repo.create").
+    #[serde(default)]
+    pub action: Option<String>,
+    /// Only entries after this ISO 8601 timestamp.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// Filter by token name.
+    #[serde(default)]
+    pub token_name: Option<String>,
+}
+
+/// Parameters for purging old audit entries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PurgeAuditParams {
+    /// Delete entries older than this ISO 8601 timestamp.
+    pub before: String,
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool definitions
 // ---------------------------------------------------------------------------
@@ -659,6 +683,62 @@ impl RemiMcpServer {
             ))
         }
     }
+
+    /// Query the admin audit log. Returns recent API operations with timing
+    /// and (for writes) request/response bodies.
+    #[tool(description = "Query admin audit log. Supports filters: limit, action prefix, since timestamp, token_name.")]
+    async fn query_audit_log(
+        &self,
+        Parameters(params): Parameters<QueryAuditParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db_path = { self.state.read().await.config.db_path.clone() };
+        let result = tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open(&db_path)
+                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
+            conary_core::db::models::audit_log::query(
+                &conn,
+                params.limit,
+                params.action.as_deref(),
+                params.since.as_deref(),
+                params.token_name.as_deref(),
+            )
+            .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task error: {e}"), None))??;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        )]))
+    }
+
+    /// Purge old audit log entries. Deletes entries older than the given date.
+    ///
+    /// **Not idempotent** -- deleted entries cannot be recovered.
+    #[tool(description = "Delete audit log entries older than a given ISO 8601 date. NOT reversible.")]
+    async fn purge_audit_log(
+        &self,
+        Parameters(params): Parameters<PurgeAuditParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db_path = { self.state.read().await.config.db_path.clone() };
+        let before = params.before.clone();
+        let deleted = tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open(&db_path)
+                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))?;
+            conary_core::db::models::audit_log::purge(&conn, &before)
+                .map_err(|e| McpError::internal_error(format!("DB error: {e}"), None))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task error: {e}"), None))??;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "deleted": deleted,
+                "before": params.before,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +756,8 @@ impl ServerHandler for RemiMcpServer {
         .with_instructions(
             "Remi MCP server -- manage CI workflows, inspect runs, \
              trigger builds, sync mirrors, manage admin tokens, \
-             list/inspect repositories, and manage federation peers.",
+             list/inspect repositories, manage federation peers, \
+             and query/purge the admin audit log.",
         )
     }
 }
@@ -702,6 +783,6 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 14, "Expected 14 MCP tools");
+        assert_eq!(tools.len(), 16, "Expected 16 MCP tools");
     }
 }

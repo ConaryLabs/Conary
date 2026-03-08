@@ -23,6 +23,7 @@ async-trait.workspace = true
 futures.workspace = true
 async-stream = "0.3"
 dashmap = "6.0"
+governor = "0.8"
 parking_lot = "0.12"
 
 # Service discovery

@@ -15,6 +15,7 @@
 //! - Rate limiting per IP/peer
 
 pub mod analytics;
+pub mod audit;
 pub mod auth;
 mod bloom;
 mod cache;
@@ -32,6 +33,7 @@ mod negative_cache;
 pub mod popularity;
 mod prewarm;
 pub mod r2;
+pub mod rate_limit;
 mod routes;
 pub mod search;
 pub mod security;
@@ -188,6 +190,8 @@ pub struct ServerState {
     pub forgejo_token: Option<String>,
     /// Broadcast channel for admin events (SSE stream)
     pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
+    /// Rate limiters for the external admin API
+    pub rate_limiters: Option<Arc<crate::server::rate_limit::AdminRateLimiters>>,
 }
 
 impl ServerState {
@@ -274,6 +278,7 @@ impl ServerState {
             forgejo_url: None,
             forgejo_token: None,
             admin_events,
+            rate_limiters: None,
         }
     }
 }
@@ -493,6 +498,16 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             let mut state_w = state.write().await;
             state_w.forgejo_url = remi_config.admin.forgejo_url.clone();
             state_w.forgejo_token = remi_config.admin.forgejo_token.clone();
+        }
+
+        // Initialize admin rate limiters
+        {
+            let limiters = Arc::new(crate::server::rate_limit::AdminRateLimiters::new(
+                remi_config.admin.rate_limit_read_rpm,
+                remi_config.admin.rate_limit_write_rpm,
+                remi_config.admin.rate_limit_auth_fail_rpm,
+            ));
+            state.write().await.rate_limiters = Some(limiters);
         }
 
         // Bootstrap token from REMI_ADMIN_TOKEN env var

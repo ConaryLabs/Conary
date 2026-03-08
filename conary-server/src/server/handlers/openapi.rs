@@ -308,6 +308,105 @@ pub async fn openapi_spec() -> Response {
                     },
                     "responses": { "200": { "description": "Configuration updated" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" } }
                 }
+            },
+            "/v1/admin/audit": {
+                "get": {
+                    "operationId": "queryAudit",
+                    "summary": "Query audit log",
+                    "description": "Returns recent admin API operations. Supports filtering by action, token, and time range. Write operations include request/response bodies.",
+                    "tags": ["audit"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        {
+                            "name": "limit",
+                            "in": "query",
+                            "schema": { "type": "integer", "default": 50, "maximum": 500 },
+                            "description": "Maximum number of entries to return"
+                        },
+                        {
+                            "name": "action",
+                            "in": "query",
+                            "schema": { "type": "string" },
+                            "description": "Filter by action prefix (e.g., 'repo' matches 'repo.create')"
+                        },
+                        {
+                            "name": "since",
+                            "in": "query",
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "Only entries after this ISO 8601 timestamp"
+                        },
+                        {
+                            "name": "token_name",
+                            "in": "query",
+                            "schema": { "type": "string" },
+                            "description": "Filter by token name"
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Array of audit log entries",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": { "type": "integer" },
+                                                "timestamp": { "type": "string", "format": "date-time" },
+                                                "token_name": { "type": "string", "nullable": true },
+                                                "action": { "type": "string" },
+                                                "method": { "type": "string" },
+                                                "path": { "type": "string" },
+                                                "status_code": { "type": "integer" },
+                                                "request_body": { "type": "string", "nullable": true },
+                                                "response_body": { "type": "string", "nullable": true },
+                                                "source_ip": { "type": "string", "nullable": true },
+                                                "duration_ms": { "type": "integer", "nullable": true }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "401": { "description": "Not authenticated" },
+                        "403": { "description": "Insufficient scope (requires admin)" }
+                    }
+                },
+                "delete": {
+                    "operationId": "purgeAudit",
+                    "summary": "Purge old audit entries",
+                    "description": "Delete audit log entries older than the specified date. NOT reversible.",
+                    "tags": ["audit"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        {
+                            "name": "before",
+                            "in": "query",
+                            "required": true,
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "Delete entries with timestamps before this ISO 8601 date"
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Number of entries deleted",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "deleted": { "type": "integer" },
+                                            "before": { "type": "string" }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "401": { "description": "Not authenticated" },
+                        "403": { "description": "Insufficient scope (requires admin)" }
+                    }
+                }
             }
         }
     });

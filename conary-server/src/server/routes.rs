@@ -620,11 +620,18 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/federation/peers/:id/health", get(admin::peer_health))
         .route("/v1/admin/federation/config", get(admin::get_federation_config))
         .route("/v1/admin/federation/config", put(admin::update_federation_config))
+        // Audit log
+        .route("/v1/admin/audit", get(admin::query_audit).delete(admin::purge_audit))
         // SSE event stream
         .route("/v1/admin/events", get(admin::sse_events))
         // MCP endpoint
         .nest_service("/mcp", mcp_service)
-        // Auth middleware wraps all routes above
+        // Audit middleware (FIRST route_layer = runs LAST = after auth, so TokenName is available)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::server::audit::audit_middleware,
+        ))
+        // Auth middleware (SECOND route_layer = runs FIRST = before audit)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::server::auth::auth_middleware,
@@ -635,8 +642,14 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/health", get(|| async { "OK" }))
         .route("/v1/admin/openapi.json", get(openapi::openapi_spec));
 
-    // Merge: unprotected routes are NOT covered by auth middleware
-    unprotected.merge(protected).with_state(state)
+    // Rate limiting wraps everything (including unprotected routes)
+    unprotected
+        .merge(protected)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::server::rate_limit::rate_limit_middleware,
+        ))
+        .with_state(state)
 }
 
 /// Simple liveness check

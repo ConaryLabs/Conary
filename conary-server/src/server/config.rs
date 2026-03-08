@@ -568,6 +568,22 @@ pub struct AdminSection {
     /// Bootstrap token (can also be set via REMI_ADMIN_TOKEN env var)
     #[serde(default)]
     pub bootstrap_token: Option<String>,
+
+    /// Rate limit for read operations (GET), requests per minute per IP
+    #[serde(default = "default_admin_read_rpm")]
+    pub rate_limit_read_rpm: u32,
+
+    /// Rate limit for write operations (POST/PUT/DELETE), requests per minute per IP
+    #[serde(default = "default_admin_write_rpm")]
+    pub rate_limit_write_rpm: u32,
+
+    /// Rate limit for auth failures, attempts per minute per IP
+    #[serde(default = "default_admin_auth_fail_rpm")]
+    pub rate_limit_auth_fail_rpm: u32,
+
+    /// Audit log retention in days (informational; purge via API)
+    #[serde(default = "default_audit_retention_days")]
+    pub audit_retention_days: u32,
 }
 
 impl Default for AdminSection {
@@ -578,12 +594,32 @@ impl Default for AdminSection {
             forgejo_url: None,
             forgejo_token: None,
             bootstrap_token: None,
+            rate_limit_read_rpm: default_admin_read_rpm(),
+            rate_limit_write_rpm: default_admin_write_rpm(),
+            rate_limit_auth_fail_rpm: default_admin_auth_fail_rpm(),
+            audit_retention_days: default_audit_retention_days(),
         }
     }
 }
 
 fn default_external_admin_bind() -> String {
     "0.0.0.0:8082".to_string()
+}
+
+fn default_admin_read_rpm() -> u32 {
+    60
+}
+
+fn default_admin_write_rpm() -> u32 {
+    10
+}
+
+fn default_admin_auth_fail_rpm() -> u32 {
+    5
+}
+
+fn default_audit_retention_days() -> u32 {
+    30
 }
 
 fn default_max_builds() -> usize {

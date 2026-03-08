@@ -20,10 +20,12 @@ conaryd (local daemon with REST API).
 - `ServerMetrics` / `MetricsSnapshot` -- observability
 - `SearchEngine` -- full-text package search
 - `R2Store` -- Cloudflare R2 object storage backend
-- `AdminSection` -- external admin API config (bind addr, Forgejo URL/token, bootstrap token)
+- `AdminSection` -- external admin API config (bind addr, Forgejo URL/token, bootstrap token, rate limits, audit retention)
 - `TokenScopes` -- validated token scopes wrapper with `has_scope()` check
+- `TokenName` -- authenticated token name, stored in request extensions by auth middleware
+- `AdminRateLimiters` -- per-IP token buckets (read 60/min, write 10/min, auth-fail 5/min) via governor crate
 - `AdminEvent` -- typed event for SSE broadcast (event_type, data, timestamp)
-- `RemiMcpServer` -- MCP server exposing 14 admin tools to LLM agents via rmcp
+- `RemiMcpServer` -- MCP server exposing 16 admin tools to LLM agents via rmcp
 - `RepoRequest` / `RepoResponse` -- admin API repo management types
 - `PeerResponse` / `AddPeerRequest` -- admin API federation peer types
 
@@ -42,6 +44,8 @@ conaryd (local daemon with REST API).
 
 ## Invariants
 - External admin API on :8082 requires bearer token auth (scopes: admin, ci:read, ci:trigger, repos:read, repos:write, federation:read, federation:write)
+- Rate limiting on :8082: governor-based per-IP token buckets (read/write/auth-fail), configurable via [admin] section
+- Audit logging on :8082: all requests logged to admin_audit_log table, request/response bodies captured for writes only
 - Localhost admin :8081 bypasses auth entirely (backwards compatible)
 - MCP endpoint at `/mcp` on :8082 uses Streamable HTTP transport (rmcp)
 - OpenAPI spec at `/v1/admin/openapi.json` on :8082 (no auth required)
@@ -64,7 +68,9 @@ conaryd (local daemon with REST API).
 - `server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs, self-update)
 - `server/auth.rs` -- bearer token auth middleware, token hashing/generation, scope validation
 - `server/mcp.rs` -- MCP server (rmcp) exposing admin tools for LLM agents
-- `server/handlers/admin.rs` -- token CRUD, CI proxy, SSE, repo management, federation management
+- `server/rate_limit.rs` -- per-IP rate limiting middleware (governor) for external admin API
+- `server/audit.rs` -- audit logging middleware with action derivation for external admin API
+- `server/handlers/admin.rs` -- token CRUD, CI proxy, SSE, repo management, federation management, audit log query/purge
 - `server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
 - `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
 - `daemon/` -- conaryd (routes, handlers, auth, jobs, lock, socket, systemd)

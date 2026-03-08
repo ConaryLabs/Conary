@@ -2294,6 +2294,32 @@ pub fn migrate_v47(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 48 - Admin audit log
+///
+/// Creates the admin_audit_log table for tracking admin API operations.
+pub fn migrate_v48(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            token_name TEXT,
+            action TEXT NOT NULL,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            request_body TEXT,
+            response_body TEXT,
+            source_ip TEXT,
+            duration_ms INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON admin_audit_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_action ON admin_audit_log(action);",
+    )?;
+
+    info!("Schema version 48 applied successfully (admin_audit_log table)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2312,7 +2338,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 46);
+        assert_eq!(version, 48);
 
         // Insert into canonical_packages
         conn.execute(
