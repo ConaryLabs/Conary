@@ -23,7 +23,9 @@ conaryd (local daemon with REST API).
 - `AdminSection` -- external admin API config (bind addr, Forgejo URL/token, bootstrap token)
 - `TokenScopes` -- validated token scopes wrapper with `has_scope()` check
 - `AdminEvent` -- typed event for SSE broadcast (event_type, data, timestamp)
-- `RemiMcpServer` -- MCP server exposing admin tools to LLM agents via rmcp
+- `RemiMcpServer` -- MCP server exposing 14 admin tools to LLM agents via rmcp
+- `RepoRequest` / `RepoResponse` -- admin API repo management types
+- `PeerResponse` / `AddPeerRequest` -- admin API federation peer types
 
 ## Federation Key Types
 - `RendezvousRouter` -- deterministic K-peer selection (not Bloom filters)
@@ -43,6 +45,8 @@ conaryd (local daemon with REST API).
 - Localhost admin :8081 bypasses auth entirely (backwards compatible)
 - MCP endpoint at `/mcp` on :8082 uses Streamable HTTP transport (rmcp)
 - OpenAPI spec at `/v1/admin/openapi.json` on :8082 (no auth required)
+- Repo management uses existing `Repository` model CRUD (no new DB schema needed)
+- Federation peer management queries `federation_peers` table directly (no model file)
 - Remi proxies through Cloudflare for metadata, serves chunks directly
 - Use `spawn_blocking` for SQLite operations in async context
 - Federation hierarchy: leaf -> cell hub (LAN) -> region hub (WAN, mTLS)
@@ -60,7 +64,7 @@ conaryd (local daemon with REST API).
 - `server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs, self-update)
 - `server/auth.rs` -- bearer token auth middleware, token hashing/generation, scope validation
 - `server/mcp.rs` -- MCP server (rmcp) exposing admin tools for LLM agents
-- `server/handlers/admin.rs` -- token CRUD, CI proxy (Forgejo), SSE event stream
+- `server/handlers/admin.rs` -- token CRUD, CI proxy, SSE, repo management, federation management
 - `server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
 - `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
 - `daemon/` -- conaryd (routes, handlers, auth, jobs, lock, socket, systemd)

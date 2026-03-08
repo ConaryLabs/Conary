@@ -141,6 +141,173 @@ pub async fn openapi_spec() -> Response {
                     "parameters": [{ "name": "filter", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Comma-separated event types" }],
                     "responses": { "200": { "description": "SSE stream" } }
                 }
+            },
+            "/v1/admin/repos": {
+                "get": {
+                    "operationId": "listRepos",
+                    "summary": "List configured repositories",
+                    "description": "Returns all configured upstream repositories with their sync status, priority, and enabled state. Use to check which repos are available before triggering a sync. Requires repos:read scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Array of repositories" }, "401": { "description": "Invalid or missing token" } }
+                },
+                "post": {
+                    "operationId": "createRepo",
+                    "summary": "Add a repository",
+                    "description": "Registers a new upstream repository for metadata sync and package fetching. After adding, trigger a sync to pull metadata. Requires repos:write scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["name", "url"],
+                            "properties": {
+                                "name": { "type": "string", "description": "Unique repository identifier (e.g., 'fedora-41')" },
+                                "url": { "type": "string", "description": "Base URL for repository metadata" },
+                                "content_url": { "type": "string", "description": "Separate URL for package downloads, if different from metadata URL" },
+                                "enabled": { "type": "boolean", "description": "Whether the repo is active. Default: true" },
+                                "priority": { "type": "integer", "description": "Lower values are preferred when resolving. Default: 0" },
+                                "gpg_check": { "type": "boolean", "description": "Verify GPG signatures on metadata. Default: true" },
+                                "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds. Default: 3600" }
+                            }
+                        }}}
+                    },
+                    "responses": { "201": { "description": "Repository created" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" }, "409": { "description": "Repository name already exists" } }
+                }
+            },
+            "/v1/admin/repos/{name}": {
+                "get": {
+                    "operationId": "getRepo",
+                    "summary": "Get repository details",
+                    "description": "Returns full configuration and sync status for a single repository. Use to inspect settings before updating. Requires repos:read scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" }],
+                    "responses": { "200": { "description": "Repository details" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
+                },
+                "put": {
+                    "operationId": "updateRepo",
+                    "summary": "Update repository configuration",
+                    "description": "Replaces repository configuration. Include all fields, not just changed ones. Use getRepo first to fetch current values. Requires repos:write scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["url"],
+                            "properties": {
+                                "name": { "type": "string", "description": "Ignored (renames not supported). Optional for backwards compatibility." },
+                                "url": { "type": "string", "description": "Base URL for repository metadata" },
+                                "content_url": { "type": "string", "description": "Separate URL for package downloads" },
+                                "enabled": { "type": "boolean", "description": "Whether the repo is active" },
+                                "priority": { "type": "integer", "description": "Lower values are preferred when resolving" },
+                                "gpg_check": { "type": "boolean", "description": "Verify GPG signatures on metadata" },
+                                "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds" }
+                            }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Repository updated" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
+                },
+                "delete": {
+                    "operationId": "deleteRepo",
+                    "summary": "Remove a repository",
+                    "description": "Deletes a repository and its cached metadata. Packages already converted from this repo remain in the CAS. Requires repos:write scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" }],
+                    "responses": { "204": { "description": "Deleted" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
+                }
+            },
+            "/v1/admin/repos/{name}/sync": {
+                "post": {
+                    "operationId": "syncRepo",
+                    "summary": "Trigger repository metadata sync",
+                    "description": "Starts an asynchronous metadata sync for the specified repository. Returns immediately with 202. Monitor progress via the SSE events endpoint with ?filter=repo. Requires repos:write scope.",
+                    "tags": ["repos"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" }],
+                    "responses": { "202": { "description": "Sync started" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
+                }
+            },
+            "/v1/admin/federation/peers": {
+                "get": {
+                    "operationId": "listPeers",
+                    "summary": "List federation peers",
+                    "description": "Returns all configured federation peers with their tier, health status, and last-seen timestamps. Use to monitor cluster topology. Requires federation:read scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Array of peers with health info" }, "401": { "description": "Invalid or missing token" } }
+                },
+                "post": {
+                    "operationId": "addPeer",
+                    "summary": "Add a federation peer",
+                    "description": "Registers a new peer node for CAS chunk sharing. The peer will be health-checked automatically. Use listPeers to verify it came online. Requires federation:write scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["endpoint"],
+                            "properties": {
+                                "endpoint": { "type": "string", "description": "Base URL of the peer (e.g., 'https://peer1.example.com:8080')" },
+                                "tier": { "type": "string", "description": "Peer tier: 'leaf', 'cell_hub', or 'region_hub'. Default: 'leaf'" },
+                                "node_name": { "type": "string", "description": "Human-readable name for the peer" }
+                            }
+                        }}}
+                    },
+                    "responses": { "201": { "description": "Peer added" }, "400": { "description": "Invalid peer configuration" }, "401": { "description": "Invalid or missing token" } }
+                }
+            },
+            "/v1/admin/federation/peers/{id}": {
+                "delete": {
+                    "operationId": "deletePeer",
+                    "summary": "Remove a federation peer",
+                    "description": "Removes a peer from the federation. Chunks stored on that peer become unavailable unless replicated elsewhere. Requires federation:write scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Peer identifier" }],
+                    "responses": { "204": { "description": "Deleted" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Peer not found" } }
+                }
+            },
+            "/v1/admin/federation/peers/{id}/health": {
+                "get": {
+                    "operationId": "peerHealth",
+                    "summary": "Get detailed peer health",
+                    "description": "Returns detailed health metrics for a specific peer including latency, success rate, circuit breaker state, and current status. Use to diagnose connectivity issues. Requires federation:read scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Peer identifier" }],
+                    "responses": { "200": { "description": "Peer health with success_rate and status" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Peer not found" } }
+                }
+            },
+            "/v1/admin/federation/config": {
+                "get": {
+                    "operationId": "getFederationConfig",
+                    "summary": "Get federation configuration",
+                    "description": "Returns the current federation configuration including tier, replication settings, and discovery options. Requires federation:read scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "responses": { "200": { "description": "Federation configuration object" }, "401": { "description": "Invalid or missing token" } }
+                },
+                "put": {
+                    "operationId": "updateFederationConfig",
+                    "summary": "Update federation configuration",
+                    "description": "Replaces the federation configuration. Changes take effect immediately. Use getFederationConfig first to fetch current values. Requires federation:write scope.",
+                    "tags": ["federation"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "description": "Federation configuration object. Structure depends on deployment."
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Configuration updated" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" } }
+                }
             }
         }
     });

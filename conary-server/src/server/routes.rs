@@ -606,6 +606,20 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(admin::ci_dispatch),
         )
         .route("/v1/admin/ci/mirror-sync", post(admin::ci_mirror_sync))
+        // Repository management
+        .route("/v1/admin/repos", get(admin::list_repos))
+        .route("/v1/admin/repos", post(admin::create_repo))
+        .route("/v1/admin/repos/:name", get(admin::get_repo))
+        .route("/v1/admin/repos/:name", put(admin::update_repo))
+        .route("/v1/admin/repos/:name", delete(admin::delete_repo))
+        .route("/v1/admin/repos/:name/sync", post(admin::sync_repo))
+        // Federation management
+        .route("/v1/admin/federation/peers", get(admin::list_peers))
+        .route("/v1/admin/federation/peers", post(admin::add_peer))
+        .route("/v1/admin/federation/peers/:id", delete(admin::delete_peer))
+        .route("/v1/admin/federation/peers/:id/health", get(admin::peer_health))
+        .route("/v1/admin/federation/config", get(admin::get_federation_config))
+        .route("/v1/admin/federation/config", put(admin::update_federation_config))
         // SSE event stream
         .route("/v1/admin/events", get(admin::sse_events))
         // MCP endpoint
