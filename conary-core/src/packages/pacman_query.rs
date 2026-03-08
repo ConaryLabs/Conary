@@ -6,6 +6,7 @@
 //! using the `pacman` command-line tool for Arch Linux systems.
 
 use crate::error::{Error, Result};
+use crate::packages::archive_utils::get_file_metadata;
 use crate::packages::rpm_query::DependencyInfo;
 use std::collections::HashMap;
 use std::process::Command;
@@ -208,16 +209,6 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
     debug!("Found {} files for package {}", files.len(), name);
     Ok(files)
-}
-
-/// Get file metadata (size and mode)
-fn get_file_metadata(path: &str) -> (i64, i32) {
-    use std::os::unix::fs::MetadataExt;
-
-    match std::fs::metadata(path) {
-        Ok(meta) => (meta.len() as i64, meta.mode() as i32),
-        Err(_) => (0, 0o644),
-    }
 }
 
 /// Get file digest from pacman mtree database

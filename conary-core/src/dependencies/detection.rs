@@ -285,13 +285,14 @@ impl LanguageDepDetector {
     pub fn analyze_provides(
         paths: &[String],
     ) -> std::collections::HashMap<DependencyClass, Vec<String>> {
-        let mut result = std::collections::HashMap::new();
+        let mut result: std::collections::HashMap<DependencyClass, Vec<String>> =
+            std::collections::HashMap::new();
 
         for path in paths {
             for dep in Self::detect_provides(path) {
                 result
                     .entry(dep.class)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(dep.name);
             }
         }

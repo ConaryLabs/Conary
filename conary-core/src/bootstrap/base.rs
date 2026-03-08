@@ -455,7 +455,7 @@ impl BaseBuilder {
 
         let order = graph
             .topological_sort()
-            .map_err(|e| BaseError::DependencyCycle(format!("{e}")))?;
+            .map_err(|e| BaseError::DependencyCycle(e.to_string()))?;
 
         info!(
             "Loaded {} base recipes, resolved build order ({} packages)",
@@ -526,10 +526,7 @@ impl BaseBuilder {
             .join(format!("{}.toml", pkg.name));
 
         if !recipe_path.exists() {
-            return Err(BaseError::RecipeNotFound(format!(
-                "{}",
-                recipe_path.display()
-            )));
+            return Err(BaseError::RecipeNotFound(recipe_path.display().to_string()));
         }
 
         parse_recipe_file(&recipe_path).map_err(|e| BaseError::RecipeParseFailed(e.to_string()))

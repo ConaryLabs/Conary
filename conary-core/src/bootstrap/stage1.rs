@@ -172,10 +172,7 @@ impl Stage1Builder {
             let recipe_path = stage1_dir.join(format!("{}.toml", pkg_name));
 
             if !recipe_path.exists() {
-                return Err(Stage1Error::RecipeNotFound(format!(
-                    "{}",
-                    recipe_path.display()
-                )));
+                return Err(Stage1Error::RecipeNotFound(recipe_path.display().to_string()));
             }
 
             let recipe = parse_recipe_file(&recipe_path)

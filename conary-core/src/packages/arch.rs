@@ -144,7 +144,7 @@ impl ArchPackage {
             files.push(PackageFile {
                 path: normalize_path(&entry_path)
                     .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
-                size: size as i64,
+                size: i64::try_from(size).unwrap_or(i64::MAX),
                 mode: mode as i32,
                 sha256: None, // We'll compute this during extraction if needed
             });
@@ -535,7 +535,7 @@ impl PackageFormat for ArchPackage {
                 path: normalize_path(&entry_path)
                     .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 content,
-                size: size as i64,
+                size: i64::try_from(size).unwrap_or(i64::MAX),
                 mode: mode as i32,
                 sha256: Some(hash),
             });

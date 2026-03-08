@@ -406,7 +406,6 @@ pub struct TriggerResults {
 }
 
 impl TriggerResults {
-
     /// Check if all triggers succeeded
     pub fn all_succeeded(&self) -> bool {
         self.failed == 0

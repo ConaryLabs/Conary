@@ -14,7 +14,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 /// Result of a chunk fetch operation
@@ -365,10 +364,11 @@ impl HttpChunkFetcher {
     }
 
     /// Fetch chunks individually with concurrency control
+    ///
+    /// Uses `buffer_unordered` to limit concurrency -- no additional semaphore
+    /// needed since `buffer_unordered(N)` polls at most N futures at a time.
     async fn fetch_many_individual(&self, hashes: &[String]) -> Result<HashMap<String, Vec<u8>>> {
         use futures::stream::{self, StreamExt};
-
-        let semaphore = Arc::new(Semaphore::new(self.max_concurrent));
 
         info!(
             "Fetching {} chunks individually (max {} concurrent)",
@@ -377,13 +377,9 @@ impl HttpChunkFetcher {
         );
 
         let fetches = stream::iter(hashes.iter().cloned())
-            .map(|hash| {
-                let permit = semaphore.clone();
-                async move {
-                    let _permit = permit.acquire().await.unwrap();
-                    let data = self.fetch(&hash).await?;
-                    Ok::<_, Error>((hash, data))
-                }
+            .map(|hash| async move {
+                let data = self.fetch(&hash).await?;
+                Ok::<_, Error>((hash, data))
             })
             .buffer_unordered(self.max_concurrent);
 

@@ -490,16 +490,19 @@ impl LabelPathEntry {
 }
 
 /// Get the current label path as a list of LabelEntry objects
+///
+/// Uses a single JOIN query instead of loading each label individually.
 pub fn get_label_path(conn: &Connection) -> Result<Vec<LabelEntry>> {
-    let entries = LabelPathEntry::list_enabled_ordered(conn)?;
-    let mut labels = Vec::new();
-
-    for entry in entries {
-        if let Some(label) = entry.label(conn)? {
-            labels.push(label);
-        }
-    }
-
+    let sql = "SELECT l.id, l.repository, l.namespace, l.tag, l.description, \
+               l.parent_label_id, l.created_at, l.repository_id, l.delegate_to_label_id \
+               FROM labels l \
+               JOIN label_path lp ON lp.label_id = l.id \
+               WHERE lp.enabled = 1 \
+               ORDER BY lp.priority ASC";
+    let mut stmt = conn.prepare(sql)?;
+    let labels = stmt
+        .query_map([], LabelEntry::from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(labels)
 }
 

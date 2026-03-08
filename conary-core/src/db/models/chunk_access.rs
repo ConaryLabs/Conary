@@ -128,18 +128,26 @@ impl ChunkAccess {
         Ok(())
     }
 
-    /// Set protection status for multiple chunks
+    /// Set protection status for multiple chunks using a single prepared statement
     pub fn protect_chunks(conn: &Connection, hashes: &[String]) -> Result<()> {
-        for hash in hashes {
-            Self::set_protected(conn, hash, true)?;
-        }
-        Ok(())
+        Self::set_protected_batch(conn, hashes, true)
     }
 
-    /// Remove protection from multiple chunks
+    /// Remove protection from multiple chunks using a single prepared statement
     pub fn unprotect_chunks(conn: &Connection, hashes: &[String]) -> Result<()> {
+        Self::set_protected_batch(conn, hashes, false)
+    }
+
+    /// Batch update protection status (prepares the statement once)
+    fn set_protected_batch(conn: &Connection, hashes: &[String], protected: bool) -> Result<()> {
+        if hashes.is_empty() {
+            return Ok(());
+        }
+        let mut stmt =
+            conn.prepare("UPDATE chunk_access SET protected = ?1 WHERE hash = ?2")?;
+        let val = i32::from(protected);
         for hash in hashes {
-            Self::set_protected(conn, hash, false)?;
+            stmt.execute(params![val, hash])?;
         }
         Ok(())
     }

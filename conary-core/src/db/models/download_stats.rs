@@ -78,6 +78,18 @@ pub struct DownloadCount {
 }
 
 impl DownloadCount {
+    /// Convert a database row to a DownloadCount
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            distro: row.get(0)?,
+            package_name: row.get(1)?,
+            total_count: row.get(2)?,
+            count_30d: row.get(3)?,
+            count_7d: row.get(4)?,
+            last_updated: row.get(5)?,
+        })
+    }
+
     /// Refresh aggregated counts from raw download_stats
     ///
     /// This should be called periodically (e.g., every 15 minutes) to update
@@ -108,16 +120,7 @@ impl DownloadCount {
                  FROM download_counts
                  WHERE distro = ?1 AND package_name = ?2",
                 [distro, name],
-                |row| {
-                    Ok(DownloadCount {
-                        distro: row.get(0)?,
-                        package_name: row.get(1)?,
-                        total_count: row.get(2)?,
-                        count_30d: row.get(3)?,
-                        count_7d: row.get(4)?,
-                        last_updated: row.get(5)?,
-                    })
-                },
+                Self::from_row,
             )
             .optional()?;
         Ok(result)
@@ -134,16 +137,7 @@ impl DownloadCount {
         )?;
 
         let counts = stmt
-            .query_map(rusqlite::params![distro, limit as i64], |row| {
-                Ok(DownloadCount {
-                    distro: row.get(0)?,
-                    package_name: row.get(1)?,
-                    total_count: row.get(2)?,
-                    count_30d: row.get(3)?,
-                    count_7d: row.get(4)?,
-                    last_updated: row.get(5)?,
-                })
-            })?
+            .query_map(rusqlite::params![distro, limit as i64], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(counts)
     }

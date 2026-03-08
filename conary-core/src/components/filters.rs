@@ -184,13 +184,10 @@ impl FilterSet {
     ///
     /// Returns Some if a rule matches, None if no rules match.
     pub fn classify(&self, path: &str) -> Option<ComponentType> {
-        // Find the first matching rule (rules are sorted by priority)
-        for rule in &self.rules {
-            if rule.matches(path) {
-                return Some(rule.component);
-            }
-        }
-        None
+        self.rules
+            .iter()
+            .find(|rule| rule.matches(path))
+            .map(|rule| rule.component)
     }
 
     /// Check if the filter set is empty
