@@ -5,7 +5,7 @@
 //! scope-based authorization, and axum middleware integration.
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::middleware::Next;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::server::ServerState;
+use crate::server::rate_limit::AdminRateLimiters;
 
 /// Wrapper for token scopes stored in request extensions.
 ///
@@ -147,16 +148,17 @@ pub fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
 /// `last_used_at` in the background. On failure, returns a 401 JSON error.
 pub async fn auth_middleware(
     State(state): State<Arc<RwLock<ServerState>>>,
+    limiters: Option<Extension<Arc<AdminRateLimiters>>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    // Extract rate limiters, client IP, and db_path in a single lock acquisition
-    let (limiters, client_ip, db_path) = {
+    // Rate limiters come from an Extension layer (set once at startup),
+    // so we only need the RwLock for db_path.
+    let limiters = limiters.map(|Extension(l)| l);
+    let client_ip = crate::server::rate_limit::extract_ip(&request);
+    let db_path = {
         let s = state.read().await;
-        let limiters = s.rate_limiters.clone();
-        let ip = crate::server::rate_limit::extract_ip(&request);
-        let db_path = s.config.db_path.clone();
-        (limiters, ip, db_path)
+        s.config.db_path.clone()
     };
 
     let token = match extract_bearer(request.headers()) {

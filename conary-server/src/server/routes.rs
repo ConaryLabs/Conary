@@ -578,7 +578,10 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
 ///
 /// SECURITY: All routes require Bearer token authentication via `auth_middleware`.
 /// The external admin API must be explicitly enabled in config (`admin.enabled = true`).
-pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
+pub fn create_external_admin_router(
+    state: Arc<RwLock<ServerState>>,
+    rate_limiters: Option<Arc<crate::server::rate_limit::AdminRateLimiters>>,
+) -> Router {
     // MCP (Model Context Protocol) endpoint for LLM agent integration.
     // Protected by the same auth middleware as other admin endpoints.
     let state_for_mcp = state.clone();
@@ -663,14 +666,21 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/health", get(|| async { "OK" }))
         .route("/v1/admin/openapi.json", get(openapi::openapi_spec));
 
-    // Rate limiting wraps everything (including unprotected routes)
-    unprotected
+    // Rate limiting wraps everything (including unprotected routes).
+    // Rate limiters are injected as an Extension layer (set once at startup)
+    // so the middleware does not need to acquire the ServerState RwLock.
+    let mut router = unprotected
         .merge(protected)
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
+        .route_layer(middleware::from_fn(
             crate::server::rate_limit::rate_limit_middleware,
         ))
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(limiters) = rate_limiters {
+        router = router.layer(axum::Extension(limiters));
+    }
+
+    router
 }
 
 /// Simple liveness check

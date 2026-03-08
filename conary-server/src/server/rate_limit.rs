@@ -7,7 +7,7 @@
 //! - Auth failure: default 5/min (applied in auth middleware on 401)
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::Extension;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -16,9 +16,6 @@ use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-
-use crate::server::ServerState;
 
 /// Rate limiter set for the admin API.
 pub struct AdminRateLimiters {
@@ -62,19 +59,14 @@ pub(crate) fn extract_ip(request: &Request<Body>) -> IpAddr {
 /// Checks the read or write bucket depending on the HTTP method.
 /// Returns 429 with Retry-After header if the limit is exceeded.
 ///
-/// Extracts `AdminRateLimiters` from `ServerState` so the middleware can
-/// share the router's state type (`Arc<RwLock<ServerState>>`).
+/// Extracts `AdminRateLimiters` from an axum `Extension` layer, avoiding
+/// the need to acquire the `ServerState` RwLock on every request.
 pub async fn rate_limit_middleware(
-    State(state): State<Arc<RwLock<ServerState>>>,
+    limiters: Option<Extension<Arc<AdminRateLimiters>>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let limiters = {
-        let s = state.read().await;
-        s.rate_limiters.clone()
-    };
-
-    let Some(limiters) = limiters else {
+    let Some(Extension(limiters)) = limiters else {
         return next.run(request).await;
     };
 
@@ -114,6 +106,31 @@ pub async fn rate_limit_middleware(
 /// (in which case the caller should return 429 instead of 401).
 pub fn check_auth_failure(limiters: &AdminRateLimiters, ip: IpAddr) -> bool {
     limiters.auth_fail.check_key(&ip).is_err()
+}
+
+/// Run periodic cleanup of rate limiter state to prevent unbounded memory growth.
+///
+/// Governor's `DefaultKeyedRateLimiter` uses a `DashMap` internally. Entries for
+/// IPs that have replenished back to full quota are indistinguishable from fresh
+/// entries and can be safely removed via `retain_recent()`. This task runs every
+/// 5 minutes and also calls `shrink_to_fit()` to release excess DashMap capacity.
+pub async fn run_limiter_cleanup(limiters: Arc<AdminRateLimiters>) {
+    let interval = std::time::Duration::from_secs(300);
+    loop {
+        tokio::time::sleep(interval).await;
+        limiters.read.retain_recent();
+        limiters.read.shrink_to_fit();
+        limiters.write.retain_recent();
+        limiters.write.shrink_to_fit();
+        limiters.auth_fail.retain_recent();
+        limiters.auth_fail.shrink_to_fit();
+        tracing::debug!(
+            "Rate limiter cleanup: read={}, write={}, auth_fail={}",
+            limiters.read.len(),
+            limiters.write.len(),
+            limiters.auth_fail.len(),
+        );
+    }
 }
 
 #[cfg(test)]

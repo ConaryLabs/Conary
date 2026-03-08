@@ -191,8 +191,6 @@ pub struct ServerState {
     pub forgejo_token: Option<String>,
     /// Broadcast channel for admin events (SSE stream)
     pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
-    /// Rate limiters for the external admin API
-    pub rate_limiters: Option<Arc<crate::server::rate_limit::AdminRateLimiters>>,
 }
 
 impl ServerState {
@@ -279,7 +277,6 @@ impl ServerState {
             forgejo_url: None,
             forgejo_token: None,
             admin_events,
-            rate_limiters: None,
         }
     }
 }
@@ -490,6 +487,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         }
     }
 
+    // Admin rate limiters live outside ServerState to avoid per-request RwLock
+    // acquisition. Set once at startup, shared via axum Extension layer.
+    let mut admin_rate_limiters: Option<Arc<crate::server::rate_limit::AdminRateLimiters>> = None;
+
     // Conditionally bind the external admin listener
     let external_admin_listener = if remi_config.admin.enabled {
         let bind = remi_config.external_admin_bind_addr()?;
@@ -502,14 +503,18 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         }
 
         // Initialize admin rate limiters
-        {
-            let limiters = Arc::new(crate::server::rate_limit::AdminRateLimiters::new(
-                remi_config.admin.rate_limit_read_rpm,
-                remi_config.admin.rate_limit_write_rpm,
-                remi_config.admin.rate_limit_auth_fail_rpm,
-            ));
-            state.write().await.rate_limiters = Some(limiters);
-        }
+        let limiters = Arc::new(crate::server::rate_limit::AdminRateLimiters::new(
+            remi_config.admin.rate_limit_read_rpm,
+            remi_config.admin.rate_limit_write_rpm,
+            remi_config.admin.rate_limit_auth_fail_rpm,
+        ));
+
+        // Spawn periodic cleanup for governor DashMap entries
+        tokio::spawn(crate::server::rate_limit::run_limiter_cleanup(
+            Arc::clone(&limiters),
+        ));
+
+        admin_rate_limiters = Some(limiters);
 
         // Bootstrap token from REMI_ADMIN_TOKEN env var
         if let Ok(env_token) = std::env::var("REMI_ADMIN_TOKEN") {
@@ -548,7 +553,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
 
     // Create the external admin router only if enabled
     let external_admin_future = if let Some(listener) = external_admin_listener {
-        let app = create_external_admin_router(state.clone());
+        let app = create_external_admin_router(state.clone(), admin_rate_limiters);
         let fut = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
