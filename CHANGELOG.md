@@ -4,6 +4,89 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.2.0] - 2026-03-07
+
+### Added
+- add update-channel management commands
+- wire up complete self-update command
+- add atomic binary replacement for self-update
+- add self-update download, extract, and verify
+- add self-update version check logic
+- add self-update CLI command (stub)
+- Add CAS storage and upgrade rollback to CCS install
+- Add script hooks and changeset tracking to CCS install
+- Add curated canonical rules, distros.toml, and registry CLI
+- Add --from flag to 'conary install' for cross-distro override
+- Add distro, canonical, and groups CLI commands
+- Add DB-backed canonical mapping for CCS legacy capabilities
+- Add canonical conflict detection for equivalent packages
+- Add CanonicalResolver with pinning, ranking, and mixing policy
+- Wire canonical discovery into repository sync pipeline
+- Add AppStream catalog parser for canonical identity
+- Add Repology API client for canonical registry bootstrap
+- Add canonical rules engine and multi-strategy auto-discovery
+- Add distro pin and package overrides to system model parser
+- Add canonical, distro pin, and system affinity DB models
+- Add schema migration v45 for canonical package identity
+
+### Fixed
+- Resolve skipped integration tests (composefs, generations, hermetic)
+- Resolve FK constraint failure and pre_remove hook in CCS install
+- Remove nested transaction in batch_insert causing repo sync failure
+- Resolve 6 clippy warnings for clean CI
+- Apply all code review findings across 8 batches
+- Address 3 regressions found by Codex review
+- Remove duplicate code blocks introduced during P0 security fixes
+- P1/P2 findings in packages, resolver, and db modules
+- P1/P2 findings in filesystem, canonical, and model modules
+- P1/P2 findings in install, remove, update, adopt, and system commands
+- P1/P2 findings in remi server, daemon, and federation
+- Address Codex review findings for cross-distro canonical mapping
+- Wrap AppStream ingestion in transaction for atomicity
+- Harden Repology client — User-Agent, error_for_status, URL encoding
+- Bootstrap CLI bugs found by Codex review
+- Address crate split review findings
+
+### Security
+- Fix all P0 critical findings from feature review
+- Fix all P0 critical findings from feature review
+
+### Other
+- feat(db): add key-value settings table (migration 46)
+- bootstrap: Add dry-run validation, --skip-verify flag, complete resume logic
+- bootstrap: Add systemd-repart image builder with rootless support
+- bootstrap: Implement Stage 2 (reproducibility rebuild)
+- bootstrap: Graph-ordered base system with per-package checkpoints
+- bootstrap: Add Stage 1 LFS 12.4 recipe files with real checksums
+- bootstrap: Enforce checksums, reject placeholders unless --skip-verify
+- bootstrap: Implement Stage 0 seed caching
+- bootstrap: Add version detection, update to LFS 12.4 defaults
+- build: Add workspace.dependencies to deduplicate version specs
+- build: Move shared dependencies to conary-core
+- build: Create conary-core crate skeleton
+- fix(erofs): Remove dead chunk indexes, fix mode passthrough, fix probe race
+- fix(erofs): Fix inode field layout, wire fs-verity, unmount old composefs
+- feat(generation): Update GC and info for EROFS/composefs format
+- feat(generation): Replace renameat2 with composefs mount switching
+- feat(fs): Add fs-verity enablement for CAS objects
+- feat(generation): Rewrite builder to produce EROFS images
+- feat(generation): Add composefs detection and preflight
+- fix(install): Address Codex review of dependency resolution
+- fix(generation): Address Codex review findings
+- fix(generation): Address code review findings
+- fix(generation): Correct format_bytes test assertion for sub-KiB values
+- feat(cli): Wire generation and takeover commands into CLI
+- feat(generation): Add conary system takeover command
+- feat(generation): Add list, info, and gc commands
+- feat(generation): Add BLS boot entries with GRUB fallback
+- feat(generation): Add atomic switch via renameat2(RENAME_EXCHANGE)
+- feat(generation): Add generation builder — reflink files from CAS
+- feat(generation): Add generation metadata types and path helpers
+- feat(fs): Add reflink support with fallback to hardlink/copy
+- feat(install): Add dependency resolution with dep-mode control
+- fix(server): Deduplicate Remi sync, aggregate multi-repo metadata, fix conversion patterns
+- fix(server): Correct distro count query and search facet storage
+
 ## [0.1.0] - 2026-03-03
 
 Major release covering 10 months of development. Every subsystem listed below is implemented and tested.

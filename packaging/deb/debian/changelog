@@ -1,3 +1,9 @@
+conary (0.2.0-1) unstable; urgency=medium
+
+  * Release 0.2.0
+
+ -- Conary Contributors <contributors@conary.io>  Sat, 07 Mar 2026 16:46:10 -0800
+
 conary (0.1.0-1) unstable; urgency=low
 
   * Initial DEB package
