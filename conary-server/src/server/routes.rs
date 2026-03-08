@@ -18,7 +18,7 @@
 
 use crate::server::handlers::{
     canonical, chunks, detail, federation, index, jobs, models, oci, packages, recipes, search,
-    sparse, tuf,
+    self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -453,6 +453,13 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/:distro/tuf/targets.json", get(tuf::get_targets))
         .route("/v1/:distro/tuf/root.json", get(tuf::get_root))
         .route("/v1/:distro/tuf/:version", get(tuf::get_versioned_root))
+        // === Self-Update (CCS binary distribution) ===
+        .route("/v1/ccs/conary/latest", get(self_update::get_latest))
+        .route("/v1/ccs/conary/versions", get(self_update::get_versions))
+        .route(
+            "/v1/ccs/conary/:version/download",
+            get(self_update::download),
+        )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))
         .route("/v1/stats/recent", get(detail::get_recent))
