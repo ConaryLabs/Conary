@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-07
 revision: 2
-summary: Update schema to v46, add settings table
+summary: Update schema to v48 (admin_tokens, admin_audit_log), add admin API architecture
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v46 |        +------+-----+
+     |  SQLite v48 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -108,8 +108,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v46, migration dispatcher
-    |   +-- migrations.rs All 46 migration functions
+    |   +-- schema.rs    Schema v48, migration dispatcher
+    |   +-- migrations.rs All 48 migration functions
     |   +-- models/      ORM-style model structs
     +-- transaction/     Crash-safe atomic operations
     |   +-- journal.rs   Append-only recovery journal
@@ -378,7 +378,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v46)
+## Database Schema (v48)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 
@@ -418,6 +418,10 @@ Server (Remi):
   chunk_access                                    LRU cache tracking
   download_stats / download_counts                Analytics
   delta_manifests                                 Pre-computed version deltas
+
+Admin API:
+  admin_tokens                                    Bearer token auth (name, hash, scopes)
+  admin_audit_log                                 Request audit trail (action, IP, timing)
   remote_collections                              Cached remote model includes
 
 Federation / Daemon:

@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [server-v0.2.0] - 2026-03-07
 
 ### Added
+- External admin API on :8082 with bearer token authentication and scope-based authorization
+- Token CRUD endpoints (create/list/delete) with SHA-256 hashing
+- CI proxy handlers for Forgejo integration (workflows, runs, dispatch, mirror-sync)
+- SSE event stream for real-time admin notifications
+- OpenAPI 3.1 spec at /v1/admin/openapi.json
+- MCP endpoint at /mcp via rmcp with 16 admin tools for LLM agent integration
+- Repository management endpoints (CRUD + sync trigger)
+- Federation peer management endpoints (list/add/remove + config)
+- Per-IP rate limiting via governor (read 60/min, write 10/min, auth-fail 5/min)
+- Audit logging middleware with query and purge endpoints
+- DB migration v47: admin_tokens table
+- DB migration v48: admin_audit_log table
 - Add Remi canonical metadata API endpoints
 - Add standalone remi and conaryd binaries
 

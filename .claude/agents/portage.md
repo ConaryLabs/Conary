@@ -105,5 +105,5 @@ Skip gates if the user said "run hands-off" or "just do it."
 - Test: `cargo test` (1800+ tests)
 - Lint: `cargo clippy -- -D warnings`
 - Conventions: database-first, file headers (`// path/to/file.rs`), thiserror, no emojis
-- Schema: SQLite v45 (40+ tables across 45 migrations)
+- Schema: SQLite v48 (40+ tables across 48 migrations)
 - Debug builds only for dev work, never `--release` unless deploying

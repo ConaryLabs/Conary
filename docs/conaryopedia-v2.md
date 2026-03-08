@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-07
 revision: 2
-summary: Add self-update section, update schema version to v46
+summary: Update schema version to v48, add external admin API reference
 ---
 
 # Conaryopedia v2
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v46). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v48). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -3312,6 +3312,36 @@ The frontend is served as a SPA with `ServeDir` + `ServeFile` fallback to `index
 | POST | `/v1/admin/refresh` | Refresh upstream metadata |
 | PUT | `/v1/admin/models/:name` | Publish model collection |
 | POST | `/v1/admin/tuf/refresh-timestamp` | Refresh TUF timestamp |
+
+### External Admin API (port 8082)
+
+Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min, auth-fail 5/min). All requests audit-logged.
+
+| Method | Path | Purpose | Scope |
+|--------|------|---------|-------|
+| POST | `/v1/admin/tokens` | Create API token | admin |
+| GET | `/v1/admin/tokens` | List tokens | admin |
+| DELETE | `/v1/admin/tokens/:id` | Delete token | admin |
+| GET | `/v1/admin/ci/workflows` | List CI workflows | ci:read |
+| GET | `/v1/admin/ci/workflows/:name/runs` | List workflow runs | ci:read |
+| POST | `/v1/admin/ci/workflows/:name/dispatch` | Trigger workflow | ci:trigger |
+| POST | `/v1/admin/ci/mirror-sync` | Trigger mirror sync | ci:trigger |
+| GET | `/v1/admin/repos` | List repositories | repos:read |
+| GET | `/v1/admin/repos/:name` | Get repository | repos:read |
+| POST | `/v1/admin/repos` | Create repository | repos:write |
+| PUT | `/v1/admin/repos/:name` | Update repository | repos:write |
+| DELETE | `/v1/admin/repos/:name` | Delete repository | repos:write |
+| POST | `/v1/admin/repos/:name/sync` | Trigger repo sync | repos:write |
+| GET | `/v1/admin/federation/peers` | List federation peers | federation:read |
+| GET | `/v1/admin/federation/config` | Get federation config | federation:read |
+| POST | `/v1/admin/federation/peers` | Add federation peer | federation:write |
+| DELETE | `/v1/admin/federation/peers/:id` | Remove peer | federation:write |
+| PUT | `/v1/admin/federation/config` | Update federation config | federation:write |
+| GET | `/v1/admin/events` | SSE event stream | any valid token |
+| GET | `/v1/admin/audit` | Query audit log | admin |
+| DELETE | `/v1/admin/audit` | Purge old audit entries | admin |
+| GET | `/v1/admin/openapi.json` | OpenAPI 3.1 spec | (no auth) |
+| GET/POST | `/mcp` | MCP endpoint (16 tools) | admin |
 
 ---
 

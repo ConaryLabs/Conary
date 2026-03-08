@@ -75,6 +75,16 @@ Prove the features work on real systems. Each scenario becomes a CI job.
 - [ ] Federation peer discovery and chunk routing
 - [ ] OCI distribution API serves valid manifests (T69-T70)
 
+### Remi Admin API
+
+- [x] External admin API on :8082 with bearer token auth (P0)
+- [x] Token CRUD, CI proxy, SSE event stream (P0)
+- [x] OpenAPI 3.1 spec, MCP endpoint with 16 tools (P0)
+- [x] Repository management endpoints (P1)
+- [x] Federation peer management endpoints (P1)
+- [x] Per-IP rate limiting via governor (P2)
+- [x] Audit logging with query/purge endpoints (P2)
+
 ### Recipe & Build
 
 - [ ] Cook a recipe from TOML, verify CCS output (T62-T63)
