@@ -163,6 +163,9 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         )));
     }
 
+    // Load digest map once to avoid re-reading the md5sums file per file (N+1)
+    let digest_map = load_digest_map(name);
+
     let mut files = Vec::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -174,8 +177,9 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         // Get file metadata
         let (size, mode) = get_file_metadata(&path);
 
-        // Try to get md5sum from dpkg database
-        let digest = get_file_digest(name, &path);
+        // Look up md5sum from pre-loaded digest map
+        let search_path = path.strip_prefix('/').unwrap_or(&path);
+        let digest = digest_map.get(search_path).cloned();
 
         // Check if this is a symlink and get target
         let link_target = if (mode & 0o170000) == 0o120000 {
@@ -211,39 +215,35 @@ fn get_file_metadata(path: &str) -> (i64, i32) {
     }
 }
 
-/// Get file digest from dpkg database
-fn get_file_digest(package: &str, path: &str) -> Option<String> {
-    // dpkg stores md5sums in /var/lib/dpkg/info/<package>.md5sums
-    let md5sums_path = format!("/var/lib/dpkg/info/{}.md5sums", package);
+/// Load the full digest map for a package from the dpkg md5sums file.
+///
+/// Returns a map of relative path -> md5 digest. Reads the file once,
+/// trying the base package name first, then architecture-qualified variants.
+fn load_digest_map(package: &str) -> HashMap<String, String> {
+    let base_path = format!("/var/lib/dpkg/info/{}.md5sums", package);
+    if let Ok(content) = std::fs::read_to_string(&base_path) {
+        return parse_md5sums(&content);
+    }
 
-    if let Ok(content) = std::fs::read_to_string(&md5sums_path) {
-        // Format: <md5sum>  <path>
-        // Note: path in md5sums file doesn't have leading /
-        let search_path = path.strip_prefix('/').unwrap_or(path);
-        for line in content.lines() {
-            let parts: Vec<&str> = line.splitn(2, "  ").collect();
-            if parts.len() == 2 && parts[1] == search_path {
-                return Some(parts[0].to_string());
-            }
+    for arch in &["amd64", "i386", "arm64", "armhf", "all"] {
+        let arch_path = format!("/var/lib/dpkg/info/{}:{}.md5sums", package, arch);
+        if let Ok(content) = std::fs::read_to_string(&arch_path) {
+            return parse_md5sums(&content);
         }
     }
 
-    // Try with architecture suffix
-    let arch_suffixes = ["amd64", "i386", "arm64", "armhf", "all"];
-    for arch in &arch_suffixes {
-        let md5sums_path = format!("/var/lib/dpkg/info/{}:{}.md5sums", package, arch);
-        if let Ok(content) = std::fs::read_to_string(&md5sums_path) {
-            let search_path = path.strip_prefix('/').unwrap_or(path);
-            for line in content.lines() {
-                let parts: Vec<&str> = line.splitn(2, "  ").collect();
-                if parts.len() == 2 && parts[1] == search_path {
-                    return Some(parts[0].to_string());
-                }
-            }
-        }
-    }
+    HashMap::new()
+}
 
-    None
+/// Parse dpkg md5sums file content into a path -> digest map.
+fn parse_md5sums(content: &str) -> HashMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let (digest, path) = line.split_once("  ")?;
+            Some((path.to_string(), digest.to_string()))
+        })
+        .collect()
 }
 
 /// Query dependencies of an installed package (names only)

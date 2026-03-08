@@ -38,6 +38,8 @@ pub struct CcsPackage {
     package_files: Vec<PackageFile>,
     /// Cached dependencies for the trait
     dependencies: Vec<Dependency>,
+    /// Cached config files for the trait
+    config_files_cache: Vec<ConfigFileInfo>,
 }
 
 /// Convert a BinaryManifest to CcsManifest for internal compatibility.
@@ -406,6 +408,16 @@ impl PackageFormat for CcsPackage {
         // Pre-compute trait data
         let package_files = Self::convert_files(&files);
         let dependencies = Self::convert_dependencies(&manifest);
+        let config_files_cache: Vec<ConfigFileInfo> = manifest
+            .config
+            .files
+            .iter()
+            .map(|path| ConfigFileInfo {
+                path: path.clone(),
+                noreplace: manifest.config.noreplace,
+                ghost: false,
+            })
+            .collect();
 
         debug!(
             "Parsed CCS package: {} v{} ({} files, {} deps, {} components)",
@@ -423,6 +435,7 @@ impl PackageFormat for CcsPackage {
             components,
             package_files,
             dependencies,
+            config_files_cache,
         })
     }
 
@@ -518,23 +531,14 @@ impl PackageFormat for CcsPackage {
         Ok(extracted)
     }
 
-    fn scriptlets(&self) -> Vec<Scriptlet> {
+    fn scriptlets(&self) -> &[Scriptlet] {
         // CCS uses declarative hooks, not scriptlets
         // Hooks are handled separately by HookExecutor
-        Vec::new()
+        &[]
     }
 
-    fn config_files(&self) -> Vec<ConfigFileInfo> {
-        self.manifest
-            .config
-            .files
-            .iter()
-            .map(|path| ConfigFileInfo {
-                path: path.clone(),
-                noreplace: self.manifest.config.noreplace,
-                ghost: false,
-            })
-            .collect()
+    fn config_files(&self) -> &[ConfigFileInfo] {
+        &self.config_files_cache
     }
 
     fn to_trove(&self) -> Trove {

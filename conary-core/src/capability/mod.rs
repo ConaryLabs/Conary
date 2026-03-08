@@ -106,15 +106,13 @@ pub fn load_capabilities(
         )
         .ok();
 
-    match result {
-        Some(json) => {
-            let capabilities: CapabilityDeclaration = serde_json::from_str(&json).map_err(|e| {
+    result
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|e| {
                 CapabilityError::Other(format!("Failed to parse capabilities: {}", e))
-            })?;
-            Ok(Some(capabilities))
-        }
-        None => Ok(None),
-    }
+            })
+        })
+        .transpose()
 }
 
 /// Load capabilities for a package by name
@@ -233,12 +231,7 @@ pub fn list_packages_with_capabilities(
         ))
     })?;
 
-    let mut results = Vec::new();
-    for row in rows {
-        results.push(row?);
-    }
-
-    Ok(results)
+    rows.collect::<Result<Vec<_>, _>>().map_err(CapabilityError::from)
 }
 
 #[cfg(test)]

@@ -147,6 +147,7 @@ impl RecipeGraph {
     pub fn topological_sort(&self) -> Result<Vec<String>> {
         let mut in_degrees = self.compute_in_degrees();
         let mut result = Vec::with_capacity(self.edges.len());
+        let mut processed = HashSet::with_capacity(self.edges.len());
 
         // Queue of nodes with no remaining dependencies
         let mut queue: VecDeque<String> = in_degrees
@@ -156,6 +157,7 @@ impl RecipeGraph {
             .collect();
 
         while let Some(node) = queue.pop_front() {
+            processed.insert(node.clone());
             result.push(node.clone());
 
             // For each recipe that depends on this node...
@@ -186,7 +188,7 @@ impl RecipeGraph {
             let remaining: Vec<String> = self
                 .edges
                 .keys()
-                .filter(|k| !result.contains(k))
+                .filter(|k| !processed.contains(*k))
                 .cloned()
                 .collect();
 

@@ -409,11 +409,11 @@ impl PackageFormat for RpmPackage {
         self.meta.to_trove()
     }
 
-    fn scriptlets(&self) -> Vec<Scriptlet> {
+    fn scriptlets(&self) -> &[Scriptlet] {
         self.meta.scriptlets()
     }
 
-    fn config_files(&self) -> Vec<ConfigFileInfo> {
+    fn config_files(&self) -> &[ConfigFileInfo] {
         self.meta.config_files()
     }
 }

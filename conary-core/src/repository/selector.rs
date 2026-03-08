@@ -9,7 +9,6 @@ use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::version::RpmVersion;
 use rusqlite::Connection;
-use std::env;
 use tracing::{debug, info};
 
 /// Options for package selection
@@ -36,9 +35,7 @@ pub struct PackageSelector;
 impl PackageSelector {
     /// Detect the current system architecture
     pub fn detect_architecture() -> String {
-        // env::consts::ARCH returns the target architecture
-        // Common values: "x86_64", "aarch64", "x86", "arm", etc.
-        env::consts::ARCH.to_string()
+        super::registry::detect_system_arch()
     }
 
     /// Check if a package architecture is compatible with the system

@@ -45,22 +45,9 @@ impl Default for CapabilityDeclaration {
         Self {
             version: default_version(),
             rationale: None,
-            network: NetworkCapabilities {
-                outbound: Vec::new(),
-                listen: Vec::new(),
-                none: false,
-            },
-            filesystem: FilesystemCapabilities {
-                read: Vec::new(),
-                write: Vec::new(),
-                execute: Vec::new(),
-                deny: Vec::new(),
-            },
-            syscalls: SyscallCapabilities {
-                allow: Vec::new(),
-                deny: Vec::new(),
-                profile: None,
-            },
+            network: NetworkCapabilities::default(),
+            filesystem: FilesystemCapabilities::default(),
+            syscalls: SyscallCapabilities::default(),
         }
     }
 }

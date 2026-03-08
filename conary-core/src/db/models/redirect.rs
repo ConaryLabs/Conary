@@ -11,14 +11,15 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use std::str::FromStr;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Column list for Redirect SELECT queries (avoids repetition across methods)
 const REDIRECT_COLUMNS: &str = "id, source_name, source_version, target_name, target_version, \
     redirect_type, message, created_at";
 
 /// Type of redirect operation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum RedirectType {
     /// Package was renamed (old name -> new name)
     Rename,
@@ -32,32 +33,7 @@ pub enum RedirectType {
 
 impl RedirectType {
     pub fn as_str(&self) -> &str {
-        match self {
-            RedirectType::Rename => "rename",
-            RedirectType::Obsolete => "obsolete",
-            RedirectType::Merge => "merge",
-            RedirectType::Split => "split",
-        }
-    }
-}
-
-impl FromStr for RedirectType {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "rename" => Ok(RedirectType::Rename),
-            "obsolete" => Ok(RedirectType::Obsolete),
-            "merge" => Ok(RedirectType::Merge),
-            "split" => Ok(RedirectType::Split),
-            _ => Err(format!("Invalid redirect type: {s}")),
-        }
-    }
-}
-
-impl std::fmt::Display for RedirectType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        self.as_ref()
     }
 }
 

@@ -6,6 +6,7 @@
 //! and produce binaries for the target architecture. This toolchain is then
 //! used to build Stage 1 (the self-hosted toolchain).
 
+use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
 use std::path::{Path, PathBuf};
@@ -355,37 +356,9 @@ impl Stage0Builder {
             "Extracting seed to {}...",
             self.config.tools_prefix.display()
         );
-        std::fs::create_dir_all(&self.config.tools_prefix)?;
 
-        // Determine tar flag from extension
-        let tar_flag = if seed_path.to_string_lossy().ends_with(".tar.xz") {
-            "xJf"
-        } else if seed_path.to_string_lossy().ends_with(".tar.gz") {
-            "xzf"
-        } else if seed_path.to_string_lossy().ends_with(".tar.bz2") {
-            "xjf"
-        } else {
-            "xaf" // auto-detect
-        };
-
-        let status = Command::new("tar")
-            .args([
-                tar_flag,
-                seed_path.to_str().unwrap(),
-                "-C",
-                self.config.tools_prefix.to_str().unwrap(),
-                "--strip-components=1",
-            ])
-            .status()
-            .map_err(|e| Stage0Error::BuildFailed(format!("Tar failed: {e}")))?;
-
-        if !status.success() {
-            return Err(Stage0Error::BuildFailed(
-                "Failed to extract seed".to_string(),
-            ));
-        }
-
-        Ok(())
+        build_helpers::extract_tar(seed_path, &self.config.tools_prefix, true)
+            .map_err(|e| Stage0Error::BuildFailed(format!("Seed extraction failed: {e}")))
     }
 
     /// Set up the work directory with crosstool-ng config

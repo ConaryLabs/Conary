@@ -119,27 +119,37 @@ fn count_existing_paths(paths: &[String], skipped: &mut Vec<String>) -> usize {
     count
 }
 
-/// Warn about deny paths that cannot be enforced due to overlapping allow rules
-fn check_deny_conflicts(caps: &FilesystemCapabilities) {
+/// Find deny paths that conflict with allowed parents.
+///
+/// Returns a list of `(deny_path, allowed_path, access_type)` tuples where
+/// a deny path falls under an allowed parent, which landlock cannot enforce.
+fn find_deny_conflicts(
+    caps: &FilesystemCapabilities,
+) -> Vec<(&str, &str, &'static str)> {
+    let mut conflicts = Vec::new();
     for deny_path in &caps.deny {
         for read_path in &caps.read {
             if deny_path.starts_with(read_path) {
-                warn!(
-                    "Deny path '{}' is under allowed read path '{}' - \
-                     landlock cannot enforce sub-path denials (limitation)",
-                    deny_path, read_path
-                );
+                conflicts.push((deny_path.as_str(), read_path.as_str(), "read"));
             }
         }
         for write_path in &caps.write {
             if deny_path.starts_with(write_path) {
-                warn!(
-                    "Deny path '{}' is under allowed write path '{}' - \
-                     landlock cannot enforce sub-path denials (limitation)",
-                    deny_path, write_path
-                );
+                conflicts.push((deny_path.as_str(), write_path.as_str(), "write"));
             }
         }
+    }
+    conflicts
+}
+
+/// Warn about deny paths that cannot be enforced due to overlapping allow rules
+fn check_deny_conflicts(caps: &FilesystemCapabilities) {
+    for (deny_path, allowed_path, access_type) in find_deny_conflicts(caps) {
+        warn!(
+            "Deny path '{}' is under allowed {} path '{}' - \
+             landlock cannot enforce sub-path denials (limitation)",
+            deny_path, access_type, allowed_path
+        );
     }
 }
 
@@ -177,20 +187,7 @@ pub fn build_landlock_ruleset(
 
 /// Count deny paths that conflict with allowed parents
 fn count_deny_conflicts(caps: &FilesystemCapabilities) -> usize {
-    let mut conflicts = 0;
-    for deny_path in &caps.deny {
-        for read_path in &caps.read {
-            if deny_path.starts_with(read_path) {
-                conflicts += 1;
-            }
-        }
-        for write_path in &caps.write {
-            if deny_path.starts_with(write_path) {
-                conflicts += 1;
-            }
-        }
-    }
-    conflicts
+    find_deny_conflicts(caps).len()
 }
 
 /// Information about a built landlock ruleset (for reporting)

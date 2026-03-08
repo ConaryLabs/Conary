@@ -809,7 +809,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             Path::new(root),
             pkg.name(),
             pkg.version(),
-            &scriptlets,
+            scriptlets,
             scriptlet_format,
             &execution_mode,
             sandbox_mode,
@@ -1063,7 +1063,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
 
         // Store scriptlets for later removal (always, even if --no-scripts)
-        for scriptlet in &scriptlets {
+        for scriptlet in scriptlets {
             let mut entry = ScriptletEntry::with_flags(
                 trove_id,
                 scriptlet.phase.to_string(),
@@ -1140,7 +1140,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             Path::new(root),
             pkg.name(),
             pkg.version(),
-            &scriptlets,
+            scriptlets,
             scriptlet_format,
             &execution_mode,
             sandbox_mode,

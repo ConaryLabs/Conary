@@ -121,54 +121,62 @@ pub async fn get_model_signature(
         return e;
     }
 
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
+    let db_path = state.read().await.config.db_path.clone();
 
-    let state = state.read().await;
-    let db_path = &state.config.db_path;
-
-    let conn = match Connection::open(db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-        }
-    };
-
-    // Query for signature in remote_collections
-    let result: Result<Option<(Vec<u8>, String)>, _> = conn
-        .query_row(
-            "SELECT rc.signature, rc.signer_key_id
-             FROM remote_collections rc
-             WHERE rc.name = ?1 AND rc.signature IS NOT NULL
-             ORDER BY rc.fetched_at DESC LIMIT 1",
-            [&name],
-            |row| {
-                let sig: Vec<u8> = row.get(0)?;
-                let key_id: String = row.get(1)?;
-                Ok((sig, key_id))
-            },
-        )
-        .optional();
+    let result =
+        tokio::task::spawn_blocking(move || query_signature(&db_path, &name)).await;
 
     match result {
-        Ok(Some((signature, key_id))) => {
-            let response = SignatureResponse {
-                signature: BASE64.encode(&signature),
-                key_id,
-            };
+        Ok(Ok(Some(response))) => {
             let json = match super::serialize_json(&response, "signature") {
                 Ok(j) => j,
                 Err(e) => return e,
             };
             super::json_response(json, 300)
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "No signature found for collection").into_response(),
-        Err(e) => {
-            tracing::error!("Failed to query signature for '{}': {}", name, e);
+        Ok(Ok(None)) => {
+            (StatusCode::NOT_FOUND, "No signature found for collection").into_response()
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Failed to query signature: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
         }
+        Err(e) => {
+            tracing::error!("Task panicked in get_model_signature: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+        }
     }
+}
+
+/// Query the signature for a named collection from the database
+fn query_signature(
+    db_path: &std::path::Path,
+    name: &str,
+) -> Result<Option<SignatureResponse>, anyhow::Error> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let conn = Connection::open(db_path)?;
+
+    let result: Option<(Vec<u8>, String)> = conn
+        .query_row(
+            "SELECT rc.signature, rc.signer_key_id
+             FROM remote_collections rc
+             WHERE rc.name = ?1 AND rc.signature IS NOT NULL
+             ORDER BY rc.fetched_at DESC LIMIT 1",
+            [name],
+            |row| {
+                let sig: Vec<u8> = row.get(0)?;
+                let key_id: String = row.get(1)?;
+                Ok((sig, key_id))
+            },
+        )
+        .optional()?;
+
+    Ok(result.map(|(signature, key_id)| SignatureResponse {
+        signature: BASE64.encode(&signature),
+        key_id,
+    }))
 }
 
 /// Query parameters for PUT model endpoint
@@ -212,11 +220,16 @@ pub async fn put_model(
             .into_response();
     }
 
-    let state = state.read().await;
-    let db_path = &state.config.db_path;
+    let db_path = state.read().await.config.db_path.clone();
+    let force = params.force;
 
-    match store_collection(db_path, &name, &body, params.force) {
-        Ok(response) => {
+    let result = tokio::task::spawn_blocking(move || {
+        store_collection(&db_path, &name, &body, force)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(response)) => {
             let json = match super::serialize_json(&response, "put model response") {
                 Ok(j) => j,
                 Err(e) => return e,
@@ -227,37 +240,41 @@ pub async fn put_model(
                 .body(axum::body::Body::from(json))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
-        Err(StoreError::NameMismatch {
+        Ok(Err(StoreError::NameMismatch {
             url_name,
             body_name,
-        }) => {
+        })) => {
             let msg = format!(
                 "Name mismatch: URL has '{}' but body has '{}'",
                 url_name, body_name
             );
             (StatusCode::BAD_REQUEST, msg).into_response()
         }
-        Err(StoreError::HashMismatch { expected, computed }) => {
+        Ok(Err(StoreError::HashMismatch { expected, computed })) => {
             let msg = format!(
                 "Content hash mismatch: body claims '{}' but computed '{}'",
                 expected, computed
             );
             (StatusCode::BAD_REQUEST, msg).into_response()
         }
-        Err(StoreError::AlreadyExists(name)) => {
+        Ok(Err(StoreError::AlreadyExists(name))) => {
             let msg = format!(
                 "Collection '{}' already exists (use ?force=true to overwrite)",
                 name
             );
             (StatusCode::CONFLICT, msg).into_response()
         }
-        Err(StoreError::InvalidJson(e)) => {
+        Ok(Err(StoreError::InvalidJson(e))) => {
             let msg = format!("Invalid JSON: {}", e);
             (StatusCode::BAD_REQUEST, msg).into_response()
         }
-        Err(StoreError::Database(e)) => {
-            tracing::error!("Failed to store collection '{}': {}", name, e);
+        Ok(Err(StoreError::Database(e))) => {
+            tracing::error!("Failed to store collection: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+        Err(e) => {
+            tracing::error!("Task panicked in put_model: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }
 }
@@ -409,36 +426,26 @@ fn build_collection_data(
     }))
 }
 
-/// Build a listing of all collections
+/// Build a listing of all collections with member counts in a single query
 fn build_collection_list(db_path: &std::path::Path) -> Result<Vec<CollectionEntry>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Find all collection troves
     let mut stmt = conn.prepare(
-        "SELECT id, name, version, description FROM troves WHERE type = 'collection' ORDER BY name",
+        "SELECT t.name, t.version, t.description, COUNT(cm.id) AS member_count
+         FROM troves t
+         LEFT JOIN collection_members cm ON cm.collection_id = t.id
+         WHERE t.type = 'collection'
+         GROUP BY t.id
+         ORDER BY t.name",
     )?;
 
     let entries: Vec<CollectionEntry> = stmt
         .query_map([], |row| {
-            let id: i64 = row.get(0)?;
-            let name: String = row.get(1)?;
-            let version: String = row.get(2)?;
-            let description: Option<String> = row.get(3)?;
-
-            // Count members (may fail for individual rows, so return 0 on error)
-            let member_count: usize = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM collection_members WHERE collection_id = ?1",
-                    [id],
-                    |r| r.get::<_, i64>(0),
-                )
-                .unwrap_or(0) as usize;
-
             Ok(CollectionEntry {
-                name,
-                version,
-                member_count,
-                description,
+                name: row.get(0)?,
+                version: row.get(1)?,
+                description: row.get(2)?,
+                member_count: row.get::<_, i64>(3)? as usize,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

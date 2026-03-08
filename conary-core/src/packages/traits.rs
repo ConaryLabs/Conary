@@ -146,10 +146,10 @@ pub trait PackageFormat {
 
     /// Get the scriptlets (install/remove hooks) from the package
     ///
-    /// Returns a vector of Scriptlet containing phase, interpreter, and content.
-    /// Default implementation returns empty vec for formats that don't support scriptlets.
-    fn scriptlets(&self) -> Vec<Scriptlet> {
-        Vec::new()
+    /// Returns a slice of Scriptlet containing phase, interpreter, and content.
+    /// Default implementation returns empty slice for formats that don't support scriptlets.
+    fn scriptlets(&self) -> &[Scriptlet] {
+        &[]
     }
 
     /// Get the list of configuration files declared by the package
@@ -158,10 +158,10 @@ pub trait PackageFormat {
     /// For DEB: files listed in DEBIAN/conffiles
     /// For Arch: files listed in backup array in .PKGINFO
     ///
-    /// Default implementation returns empty vec - config files detected
+    /// Default implementation returns empty slice - config files detected
     /// automatically by path (e.g., /etc/*) during installation.
-    fn config_files(&self) -> Vec<ConfigFileInfo> {
-        Vec::new()
+    fn config_files(&self) -> &[ConfigFileInfo] {
+        &[]
     }
 
     /// Convert this package to a Trove representation

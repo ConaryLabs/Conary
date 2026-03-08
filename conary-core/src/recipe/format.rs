@@ -468,6 +468,11 @@ impl BuildStage {
     }
 }
 
+/// Check if a string is a remote URL (http:// or https://)
+pub fn is_remote_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
 /// Component classification overrides
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComponentSection {

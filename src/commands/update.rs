@@ -15,6 +15,36 @@ use std::path::Path;
 use conary_core::version::RpmVersion;
 use tracing::{debug, info, warn};
 
+/// Check whether the repository version is strictly newer than the installed version.
+///
+/// Returns `true` if `repo_version` parses and compares greater than `installed_version`.
+/// Returns `false` (and logs a warning) when either version fails to parse or when the
+/// repository version is the same or older.
+fn is_repo_version_newer(package_name: &str, repo_version: &str, installed_version: &str) -> bool {
+    match (
+        RpmVersion::parse(repo_version),
+        RpmVersion::parse(installed_version),
+    ) {
+        (Ok(repo_ver), Ok(installed_ver)) => {
+            if repo_ver <= installed_ver {
+                debug!(
+                    "Skipping {} {} (installed {} is same or newer)",
+                    package_name, repo_version, installed_version
+                );
+                return false;
+            }
+            true
+        }
+        _ => {
+            warn!(
+                "Could not compare versions for {}: {} vs {}, skipping",
+                package_name, repo_version, installed_version
+            );
+            false
+        }
+    }
+}
+
 fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Result<(Trove, i64)> {
     let troves = Trove::find_by_name(conn, package_name)?;
     let trove = troves
@@ -153,27 +183,8 @@ pub fn cmd_update(
             if repo_pkg.version != trove.version
                 && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
             {
-                // Skip if the repository version is not actually newer than installed
-                match (
-                    RpmVersion::parse(&repo_pkg.version),
-                    RpmVersion::parse(&trove.version),
-                ) {
-                    (Ok(repo_ver), Ok(installed_ver)) => {
-                        if repo_ver <= installed_ver {
-                            warn!(
-                                "Skipping {} {} (installed {} is same or newer)",
-                                trove.name, repo_pkg.version, trove.version
-                            );
-                            continue;
-                        }
-                    }
-                    _ => {
-                        warn!(
-                            "Could not compare versions for {}: {} vs {}, skipping",
-                            trove.name, repo_pkg.version, trove.version
-                        );
-                        continue;
-                    }
+                if !is_repo_version_newer(&trove.name, &repo_pkg.version, &trove.version) {
+                    continue;
                 }
 
                 // Filter by security if requested
@@ -687,27 +698,8 @@ pub fn cmd_update_group(
             if repo_pkg.version != trove.version
                 && (repo_pkg.architecture == trove.architecture || repo_pkg.architecture.is_none())
             {
-                // Skip if the repository version is not actually newer than installed
-                match (
-                    RpmVersion::parse(&repo_pkg.version),
-                    RpmVersion::parse(&trove.version),
-                ) {
-                    (Ok(repo_ver), Ok(installed_ver)) => {
-                        if repo_ver <= installed_ver {
-                            debug!(
-                                "Skipping {} {} (installed {} is same or newer)",
-                                member.member_name, repo_pkg.version, trove.version
-                            );
-                            continue;
-                        }
-                    }
-                    _ => {
-                        warn!(
-                            "Could not compare versions for {}: {} vs {}, skipping",
-                            member.member_name, repo_pkg.version, trove.version
-                        );
-                        continue;
-                    }
+                if !is_repo_version_newer(&member.member_name, &repo_pkg.version, &trove.version) {
+                    continue;
                 }
 
                 // Filter by security if requested

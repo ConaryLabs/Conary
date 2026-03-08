@@ -9,6 +9,7 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use strum_macros::{AsRefStr, EnumString};
 
 /// Column list for ComponentDependency SELECT queries (avoids repetition across methods)
 const COMP_DEP_COLUMNS: &str = "id, component_id, depends_on_component, depends_on_package, \
@@ -18,7 +19,8 @@ const COMP_DEP_COLUMNS: &str = "id, component_id, depends_on_component, depends_
 const COMP_PROVIDE_COLUMNS: &str = "id, component_id, capability, version";
 
 /// Dependency type for component dependencies
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum ComponentDepType {
     /// Required at runtime
     Runtime,
@@ -30,22 +32,13 @@ pub enum ComponentDepType {
 
 impl ComponentDepType {
     /// Convert to string for database storage
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Runtime => "runtime",
-            Self::Build => "build",
-            Self::Optional => "optional",
-        }
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
     }
 
     /// Parse from string
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "runtime" => Some(Self::Runtime),
-            "build" => Some(Self::Build),
-            "optional" => Some(Self::Optional),
-            _ => None,
-        }
+        s.parse().ok()
     }
 }
 

@@ -75,9 +75,14 @@ impl FilterSet {
 
     /// Add a rule to the filter set
     pub fn add_rule(&mut self, rule: FilterRule) {
-        self.rules.push(rule);
-        // Re-sort by priority (highest first)
-        self.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        // Insert in sorted position (highest priority first) to avoid
+        // re-sorting the entire vec on every insertion. For equal
+        // priorities, preserve insertion order by finding the end of
+        // the equal-priority range via partition_point.
+        let pos = self
+            .rules
+            .partition_point(|r| r.priority >= rule.priority);
+        self.rules.insert(pos, rule);
     }
 
     /// Load filters from a configuration file

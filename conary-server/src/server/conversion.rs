@@ -401,8 +401,8 @@ impl ConversionService {
                     description: d.description.clone(),
                 })
                 .collect(),
-            scriptlets: pkg.scriptlets(),
-            config_files: pkg.config_files(),
+            scriptlets: pkg.scriptlets().to_vec(),
+            config_files: pkg.config_files().to_vec(),
         }
     }
 

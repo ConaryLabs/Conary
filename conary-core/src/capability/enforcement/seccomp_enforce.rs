@@ -19,7 +19,7 @@
 use super::{EnforcementError, EnforcementMode};
 use crate::capability::{SyscallCapabilities, SyscallProfile};
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, warn};
 
 /// Apply seccomp BPF filter based on declared syscall capabilities
@@ -63,24 +63,20 @@ pub fn apply_seccomp_filter(
     Ok(())
 }
 
-/// Build a seccomp BPF program from syscall capabilities
-pub fn build_seccomp_filter(
+/// Resolve the final list of allowed syscalls from profile, explicit allow/deny,
+/// and wildcard expansion. Returns a sorted, deduplicated list.
+fn resolve_allowed_syscalls(
     caps: &SyscallCapabilities,
-    mode: EnforcementMode,
-) -> Result<BpfProgram, EnforcementError> {
-    // Collect allowed syscalls from profile + explicit allow list
+) -> Result<Vec<String>, EnforcementError> {
     let mut allowed: Vec<String> = Vec::new();
 
     // Expand profile to syscall list
     if let Some(ref profile_name) = caps.profile {
-        if let Some(profile) = SyscallProfile::parse(profile_name) {
-            for syscall in profile.allowed_syscalls() {
-                allowed.push((*syscall).to_string());
-            }
-        } else {
-            return Err(EnforcementError::Seccomp(format!(
-                "Unknown syscall profile: {profile_name}"
-            )));
+        let profile = SyscallProfile::parse(profile_name).ok_or_else(|| {
+            EnforcementError::Seccomp(format!("Unknown syscall profile: {profile_name}"))
+        })?;
+        for syscall in profile.allowed_syscalls() {
+            allowed.push((*syscall).to_string());
         }
     }
 
@@ -93,8 +89,8 @@ pub fn build_seccomp_filter(
         }
     }
 
-    // Remove denied syscalls (deny overrides allow)
-    let deny_set: Vec<String> = caps
+    // Remove denied syscalls (deny overrides allow) using HashSet for O(1) lookups
+    let deny_set: HashSet<String> = caps
         .deny
         .iter()
         .flat_map(|s| {
@@ -111,6 +107,16 @@ pub fn build_seccomp_filter(
     // Deduplicate
     allowed.sort();
     allowed.dedup();
+
+    Ok(allowed)
+}
+
+/// Build a seccomp BPF program from syscall capabilities
+pub fn build_seccomp_filter(
+    caps: &SyscallCapabilities,
+    mode: EnforcementMode,
+) -> Result<BpfProgram, EnforcementError> {
+    let allowed = resolve_allowed_syscalls(caps)?;
 
     // Build the BPF filter.
     // In Enforce mode, unauthorized syscalls kill the process.
@@ -203,25 +209,10 @@ pub fn describe_seccomp_filter(
     caps: &SyscallCapabilities,
     mode: EnforcementMode,
 ) -> SeccompFilterInfo {
-    let mut allowed: Vec<String> = Vec::new();
+    // Use resolve_allowed_syscalls; treat unknown profiles as empty (describe is best-effort)
+    let allowed = resolve_allowed_syscalls(caps).unwrap_or_default();
 
-    if let Some(ref profile_name) = caps.profile
-        && let Some(profile) = SyscallProfile::parse(profile_name)
-    {
-        for syscall in profile.allowed_syscalls() {
-            allowed.push((*syscall).to_string());
-        }
-    }
-
-    for syscall in &caps.allow {
-        if syscall.contains('*') {
-            allowed.extend(expand_wildcard(syscall));
-        } else {
-            allowed.push(syscall.clone());
-        }
-    }
-
-    let deny_set: Vec<String> = caps
+    let denied_explicit: usize = caps
         .deny
         .iter()
         .flat_map(|s| {
@@ -231,11 +222,7 @@ pub fn describe_seccomp_filter(
                 vec![s.clone()]
             }
         })
-        .collect();
-
-    allowed.retain(|s| !deny_set.contains(s));
-    allowed.sort();
-    allowed.dedup();
+        .count();
 
     let unmapped: Vec<String> = allowed
         .iter()
@@ -247,7 +234,7 @@ pub fn describe_seccomp_filter(
         mode,
         profile: caps.profile.clone(),
         allowed_count: allowed.len(),
-        denied_explicit: deny_set.len(),
+        denied_explicit,
         unmapped_names: unmapped,
         allowed_syscalls: allowed,
     }

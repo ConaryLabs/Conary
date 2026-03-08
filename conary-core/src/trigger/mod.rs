@@ -85,7 +85,7 @@ impl<'a> TriggerExecutor<'a> {
 
         if triggers.is_empty() {
             debug!("No triggers to execute for changeset {}", changeset_id);
-            return Ok(TriggerResults::empty());
+            return Ok(TriggerResults::default());
         }
 
         info!(
@@ -95,7 +95,7 @@ impl<'a> TriggerExecutor<'a> {
             self.root.display()
         );
 
-        let mut results = TriggerResults::new();
+        let mut results = TriggerResults::default();
 
         for trigger in triggers {
             let trigger_id = trigger.id.unwrap_or(0);
@@ -173,11 +173,7 @@ impl<'a> TriggerExecutor<'a> {
     }
 
     /// Execute a single trigger handler
-    // TODO: `execute_handler` and `execute_handler_in_target` share ~80% identical
-    // code. Extract the common post-spawn logic (timeout wait, output capture,
-    // status checking) into a shared helper function.
     fn execute_handler(&self, trigger: &Trigger) -> Result<Option<String>> {
-        // Parse handler command
         let parts: Vec<&str> = trigger.handler.split_whitespace().collect();
         if parts.is_empty() {
             return Err(Error::TriggerError("Empty handler command".to_string()));
@@ -188,8 +184,7 @@ impl<'a> TriggerExecutor<'a> {
 
         debug!("Executing: {} {:?}", cmd, args);
 
-        // Execute with timeout and stdin nullification
-        let mut child = Command::new(cmd)
+        let child = Command::new(cmd)
             .args(args)
             .env("CONARY_TRIGGER_NAME", &trigger.name)
             .env("CONARY_ROOT", self.root.to_string_lossy().as_ref())
@@ -199,71 +194,7 @@ impl<'a> TriggerExecutor<'a> {
             .spawn()
             .map_err(|e| Error::TriggerError(format!("Failed to spawn '{}': {}", cmd, e)))?;
 
-        // Wait with timeout
-        match child.wait_timeout(self.timeout)? {
-            Some(status) => {
-                // Process already exited; read buffered output without
-                // calling wait_with_output (which would double-wait).
-                let stdout_bytes = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr_bytes = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stdout = String::from_utf8_lossy(&stdout_bytes);
-                let stderr = String::from_utf8_lossy(&stderr_bytes);
-
-                // Log output
-                if !stdout.is_empty() {
-                    for line in stdout.lines() {
-                        debug!("[{}] {}", trigger.name, line);
-                    }
-                }
-                if !stderr.is_empty() {
-                    for line in stderr.lines() {
-                        warn!("[{}] {}", trigger.name, line);
-                    }
-                }
-
-                if status.success() {
-                    let combined = format!("{}{}", stdout, stderr);
-                    Ok(if combined.is_empty() {
-                        None
-                    } else {
-                        Some(combined)
-                    })
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    Err(Error::TriggerError(format!(
-                        "Handler '{}' failed with exit code {}: {}",
-                        cmd,
-                        code,
-                        stderr.trim()
-                    )))
-                }
-            }
-            None => {
-                // Timeout - kill the process
-                let _ = child.kill();
-                Err(Error::TriggerError(format!(
-                    "Handler '{}' timed out after {} seconds",
-                    cmd,
-                    self.timeout.as_secs()
-                )))
-            }
-        }
+        self.wait_and_capture(child, &trigger.name, cmd, None)
     }
 
     /// Execute a trigger handler inside a target root using chroot
@@ -272,7 +203,6 @@ impl<'a> TriggerExecutor<'a> {
     /// necessary for triggers to work correctly during bootstrap or when
     /// installing to a non-live filesystem.
     fn execute_handler_in_target(&self, trigger: &Trigger) -> Result<Option<String>> {
-        // Parse handler command
         let parts: Vec<&str> = trigger.handler.split_whitespace().collect();
         if parts.is_empty() {
             return Err(Error::TriggerError("Empty handler command".to_string()));
@@ -299,8 +229,7 @@ impl<'a> TriggerExecutor<'a> {
             ));
         }
 
-        // Build chroot command
-        let mut child = Command::new("chroot")
+        let child = Command::new("chroot")
             .arg(self.root)
             .arg(cmd)
             .args(args)
@@ -314,7 +243,19 @@ impl<'a> TriggerExecutor<'a> {
                 Error::TriggerError(format!("Failed to spawn chroot for '{}': {}", cmd, e))
             })?;
 
-        // Wait with timeout
+        self.wait_and_capture(child, &trigger.name, cmd, Some(self.root))
+    }
+
+    /// Wait for a spawned child process with timeout, capture output, and check status.
+    ///
+    /// If `chroot_path` is `Some`, error messages include the chroot context.
+    fn wait_and_capture(
+        &self,
+        mut child: std::process::Child,
+        trigger_name: &str,
+        cmd: &str,
+        chroot_path: Option<&Path>,
+    ) -> Result<Option<String>> {
         match child.wait_timeout(self.timeout)? {
             Some(status) => {
                 // Process already exited; read buffered output without
@@ -343,12 +284,12 @@ impl<'a> TriggerExecutor<'a> {
                 // Log output
                 if !stdout.is_empty() {
                     for line in stdout.lines() {
-                        debug!("[{}] {}", trigger.name, line);
+                        debug!("[{}] {}", trigger_name, line);
                     }
                 }
                 if !stderr.is_empty() {
                     for line in stderr.lines() {
-                        warn!("[{}] {}", trigger.name, line);
+                        warn!("[{}] {}", trigger_name, line);
                     }
                 }
 
@@ -361,24 +302,41 @@ impl<'a> TriggerExecutor<'a> {
                     })
                 } else {
                     let code = status.code().unwrap_or(-1);
-                    Err(Error::TriggerError(format!(
-                        "Handler '{}' failed with exit code {} (chroot: {}): {}",
-                        cmd,
-                        code,
-                        self.root.display(),
-                        stderr.trim()
-                    )))
+                    let context = match chroot_path {
+                        Some(root) => format!(
+                            "Handler '{}' failed with exit code {} (chroot: {}): {}",
+                            cmd,
+                            code,
+                            root.display(),
+                            stderr.trim()
+                        ),
+                        None => format!(
+                            "Handler '{}' failed with exit code {}: {}",
+                            cmd,
+                            code,
+                            stderr.trim()
+                        ),
+                    };
+                    Err(Error::TriggerError(context))
                 }
             }
             None => {
                 // Timeout - kill the process
                 let _ = child.kill();
-                Err(Error::TriggerError(format!(
-                    "Handler '{}' timed out after {} seconds (chroot: {})",
-                    cmd,
-                    self.timeout.as_secs(),
-                    self.root.display()
-                )))
+                let context = match chroot_path {
+                    Some(root) => format!(
+                        "Handler '{}' timed out after {} seconds (chroot: {})",
+                        cmd,
+                        self.timeout.as_secs(),
+                        root.display()
+                    ),
+                    None => format!(
+                        "Handler '{}' timed out after {} seconds",
+                        cmd,
+                        self.timeout.as_secs()
+                    ),
+                };
+                Err(Error::TriggerError(context))
             }
         }
     }
@@ -448,13 +406,6 @@ pub struct TriggerResults {
 }
 
 impl TriggerResults {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn empty() -> Self {
-        Self::default()
-    }
 
     /// Check if all triggers succeeded
     pub fn all_succeeded(&self) -> bool {
@@ -483,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_trigger_results() {
-        let mut results = TriggerResults::new();
+        let mut results = TriggerResults::default();
         results.succeeded = 5;
         results.failed = 1;
         results.skipped = 2;

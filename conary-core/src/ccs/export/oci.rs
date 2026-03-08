@@ -9,13 +9,14 @@ use anyhow::{Context, Result};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::Path;
 use tar::Builder;
 
 use crate::ccs::package::CcsPackage;
+use crate::hash;
 use crate::packages::traits::PackageFormat;
 
 /// OCI image layout version
@@ -222,7 +223,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
 
     // Create layer tarball
     let layer_data = create_layer_tarball(&all_files)?;
-    let layer_digest = format!("sha256:{}", sha256_hex(&layer_data));
+    let layer_digest = hash::sha256_prefixed(&layer_data);
     let layer_diff_id = format!("sha256:{}", sha256_hex_uncompressed(&all_files)?);
 
     // Write layer blob
@@ -231,7 +232,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     // Create config
     let config = create_config(&container_config, &layer_diff_id, &package_names);
     let config_json = serde_json::to_string_pretty(&config)?;
-    let config_digest = format!("sha256:{}", sha256_hex(config_json.as_bytes()));
+    let config_digest = hash::sha256_prefixed(config_json.as_bytes());
     fs::write(blobs_dir.join(&config_digest[7..]), &config_json)?;
 
     // Create manifest
@@ -267,7 +268,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
-    let manifest_digest = format!("sha256:{}", sha256_hex(manifest_json.as_bytes()));
+    let manifest_digest = hash::sha256_prefixed(manifest_json.as_bytes());
     fs::write(blobs_dir.join(&manifest_digest[7..]), &manifest_json)?;
 
     // Create index
@@ -413,16 +414,8 @@ fn sha256_hex_uncompressed(files: &[OciFileEntry]) -> Result<String> {
         write_tar_entries(&mut archive, files)?;
         archive.finish()?;
     }
-    Ok(sha256_hex(&output))
+    Ok(hash::sha256(&output))
 }
-
-/// Calculate SHA256 hex digest
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
-}
-
 /// Create OCI image config
 fn create_config(container: &ContainerConfig, diff_id: &str, packages: &[String]) -> OciConfig {
     let now = chrono::Utc::now().to_rfc3339();
@@ -481,11 +474,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sha256_hex() {
+    fn test_sha256_integration() {
         let data = b"hello world";
-        let hash = sha256_hex(data);
+        let digest = hash::sha256(data);
         assert_eq!(
-            hash,
+            digest,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
     }

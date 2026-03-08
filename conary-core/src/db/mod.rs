@@ -18,6 +18,23 @@ use rusqlite::Connection;
 use std::path::Path;
 use tracing::{debug, info};
 
+/// Standard PRAGMAs applied to every connection.
+///
+/// WAL mode persists in the file, but `synchronous`, `foreign_keys`, and
+/// `busy_timeout` are session-level and must be set on each open.
+const CONNECTION_PRAGMAS: &str = "\
+    PRAGMA journal_mode = WAL;\
+    PRAGMA synchronous = NORMAL;\
+    PRAGMA foreign_keys = ON;\
+    PRAGMA busy_timeout = 5000;\
+";
+
+/// Apply standard PRAGMAs to a connection
+fn configure(conn: &Connection) -> Result<()> {
+    conn.execute_batch(CONNECTION_PRAGMAS)?;
+    Ok(())
+}
+
 /// Initialize a new Conary database at the specified path
 ///
 /// Creates the database file and sets up the initial schema.
@@ -40,20 +57,8 @@ pub fn init(path: impl AsRef<Path>) -> Result<()> {
             .map_err(|e| Error::InitError(format!("Failed to create database directory: {}", e)))?;
     }
 
-    // Open/create the database
     let conn = Connection::open(path)?;
-
-    // Set pragmas for better performance and reliability
-    conn.execute_batch(
-        "
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
-        ",
-    )?;
-
-    // Run schema migrations to set up or upgrade the database
+    configure(&conn)?;
     schema::migrate(&conn)?;
 
     info!("Database initialized successfully");
@@ -76,18 +81,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     }
 
     let conn = Connection::open(path)?;
-
-    // Set pragmas (WAL persists in file but synchronous is session-level)
-    conn.execute_batch(
-        "
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
-        ",
-    )?;
-
-    // Apply any pending migrations
+    configure(&conn)?;
     schema::migrate(&conn)?;
 
     Ok(conn)
@@ -114,18 +108,7 @@ pub fn open_fast(path: impl AsRef<Path>) -> Result<Connection> {
     }
 
     let conn = Connection::open(path)?;
-
-    // Set pragmas (WAL persists in file but synchronous is session-level)
-    conn.execute_batch(
-        "
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
-        ",
-    )?;
-
-    // No migration check -- caller guarantees schema is up-to-date
+    configure(&conn)?;
 
     Ok(conn)
 }

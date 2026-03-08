@@ -17,6 +17,7 @@
 //!
 //! After completion, the target root contains a complete bootable system.
 
+use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
 use crate::container::{ContainerConfig, Sandbox};
@@ -830,54 +831,13 @@ impl BaseBuilder {
     }
 
     fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), BaseError> {
-        fs::create_dir_all(dest)?;
-
-        let archive_str = archive.to_str().expect("archive path must be valid utf-8");
-        let dest_str = dest.to_str().expect("dest path must be valid utf-8");
-
-        let filename = archive
-            .file_name()
-            .expect("archive path must have a filename")
-            .to_string_lossy();
-
-        let flag = if filename.ends_with(".tar.xz") || filename.ends_with(".txz") {
-            "xJf"
-        } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-            "xzf"
-        } else if filename.ends_with(".tar.bz2") || filename.ends_with(".tbz2") {
-            "xjf"
-        } else {
-            "xf"
-        };
-
-        let output = Command::new("tar")
-            .args([flag, archive_str, "-C", dest_str])
-            .output()
-            .map_err(|e| BaseError::BuildFailed("extract".to_string(), e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(BaseError::BuildFailed(
-                "extract".to_string(),
-                stderr.to_string(),
-            ));
-        }
-
-        Ok(())
+        build_helpers::extract_tar(archive, dest, false)
+            .map_err(|e| BaseError::BuildFailed("extract".to_string(), e))
     }
 
     /// Find actual source directory
     fn find_source_dir(&self, dir: &Path) -> Result<PathBuf, BaseError> {
-        let entries: Vec<_> = fs::read_dir(dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
-
-        if entries.len() == 1 {
-            Ok(entries[0].path())
-        } else {
-            Ok(dir.to_path_buf())
-        }
+        build_helpers::find_source_dir(dir).map_err(BaseError::DirectoryCreation)
     }
 
     /// Run setup phase

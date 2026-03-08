@@ -169,17 +169,25 @@ pub struct ResolvedModel {
 
     /// Ordered layers showing composition precedence (first = lowest priority)
     pub layers: Vec<ModelLayer>,
+
+    /// Fast lookup set for install + optional membership checks during resolution.
+    /// Mirrors `install` and `optionals` for O(1) `contains` checks.
+    #[doc(hidden)]
+    pub known_packages: HashSet<String>,
 }
 
 impl ResolvedModel {
     /// Create a resolved model from a base system model (no includes resolved yet)
     pub fn from_model(model: &SystemModel) -> Self {
         let mut sources = HashMap::new();
+        let mut known_packages = HashSet::new();
         for pkg in &model.config.install {
             sources.insert(pkg.clone(), "local".to_string());
+            known_packages.insert(pkg.clone());
         }
         for pkg in &model.optional.packages {
             sources.insert(pkg.clone(), "local (optional)".to_string());
+            known_packages.insert(pkg.clone());
         }
 
         Self {
@@ -194,6 +202,7 @@ impl ResolvedModel {
                 packages: model.config.install.clone(),
                 is_local: true,
             }],
+            known_packages,
         }
     }
 }
@@ -375,8 +384,7 @@ fn resolve_includes_recursive(
 
         // Merge members according to conflict strategy
         for member in &collection.members {
-            let already_defined = resolved.install.contains(&member.name)
-                || resolved.optionals.contains(&member.name);
+            let already_defined = resolved.known_packages.contains(&member.name);
 
             if already_defined {
                 match on_conflict {
@@ -411,6 +419,7 @@ fn resolve_includes_recursive(
                 } else {
                     resolved.install.push(member.name.clone());
                 }
+                resolved.known_packages.insert(member.name.clone());
 
                 if let Some(constraint) = &member.version_constraint {
                     resolved

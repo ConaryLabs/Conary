@@ -272,7 +272,6 @@ pub async fn execute_enhance_job(
     .map_err(|e| conary_core::Error::IoError(format!("Task join error: {e}")))?
 }
 
-
 /// Get package name from trove ID
 fn get_package_name(conn: &Connection, trove_id: i64) -> Option<String> {
     conn.query_row("SELECT name FROM troves WHERE id = ?1", [trove_id], |row| {

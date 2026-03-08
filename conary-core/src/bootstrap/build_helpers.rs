@@ -51,7 +51,10 @@ pub fn extract_tar(
     let flag = tar_flag_for_archive(&filename);
 
     let mut cmd = Command::new("tar");
-    cmd.args([flag, archive_str, "-C", dest_str]);
+    for part in flag.split_whitespace() {
+        cmd.arg(part);
+    }
+    cmd.args([archive_str, "-C", dest_str]);
     if strip_components {
         cmd.arg("--strip-components=1");
     }
@@ -317,7 +320,7 @@ mod tests {
         assert_eq!(tar_flag_for_archive("foo.tar.bz2"), "xjf");
         assert_eq!(tar_flag_for_archive("foo.tbz2"), "xjf");
         assert_eq!(tar_flag_for_archive("foo.tar"), "xf");
-        assert_eq!(tar_flag_for_archive("foo.tar.zst"), "xf");
+        assert_eq!(tar_flag_for_archive("foo.tar.zst"), "--zstd -xf");
     }
 
     #[test]

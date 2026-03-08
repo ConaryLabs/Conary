@@ -16,6 +16,7 @@ use crate::error::Result;
 use glob::Pattern;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::{HashMap, VecDeque};
+use strum_macros::{AsRefStr, EnumString};
 use tracing::{debug, warn};
 
 /// Column list for Trigger SELECT queries (avoids repetition across methods)
@@ -252,7 +253,8 @@ impl TriggerDependency {
 }
 
 /// Status of a trigger in a changeset
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum TriggerStatus {
     Pending,
     Running,
@@ -263,23 +265,11 @@ pub enum TriggerStatus {
 
 impl TriggerStatus {
     pub fn as_str(&self) -> &str {
-        match self {
-            TriggerStatus::Pending => "pending",
-            TriggerStatus::Running => "running",
-            TriggerStatus::Completed => "completed",
-            TriggerStatus::Failed => "failed",
-            TriggerStatus::Skipped => "skipped",
-        }
+        self.as_ref()
     }
 
     pub fn parse(s: &str) -> Self {
-        match s {
-            "running" => TriggerStatus::Running,
-            "completed" => TriggerStatus::Completed,
-            "failed" => TriggerStatus::Failed,
-            "skipped" => TriggerStatus::Skipped,
-            _ => TriggerStatus::Pending,
-        }
+        s.parse().unwrap_or(TriggerStatus::Pending)
     }
 }
 

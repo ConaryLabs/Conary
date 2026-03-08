@@ -96,11 +96,8 @@ pub struct Stage2Package {
 
 /// Builder for Stage 2 toolchain (reproducibility rebuild)
 pub struct Stage2Builder {
-    /// Base work directory
+    /// Work directory (also serves as the output directory for Stage 2 artifacts)
     work_dir: PathBuf,
-
-    /// Output directory for Stage 2 artifacts
-    output_dir: PathBuf,
 
     /// Bootstrap configuration
     config: BootstrapConfig,
@@ -131,13 +128,12 @@ impl Stage2Builder {
         config: &BootstrapConfig,
         toolchain: Toolchain,
     ) -> Result<Self, Stage2Error> {
-        let work_dir = work_dir.as_ref().to_path_buf();
-        let output_dir = work_dir.join("stage2");
+        let work_dir = work_dir.as_ref().join("stage2");
 
         // Create directory structure
-        let sysroot = output_dir.join("sysroot");
-        let sources_dir = work_dir.join("sources");
-        let logs_dir = output_dir.join("logs");
+        let sysroot = work_dir.join("sysroot");
+        let sources_dir = work_dir.parent().unwrap_or(&work_dir).join("sources");
+        let logs_dir = work_dir.join("logs");
 
         fs::create_dir_all(&sysroot)?;
         fs::create_dir_all(&sources_dir)?;
@@ -148,8 +144,7 @@ impl Stage2Builder {
         let build_env = build_helpers::setup_build_env(&toolchain, &sysroot);
 
         Ok(Self {
-            work_dir: output_dir.clone(),
-            output_dir,
+            work_dir,
             config: config.clone(),
             toolchain,
             sysroot,
@@ -177,7 +172,7 @@ impl Stage2Builder {
 
     /// Get the output directory
     pub fn output_dir(&self) -> &Path {
-        &self.output_dir
+        &self.work_dir
     }
 
     /// Load recipes from the recipe directory.
@@ -235,7 +230,7 @@ impl Stage2Builder {
             self.save_log(idx)?;
         }
 
-        info!("Stage 2 complete: output at {}", self.output_dir.display());
+        info!("Stage 2 complete: output at {}", self.work_dir.display());
 
         // Create and return the Stage 2 toolchain
         let stage2_prefix = self.sysroot.join("usr");
@@ -266,7 +261,7 @@ impl Stage2Builder {
 
         for name in STAGE2_PACKAGES {
             let s1 = stage1_dir.join(name);
-            let s2 = self.output_dir.join(name);
+            let s2 = self.work_dir.join(name);
 
             if s1.exists()
                 && s2.exists()

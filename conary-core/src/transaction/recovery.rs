@@ -146,7 +146,6 @@ fn recover_single(
             if db_has_changeset {
                 cleanup_work_dir(engine, &tx_uuid)?;
                 journal.archive()?;
-                let _changeset_id = get_changeset_id_by_uuid(conn, &tx_uuid)?;
                 Ok(RecoveryOutcome::CompletedPending { tx_uuid })
             } else {
                 // This shouldn't happen - journal says DB committed but DB doesn't have it
@@ -382,19 +381,22 @@ fn cleanup_work_dir(engine: &TransactionEngine, tx_uuid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check whether the `changesets` table has a `tx_uuid` column.
+///
+/// Early database versions lack this column, so callers must guard
+/// UUID-based queries behind this check.
+fn has_tx_uuid_column(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('changesets') WHERE name = 'tx_uuid'",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
 /// Check if a changeset with the given tx_uuid exists in the database
 fn check_changeset_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<bool> {
-    // First check if the tx_uuid column exists
-    let has_column: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM pragma_table_info('changesets') WHERE name = 'tx_uuid'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(false);
-
-    if !has_column {
-        // Column doesn't exist yet, can't have a matching changeset
+    if !has_tx_uuid_column(conn) {
         return Ok(false);
     }
 
@@ -409,16 +411,7 @@ fn check_changeset_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<bool> {
 
 /// Get the changeset ID for a transaction UUID
 fn get_changeset_id_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<i64> {
-    // First check if the tx_uuid column exists
-    let has_column: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM pragma_table_info('changesets') WHERE name = 'tx_uuid'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(false);
-
-    if !has_column {
+    if !has_tx_uuid_column(conn) {
         return Ok(0);
     }
 

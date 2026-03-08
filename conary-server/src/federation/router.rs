@@ -94,43 +94,7 @@ impl RendezvousRouter {
         chunk_hash: &str,
         peers: &'a [Peer],
     ) -> HierarchicalSelection<'a> {
-        // Partition peers by tier
-        let mut cell_peers: Vec<&'a Peer> = Vec::new();
-        let mut region_peers: Vec<&'a Peer> = Vec::new();
-        let mut leaf_peers: Vec<&'a Peer> = Vec::new();
-
-        for peer in peers {
-            match peer.tier {
-                PeerTier::CellHub => cell_peers.push(peer),
-                PeerTier::RegionHub => region_peers.push(peer),
-                PeerTier::Leaf => leaf_peers.push(peer),
-            }
-        }
-
-        // Select up to K from each tier using rendezvous hashing
-        let select_k = |tier_peers: Vec<&'a Peer>| -> Vec<&'a Peer> {
-            if tier_peers.is_empty() {
-                return Vec::new();
-            }
-
-            // Compute weights for all peers in this tier
-            let mut weighted: Vec<(u64, &Peer)> = tier_peers
-                .into_iter()
-                .map(|p| (self.compute_weight(chunk_hash, &p.id), p))
-                .collect();
-
-            // Sort by weight descending
-            weighted.sort_by(|a, b| b.0.cmp(&a.0));
-
-            // Take up to K
-            weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
-        };
-
-        HierarchicalSelection {
-            cell_hubs: select_k(cell_peers),
-            region_hubs: select_k(region_peers),
-            leaves: select_k(leaf_peers),
-        }
+        self.partition_and_select(chunk_hash, peers, |_| true)
     }
 
     /// Select peers in flattened hierarchical order
@@ -157,40 +121,9 @@ impl RendezvousRouter {
         peers: &'a [Peer],
         allowlists: &TierAllowlists,
     ) -> HierarchicalSelection<'a> {
-        // Partition filtered peers by tier
-        let mut cell_peers: Vec<&'a Peer> = Vec::new();
-        let mut region_peers: Vec<&'a Peer> = Vec::new();
-        let mut leaf_peers: Vec<&'a Peer> = Vec::new();
-
-        for peer in peers {
-            if !allowlists.is_allowed(&peer.endpoint, peer.tier) {
-                continue;
-            }
-            match peer.tier {
-                PeerTier::CellHub => cell_peers.push(peer),
-                PeerTier::RegionHub => region_peers.push(peer),
-                PeerTier::Leaf => leaf_peers.push(peer),
-            }
-        }
-
-        // Select up to K from each tier using rendezvous hashing
-        let select_k = |tier_peers: Vec<&'a Peer>| -> Vec<&'a Peer> {
-            if tier_peers.is_empty() {
-                return Vec::new();
-            }
-            let mut weighted: Vec<(u64, &'a Peer)> = tier_peers
-                .into_iter()
-                .map(|p| (self.compute_weight(chunk_hash, &p.id), p))
-                .collect();
-            weighted.sort_by(|a, b| b.0.cmp(&a.0));
-            weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
-        };
-
-        HierarchicalSelection {
-            cell_hubs: select_k(cell_peers),
-            region_hubs: select_k(region_peers),
-            leaves: select_k(leaf_peers),
-        }
+        self.partition_and_select(chunk_hash, peers, |peer| {
+            allowlists.is_allowed(&peer.endpoint, peer.tier)
+        })
     }
 
     /// Select peers in flattened hierarchical order with allowlist filtering
@@ -205,6 +138,54 @@ impl RendezvousRouter {
     ) -> Vec<&'a Peer> {
         let selection = self.select_peers_hierarchical_filtered(chunk_hash, peers, allowlists);
         selection.into_ordered_vec()
+    }
+
+    /// Partition peers by tier, apply a filter, and select up to K from each tier
+    fn partition_and_select<'a>(
+        &self,
+        chunk_hash: &str,
+        peers: &'a [Peer],
+        filter: impl Fn(&Peer) -> bool,
+    ) -> HierarchicalSelection<'a> {
+        let mut cell_peers: Vec<&'a Peer> = Vec::new();
+        let mut region_peers: Vec<&'a Peer> = Vec::new();
+        let mut leaf_peers: Vec<&'a Peer> = Vec::new();
+
+        for peer in peers {
+            if !filter(peer) {
+                continue;
+            }
+            match peer.tier {
+                PeerTier::CellHub => cell_peers.push(peer),
+                PeerTier::RegionHub => region_peers.push(peer),
+                PeerTier::Leaf => leaf_peers.push(peer),
+            }
+        }
+
+        HierarchicalSelection {
+            cell_hubs: self.select_k_from_tier(chunk_hash, cell_peers),
+            region_hubs: self.select_k_from_tier(chunk_hash, region_peers),
+            leaves: self.select_k_from_tier(chunk_hash, leaf_peers),
+        }
+    }
+
+    /// Rendezvous-hash rank and take up to K peers from a single tier
+    fn select_k_from_tier<'a>(
+        &self,
+        chunk_hash: &str,
+        tier_peers: Vec<&'a Peer>,
+    ) -> Vec<&'a Peer> {
+        if tier_peers.is_empty() {
+            return Vec::new();
+        }
+
+        let mut weighted: Vec<(u64, &'a Peer)> = tier_peers
+            .into_iter()
+            .map(|p| (self.compute_weight(chunk_hash, &p.id), p))
+            .collect();
+
+        weighted.sort_by(|a, b| b.0.cmp(&a.0));
+        weighted.into_iter().take(self.k).map(|(_, p)| p).collect()
     }
 }
 

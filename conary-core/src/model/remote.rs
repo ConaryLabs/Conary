@@ -7,7 +7,7 @@
 //! from a Remi `/v1/models/:name` endpoint, caches it in SQLite, and returns it
 //! as a `FetchedCollection`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use rusqlite::Connection;
@@ -191,106 +191,15 @@ fn follow_delegation(
 /// Fetch a remote collection, using cache when available
 ///
 /// When `offline` is true, only returns cached data (no HTTP requests).
+/// This delegates to `fetch_and_verify_remote_collection` with signature
+/// verification disabled.
 pub fn fetch_remote_collection(
     conn: &Connection,
     name: &str,
     label: &str,
     offline: bool,
 ) -> ModelResult<FetchedCollection> {
-    // Check cache first
-    if let Some(cached) = RemoteCollection::find_cached(conn, name, Some(label))
-        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
-    {
-        debug!(name = %name, label = %label, "Using cached remote collection");
-        let data: CollectionData = serde_json::from_str(&cached.data_json)
-            .map_err(|e| ModelError::RemoteFetchError(format!("Corrupt cache entry: {}", e)))?;
-        return Ok(data.to_fetched_collection());
-    }
-
-    // In offline mode, fail if no cache hit
-    if offline {
-        return Err(ModelError::RemoteFetchError(format!(
-            "Collection '{}' not in cache and --offline mode is enabled",
-            name
-        )));
-    }
-
-    // Resolve label to URL
-    let url = resolve_label_to_url(conn, name, label)?;
-    info!(name = %name, url = %url, "Fetching remote collection");
-
-    // HTTP GET
-    let client = RepositoryClient::new()
-        .map_err(|e| ModelError::RemoteFetchError(format!("HTTP client error: {}", e)))?;
-
-    let bytes = client
-        .download_to_bytes(&url)
-        .map_err(|e| ModelError::RemoteNotFound(format!("{}: {}", name, e)))?;
-
-    // Enforce size limit
-    if bytes.len() > MAX_INCLUDE_SIZE {
-        return Err(ModelError::RemoteFetchError(format!(
-            "Remote collection '{}' exceeds size limit ({} bytes > {} bytes)",
-            name,
-            bytes.len(),
-            MAX_INCLUDE_SIZE
-        )));
-    }
-
-    // Deserialize
-    let data: CollectionData = serde_json::from_slice(&bytes)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {}: {}", url, e)))?;
-
-    // Verify content hash.
-    // The content_hash is computed over JSON with content_hash set to "".
-    // To verify, we must zero out content_hash before hashing, otherwise
-    // we'd be hashing JSON that includes the hash itself (chicken-and-egg).
-    let computed_hash = if !data.content_hash.is_empty() {
-        let mut verification_data = data.clone();
-        verification_data.content_hash = String::new();
-        let verification_json = serde_json::to_vec(&verification_data)
-            .map_err(|e| ModelError::RemoteFetchError(format!("Re-serialize failed: {}", e)))?;
-        let hash = hash::sha256_prefixed(&verification_json);
-        if hash != data.content_hash {
-            return Err(ModelError::RemoteFetchError(format!(
-                "Content hash mismatch for remote collection '{}': expected {}, computed {}",
-                name, data.content_hash, hash
-            )));
-        }
-        hash
-    } else {
-        hash::sha256_prefixed(&bytes)
-    };
-
-    // Cache the result
-    let expires_at = (Utc::now() + chrono::Duration::seconds(DEFAULT_CACHE_TTL_SECS))
-        .format("%Y-%m-%dT%H:%M:%S")
-        .to_string();
-
-    let data_json = String::from_utf8_lossy(&bytes).to_string();
-
-    let mut cache_entry = RemoteCollection::new(
-        name.to_string(),
-        Some(label.to_string()),
-        computed_hash,
-        data_json,
-        expires_at,
-    );
-    cache_entry.version = Some(data.version.clone());
-
-    if let Err(e) = cache_entry.upsert(conn) {
-        warn!("Failed to cache remote collection '{}': {}", name, e);
-        // Non-fatal — we still have the data
-    }
-
-    info!(
-        name = %name,
-        version = %data.version,
-        members = data.members.len(),
-        "Fetched remote collection"
-    );
-
-    Ok(data.to_fetched_collection())
+    fetch_and_verify_remote_collection(conn, name, label, offline, false, &[])
 }
 
 /// Fetch a remote collection with optional Ed25519 signature verification
@@ -362,14 +271,26 @@ pub fn fetch_and_verify_remote_collection(
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;
 
-    // Verify content hash
-    let computed_hash = hash::sha256_prefixed(&bytes);
-    if !data.content_hash.is_empty() && computed_hash != data.content_hash {
-        return Err(ModelError::RemoteFetchError(format!(
-            "Content hash mismatch for remote collection '{name}': expected {}, computed {}",
-            data.content_hash, computed_hash
-        )));
-    }
+    // Verify content hash.
+    // The content_hash is computed over JSON with content_hash set to "".
+    // To verify, we must zero out content_hash before hashing, otherwise
+    // we'd be hashing JSON that includes the hash itself (chicken-and-egg).
+    let computed_hash = if !data.content_hash.is_empty() {
+        let mut verification_data = data.clone();
+        verification_data.content_hash = String::new();
+        let verification_json = serde_json::to_vec(&verification_data)
+            .map_err(|e| ModelError::RemoteFetchError(format!("Re-serialize failed: {e}")))?;
+        let hash = hash::sha256_prefixed(&verification_json);
+        if hash != data.content_hash {
+            return Err(ModelError::RemoteFetchError(format!(
+                "Content hash mismatch for remote collection '{name}': expected {}, computed {}",
+                data.content_hash, hash
+            )));
+        }
+        hash
+    } else {
+        hash::sha256_prefixed(&bytes)
+    };
 
     // Attempt to fetch signature
     let sig_url = format!("{}/signature", url.trim_end_matches('/'));
@@ -564,12 +485,15 @@ pub fn build_collection_data_from_model(
     name: &str,
     version: &str,
 ) -> CollectionData {
+    let optional_set: HashSet<&str> = model.optional.packages.iter().map(|s| s.as_str()).collect();
+    let install_set: HashSet<&str> = model.config.install.iter().map(|s| s.as_str()).collect();
+
     let mut members: Vec<CollectionMemberData> = Vec::new();
 
     // Add install list packages
     for pkg_name in &model.config.install {
         let version_constraint = model.pin.get(pkg_name).cloned();
-        let is_optional = model.optional.packages.contains(pkg_name);
+        let is_optional = optional_set.contains(pkg_name.as_str());
 
         members.push(CollectionMemberData {
             name: pkg_name.clone(),
@@ -580,7 +504,7 @@ pub fn build_collection_data_from_model(
 
     // Add optional packages not already in the install list
     for pkg_name in &model.optional.packages {
-        if !model.config.install.contains(pkg_name) {
+        if !install_set.contains(pkg_name.as_str()) {
             let version_constraint = model.pin.get(pkg_name).cloned();
             members.push(CollectionMemberData {
                 name: pkg_name.clone(),

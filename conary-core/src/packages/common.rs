@@ -7,7 +7,7 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::packages::traits::{ConfigFileInfo, Dependency, PackageFile, Scriptlet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Maximum size for a single file during package extraction (512 MB).
 pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
@@ -97,13 +97,13 @@ impl PackageMetadata {
     }
 
     /// Get the scriptlets
-    pub fn scriptlets(&self) -> Vec<Scriptlet> {
-        self.scriptlets.clone()
+    pub fn scriptlets(&self) -> &[Scriptlet] {
+        &self.scriptlets
     }
 
     /// Get the configuration files
-    pub fn config_files(&self) -> Vec<ConfigFileInfo> {
-        self.config_files.clone()
+    pub fn config_files(&self) -> &[ConfigFileInfo] {
+        &self.config_files
     }
 
     /// Convert to a Trove representation
@@ -119,7 +119,7 @@ impl PackageMetadata {
     }
 
     /// Get the package file path
-    pub fn package_path(&self) -> &PathBuf {
+    pub fn package_path(&self) -> &Path {
         &self.package_path
     }
 }

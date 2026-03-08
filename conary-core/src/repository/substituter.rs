@@ -52,11 +52,6 @@ impl SubstituterSource {
     }
 }
 
-/// Returns a human-readable name for a substituter source
-pub fn source_name(source: &SubstituterSource) -> &str {
-    source.name()
-}
-
 impl SubstituterChain {
     /// Create a new substituter chain with the given sources
     pub fn new(sources: Vec<SubstituterSource>) -> Self {
@@ -303,10 +298,10 @@ mod tests {
         ]);
 
         assert_eq!(chain.len(), 4);
-        assert_eq!(source_name(&chain.sources()[0]), "local-cache");
-        assert_eq!(source_name(&chain.sources()[1]), "federation");
-        assert_eq!(source_name(&chain.sources()[2]), "remi");
-        assert_eq!(source_name(&chain.sources()[3]), "binary");
+        assert_eq!(chain.sources()[0].name(), "local-cache");
+        assert_eq!(chain.sources()[1].name(), "federation");
+        assert_eq!(chain.sources()[2].name(), "remi");
+        assert_eq!(chain.sources()[3].name(), "binary");
     }
 
     #[test]
@@ -428,28 +423,32 @@ mod tests {
     #[test]
     fn test_source_name() {
         assert_eq!(
-            source_name(&SubstituterSource::LocalCache {
+            SubstituterSource::LocalCache {
                 cache_dir: PathBuf::from("/tmp")
-            }),
+            }
+            .name(),
             "local-cache"
         );
         assert_eq!(
-            source_name(&SubstituterSource::Federation {
+            SubstituterSource::Federation {
                 tier: "region_hub".to_string()
-            }),
+            }
+            .name(),
             "federation"
         );
         assert_eq!(
-            source_name(&SubstituterSource::Remi {
+            SubstituterSource::Remi {
                 endpoint: "https://remi.example.com".to_string(),
                 distro: "fedora".to_string(),
-            }),
+            }
+            .name(),
             "remi"
         );
         assert_eq!(
-            source_name(&SubstituterSource::Binary {
+            SubstituterSource::Binary {
                 base_url: "https://repo.example.com".to_string()
-            }),
+            }
+            .name(),
             "binary"
         );
     }

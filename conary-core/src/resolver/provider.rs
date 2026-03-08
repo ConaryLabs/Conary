@@ -118,7 +118,8 @@ impl<'db> ConaryProvider<'db> {
         for trove in troves {
             let trove_id = trove.id;
             let version = RpmVersion::parse(&trove.version)?;
-            let name_id = self.intern_name(&trove.name);
+            // Intern name for side effect (ensures this name is known to the solver)
+            let _name_id = self.intern_name(&trove.name);
 
             let pkg = ConaryPackage {
                 name: trove.name.clone(),
@@ -145,9 +146,6 @@ impl<'db> ConaryProvider<'db> {
                     .collect();
                 self.dependencies.insert(solvable_id.0, dep_list);
             }
-
-            // Ensure this name is known
-            let _ = name_id;
         }
         Ok(())
     }

@@ -54,25 +54,30 @@ pub async fn get_metadata(
         return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
     }
 
-    let state = state.read().await;
-    let db_path = &state.config.db_path;
+    let db_path = state.read().await.config.db_path.clone();
 
-    // Query repository metadata
-    match build_metadata(db_path, &distro) {
-        Ok(metadata) => {
+    let result =
+        tokio::task::spawn_blocking(move || build_metadata(&db_path, &distro)).await;
+
+    match result {
+        Ok(Ok(metadata)) => {
             let json = match super::serialize_json(&metadata, "repository metadata") {
                 Ok(j) => j,
                 Err(e) => return e,
             };
             super::json_response(json, 300)
         }
-        Err(e) => {
-            tracing::error!("Failed to build metadata for {}: {}", distro, e);
+        Ok(Err(e)) => {
+            tracing::error!("Failed to build metadata: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to build metadata",
             )
                 .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Task panicked in get_metadata: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }
 }

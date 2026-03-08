@@ -18,18 +18,25 @@ pub mod provenance_capture;
 pub use config::{CookResult, KitchenConfig, StageConfig, StageRegistry};
 pub use cook::Cook;
 pub use makedepends::{MakedependsResolver, MakedependsResult, NoopResolver};
-// ProvenanceCapture is used internally by cook.rs; export for external use if needed
+// Re-exported for external consumers (e.g., CLI tools that inspect provenance)
 #[allow(unused_imports)]
 pub use provenance_capture::{CapturedDep, CapturedPatch, ProvenanceCapture};
 
 use crate::error::{Error, Result};
 use crate::recipe::cache::{BuildCache, ToolchainInfo};
-use crate::recipe::format::Recipe;
+use crate::recipe::format::{Recipe, is_remote_url};
 use archive::{download_file, verify_file_checksum};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+/// Convert a checksum string into a source cache filename
+///
+/// Replaces ':' with '_' so "sha256:abc123" becomes "sha256_abc123"
+fn source_cache_key(checksum: &str) -> String {
+    checksum.replace(':', "_")
+}
 
 /// The Kitchen: where recipes are cooked
 pub struct Kitchen {
@@ -301,7 +308,7 @@ impl Kitchen {
         // Fetch remote patches
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
-                if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
+                if is_remote_url(&patch.file) {
                     info!("Fetching patch: {}", patch.file);
                     let checksum = patch.checksum.as_deref().unwrap_or("sha256:0");
                     let path = self.fetch_source(&patch.file, checksum)?;
@@ -325,16 +332,16 @@ impl Kitchen {
     /// meaning the build can proceed without network access.
     pub fn sources_cached(&self, recipe: &Recipe) -> bool {
         // Check main archive
-        let cache_key = recipe.source.checksum.replace(':', "_");
-        let cached_path = self.config.source_cache.join(&cache_key);
+        let key = source_cache_key(&recipe.source.checksum);
+        let cached_path = self.config.source_cache.join(&key);
         if !cached_path.exists() {
             return false;
         }
 
         // Check additional sources
         for additional in &recipe.source.additional {
-            let cache_key = additional.checksum.replace(':', "_");
-            let cached_path = self.config.source_cache.join(&cache_key);
+            let key = source_cache_key(&additional.checksum);
+            let cached_path = self.config.source_cache.join(&key);
             if !cached_path.exists() {
                 return false;
             }
@@ -343,11 +350,10 @@ impl Kitchen {
         // Check remote patches
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
-                if (patch.file.starts_with("http://") || patch.file.starts_with("https://"))
-                    && let Some(checksum) = &patch.checksum
+                if is_remote_url(&patch.file) && let Some(checksum) = &patch.checksum
                 {
-                    let cache_key = checksum.replace(':', "_");
-                    let cached_path = self.config.source_cache.join(&cache_key);
+                    let key = source_cache_key(checksum);
+                    let cached_path = self.config.source_cache.join(&key);
                     if !cached_path.exists() {
                         return false;
                     }
@@ -479,7 +485,7 @@ impl Kitchen {
         fs::create_dir_all(&self.config.source_cache)?;
 
         // Use checksum as cache key
-        let cache_key = checksum.replace(':', "_");
+        let cache_key = source_cache_key(checksum);
         let cached_path = self.config.source_cache.join(&cache_key);
 
         // Check if already cached

@@ -6,7 +6,7 @@ use crate::ccs::builder::{CcsBuilder, write_ccs_package};
 use crate::ccs::manifest::{CcsManifest, ManifestProvenance, PackageDep};
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::error::{Error, Result};
-use crate::recipe::format::Recipe;
+use crate::recipe::format::{Recipe, is_remote_url};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -103,7 +103,7 @@ impl<'a> Cook<'a> {
         // Fetch patches
         if let Some(patches) = &self.recipe.patches {
             for patch in &patches.files {
-                if patch.file.starts_with("http://") || patch.file.starts_with("https://") {
+                if is_remote_url(&patch.file) {
                     let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
                     let local_path = self.build_dir.path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
@@ -169,8 +169,7 @@ impl<'a> Cook<'a> {
         };
 
         for patch_info in patches {
-            let patch_path = if patch_info.file.starts_with("http://")
-                || patch_info.file.starts_with("https://")
+            let patch_path = if is_remote_url(&patch_info.file)
             {
                 let filename = patch_info
                     .file

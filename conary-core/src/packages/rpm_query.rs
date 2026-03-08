@@ -171,69 +171,18 @@ pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
         version: parts[1].to_string(),
         release: parts[2].to_string(),
         epoch,
-        arch: parts.get(4).map_or("noarch".to_string(), |s| {
-            if *s == "(none)" {
-                "noarch".to_string()
-            } else {
-                s.to_string()
-            }
-        }),
-        description: parts.get(5).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        summary: parts.get(6).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        license: parts.get(7).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        url: parts.get(8).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        vendor: parts.get(9).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        source_rpm: parts.get(10).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        build_host: parts.get(11).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
-        install_time: parts.get(12).and_then(|s| {
-            if *s == "(none)" {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        }),
+        arch: parts
+            .get(4)
+            .and_then(rpm_none_to_option)
+            .unwrap_or_else(|| "noarch".to_string()),
+        description: parts.get(5).and_then(rpm_none_to_option),
+        summary: parts.get(6).and_then(rpm_none_to_option),
+        license: parts.get(7).and_then(rpm_none_to_option),
+        url: parts.get(8).and_then(rpm_none_to_option),
+        vendor: parts.get(9).and_then(rpm_none_to_option),
+        source_rpm: parts.get(10).and_then(rpm_none_to_option),
+        build_host: parts.get(11).and_then(rpm_none_to_option),
+        install_time: parts.get(12).and_then(rpm_none_to_option),
     })
 }
 
@@ -263,6 +212,15 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
     debug!("Found {} files for package {}", files.len(), name);
     Ok(files)
+}
+
+/// Convert an RPM field value to `Option<String>`, treating `"(none)"` and empty as `None`.
+fn rpm_none_to_option(s: &&str) -> Option<String> {
+    if *s == "(none)" || s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 /// Parse a single line from `rpm --dump` output
@@ -545,11 +503,7 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
             version: parts[1].to_string(),
             release: parts[2].to_string(),
             epoch,
-            arch: if parts[4] == "(none)" {
-                "noarch".to_string()
-            } else {
-                parts[4].to_string()
-            },
+            arch: rpm_none_to_option(&parts[4]).unwrap_or_else(|| "noarch".to_string()),
             description: None,
             summary: None,
             license: None,
