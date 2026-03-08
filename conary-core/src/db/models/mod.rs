@@ -35,6 +35,7 @@ mod trove;
 
 pub mod admin_token;
 pub mod audit_log;
+pub mod federation_peer;
 pub mod settings;
 
 pub use canonical::{CanonicalPackage, PackageImplementation};
