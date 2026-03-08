@@ -204,10 +204,7 @@ async fn auth_gate_middleware(
     request: Request,
     next: middleware::Next,
 ) -> Result<Response, ApiError> {
-    if request.method() == Method::POST
-        || request.method() == Method::PUT
-        || request.method() == Method::DELETE
-    {
+    if matches!(*request.method(), Method::POST | Method::PUT | Method::DELETE) {
         require_auth(&state.auth_checker, &creds, Action::Install)?;
     }
     Ok(next.run(request).await)

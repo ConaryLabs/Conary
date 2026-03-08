@@ -99,29 +99,32 @@ impl PeerCredentials {
     /// `/proc/{pid}/status` with UID cross-validation to mitigate
     /// PID reuse races.
     pub fn is_admin_group(&self) -> bool {
-        let admin_gids: &[u32] = &[10, 27];
+        self.has_any_gid(&[10, 27])
+    }
 
-        if admin_gids.contains(&self.gid) {
+    /// Check if the peer's primary or supplementary groups contain any of the given GIDs
+    ///
+    /// Reads supplementary groups from `/proc/{pid}/status` with UID
+    /// cross-validation against SO_PEERCRED to detect PID reuse races.
+    pub(crate) fn has_any_gid(&self, gids: &[u32]) -> bool {
+        if gids.contains(&self.gid) {
             return true;
         }
 
-        if let Ok((proc_uid, supplementary)) = Self::read_proc_status(self.pid) {
-            if proc_uid != self.uid {
-                tracing::warn!(
-                    "PID reuse detected: SO_PEERCRED uid={} but /proc/{}/status uid={}. \
-                     Denying supplementary group check.",
-                    self.uid, self.pid, proc_uid
-                );
-                return false;
-            }
-            for gid in &supplementary {
-                if admin_gids.contains(gid) {
-                    return true;
-                }
-            }
+        let Ok((proc_uid, supplementary)) = Self::read_proc_status(self.pid) else {
+            return false;
+        };
+
+        if proc_uid != self.uid {
+            tracing::warn!(
+                "PID reuse detected: SO_PEERCRED uid={} but /proc/{}/status uid={}. \
+                 Denying supplementary group check.",
+                self.uid, self.pid, proc_uid
+            );
+            return false;
         }
 
-        false
+        supplementary.iter().any(|gid| gids.contains(gid))
     }
 
     /// Read UID and supplementary group IDs from `/proc/{pid}/status`
@@ -305,23 +308,8 @@ impl AuthChecker {
         }
 
         // Check trusted GIDs (primary + supplementary)
-        // This covers admin groups (wheel=10, sudo=27) since they're in trusted_gids
-        if self.trusted_gids.contains(&creds.gid) {
+        if creds.has_any_gid(&self.trusted_gids) {
             return Permission::Full;
-        }
-        if let Ok((proc_uid, supplementary)) = PeerCredentials::read_proc_status(creds.pid) {
-            if proc_uid == creds.uid {
-                for gid in &supplementary {
-                    if self.trusted_gids.contains(gid) {
-                        return Permission::Full;
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "PID reuse detected in AuthChecker: SO_PEERCRED uid={} but /proc/{}/status uid={}",
-                    creds.uid, creds.pid, proc_uid
-                );
-            }
         }
 
         // Read-only actions are always allowed

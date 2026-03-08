@@ -241,19 +241,16 @@ pub fn cmd_bootstrap_stage2(
     println!("Building Stage 2 toolchain (reproducibility rebuild)...");
     println!("  Work directory: {}", work_dir);
 
-    // Set config options
-    let _config = {
-        let mut c = BootstrapConfig::new()
-            .with_verbose(verbose)
-            .with_skip_verify(skip_verify);
-        if let Some(j) = jobs {
-            c = c.with_jobs(j);
-        }
-        c
-    };
+    // Build config with user-specified options
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
 
     // Check if Stage 1 is complete
-    let mut bootstrap = Bootstrap::new(work_dir)?;
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
     let Some(toolchain) = bootstrap.get_stage1_toolchain() else {
         println!("[ERROR] Stage 1 toolchain not found.");

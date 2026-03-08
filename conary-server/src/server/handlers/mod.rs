@@ -61,6 +61,41 @@ pub fn validate_name(name: &str) -> Result<(), Response> {
     Ok(())
 }
 
+/// Validate distro name and both path parameters (distro + name) in one call.
+/// Returns a 400 response on validation failure.
+#[allow(clippy::result_large_err)]
+pub fn validate_distro_and_name(distro: &str, name: &str) -> Result<(), Response> {
+    validate_name(distro)?;
+    validate_name(name)?;
+    if !SUPPORTED_DISTROS.contains(&distro) {
+        return Err((StatusCode::BAD_REQUEST, "Unknown distribution").into_response());
+    }
+    Ok(())
+}
+
+/// Run a blocking database closure via `spawn_blocking` and flatten the nested Result.
+///
+/// Handles the triple-match boilerplate (`Ok(Ok(..))`, `Ok(Err(..))`, `Err(..)`) that
+/// appears in every handler that calls `spawn_blocking` for SQLite queries.
+#[allow(clippy::result_large_err)]
+pub async fn run_blocking<T, F>(context: &str, f: F) -> Result<T, Response>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => {
+            tracing::error!("Database error in {context}: {e}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
+        }
+        Err(e) => {
+            tracing::error!("Task panicked in {context}: {e}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+        }
+    }
+}
+
 /// Serialize a value to JSON, returning a proper error response on failure
 #[allow(clippy::result_large_err)]
 pub fn serialize_json<T: serde::Serialize>(value: &T, context: &str) -> Result<String, Response> {
@@ -125,7 +160,7 @@ pub fn find_repositories_for_distro(
         {
             continue;
         }
-        if repo.name.starts_with(distro) || repo.name.contains(distro) {
+        if repo.name.contains(distro) {
             matched.push(repo.clone());
         }
     }

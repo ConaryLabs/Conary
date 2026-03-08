@@ -3,6 +3,7 @@
 
 use super::metadata::{GenerationMetadata, gc_roots_dir, generation_path, generations_dir};
 use super::switch::current_generation;
+use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
 use tracing::info;
 
@@ -253,22 +254,6 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .sum()
 }
 
-/// Format a byte count as a human-readable string (GiB, MiB, or KiB).
-fn format_bytes(bytes: u64) -> String {
-    const GIB: u64 = 1024 * 1024 * 1024;
-    const MIB: u64 = 1024 * 1024;
-    const KIB: u64 = 1024;
-
-    if bytes >= GIB {
-        format!("{:.2} GiB", bytes as f64 / GIB as f64)
-    } else if bytes >= MIB {
-        format!("{:.2} MiB", bytes as f64 / MIB as f64)
-    } else if bytes >= KIB {
-        format!("{:.2} KiB", bytes as f64 / KIB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -276,11 +261,11 @@ mod tests {
 
     #[test]
     fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1024), "1.00 KiB");
-        assert_eq!(format_bytes(1_048_576), "1.00 MiB");
-        assert_eq!(format_bytes(1_073_741_824), "1.00 GiB");
-        assert_eq!(format_bytes(2_684_354_560), "2.50 GiB");
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1_048_576), "1.00 MB");
+        assert_eq!(format_bytes(1_073_741_824), "1.00 GB");
+        assert_eq!(format_bytes(2_684_354_560), "2.50 GB");
     }
 }

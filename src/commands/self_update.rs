@@ -16,13 +16,17 @@ pub fn cmd_self_update(
     force: bool,
     version: Option<String>,
 ) -> Result<()> {
-    let _ = version;
     let current_version = env!("CARGO_PKG_VERSION");
     let conn = db::open(db_path)?;
     let channel_url = get_update_channel(&conn)?;
 
     println!("Current version: {current_version}");
     println!("Update channel: {channel_url}");
+
+    if let Some(ref v) = version {
+        println!("Requested version: {v}");
+        // TODO: support downloading a specific version instead of latest
+    }
 
     // Check for updates
     let result = check_for_update(&channel_url, current_version)?;

@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::run_blocking;
+
 /// Full package detail response
 #[derive(Debug, Serialize)]
 pub struct PackageDetail {
@@ -80,35 +82,22 @@ pub struct OverviewStats {
 pub async fn get_package_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Response {
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
-        return e;
-    }
+) -> Result<Response, Response> {
+    super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
+    let detail =
+        run_blocking("package detail", move || query_package_detail(&db_path, &distro, &name))
+            .await?;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_package_detail(&db_path, &distro, &name)).await;
-
-    match result {
-        Ok(Ok(Some(detail))) => (
+    match detail {
+        Some(detail) => Ok((
             StatusCode::OK,
             [(header::CACHE_CONTROL, "public, max-age=300")],
             Json(detail),
         )
-            .into_response(),
-        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in package detail: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in package detail: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
+            .into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "Package not found").into_response()),
     }
 }
 
@@ -118,35 +107,19 @@ pub async fn get_package_detail(
 pub async fn get_versions(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Response {
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
-        return e;
-    }
+) -> Result<Response, Response> {
+    super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
+    let versions =
+        run_blocking("versions", move || query_versions(&db_path, &distro, &name)).await?;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_versions(&db_path, &distro, &name)).await;
-
-    match result {
-        Ok(Ok(versions)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(versions),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in versions: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in versions: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        Json(versions),
+    )
+        .into_response())
 }
 
 /// GET /v1/packages/:distro/:name/dependencies
@@ -155,35 +128,19 @@ pub async fn get_versions(
 pub async fn get_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Response {
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
-        return e;
-    }
+) -> Result<Response, Response> {
+    super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
+    let deps =
+        run_blocking("dependencies", move || query_dependencies(&db_path, &distro, &name)).await?;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_dependencies(&db_path, &distro, &name)).await;
-
-    match result {
-        Ok(Ok(deps)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(deps),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in dependencies: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in dependencies: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        Json(deps),
+    )
+        .into_response())
 }
 
 /// GET /v1/packages/:distro/:name/rdepends
@@ -192,36 +149,22 @@ pub async fn get_dependencies(
 pub async fn get_reverse_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Response {
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
-        return e;
-    }
+) -> Result<Response, Response> {
+    super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
+    let rdeps =
+        run_blocking("reverse dependencies", move || {
+            query_reverse_dependencies(&db_path, &distro, &name)
+        })
+        .await?;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_reverse_dependencies(&db_path, &distro, &name))
-            .await;
-
-    match result {
-        Ok(Ok(rdeps)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(rdeps),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in reverse dependencies: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in reverse dependencies: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        Json(rdeps),
+    )
+        .into_response())
 }
 
 /// GET /v1/stats/popular?distro=fedora&limit=50
@@ -230,32 +173,20 @@ pub async fn get_reverse_dependencies(
 pub async fn get_popular(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
-) -> Response {
+) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
-
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_popular(&db_path, distro.as_deref(), limit))
-            .await;
+    let packages =
+        run_blocking("popular", move || query_popular(&db_path, distro.as_deref(), limit)).await?;
 
-    match result {
-        Ok(Ok(packages)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(packages),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in popular: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in popular: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        Json(packages),
+    )
+        .into_response())
 }
 
 /// GET /v1/stats/recent?distro=fedora&limit=50
@@ -264,57 +195,38 @@ pub async fn get_popular(
 pub async fn get_recent(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
-) -> Response {
+) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
-
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let result =
-        tokio::task::spawn_blocking(move || query_recent(&db_path, distro.as_deref(), limit)).await;
+    let packages =
+        run_blocking("recent", move || query_recent(&db_path, distro.as_deref(), limit)).await?;
 
-    match result {
-        Ok(Ok(packages)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(packages),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in recent: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in recent: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        Json(packages),
+    )
+        .into_response())
 }
 
 /// GET /v1/stats/overview
 ///
 /// Global statistics: total packages, downloads, distros, conversions.
-pub async fn get_overview(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
+pub async fn get_overview(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || query_overview(&db_path)).await;
+    let stats = run_blocking("overview", move || query_overview(&db_path)).await?;
 
-    match result {
-        Ok(Ok(stats)) => (
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=60")],
-            Json(stats),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Database error in overview: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Task panicked in overview: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=60")],
+        Json(stats),
+    )
+        .into_response())
 }
 
 // --- Database query functions (run on blocking threads) ---

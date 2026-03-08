@@ -218,8 +218,9 @@ fn is_overlay_mount(path: &str) -> bool {
     };
     mounts.lines().any(|line| {
         let mut parts = line.split_whitespace();
-        let fs_type = parts.next();
+        let _device = parts.next();
         let mount_point = parts.next();
+        let fs_type = parts.next();
         mount_point == Some(path) && fs_type == Some("overlay")
     })
 }

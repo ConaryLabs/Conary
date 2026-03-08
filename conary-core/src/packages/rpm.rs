@@ -314,7 +314,7 @@ impl PackageFormat for RpmPackage {
                 .meta
                 .files
                 .iter()
-                .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
+                .filter(|f| is_regular_file_mode(f.mode as u32)) // Regular files only
                 .count();
             if expected_file_count > 0 {
                 tracing::warn!(
@@ -387,7 +387,7 @@ impl PackageFormat for RpmPackage {
             .meta
             .files
             .iter()
-            .filter(|f| f.mode as u32 & 0o170000 == 0o100000) // Regular files only
+            .filter(|f| is_regular_file_mode(f.mode as u32)) // Regular files only
             .count();
 
         if extracted_files.len() < expected_regular_files {

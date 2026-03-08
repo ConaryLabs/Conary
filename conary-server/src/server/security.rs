@@ -68,7 +68,7 @@ impl RateLimiter {
 
 /// Ban list for misbehaving IPs
 pub struct BanList {
-    /// Active bans: IP -> Ban Expiration Time
+    /// Active bans: IP -> Ban Creation Time
     bans: RwLock<HashMap<String, Instant>>,
     /// Recent failures: IP -> (Count, First Failure Time)
     failures: RwLock<HashMap<String, (u32, Instant)>>,

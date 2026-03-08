@@ -65,19 +65,11 @@ pub async fn get_package(
     Query(query): Query<PackageQuery>,
 ) -> Response {
     // Validate path parameters
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
+    if let Err(e) = super::validate_distro_and_name(&distro, &name) {
         return e;
     }
 
     let state_guard = state.read().await;
-
-    // Validate distro
-    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
-        return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
-    }
 
     // Check if package is already converted
     let db_path = &state_guard.config.db_path;
@@ -350,19 +342,11 @@ pub async fn download_package(
     headers: axum::http::HeaderMap,
 ) -> Response {
     // Validate path parameters
-    if let Err(e) = super::validate_name(&distro) {
-        return e;
-    }
-    if let Err(e) = super::validate_name(&name) {
+    if let Err(e) = super::validate_distro_and_name(&distro, &name) {
         return e;
     }
 
     let state_guard = state.read().await;
-
-    // Validate distro
-    if !super::SUPPORTED_DISTROS.contains(&distro.as_str()) {
-        return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response();
-    }
 
     // Check for conversion job (in-progress or completed)
     let job_key = format!(

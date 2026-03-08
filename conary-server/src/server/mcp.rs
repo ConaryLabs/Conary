@@ -51,6 +51,12 @@ fn validate_path_param(value: &str, param_name: &str) -> Result<(), McpError> {
     }
 }
 
+/// Serialize a value to pretty JSON, mapping failures to [`McpError`].
+fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
+    serde_json::to_string_pretty(value)
+        .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
+}
+
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 fn service_err_to_mcp(e: ServiceError) -> McpError {
     match e {
@@ -287,9 +293,7 @@ impl RemiMcpServer {
             .await
             .map_err(service_err_to_mcp)?;
 
-        let text = serde_json::to_string_pretty(&tokens)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&tokens)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -316,9 +320,7 @@ impl RemiMcpServer {
             "token": created.raw_token,
             "scopes": created.scopes,
         });
-        let text = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&result)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -334,8 +336,7 @@ impl RemiMcpServer {
 
         if deleted {
             let result = serde_json::json!({"status": "deleted", "token_id": params.token_id});
-            let text = serde_json::to_string_pretty(&result)
-                .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+            let text = to_json_text(&result)?;
             Ok(CallToolResult::success(vec![Content::text(text)]))
         } else {
             Err(McpError::invalid_params(
@@ -371,9 +372,7 @@ impl RemiMcpServer {
             })
             .collect();
 
-        let text = serde_json::to_string_pretty(&json)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&json)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -404,8 +403,7 @@ impl RemiMcpServer {
                     "created_at": r.created_at,
                     "default_strategy": r.default_strategy,
                 });
-                let text = serde_json::to_string_pretty(&result)
-                    .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+                let text = to_json_text(&result)?;
                 Ok(CallToolResult::success(vec![Content::text(text)]))
             }
             None => Err(McpError::invalid_params(
@@ -449,9 +447,7 @@ impl RemiMcpServer {
             })
             .collect();
 
-        let text = serde_json::to_string_pretty(&json)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&json)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -479,9 +475,7 @@ impl RemiMcpServer {
             "endpoint": peer.endpoint,
             "tier": peer.tier,
         });
-        let text = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&result)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -497,8 +491,7 @@ impl RemiMcpServer {
 
         if deleted {
             let result = serde_json::json!({"status": "deleted", "peer_id": params.peer_id});
-            let text = serde_json::to_string_pretty(&result)
-                .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+            let text = to_json_text(&result)?;
             Ok(CallToolResult::success(vec![Content::text(text)]))
         } else {
             Err(McpError::invalid_params(
@@ -529,9 +522,7 @@ impl RemiMcpServer {
         .await
         .map_err(service_err_to_mcp)?;
 
-        let text = serde_json::to_string_pretty(&entries)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&entries)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -551,9 +542,7 @@ impl RemiMcpServer {
             "deleted": deleted,
             "before": params.before,
         });
-        let text = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
-
+        let text = to_json_text(&result)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
