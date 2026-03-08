@@ -9,6 +9,10 @@ use crate::db::models::settings;
 use crate::error::{Error, Result};
 use rusqlite::Connection;
 use serde::Deserialize;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Default update channel URL
 pub const DEFAULT_UPDATE_CHANNEL: &str = "https://packages.conary.io/v1/ccs/conary";
@@ -113,6 +117,101 @@ pub fn check_for_update(
     }
 }
 
+/// Download the CCS package to a temp directory and return the path
+pub fn download_update(
+    download_url: &str,
+    expected_sha256: &str,
+    dest_dir: &Path,
+) -> Result<PathBuf> {
+    use crate::repository::RepositoryClient;
+
+    let dest_path = dest_dir.join("conary-update.ccs");
+    let client = RepositoryClient::new()?;
+    client.download_file(download_url, &dest_path)?;
+
+    // Verify SHA-256
+    let content = fs::read(&dest_path)
+        .map_err(|e| Error::IoError(format!("Failed to read downloaded file: {e}")))?;
+    let actual_hash = crate::hash::sha256(&content);
+    if actual_hash != expected_sha256 {
+        fs::remove_file(&dest_path).ok();
+        return Err(Error::ChecksumMismatch {
+            expected: expected_sha256.to_string(),
+            actual: actual_hash,
+        });
+    }
+
+    Ok(dest_path)
+}
+
+/// Extract the conary binary from a CCS package to a temp file
+///
+/// Returns the path to the extracted binary. The binary is placed on the
+/// same filesystem as `target_dir` to enable atomic rename().
+pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+
+    let file = fs::File::open(ccs_path)
+        .map_err(|e| Error::IoError(format!("Failed to open CCS package: {e}")))?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+
+    let dest = target_dir.join(".conary-update.tmp");
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+        let path_str = path.to_string_lossy();
+
+        // Look for the conary binary in the CCS package
+        if path_str.ends_with("usr/bin/conary") || path_str == "conary" {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            fs::write(&dest, &content)
+                .map_err(|e| Error::IoError(format!("Failed to write binary: {e}")))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))?;
+            }
+
+            return Ok(dest);
+        }
+    }
+
+    Err(Error::ParseError(
+        "CCS package does not contain a conary binary".to_string(),
+    ))
+}
+
+/// Verify the extracted binary runs and reports the expected version
+pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
+    let output = Command::new(binary_path)
+        .arg("--version")
+        .output()
+        .map_err(|e| Error::IoError(format!("Failed to execute new binary: {e}")))?;
+
+    if !output.status.success() {
+        return Err(Error::IoError(format!(
+            "New binary exited with status {}",
+            output.status
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains(expected_version) {
+        return Err(Error::IoError(format!(
+            "Version mismatch: expected '{}' in output, got '{}'",
+            expected_version,
+            stdout.trim()
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +284,11 @@ mod tests {
             }
             _ => panic!("Expected UpdateAvailable"),
         }
+    }
+
+    #[test]
+    fn test_verify_binary_nonexistent() {
+        let result = verify_binary(Path::new("/nonexistent/binary"), "1.0.0");
+        assert!(result.is_err());
     }
 }
