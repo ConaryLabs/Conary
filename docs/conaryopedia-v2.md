@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-06
-revision: 1
-summary: Comprehensive technical guide covering all Conary subsystems
+last_updated: 2026-03-07
+revision: 2
+summary: Add self-update section, update schema version to v46
 ---
 
 # Conaryopedia v2
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v36). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v46). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -968,6 +968,37 @@ conary system completions fish       # Fish completions
 # Install for bash:
 conary system completions bash > /etc/bash_completion.d/conary
 ```
+
+### 2.21 Self-Update
+
+Once installed via a native package (.rpm/.deb/.pkg.tar.zst), Conary handles its own upgrades. The `self-update` command checks Remi for newer CCS packages, downloads, verifies, and atomically replaces the running binary.
+
+```bash
+conary self-update              # Check and update if newer available
+conary self-update --check      # Check only, don't install
+conary self-update --force      # Reinstall even if same version
+conary self-update --version X  # Install specific version
+```
+
+The update channel defaults to `https://packages.conary.io/v1/ccs/conary` but can be overridden:
+
+```bash
+conary system update-channel get          # Show current channel
+conary system update-channel set <url>    # Use custom channel
+conary system update-channel reset        # Restore default
+```
+
+The update flow:
+1. Read update channel URL from the `settings` table (fallback: hardcoded default)
+2. `GET /v1/ccs/conary/latest` returns version, download URL, SHA-256, size
+3. Compare remote version against current (compiled-in) version
+4. Download CCS package, verify SHA-256 checksum
+5. Extract `/usr/bin/conary` binary from the CCS package
+6. Verify the new binary runs (`./conary-new --version`)
+7. Atomic `rename()` replaces the old binary (same filesystem)
+8. Register new binary hash in CAS
+
+The conary binary lives outside EROFS generation images. Self-update works independently of the generation/composefs system.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-07
-revision: 1
-summary: Initial integration test documentation
+revision: 2
+summary: Add Group F self-update tests (T72-T76)
 ---
 
 # Integration Testing
@@ -66,7 +66,7 @@ Always runs. Tests basic conary operations against a live Remi server:
 | T32 | Update | Update with adopted packages |
 | T33-T37 | Generations | List, GC, info, takeover dry-run, composefs format |
 
-### Phase 2: Deep E2E (T38-T71)
+### Phase 2: Deep E2E (T38-T76)
 
 Runs with `--phase2` flag. Requires test fixture packages published to Remi.
 
@@ -77,6 +77,7 @@ Runs with `--phase2` flag. Requires test fixture packages published to Remi.
 | C | T58-T61 | Bootstrap pipeline (dry-run, stage 0) |
 | D | T62-T66 | Recipe & build (cook, PKGBUILD convert, hermetic build) |
 | E | T67-T71 | Remi client (sparse index, chunk fetch, OCI manifests) |
+| F | T72-T76 | Self-update (channel get/set/reset, version check, mock server) |
 
 ## Configuration
 

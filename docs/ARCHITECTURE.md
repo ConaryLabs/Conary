@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-06
-revision: 1
-summary: System design overview with module structure and data flow
+last_updated: 2026-03-07
+revision: 2
+summary: Update schema to v46, add settings table
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v44 |        +------+-----+
+     |  SQLite v46 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -108,8 +108,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v45, migration dispatcher
-    |   +-- migrations.rs All 45 migration functions
+    |   +-- schema.rs    Schema v46, migration dispatcher
+    |   +-- migrations.rs All 46 migration functions
     |   +-- models/      ORM-style model structs
     +-- transaction/     Crash-safe atomic operations
     |   +-- journal.rs   Append-only recovery journal
@@ -378,7 +378,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v44)
+## Database Schema (v46)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 
@@ -411,6 +411,7 @@ State:
   system_states / state_members    System state snapshots
   config_files / config_backups    Configuration tracking
   triggers / trigger_dependencies  Post-install trigger DAG
+  settings                         Key-value configuration store
 
 Server (Remi):
   converted_packages / subpackage_relationships   Conversion tracking
