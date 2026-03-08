@@ -1,0 +1,74 @@
+// conary-server/src/server/handlers/admin/events.rs
+//! SSE event stream handler
+
+use axum::extract::{Query, State};
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::server::auth::{TokenScopes, json_error};
+use crate::server::ServerState;
+
+#[derive(Deserialize)]
+pub struct EventsQuery {
+    pub filter: Option<String>,
+}
+
+pub async fn sse_events(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    scopes: Option<axum::Extension<TokenScopes>>,
+    Query(query): Query<EventsQuery>,
+) -> Response {
+    // Any valid token can subscribe
+    if scopes.is_none() {
+        return json_error(401, "Not authenticated", "UNAUTHORIZED");
+    }
+
+    let filters: Option<Vec<String>> = query.filter.map(|f| {
+        f.split(',').map(|s| s.trim().to_string()).collect()
+    });
+
+    let rx = {
+        let s = state.read().await;
+        s.admin_events.subscribe()
+    };
+
+    let stream = async_stream::stream! {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if let Some(ref filters) = filters
+                        && !filters.iter().any(|f| event.event_type.starts_with(f.as_str()))
+                    {
+                        continue;
+                    }
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    yield Ok::<_, std::convert::Infallible>(
+                        axum::response::sse::Event::default()
+                            .event(&event.event_type)
+                            .data(data)
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("SSE client lagged by {} events", n);
+                    yield Ok(
+                        axum::response::sse::Event::default()
+                            .event("error")
+                            .data(format!(r#"{{"error":"Lagged by {n} events","code":"LAGGED"}}"#))
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(30))
+                .text("ping"),
+        )
+        .into_response()
+}
