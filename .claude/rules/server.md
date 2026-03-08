@@ -49,6 +49,6 @@ conaryd (local daemon with REST API).
 - `prewarm.rs` pre-populates cache on startup
 
 ## Files
-- `server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs)
+- `server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs, self-update)
 - `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
 - `daemon/` -- conaryd (routes, handlers, auth, jobs, lock, socket, systemd)

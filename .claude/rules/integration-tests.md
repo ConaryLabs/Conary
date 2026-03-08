@@ -79,12 +79,13 @@ Python 3.11+ stdlib-only (no pip dependencies). Key components:
 **Phase 1 (T01-T37):** Core Remi integration -- always runs
 - Health check, repo ops, install/remove/update, adopt, pin, deps, generations
 
-**Phase 2 (T38-T71):** Deep E2E -- runs with `--phase2` flag
+**Phase 2 (T38-T76):** Deep E2E -- runs with `--phase2` flag
 - Group A (T38-T50): Deep install flow with fixture packages
 - Group B (T51-T57): Generation lifecycle (build/switch/rollback/gc)
 - Group C (T58-T61): Bootstrap pipeline (dry-run, stage 0)
 - Group D (T62-T66): Recipe & build (cook, PKGBUILD, hermetic)
 - Group E (T67-T71): Remi client (sparse index, chunk fetch, OCI)
+- Group F (T72-T76): Self-update (channel get/set/reset, check, mock server)
 
 ## CI Workflows
 

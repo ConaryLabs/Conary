@@ -6,7 +6,7 @@ paths:
 # Database Module
 
 All runtime state lives in SQLite. No config files for runtime state -- this is a core
-architectural invariant. The schema is at version v45 with 40+ tables across 45 migrations.
+architectural invariant. The schema is at version v46 with 40+ tables across 46 migrations.
 Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Key Types

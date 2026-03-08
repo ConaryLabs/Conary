@@ -47,4 +47,4 @@ conary-core -- no business logic lives in the CLI layer.
 - `install/` -- install command with `batch.rs` for multi-package
 - `adopt/` -- system adoption with `conflicts.rs`, `convert.rs`
 - `generation/` -- generation management with `switch.rs`
-- Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, etc.
+- Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, `self_update.rs`, `update_channel.rs`, etc.

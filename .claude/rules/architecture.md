@@ -42,6 +42,7 @@
 | `src/trust/` | TUF supply chain trust |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system (8-stage pipeline) |
+| `src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
 ### conary-erofs -- EROFS image builder for composefs
@@ -51,5 +52,6 @@
 | Module | Purpose |
 |--------|---------|
 | `src/server/` | Remi server (feature-gated: `--features server`) |
+| `src/server/handlers/self_update` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
 | `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |

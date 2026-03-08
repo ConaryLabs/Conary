@@ -51,7 +51,7 @@ Two servers, one CI system.
 
 ## Integration Tests
 
-- **Location:** `tests/integration/remi/` (71 tests: T01-T37 Phase 1, T38-T71 Phase 2)
+- **Location:** `tests/integration/remi/` (76 tests: T01-T37 Phase 1, T38-T76 Phase 2)
 - **Runner:** Python 3.11+ (`runner/test_runner.py`), stdlib-only
 - **Config:** `tests/integration/remi/config.toml` (single source of truth)
 - **Run on Forge:** `./tests/integration/remi/run.sh --build --distro fedora43`

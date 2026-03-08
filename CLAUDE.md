@@ -52,7 +52,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Flavor**: Build variations (arch, features)
 - **CAS**: Content-addressable storage for files
 
-Database schema is currently **v45** (40+ tables across 45 migrations). See ROADMAP.md for what's next.
+Database schema is currently **v46** (40+ tables across 46 migrations). See ROADMAP.md for what's next.
 
 ## Tool Selection
 
