@@ -32,31 +32,83 @@ impl TokenScopes {
     ///
     /// The "admin" scope grants access to everything. Otherwise, the
     /// required scope must appear as an exact match in the comma-separated list.
-    pub fn has_scope(&self, required: &str) -> bool {
+    pub fn has_scope(&self, required: Scope) -> bool {
+        let required_str = required.as_str();
         self.0.split(',').any(|s| {
             let t = s.trim();
-            t == "admin" || t == required
+            t == "admin" || t == required_str
         })
     }
 }
 
-/// Valid token scopes for the admin API.
-pub const VALID_SCOPES: &[&str] = &[
-    "admin",
-    "ci:read",
-    "ci:trigger",
-    "repos:read",
-    "repos:write",
-    "federation:read",
-    "federation:write",
-];
+/// Typed representation of a valid token scope.
+///
+/// Scopes are stored as strings in SQLite but validated at API boundaries
+/// using this enum. Use [`Scope::as_str`] for DB/API serialization and
+/// [`Scope::parse`] for deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Admin,
+    CiRead,
+    CiTrigger,
+    ReposRead,
+    ReposWrite,
+    FederationRead,
+    FederationWrite,
+}
+
+impl Scope {
+    /// All valid scope variants.
+    pub const ALL: &[Scope] = &[
+        Scope::Admin,
+        Scope::CiRead,
+        Scope::CiTrigger,
+        Scope::ReposRead,
+        Scope::ReposWrite,
+        Scope::FederationRead,
+        Scope::FederationWrite,
+    ];
+
+    /// Return the wire-format string for this scope.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Admin => "admin",
+            Scope::CiRead => "ci:read",
+            Scope::CiTrigger => "ci:trigger",
+            Scope::ReposRead => "repos:read",
+            Scope::ReposWrite => "repos:write",
+            Scope::FederationRead => "federation:read",
+            Scope::FederationWrite => "federation:write",
+        }
+    }
+
+    /// Parse a wire-format string into a scope, returning `None` for unknown values.
+    pub fn parse(s: &str) -> Option<Scope> {
+        match s {
+            "admin" => Some(Scope::Admin),
+            "ci:read" => Some(Scope::CiRead),
+            "ci:trigger" => Some(Scope::CiTrigger),
+            "repos:read" => Some(Scope::ReposRead),
+            "repos:write" => Some(Scope::ReposWrite),
+            "federation:read" => Some(Scope::FederationRead),
+            "federation:write" => Some(Scope::FederationWrite),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Validate that all scopes in a comma-separated string are valid.
 /// Returns Err with the first invalid scope found.
 pub fn validate_scopes(scopes: &str) -> Result<(), String> {
     for scope in scopes.split(',') {
         let trimmed = scope.trim();
-        if !VALID_SCOPES.contains(&trimmed) {
+        if Scope::parse(trimmed).is_none() {
             return Err(trimmed.to_string());
         }
     }
@@ -220,17 +272,17 @@ mod tests {
     #[test]
     fn test_token_scopes_admin_grants_all() {
         let scopes = TokenScopes("admin".to_string());
-        assert!(scopes.has_scope("repos:write"));
-        assert!(scopes.has_scope("ci:read"));
-        assert!(scopes.has_scope("anything"));
+        assert!(scopes.has_scope(Scope::ReposWrite));
+        assert!(scopes.has_scope(Scope::CiRead));
+        assert!(scopes.has_scope(Scope::FederationRead));
     }
 
     #[test]
     fn test_token_scopes_specific() {
         let scopes = TokenScopes("ci:read,ci:trigger".to_string());
-        assert!(scopes.has_scope("ci:read"));
-        assert!(scopes.has_scope("ci:trigger"));
-        assert!(!scopes.has_scope("repos:write"));
+        assert!(scopes.has_scope(Scope::CiRead));
+        assert!(scopes.has_scope(Scope::CiTrigger));
+        assert!(!scopes.has_scope(Scope::ReposWrite));
     }
 
     #[test]

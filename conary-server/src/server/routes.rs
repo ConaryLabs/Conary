@@ -598,7 +598,7 @@ pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
                 let has_admin = request
                     .extensions()
                     .get::<crate::server::auth::TokenScopes>()
-                    .map(|s| s.has_scope("admin"))
+                    .map(|s| s.has_scope(crate::server::auth::Scope::Admin))
                     .unwrap_or(false);
                 if !has_admin {
                     return crate::server::auth::json_error(

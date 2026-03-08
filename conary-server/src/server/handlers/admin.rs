@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 
 use rusqlite::OptionalExtension;
 
-use crate::server::auth::{TokenScopes, generate_token, hash_token, json_error};
+use crate::server::auth::{Scope, TokenScopes, generate_token, hash_token, json_error};
 use crate::server::ServerState;
 
 /// Validate a path parameter against a safe pattern.
@@ -54,7 +54,7 @@ pub struct CreateTokenResponse {
 }
 
 /// Check that the caller has the required scope, returning an error response if not.
-fn check_scope(scopes: &Option<axum::Extension<TokenScopes>>, required: &str) -> Option<Response> {
+fn check_scope(scopes: &Option<axum::Extension<TokenScopes>>, required: Scope) -> Option<Response> {
     match scopes {
         Some(axum::Extension(s)) if s.has_scope(required) => None,
         Some(_) => Some(json_error(403, "Insufficient scope", "INSUFFICIENT_SCOPE")),
@@ -71,7 +71,7 @@ pub async fn create_token(
     scopes: Option<axum::Extension<TokenScopes>>,
     Json(body): Json<CreateTokenRequest>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "admin") {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
 
@@ -150,7 +150,7 @@ pub async fn list_tokens(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "admin") {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
 
@@ -195,7 +195,7 @@ pub async fn delete_token(
     Path(id): Path<i64>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "admin") {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
 
@@ -365,7 +365,7 @@ pub async fn ci_list_workflows(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:read") {
+    if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
     match forgejo_get(&state, "/repos/peter/Conary/actions/workflows").await {
@@ -382,7 +382,7 @@ pub async fn ci_list_runs(
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:read") {
+    if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "workflow name") {
@@ -407,7 +407,7 @@ pub async fn ci_get_run(
     Path(id): Path<i64>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:read") {
+    if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
     match forgejo_get(&state, &format!("/repos/peter/Conary/actions/runs/{id}")).await {
@@ -424,7 +424,7 @@ pub async fn ci_get_logs(
     Path(id): Path<i64>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:read") {
+    if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
 
@@ -503,7 +503,7 @@ pub async fn ci_dispatch(
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:trigger") {
+    if let Some(err) = check_scope(&scopes, Scope::CiTrigger) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "workflow name") {
@@ -528,7 +528,7 @@ pub async fn ci_mirror_sync(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "ci:trigger") {
+    if let Some(err) = check_scope(&scopes, Scope::CiTrigger) {
         return err;
     }
     match forgejo_post(
@@ -596,7 +596,7 @@ pub async fn list_repos(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:read") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposRead) {
         return err;
     }
 
@@ -635,7 +635,7 @@ pub async fn create_repo(
     scopes: Option<axum::Extension<TokenScopes>>,
     Json(body): Json<RepoRequest>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:write") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
     }
 
@@ -714,7 +714,7 @@ pub async fn get_repo(
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:read") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposRead) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "repo name") {
@@ -755,7 +755,7 @@ pub async fn update_repo(
     scopes: Option<axum::Extension<TokenScopes>>,
     Json(body): Json<RepoRequest>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:write") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "repo name") {
@@ -829,7 +829,7 @@ pub async fn delete_repo(
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:write") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "repo name") {
@@ -889,7 +889,7 @@ pub async fn sync_repo(
     Path(name): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "repos:write") {
+    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
         return err;
     }
     if let Some(err) = validate_path_param(&name, "repo name") {
@@ -1047,7 +1047,7 @@ pub async fn list_peers(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:read") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationRead) {
         return err;
     }
 
@@ -1106,7 +1106,7 @@ pub async fn add_peer(
     scopes: Option<axum::Extension<TokenScopes>>,
     Json(body): Json<AddPeerRequest>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:write") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationWrite) {
         return err;
     }
 
@@ -1204,7 +1204,7 @@ pub async fn delete_peer(
     Path(id): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:write") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationWrite) {
         return err;
     }
     if let Some(err) = validate_path_param(&id, "peer id") {
@@ -1257,7 +1257,7 @@ pub async fn peer_health(
     Path(id): Path<String>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:read") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationRead) {
         return err;
     }
     if let Some(err) = validate_path_param(&id, "peer id") {
@@ -1341,7 +1341,7 @@ pub async fn get_federation_config(
     State(state): State<Arc<RwLock<ServerState>>>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:read") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationRead) {
         return err;
     }
 
@@ -1391,7 +1391,7 @@ pub async fn update_federation_config(
     scopes: Option<axum::Extension<TokenScopes>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "federation:write") {
+    if let Some(err) = check_scope(&scopes, Scope::FederationWrite) {
         return err;
     }
 
@@ -1467,7 +1467,7 @@ pub async fn query_audit(
     scopes: Option<axum::Extension<TokenScopes>>,
     Query(query): Query<AuditQuery>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "admin") {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
     let db_path = { state.read().await.config.db_path.clone() };
@@ -1501,7 +1501,7 @@ pub async fn purge_audit(
     scopes: Option<axum::Extension<TokenScopes>>,
     Query(query): Query<PurgeQuery>,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, "admin") {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
     let db_path = { state.read().await.config.db_path.clone() };
@@ -1705,19 +1705,19 @@ mod tests {
     #[test]
     fn test_check_scope_admin_granted() {
         let scopes = Some(axum::Extension(TokenScopes("admin".to_string())));
-        assert!(check_scope(&scopes, "admin").is_none());
+        assert!(check_scope(&scopes, Scope::Admin).is_none());
     }
 
     #[test]
     fn test_check_scope_insufficient() {
         let scopes = Some(axum::Extension(TokenScopes("ci:read".to_string())));
-        let resp = check_scope(&scopes, "admin").unwrap();
+        let resp = check_scope(&scopes, Scope::Admin).unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
     fn test_check_scope_missing() {
-        let resp = check_scope(&None, "admin").unwrap();
+        let resp = check_scope(&None, Scope::Admin).unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
