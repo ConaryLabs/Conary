@@ -352,4 +352,98 @@ mod tests {
         let result = verify_binary(Path::new("/nonexistent/binary"), "1.0.0");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_is_newer_major_minor_patch() {
+        // Major version takes priority
+        assert!(is_newer("1.9.9", "2.0.0"));
+        assert!(!is_newer("2.0.0", "1.9.9"));
+        // Minor version takes priority over patch
+        assert!(is_newer("1.0.9", "1.1.0"));
+        assert!(!is_newer("1.1.0", "1.0.9"));
+    }
+
+    #[test]
+    fn test_update_channel_persistence() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        // Default channel
+        let default = get_update_channel(&conn).unwrap();
+        assert_eq!(default, DEFAULT_UPDATE_CHANNEL);
+
+        // Set custom
+        let custom = "https://mirror.internal/v1/ccs/conary";
+        set_update_channel(&conn, custom).unwrap();
+        assert_eq!(get_update_channel(&conn).unwrap(), custom);
+
+        // Override again
+        let custom2 = "https://other.mirror/v1/ccs/conary";
+        set_update_channel(&conn, custom2).unwrap();
+        assert_eq!(get_update_channel(&conn).unwrap(), custom2);
+    }
+
+    #[test]
+    fn test_extract_binary_empty_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("empty.ccs");
+
+        // Create a valid but empty gzipped tar
+        {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+            builder.finish().unwrap();
+        }
+
+        let result = extract_binary(&ccs_path, dir.path());
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("does not contain"), "Error was: {err_msg}");
+    }
+
+    #[test]
+    fn test_extract_binary_finds_conary() {
+        let dir = tempfile::tempdir().unwrap();
+        let ccs_path = dir.path().join("test.ccs");
+
+        // Create a gzipped tar with a usr/bin/conary entry
+        {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let file = std::fs::File::create(&ccs_path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+
+            let content = b"#!/bin/sh\necho test";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, "usr/bin/conary", &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+
+        let result = extract_binary(&ccs_path, dir.path());
+        assert!(result.is_ok(), "extract_binary failed: {:?}", result.err());
+
+        let binary_path = result.unwrap();
+        assert!(binary_path.exists());
+        assert_eq!(std::fs::read(&binary_path).unwrap(), b"#!/bin/sh\necho test");
+    }
+
+    #[test]
+    fn test_apply_update_source_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("nonexistent");
+        let target = dir.path().join("conary");
+        std::fs::write(&target, b"old").unwrap();
+
+        let result = apply_update(&source, &target, dir.path().join("objects").to_str().unwrap());
+        assert!(result.is_err());
+        // Original target should be unchanged
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    }
 }
