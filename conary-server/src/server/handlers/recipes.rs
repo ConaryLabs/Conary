@@ -58,12 +58,12 @@ fn validate_url(url_str: &str) -> std::result::Result<(), String> {
         return Err("URLs targeting localhost are not allowed".to_string());
     }
 
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(&ip) {
-            return Err(format!(
-                "URLs targeting private IP ranges are not allowed: {ip}"
-            ));
-        }
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_private_ip(&ip)
+    {
+        return Err(format!(
+            "URLs targeting private IP ranges are not allowed: {ip}"
+        ));
     }
 
     Ok(())

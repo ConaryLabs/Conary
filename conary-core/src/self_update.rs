@@ -214,12 +214,11 @@ pub fn apply_update(
 
     // Register new binary in CAS (best-effort: if this fails, binary still works)
     let content = fs::read(target_path).unwrap_or_default();
-    if !content.is_empty() {
-        if let Ok(cas) = CasStore::new(objects_dir) {
-            if let Err(e) = cas.store(&content) {
-                eprintln!("Warning: failed to register in CAS: {e}");
-            }
-        }
+    if !content.is_empty()
+        && let Ok(cas) = CasStore::new(objects_dir)
+        && let Err(e) = cas.store(&content)
+    {
+        eprintln!("Warning: failed to register in CAS: {e}");
     }
 
     Ok(())

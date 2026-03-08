@@ -61,6 +61,7 @@ fn self_update_dir(state: &ServerState) -> PathBuf {
 }
 
 /// Scan the self-update directory and return sorted (ascending) version strings.
+#[allow(clippy::result_large_err)]
 fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -105,7 +106,7 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
             .into_response());
     }
 
-    versions.sort_by(|a, b| parse_semver(a).cmp(&parse_semver(b)));
+    versions.sort_by_key(|v| parse_semver(v));
     Ok(versions)
 }
 
