@@ -780,6 +780,14 @@ pub async fn trigger_eviction(State(state): State<Arc<RwLock<ServerState>>>) -> 
                 result.chunks_evicted,
                 result.bytes_freed_human
             );
+
+            state.publish_event(
+                "cache",
+                serde_json::json!({
+                    "action": "eviction_triggered",
+                }),
+            );
+
             Json(result).into_response()
         }
         Err(e) => {

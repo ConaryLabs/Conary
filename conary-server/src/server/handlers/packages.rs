@@ -602,6 +602,19 @@ pub async fn trigger_conversion(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ConvertRequest>,
 ) -> Response {
+    // Publish admin event before starting conversion
+    {
+        let state_guard = state.read().await;
+        state_guard.publish_event(
+            "conversion",
+            serde_json::json!({
+                "action": "started",
+                "distro": req.distro,
+                "package": req.package,
+            }),
+        );
+    }
+
     // Reuse the get_package logic
     let query = PackageQuery {
         version: req.version,

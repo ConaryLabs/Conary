@@ -15,6 +15,7 @@
 //! - Rate limiting per IP/peer
 
 pub mod analytics;
+pub mod auth;
 mod bloom;
 mod cache;
 pub mod config;
@@ -25,6 +26,7 @@ mod handlers;
 mod index_gen;
 mod jobs;
 pub mod lite;
+pub mod mcp;
 pub mod metrics;
 mod negative_cache;
 pub mod popularity;
@@ -46,7 +48,7 @@ pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmResult, run_prewarm};
 pub use r2::R2Store;
-pub use routes::{create_admin_router, create_router};
+pub use routes::{create_admin_router, create_external_admin_router, create_router};
 pub use search::SearchEngine;
 pub use security::BanList;
 
@@ -135,6 +137,17 @@ impl Default for ServerConfig {
     }
 }
 
+/// Event broadcast from admin operations (e.g., CI triggers, token changes)
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AdminEvent {
+    /// Event type identifier (e.g., "token.created", "ci.triggered")
+    pub event_type: String,
+    /// Event payload
+    pub data: serde_json::Value,
+    /// ISO 8601 timestamp
+    pub timestamp: String,
+}
+
 /// Shared server state
 pub struct ServerState {
     pub config: ServerConfig,
@@ -169,11 +182,30 @@ pub struct ServerState {
     /// Key is chunk hash; value is a broadcast sender that waiters subscribe to.
     /// When the first fetch completes, all waiters are notified.
     pub inflight_fetches: Arc<DashMap<String, tokio::sync::broadcast::Sender<()>>>,
+    /// Forgejo instance URL for CI proxy (from config)
+    pub forgejo_url: Option<String>,
+    /// Forgejo API token for CI proxy (from config)
+    pub forgejo_token: Option<String>,
+    /// Broadcast channel for admin events (SSE stream)
+    pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
 }
 
 impl ServerState {
     pub fn new(config: ServerConfig) -> Self {
         Self::with_options(config, None, Duration::from_secs(15 * 60))
+    }
+
+    /// Publish an admin event to SSE subscribers.
+    ///
+    /// The send error is intentionally ignored — it only occurs when no
+    /// subscribers are connected, which is perfectly normal.
+    pub fn publish_event(&self, event_type: &str, data: serde_json::Value) {
+        let event = AdminEvent {
+            event_type: event_type.to_string(),
+            data,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        let _ = self.admin_events.send(event);
     }
 
     pub fn with_options(
@@ -219,6 +251,7 @@ impl ServerState {
         let metrics = Arc::new(ServerMetrics::new());
         let ban_list = Arc::new(BanList::new(config.ban_duration_secs, config.ban_threshold));
         let negative_cache = Arc::new(NegativeCache::new(negative_cache_ttl));
+        let (admin_events, _) = tokio::sync::broadcast::channel(1024);
 
         Self {
             config,
@@ -238,6 +271,9 @@ impl ServerState {
             federated_config: None,
             federated_cache: None,
             inflight_fetches: Arc::new(DashMap::new()),
+            forgejo_url: None,
+            forgejo_token: None,
+            admin_events,
         }
     }
 }
@@ -448,19 +484,80 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         }
     }
 
+    // Conditionally bind the external admin listener
+    let external_admin_listener = if remi_config.admin.enabled {
+        let bind = remi_config.external_admin_bind_addr()?;
+
+        // Set forgejo config on state
+        {
+            let mut state_w = state.write().await;
+            state_w.forgejo_url = remi_config.admin.forgejo_url.clone();
+            state_w.forgejo_token = remi_config.admin.forgejo_token.clone();
+        }
+
+        // Bootstrap token from REMI_ADMIN_TOKEN env var
+        if let Ok(env_token) = std::env::var("REMI_ADMIN_TOKEN") {
+            let db_path = server_config.db_path.clone();
+            let hash = crate::server::auth::hash_token(&env_token);
+            tokio::task::spawn_blocking(move || {
+                if let Ok(conn) = conary_core::db::open(&db_path)
+                    && conary_core::db::models::admin_token::find_by_hash(&conn, &hash)
+                        .unwrap_or(None)
+                        .is_none()
+                {
+                    let _ = conary_core::db::models::admin_token::create(
+                        &conn,
+                        "env-bootstrap",
+                        &hash,
+                        "admin",
+                    );
+                    tracing::info!("  Admin token created from REMI_ADMIN_TOKEN env var");
+                }
+            })
+            .await?;
+        }
+
+        let listener = tokio::net::TcpListener::bind(bind).await?;
+        tracing::info!("  External admin API: {}", bind);
+        Some(listener)
+    } else {
+        None
+    };
+
     // Bind listeners
     let public_listener = tokio::net::TcpListener::bind(server_config.bind_addr).await?;
     let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
 
     tracing::info!("Remi is ready to serve");
 
-    // Run both servers concurrently
+    // Create the external admin router only if enabled
+    let external_admin_future = if let Some(listener) = external_admin_listener {
+        let app = create_external_admin_router(state.clone());
+        let fut = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        );
+        Some(fut)
+    } else {
+        None
+    };
+
+    // Run all servers concurrently
     // Use into_make_service_with_connect_info to provide ConnectInfo to handlers
     tokio::select! {
         result = axum::serve(public_listener, public_app.into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
             result?;
         }
         result = axum::serve(admin_listener, admin_app.into_make_service_with_connect_info::<std::net::SocketAddr>()) => {
+            result?;
+        }
+        result = async {
+            if let Some(fut) = external_admin_future {
+                fut.await
+            } else {
+                std::future::pending().await
+            }
+        } => {
             result?;
         }
     }

@@ -11,6 +11,9 @@ Two servers, one CI system.
 - **Storage:** 1.7TB at `/conary` (ext4 on LVM)
 - **Deploy:** `rsync` source, `cargo build --release --features server`, copy binary, `systemctl restart remi`
 - **Sites:** `./deploy/deploy-sites.sh [site|packages|both]` — NEVER deploy `site/build/` to `/conary/web/`
+- **Admin API:** `:8082` (external, bearer token auth) -- token management, CI proxy, SSE events, MCP endpoint
+- **MCP endpoint:** `https://packages.conary.io:8082/mcp` (Streamable HTTP transport for LLM agents)
+- **OpenAPI spec:** `https://packages.conary.io:8082/v1/admin/openapi.json`
 - **Note:** `remi.conary.io` does NOT work through Cloudflare; use `packages.conary.io`
 
 ## Forge (CI/Test)

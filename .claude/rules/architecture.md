@@ -52,6 +52,10 @@
 | Module | Purpose |
 |--------|---------|
 | `src/server/` | Remi server (feature-gated: `--features server`) |
+| `src/server/auth.rs` | Admin API auth -- token hashing, generation, bearer extraction, middleware |
+| `src/server/mcp.rs` | MCP server endpoint -- LLM tool integration via rmcp |
+| `src/server/handlers/admin.rs` | Admin API handlers -- tokens, CI proxy, SSE events |
+| `src/server/handlers/openapi.rs` | OpenAPI 3.1 spec endpoint for admin API |
 | `src/server/handlers/self_update` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
 | `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |

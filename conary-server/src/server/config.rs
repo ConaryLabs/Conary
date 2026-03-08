@@ -63,6 +63,10 @@ pub struct RemiConfig {
     /// Web frontend settings
     #[serde(default)]
     pub web: WebSection,
+
+    /// External admin API settings
+    #[serde(default)]
+    pub admin: AdminSection,
 }
 
 /// Server configuration section
@@ -542,6 +546,46 @@ pub struct WebSection {
     pub root: Option<PathBuf>,
 }
 
+/// External admin API configuration
+#[derive(Debug, Deserialize)]
+pub struct AdminSection {
+    /// External admin API bind address
+    #[serde(default = "default_external_admin_bind")]
+    pub external_bind: String,
+
+    /// Enable external admin API
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Forgejo instance URL for CI proxy
+    #[serde(default)]
+    pub forgejo_url: Option<String>,
+
+    /// Forgejo API token
+    #[serde(default)]
+    pub forgejo_token: Option<String>,
+
+    /// Bootstrap token (can also be set via REMI_ADMIN_TOKEN env var)
+    #[serde(default)]
+    pub bootstrap_token: Option<String>,
+}
+
+impl Default for AdminSection {
+    fn default() -> Self {
+        Self {
+            external_bind: default_external_admin_bind(),
+            enabled: false,
+            forgejo_url: None,
+            forgejo_token: None,
+            bootstrap_token: None,
+        }
+    }
+}
+
+fn default_external_admin_bind() -> String {
+    "0.0.0.0:8082".to_string()
+}
+
 fn default_max_builds() -> usize {
     2
 }
@@ -585,6 +629,19 @@ impl RemiConfig {
                     self.server.admin_bind
                 )
             })?;
+
+        // Validate external admin bind address if enabled
+        if self.admin.enabled {
+            self.admin
+                .external_bind
+                .parse::<SocketAddr>()
+                .with_context(|| {
+                    format!(
+                        "Invalid admin.external_bind address: {}",
+                        self.admin.external_bind
+                    )
+                })?;
+        }
 
         // Validate eviction threshold
         if !(0.0..=1.0).contains(&self.storage.eviction_threshold) {
@@ -659,6 +716,19 @@ impl RemiConfig {
             .admin_bind
             .parse()
             .with_context(|| format!("Invalid admin bind address: {}", self.server.admin_bind))
+    }
+
+    /// Get external admin API bind address
+    pub fn external_admin_bind_addr(&self) -> Result<SocketAddr> {
+        self.admin
+            .external_bind
+            .parse()
+            .with_context(|| {
+                format!(
+                    "Invalid external admin bind: {}",
+                    self.admin.external_bind
+                )
+            })
     }
 
     /// Get primary upstream URL (first configured)

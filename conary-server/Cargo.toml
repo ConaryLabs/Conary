@@ -21,6 +21,7 @@ tower = "0.5"
 filetime = "0.2"
 async-trait.workspace = true
 futures.workspace = true
+async-stream = "0.3"
 dashmap = "6.0"
 parking_lot = "0.12"
 
@@ -48,6 +49,10 @@ zbus = { version = "4.0", optional = true }
 # CLI parsing (for binary entry points)
 clap.workspace = true
 tracing-subscriber.workspace = true
+
+# MCP (Model Context Protocol)
+rmcp = { version = "1.1", features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1.0"
 
 # Shared deps needed directly by server code
 anyhow.workspace = true

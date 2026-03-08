@@ -2274,6 +2274,26 @@ pub fn migrate_v46(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 47 - Admin API tokens
+///
+/// Creates the admin_tokens table for Remi admin API authentication.
+pub fn migrate_v47(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS admin_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            scopes TEXT NOT NULL DEFAULT 'admin',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_tokens_hash ON admin_tokens(token_hash);",
+    )?;
+
+    info!("Schema version 47 applied successfully (admin_tokens table)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

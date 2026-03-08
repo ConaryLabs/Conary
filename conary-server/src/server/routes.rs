@@ -17,8 +17,8 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    canonical, chunks, detail, federation, index, jobs, models, oci, packages, recipes, search,
-    self_update, sparse, tuf,
+    admin, canonical, chunks, detail, federation, index, jobs, models, oci, openapi, packages,
+    recipes, search, self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -29,7 +29,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, head, post, put},
+    routing::{delete, get, head, post, put},
 };
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
@@ -567,6 +567,62 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(tuf::refresh_timestamp),
         )
         .with_state(state)
+}
+
+/// Create the external admin router (token-authenticated, network-accessible)
+///
+/// This router handles remote admin operations:
+/// - Token management (create, revoke, list)
+/// - CI proxy (trigger builds, check status)
+/// - SSE event stream
+///
+/// SECURITY: All routes require Bearer token authentication via `auth_middleware`.
+/// The external admin API must be explicitly enabled in config (`admin.enabled = true`).
+pub fn create_external_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
+    // MCP (Model Context Protocol) endpoint for LLM agent integration.
+    // Protected by the same auth middleware as other admin endpoints.
+    let state_for_mcp = state.clone();
+    let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
+        move || Ok(crate::server::mcp::RemiMcpServer::new(state_for_mcp.clone())),
+        Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        ),
+        Default::default(),
+    );
+
+    // Auth-protected routes
+    let protected = Router::new()
+        // Token management
+        .route("/v1/admin/tokens", post(admin::create_token))
+        .route("/v1/admin/tokens", get(admin::list_tokens))
+        .route("/v1/admin/tokens/:id", delete(admin::delete_token))
+        // CI proxy endpoints
+        .route("/v1/admin/ci/workflows", get(admin::ci_list_workflows))
+        .route("/v1/admin/ci/workflows/:name/runs", get(admin::ci_list_runs))
+        .route("/v1/admin/ci/runs/:id", get(admin::ci_get_run))
+        .route("/v1/admin/ci/runs/:id/logs", get(admin::ci_get_logs))
+        .route(
+            "/v1/admin/ci/workflows/:name/dispatch",
+            post(admin::ci_dispatch),
+        )
+        .route("/v1/admin/ci/mirror-sync", post(admin::ci_mirror_sync))
+        // SSE event stream
+        .route("/v1/admin/events", get(admin::sse_events))
+        // MCP endpoint
+        .nest_service("/mcp", mcp_service)
+        // Auth middleware wraps all routes above
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::server::auth::auth_middleware,
+        ));
+
+    // Unprotected routes (discovery endpoints only)
+    let unprotected = Router::new()
+        .route("/health", get(|| async { "OK" }))
+        .route("/v1/admin/openapi.json", get(openapi::openapi_spec));
+
+    // Merge: unprotected routes are NOT covered by auth middleware
+    unprotected.merge(protected).with_state(state)
 }
 
 /// Simple liveness check

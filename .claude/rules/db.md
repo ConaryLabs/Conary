@@ -6,7 +6,7 @@ paths:
 # Database Module
 
 All runtime state lives in SQLite. No config files for runtime state -- this is a core
-architectural invariant. The schema is at version v46 with 40+ tables across 46 migrations.
+architectural invariant. The schema is at version v47 with 40+ tables across 47 migrations.
 Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Key Types
@@ -17,6 +17,7 @@ Connection management uses `rusqlite::Connection` directly (no pool).
 - `Repository` / `RepositoryPackage` -- remote repo metadata
 - `StateEngine` / `SystemState` -- declarative system state tracking
 - `TriggerEngine` / `Trigger` -- post-install trigger definitions
+- `AdminToken` -- admin API token (name, token_hash, scopes, created_at, last_used_at)
 
 ## Invariants
 - Every `db::open()` and `db::init()` sets WAL mode, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`
