@@ -34,8 +34,7 @@ Connection management uses `rusqlite::Connection` directly (no pool).
 - Schema version must be bumped in migrations when adding tables
 
 ## Files
-- `mod.rs` -- `init()`, `open()`, `with_transaction()`, connection setup
-- `schema.rs` -- migration runner
-- `migrations/` -- numbered SQL migration files
+- `mod.rs` -- `init()`, `open()`, `open_fast()`, `with_transaction()`, connection setup
+- `schema.rs` -- migration runner with version-gated inline migration blocks (v1-v48)
 - `paths.rs` -- centralized path derivation (db_dir, objects_dir, keyring_dir, temp_dir)
 - `models/` -- 30+ model files, one per table group

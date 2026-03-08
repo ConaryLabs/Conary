@@ -42,6 +42,7 @@
 | `src/trust/` | TUF supply chain trust |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system (8-stage pipeline) |
+| `src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
 | `src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
@@ -52,10 +53,15 @@
 | Module | Purpose |
 |--------|---------|
 | `src/server/` | Remi server (feature-gated: `--features server`) |
-| `src/server/auth.rs` | Admin API auth -- token hashing, generation, bearer extraction, middleware |
+| `src/server/auth.rs` | Admin API auth -- token hashing, Scope enum, bearer extraction, middleware |
+| `src/server/admin_service.rs` | Shared service layer for admin ops (tokens, repos, federation, audit) |
+| `src/server/forgejo.rs` | Shared Forgejo/CI client (get, post, get_text helpers) |
 | `src/server/mcp.rs` | MCP server endpoint -- LLM tool integration via rmcp |
-| `src/server/handlers/admin.rs` | Admin API handlers -- tokens, CI proxy, SSE events |
+| `src/server/rate_limit.rs` | Per-IP rate limiting middleware (governor, token buckets) |
+| `src/server/audit.rs` | Audit logging middleware with action derivation |
+| `src/server/routes.rs` | Axum router construction (internal :8081 + external :8082) |
+| `src/server/handlers/admin/` | Admin API handlers -- tokens, ci, repos, federation, audit, events |
 | `src/server/handlers/openapi.rs` | OpenAPI 3.1 spec endpoint for admin API |
-| `src/server/handlers/self_update` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
+| `src/server/handlers/self_update.rs` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
 | `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |

@@ -62,7 +62,7 @@ Before launching agents, identify the scope:
 
 The codebase has 4 crates:
 - `conary` (root) -- CLI binary, `src/commands/`
-- `conary-core` -- core library, 20+ modules
+- `conary-core` -- core library, 25+ modules
 - `conary-erofs` -- EROFS image builder
 - `conary-server` -- Remi server + conaryd daemon (feature-gated: `--features server`)
 
@@ -102,7 +102,7 @@ Skip gates if the user said "run hands-off" or "just do it."
 
 - Rust 2024, Rust 1.93, 4-crate workspace
 - Build: `cargo build` (default), `cargo build --features server` (full)
-- Test: `cargo test` (1800+ tests)
+- Test: `cargo test` (~200 unit/integration tests)
 - Lint: `cargo clippy -- -D warnings`
 - Conventions: database-first, file headers (`// path/to/file.rs`), thiserror, no emojis
 - Schema: SQLite v48 (40+ tables across 48 migrations)

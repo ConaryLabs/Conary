@@ -21,8 +21,10 @@ conaryd (local daemon with REST API).
 - `SearchEngine` -- full-text package search
 - `R2Store` -- Cloudflare R2 object storage backend
 - `AdminSection` -- external admin API config (bind addr, Forgejo URL/token, bootstrap token, rate limits, audit retention)
-- `TokenScopes` -- validated token scopes wrapper with `has_scope()` check
+- `Scope` -- typed enum (Admin, CiRead, CiTrigger, ReposRead, ReposWrite, FederationRead, FederationWrite)
+- `TokenScopes` -- validated token scopes wrapper with `has_scope(Scope)` check
 - `TokenName` -- authenticated token name, stored in request extensions by auth middleware
+- `ServiceError` -- shared error type for admin_service layer (BadRequest, NotFound, Conflict, Internal)
 - `AdminRateLimiters` -- per-IP token buckets (read 60/min, write 10/min, auth-fail 5/min) via governor crate
 - `AdminEvent` -- typed event for SSE broadcast (event_type, data, timestamp)
 - `RemiMcpServer` -- MCP server exposing 16 admin tools to LLM agents via rmcp
@@ -50,7 +52,7 @@ conaryd (local daemon with REST API).
 - MCP endpoint at `/mcp` on :8082 uses Streamable HTTP transport (rmcp)
 - OpenAPI spec at `/v1/admin/openapi.json` on :8082 (no auth required)
 - Repo management uses existing `Repository` model CRUD (no new DB schema needed)
-- Federation peer management queries `federation_peers` table directly (no model file)
+- Federation peer management uses `federation_peer` DB model in conary-core
 - Remi proxies through Cloudflare for metadata, serves chunks directly
 - Use `spawn_blocking` for SQLite operations in async context
 - Federation hierarchy: leaf -> cell hub (LAN) -> region hub (WAN, mTLS)
@@ -70,7 +72,10 @@ conaryd (local daemon with REST API).
 - `server/mcp.rs` -- MCP server (rmcp) exposing admin tools for LLM agents
 - `server/rate_limit.rs` -- per-IP rate limiting middleware (governor) for external admin API
 - `server/audit.rs` -- audit logging middleware with action derivation for external admin API
-- `server/handlers/admin.rs` -- token CRUD, CI proxy, SSE, repo management, federation management, audit log query/purge
+- `server/admin_service.rs` -- shared service layer (tokens, repos, federation, audit) used by handlers + MCP
+- `server/forgejo.rs` -- shared Forgejo/CI client module (get, post, get_text)
+- `server/routes.rs` -- axum router construction (internal :8081 + external :8082)
+- `server/handlers/admin/` -- admin API handlers split into: tokens.rs, ci.rs, repos.rs, federation.rs, audit.rs, events.rs
 - `server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
 - `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
 - `daemon/` -- conaryd (routes, handlers, auth, jobs, lock, socket, systemd)

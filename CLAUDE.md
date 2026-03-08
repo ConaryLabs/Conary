@@ -5,7 +5,7 @@
 ```bash
 cargo build                              # Client-only (default, use for dev)
 cargo build --features server            # With Remi server + conaryd daemon
-cargo test                               # All tests (1,800+ total)
+cargo test                               # All tests (~200 unit/integration)
 cargo clippy -- -D warnings              # Lint
 ```
 
@@ -52,7 +52,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Flavor**: Build variations (arch, features)
 - **CAS**: Content-addressable storage for files
 
-Database schema is currently **v48** (40+ tables across 48 migrations). See ROADMAP.md for what's next.
+Database schema is currently **v48** (40+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 
