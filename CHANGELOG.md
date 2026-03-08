@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [server-v0.2.1] - 2026-03-07
+
+### Fixed
+- codebase-wide simplify pass — bug fixes, deduplication, performance
+
+### Other
+- refactor(server): wire MCP tools to shared service layer, remove duplication
+- refactor(server): extract admin service layer for shared business logic
+- refactor(server): split admin.rs into domain files (tokens, ci, repos, federation, audit, events)
+- perf(server): move rate limiters out of RwLock, reduce per-request overhead
+- refactor(server): extract Forgejo client into shared module
+- refactor(server): replace string scopes with Scope enum
+- perf(db): add open_fast() to skip migrations on server hot paths
+- refactor(server): Simplify admin API — fix security, dedup, efficiency
+- feat(server): Add Remi Admin API P2 — rate limiting, audit logging
+- feat(server): Add Remi Admin API P1 — repo management, federation, MCP tools
+- feat(server): Add Remi Admin API P0 — auth, tokens, CI proxy, SSE, OpenAPI, MCP
+
 ## [v0.2.1] - 2026-03-07
 
 ### Fixed
