@@ -72,3 +72,4 @@ vendor/
 
 # Git worktrees
 .worktrees/
+tests/integration/remi/runner/__pycache__/
