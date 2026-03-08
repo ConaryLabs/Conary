@@ -33,6 +33,8 @@ mod subpackage;
 mod trigger;
 mod trove;
 
+pub mod settings;
+
 pub use canonical::{CanonicalPackage, PackageImplementation};
 pub use changeset::{Changeset, ChangesetStatus};
 pub use chunk_access::{ChunkAccess, ChunkStats};

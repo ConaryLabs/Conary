@@ -2261,6 +2261,19 @@ pub fn migrate_v45(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Migration 46: Key-value settings table
+pub fn migrate_v46(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );",
+    )?;
+
+    info!("Schema version 46 applied successfully (settings table)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2271,7 +2284,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
 
-        // Verify schema version is 45
+        // Verify schema version is 46
         let version: i32 = conn
             .query_row(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
@@ -2279,7 +2292,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 45);
+        assert_eq!(version, 46);
 
         // Insert into canonical_packages
         conn.execute(
