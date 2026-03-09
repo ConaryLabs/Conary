@@ -41,7 +41,7 @@ directory = "vendor"
 EOF
 
 %build
-cargo build --release --locked
+cargo build --release --locked -p conary
 
 %install
 install -Dpm 0755 target/release/%{crate} %{buildroot}%{_bindir}/%{crate}

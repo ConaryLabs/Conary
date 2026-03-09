@@ -12,7 +12,7 @@ override_dh_auto_configure:
 	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
 
 override_dh_auto_build:
-	cargo build --release --locked
+	cargo build --release --locked -p conary
 
 override_dh_auto_test:
 	# Tests require network and a full dev environment; skip in package build
