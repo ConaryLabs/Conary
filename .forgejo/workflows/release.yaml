@@ -1,23 +1,25 @@
 # .forgejo/workflows/release.yaml
-# Build and publish packages on version tag push
-name: Release
+# Verify that a GitHub-built release landed on Remi correctly.
+# The actual build + publish happens in GitHub Actions (.github/workflows/release.yml).
+name: Release Verify
 
 on:
   push:
     tags: ['v*']
 
 jobs:
-  publish:
+  verify:
     runs-on: linux-native
     steps:
-      - uses: actions/checkout@v4
       - name: Extract version from tag
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Publishing version: $VERSION"
-      - name: Build and publish release
-        run: ./scripts/publish-release.sh --version "$VERSION"
+          echo "Verifying release: v$VERSION"
+
+      - name: Wait for GitHub Actions to finish
+        run: sleep 120
+
       - name: Verify self-update endpoint
         run: |
           ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
@@ -25,7 +27,19 @@ jobs:
           if echo "$response" | grep -q "$VERSION"; then
             echo "[OK] Self-update API reports version $VERSION"
           else
-            echo "[FAILED] Version mismatch or endpoint unavailable"
+            echo "[FAILED] Version $VERSION not found on Remi after GitHub release"
             echo "Response: $response"
             exit 1
           fi
+
+      - name: Verify release artifacts
+        run: |
+          ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+          for ext in ccs rpm deb pkg.tar.zst; do
+            url="$ENDPOINT/releases/$VERSION/"
+            if curl -sf "$url" | grep -q "$ext"; then
+              echo "[OK] Found .$ext in release directory"
+            else
+              echo "[WARN] No .$ext found in release directory"
+            fi
+          done
