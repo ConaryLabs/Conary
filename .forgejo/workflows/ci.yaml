@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   remi-smoke:
     runs-on: linux-native
