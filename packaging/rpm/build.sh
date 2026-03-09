@@ -99,7 +99,11 @@ else
         --define "_topdir $RPMBUILD_DIR" \
         "$RPMBUILD_DIR/SPECS/conary.spec"
 
+    # Copy RPMs to output/ for consistency with CI artifact paths
+    mkdir -p "$SCRIPT_DIR/output"
+    find "$RPMBUILD_DIR/RPMS" -name '*.rpm' -exec cp {} "$SCRIPT_DIR/output/" \;
+
     echo "[4/4] Done."
-    echo "RPMs written to: $RPMBUILD_DIR/RPMS/"
-    find "$RPMBUILD_DIR/RPMS" -name '*.rpm' -exec ls -lh {} \;
+    echo "RPMs written to: $SCRIPT_DIR/output/"
+    ls -lh "$SCRIPT_DIR/output/"*.rpm 2>/dev/null || echo "(no RPMs found -- check build output)"
 fi

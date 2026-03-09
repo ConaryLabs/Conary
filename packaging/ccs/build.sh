@@ -22,7 +22,7 @@ echo "Building $NAME $VERSION CCS package"
 RELEASE_BIN="$REPO_ROOT/target/release/$NAME"
 if [ ! -f "$RELEASE_BIN" ]; then
     echo "[1/4] Building release binary..."
-    cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --release -p conary --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     echo "[1/4] Using existing release binary: $RELEASE_BIN"
 fi
