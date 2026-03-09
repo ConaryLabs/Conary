@@ -1,0 +1,520 @@
+# tests/integration/remi/manifests/phase1-advanced.toml
+#
+# Phase 1 advanced Remi integration tests (T11-T37).
+# Converted from tests/integration/remi/runner/test_runner.py run_phase1().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE},
+#                   ${TEST_BINARY}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
+#                   ${TEST_PACKAGE_3}, ${TEST_BINARY_3}
+
+[suite]
+name = "Phase 1: Advanced Integration (T11-T37)"
+phase = 1
+
+# --------------------------------------------------------------------------
+# T11: Remove Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T11"
+name = "remove_package"
+description = "Remove previously installed test package"
+timeout = 60
+depends_on = ["T07"]
+
+[[test.step]]
+conary = "remove ${TEST_PACKAGE} --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T12: Verify Removed
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T12"
+name = "verify_removed"
+description = "Verify package binary is removed and package no longer listed"
+timeout = 10
+depends_on = ["T11"]
+
+[[test.step]]
+file_not_exists = "${TEST_BINARY}"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "${TEST_PACKAGE}"
+
+# --------------------------------------------------------------------------
+# T13: Version Check
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T13"
+name = "version_check"
+description = "Verify conary --version outputs version info"
+timeout = 10
+
+[[test.step]]
+run = "${CONARY_BIN} --version"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "conary"
+
+# --------------------------------------------------------------------------
+# T14: Reinstall Which
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T14"
+name = "reinstall_which"
+description = "Reinstall test package for subsequent tests"
+timeout = 300
+depends_on = ["T11"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE} --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T15: Package Info
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T15"
+name = "package_info"
+description = "Verify package info shows name and version"
+timeout = 30
+depends_on = ["T14"]
+
+[[test.step]]
+conary = "list ${TEST_PACKAGE} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${TEST_PACKAGE}", "Version"]
+
+# --------------------------------------------------------------------------
+# T16: List Files
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T16"
+name = "list_files"
+description = "Verify package file listing includes the binary"
+timeout = 30
+depends_on = ["T14"]
+
+[[test.step]]
+conary = "list ${TEST_PACKAGE} --files"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_BINARY}"
+
+# --------------------------------------------------------------------------
+# T17: Path Ownership
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T17"
+name = "path_ownership"
+description = "Verify path ownership lookup returns the package name"
+timeout = 30
+depends_on = ["T14"]
+
+[[test.step]]
+conary = "list --path ${TEST_BINARY}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_PACKAGE}"
+
+# --------------------------------------------------------------------------
+# T18: Install Tree
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T18"
+name = "install_tree"
+description = "Install second test package"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE_2} --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T19: Verify Tree Files
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T19"
+name = "verify_tree_files"
+description = "Verify second package binary exists and is executable"
+timeout = 10
+depends_on = ["T18"]
+
+[[test.step]]
+file_exists = "${TEST_BINARY_2}"
+
+[[test.step]]
+file_executable = "${TEST_BINARY_2}"
+
+# --------------------------------------------------------------------------
+# T20: Adopt Single Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T20"
+name = "adopt_single_package"
+description = "Adopt a system package (curl) into Conary management"
+timeout = 60
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "system adopt curl"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T21: Adopt Status
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T21"
+name = "adopt_status"
+description = "Verify adopt status shows adopted packages"
+timeout = 30
+depends_on = ["T20"]
+
+[[test.step]]
+conary = "system adopt --status"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Conary Adoption Status", "Adopted"]
+
+# --------------------------------------------------------------------------
+# T22: Pin Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T22"
+name = "pin_package"
+description = "Pin a package and verify pinned status"
+timeout = 30
+depends_on = ["T14"]
+
+[[test.step]]
+conary = "pin ${TEST_PACKAGE}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list ${TEST_PACKAGE} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Pinned      : yes"
+
+# --------------------------------------------------------------------------
+# T23: Unpin Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T23"
+name = "unpin_package"
+description = "Unpin a package and verify unpinned status"
+timeout = 30
+depends_on = ["T22"]
+
+[[test.step]]
+conary = "unpin ${TEST_PACKAGE}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list ${TEST_PACKAGE} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Pinned      : no"
+
+# --------------------------------------------------------------------------
+# T24: Changeset History
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T24"
+name = "changeset_history"
+description = "Verify changeset history shows entries"
+timeout = 30
+depends_on = ["T14"]
+
+[[test.step]]
+conary = "system history"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Changeset"
+
+# --------------------------------------------------------------------------
+# T25: Install Dep Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T25"
+name = "install_dep_package"
+description = "Install third test package for dependency tests"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE_3} --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T26: Verify Dep Files
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T26"
+name = "verify_dep_files"
+description = "Verify third package binary exists"
+timeout = 10
+depends_on = ["T25"]
+
+[[test.step]]
+file_exists = "${TEST_BINARY_3}"
+
+# --------------------------------------------------------------------------
+# T27: Multi Package Coexist
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T27"
+name = "multi_package_coexist"
+description = "Verify all three packages coexist in the installed list"
+timeout = 10
+depends_on = ["T14", "T18", "T25"]
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${TEST_PACKAGE}", "${TEST_PACKAGE_2}", "${TEST_PACKAGE_3}"]
+
+# --------------------------------------------------------------------------
+# T28: Dep Mode Satisfy
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T28"
+name = "dep_mode_satisfy"
+description = "Install with --dep-mode satisfy succeeds"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE} --no-scripts --dep-mode satisfy --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# Cleanup: remove the package for later tests
+[[test.step]]
+conary = "remove ${TEST_PACKAGE} --no-scripts"
+
+# --------------------------------------------------------------------------
+# T29: Dep Mode Adopt
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T29"
+name = "dep_mode_adopt"
+description = "Install with --dep-mode adopt succeeds"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE_2} --no-scripts --dep-mode adopt --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "${TEST_BINARY_2}"
+
+# --------------------------------------------------------------------------
+# T30: Dep Mode Takeover
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T30"
+name = "dep_mode_takeover"
+description = "Install with --dep-mode takeover succeeds"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE_3} --no-scripts --dep-mode takeover --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "${TEST_BINARY_3}"
+
+# --------------------------------------------------------------------------
+# T31: Blocklist Enforced
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T31"
+name = "blocklist_enforced"
+description = "Verify glibc is blocked from installation"
+timeout = 60
+depends_on = ["T04"]
+
+# Attempt to install glibc (should fail or be blocked)
+[[test.step]]
+conary = "install glibc --no-scripts --dep-mode takeover --yes --sandbox never"
+
+# Verify glibc does NOT appear in installed list
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "glibc"
+
+# --------------------------------------------------------------------------
+# T32: Update With Adopted
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T32"
+name = "update_with_adopted"
+description = "Update system with adopted packages succeeds"
+timeout = 120
+depends_on = ["T04"]
+
+# Ensure curl is adopted
+[[test.step]]
+conary = "system adopt curl"
+
+# Run update with dep-mode satisfy
+[[test.step]]
+conary = "update --dep-mode satisfy"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T33: Generation List Empty
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T33"
+name = "generation_list_empty"
+description = "Verify generation list shows no generations initially"
+timeout = 10
+depends_on = ["T04"]
+
+[[test.step]]
+run = "${CONARY_BIN} system generation list"
+
+[test.step.assert]
+stdout_contains = "No generations"
+
+# --------------------------------------------------------------------------
+# T34: Takeover Dry Run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T34"
+name = "takeover_dry_run"
+description = "Verify system takeover dry run works (non-zero exit acceptable)"
+timeout = 60
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "system takeover --dry-run --skip-conversion"
+
+[test.step.assert]
+# Non-zero is acceptable (may require root privileges)
+# When successful, output should contain DRY RUN
+stdout_contains_if_success = "DRY RUN"
+
+# --------------------------------------------------------------------------
+# T35: Generation GC Empty
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T35"
+name = "generation_gc_empty"
+description = "Verify generation GC with no generations reports nothing to clean"
+timeout = 10
+depends_on = ["T04"]
+
+[[test.step]]
+run = "${CONARY_BIN} system generation gc"
+
+[test.step.assert]
+stdout_contains_any = ["Nothing to clean", "No generations", "Nothing to collect"]
+
+# --------------------------------------------------------------------------
+# T36: Generation Info Format
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T36"
+name = "generation_info_format"
+description = "Verify generation info format (non-zero exit acceptable if no generation exists)"
+timeout = 10
+depends_on = ["T04"]
+
+[[test.step]]
+run = "${CONARY_BIN} system generation info 1"
+
+[test.step.assert]
+# Non-zero is fine (no generation exists yet), just verify no panic.
+# When successful, output should contain composefs.
+stdout_contains_if_success = "composefs"
+
+# --------------------------------------------------------------------------
+# T37: Takeover Composefs Format
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T37"
+name = "takeover_composefs_format"
+description = "Verify takeover reports composefs/EROFS format (non-zero exit acceptable)"
+timeout = 60
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "system takeover --dry-run --skip-conversion"
+
+[test.step.assert]
+# Non-zero is acceptable (requires root), just verify no panic.
+# When successful, output should mention composefs or EROFS or DRY RUN.
+stdout_contains_any_if_success = ["composefs", "EROFS", "erofs", "DRY RUN"]

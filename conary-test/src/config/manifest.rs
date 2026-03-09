@@ -101,6 +101,20 @@ pub struct Assertion {
     pub stdout_contains: Option<String>,
     #[serde(default)]
     pub stdout_not_contains: Option<String>,
+    /// All strings must appear in stdout.
+    #[serde(default)]
+    pub stdout_contains_all: Option<Vec<String>>,
+    /// At least one string must appear in stdout.
+    #[serde(default)]
+    pub stdout_contains_any: Option<Vec<String>>,
+    /// Check stdout contains this string only when exit code is 0.
+    /// Non-zero exit is silently accepted (no assertion failure).
+    #[serde(default)]
+    pub stdout_contains_if_success: Option<String>,
+    /// Check stdout contains any of these strings only when exit code is 0.
+    /// Non-zero exit is silently accepted (no assertion failure).
+    #[serde(default)]
+    pub stdout_contains_any_if_success: Option<Vec<String>>,
     #[serde(default)]
     pub stderr_contains: Option<String>,
     #[serde(default)]

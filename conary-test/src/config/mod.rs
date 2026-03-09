@@ -171,6 +171,77 @@ v2_version = "2.0.0"
     }
 
     #[test]
+    fn test_load_phase1_advanced_manifest() {
+        let path =
+            std::path::Path::new("../tests/integration/remi/manifests/phase1-advanced.toml");
+        if path.exists() {
+            let manifest = load_manifest(path).unwrap();
+            assert!(
+                manifest.test.len() >= 27,
+                "Expected at least 27 tests (T11-T37), got {}",
+                manifest.test.len()
+            );
+
+            // Verify suite metadata
+            assert_eq!(manifest.suite.phase, 1);
+
+            // Verify T11 remove_package
+            let t11 = manifest.test.iter().find(|t| t.id == "T11").unwrap();
+            assert_eq!(t11.name, "remove_package");
+            assert_eq!(t11.timeout, 60);
+
+            // Verify T15 uses stdout_contains_all
+            let t15 = manifest.test.iter().find(|t| t.id == "T15").unwrap();
+            let a15 = t15.step[0].assert.as_ref().unwrap();
+            assert!(
+                a15.stdout_contains_all.is_some(),
+                "T15 should use stdout_contains_all"
+            );
+            let all = a15.stdout_contains_all.as_ref().unwrap();
+            assert_eq!(all.len(), 2);
+
+            // Verify T27 uses stdout_contains_all with 3 entries
+            let t27 = manifest.test.iter().find(|t| t.id == "T27").unwrap();
+            let a27 = t27.step[0].assert.as_ref().unwrap();
+            let all27 = a27.stdout_contains_all.as_ref().unwrap();
+            assert_eq!(all27.len(), 3);
+
+            // Verify T33 uses run (no_db generation command)
+            let t33 = manifest.test.iter().find(|t| t.id == "T33").unwrap();
+            assert!(
+                t33.step[0].run.is_some(),
+                "T33 should use run (no_db generation command)"
+            );
+
+            // Verify T35 uses stdout_contains_any
+            let t35 = manifest.test.iter().find(|t| t.id == "T35").unwrap();
+            let a35 = t35.step[0].assert.as_ref().unwrap();
+            assert!(
+                a35.stdout_contains_any.is_some(),
+                "T35 should use stdout_contains_any"
+            );
+            let any35 = a35.stdout_contains_any.as_ref().unwrap();
+            assert_eq!(any35.len(), 3);
+
+            // Verify T34 uses stdout_contains_if_success
+            let t34 = manifest.test.iter().find(|t| t.id == "T34").unwrap();
+            let a34 = t34.step[0].assert.as_ref().unwrap();
+            assert!(
+                a34.stdout_contains_if_success.is_some(),
+                "T34 should use stdout_contains_if_success"
+            );
+
+            // Verify T37 uses stdout_contains_any_if_success
+            let t37 = manifest.test.iter().find(|t| t.id == "T37").unwrap();
+            let a37 = t37.step[0].assert.as_ref().unwrap();
+            assert!(
+                a37.stdout_contains_any_if_success.is_some(),
+                "T37 should use stdout_contains_any_if_success"
+            );
+        }
+    }
+
+    #[test]
     fn test_load_phase1_core_manifest() {
         let path = std::path::Path::new("../tests/integration/remi/manifests/phase1-core.toml");
         if path.exists() {
