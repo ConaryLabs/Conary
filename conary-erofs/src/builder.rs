@@ -823,7 +823,7 @@ mod tests {
             builder.add_symlink("/d/link", "target", 0o777);
 
             let mut buf = Cursor::new(Vec::new());
-            builder.build(&mut buf).unwrap();
+            let _ = builder.build(&mut buf).unwrap();
             buf.into_inner()
         };
 
@@ -868,7 +868,7 @@ mod tests {
         builder.add_file("/x", &[0x42; 32], 64, 0o644, 0, 0);
 
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let image = buf.into_inner();
         let sb = parse_superblock(&image);
@@ -895,7 +895,7 @@ mod tests {
     fn chunked_file_feature_flag_set() {
         let builder = ErofsBuilder::new();
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let image = buf.into_inner();
         let sb = parse_superblock(&image);
