@@ -1,12 +1,25 @@
 // conary-test/src/server/routes.rs
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::routing::{get, post};
 
 use crate::server::handlers;
+use crate::server::mcp::TestMcpServer;
 use crate::server::state::AppState;
 
 pub fn create_router(state: AppState) -> Router {
+    // MCP (Model Context Protocol) endpoint for LLM agent integration.
+    let state_for_mcp = state.clone();
+    let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
+        move || Ok(TestMcpServer::new(state_for_mcp.clone())),
+        Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        ),
+        Default::default(),
+    );
+
     Router::new()
         .route("/v1/health", get(handlers::health))
         .route("/v1/suites", get(handlers::list_suites))
@@ -14,6 +27,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/runs", get(handlers::list_runs))
         .route("/v1/runs/{id}", get(handlers::get_run))
         .route("/v1/distros", get(handlers::list_distros))
+        .nest_service("/mcp", mcp_service)
         .with_state(state)
 }
 

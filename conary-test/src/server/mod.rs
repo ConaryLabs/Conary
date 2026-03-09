@@ -1,6 +1,7 @@
 // conary-test/src/server/mod.rs
 
 pub mod handlers;
+pub mod mcp;
 pub mod routes;
 pub mod state;
 
