@@ -133,10 +133,12 @@ mod tests {
             conary_core::db::schema::migrate(&conn).unwrap();
         }
 
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = db_path.clone();
-        config.chunk_dir = tmp.path().join("chunks");
-        config.cache_dir = tmp.path().join("cache");
+        let config = crate::server::ServerConfig {
+            db_path: db_path.clone(),
+            chunk_dir: tmp.path().join("chunks"),
+            cache_dir: tmp.path().join("cache"),
+            ..Default::default()
+        };
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
         std::fs::create_dir_all(&config.cache_dir).unwrap();
 
@@ -237,10 +239,12 @@ mod tests {
         let token_id = body["id"].as_i64().expect("id should be an integer");
 
         // Build a fresh router (oneshot consumes the app)
-        let mut config2 = crate::server::ServerConfig::default();
-        config2.db_path = db_path.clone();
-        config2.chunk_dir = db_path.parent().unwrap().join("chunks");
-        config2.cache_dir = db_path.parent().unwrap().join("cache");
+        let config2 = crate::server::ServerConfig {
+            db_path: db_path.clone(),
+            chunk_dir: db_path.parent().unwrap().join("chunks"),
+            cache_dir: db_path.parent().unwrap().join("cache"),
+            ..Default::default()
+        };
         let state2 = Arc::new(RwLock::new(crate::server::ServerState::new(config2)));
         let app2 = crate::server::routes::create_external_admin_router(state2, None);
 
@@ -249,7 +253,7 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/v1/admin/tokens/{token_id}"))
+                    .uri(format!("/v1/admin/tokens/{token_id}"))
                     .header("Authorization", "Bearer test-admin-token-12345")
                     .body(axum::body::Body::empty())
                     .unwrap(),

@@ -313,10 +313,12 @@ mod tests {
 
     /// Helper to rebuild a fresh router against the same DB (oneshot consumes the app).
     fn rebuild_app(db_path: &std::path::Path) -> axum::Router {
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = db_path.to_path_buf();
-        config.chunk_dir = db_path.parent().unwrap().join("chunks");
-        config.cache_dir = db_path.parent().unwrap().join("cache");
+        let config = crate::server::ServerConfig {
+            db_path: db_path.to_path_buf(),
+            chunk_dir: db_path.parent().unwrap().join("chunks"),
+            cache_dir: db_path.parent().unwrap().join("cache"),
+            ..Default::default()
+        };
         let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
         crate::server::routes::create_external_admin_router(state, None)
     }
@@ -332,10 +334,12 @@ mod tests {
             conary_core::db::schema::migrate(&conn).unwrap();
         }
 
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = db_path.clone();
-        config.chunk_dir = tmp.path().join("chunks");
-        config.cache_dir = tmp.path().join("cache");
+        let config = crate::server::ServerConfig {
+            db_path: db_path.clone(),
+            chunk_dir: tmp.path().join("chunks"),
+            cache_dir: tmp.path().join("cache"),
+            ..Default::default()
+        };
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
         std::fs::create_dir_all(&config.cache_dir).unwrap();
 

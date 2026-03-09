@@ -332,10 +332,12 @@ mod tests {
     use tower::ServiceExt;
 
     fn rebuild_app(db_path: &std::path::Path) -> axum::Router {
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = db_path.to_path_buf();
-        config.chunk_dir = db_path.parent().unwrap().join("chunks");
-        config.cache_dir = db_path.parent().unwrap().join("cache");
+        let config = crate::server::ServerConfig {
+            db_path: db_path.to_path_buf(),
+            chunk_dir: db_path.parent().unwrap().join("chunks"),
+            cache_dir: db_path.parent().unwrap().join("cache"),
+            ..Default::default()
+        };
         let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
         crate::server::routes::create_external_admin_router(state, None)
     }
@@ -351,10 +353,12 @@ mod tests {
             conary_core::db::schema::migrate(&conn).unwrap();
         }
 
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = db_path.clone();
-        config.chunk_dir = tmp.path().join("chunks");
-        config.cache_dir = tmp.path().join("cache");
+        let config = crate::server::ServerConfig {
+            db_path: db_path.clone(),
+            chunk_dir: tmp.path().join("chunks"),
+            cache_dir: tmp.path().join("cache"),
+            ..Default::default()
+        };
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
         std::fs::create_dir_all(&config.cache_dir).unwrap();
 
@@ -437,7 +441,7 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/v1/admin/federation/peers/{peer_id}"))
+                    .uri(format!("/v1/admin/federation/peers/{peer_id}"))
                     .header("Authorization", format!("Bearer {token}"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -451,7 +455,7 @@ mod tests {
         let resp = app4
             .oneshot(
                 axum::http::Request::builder()
-                    .uri(&format!("/v1/admin/federation/peers/{peer_id}/health"))
+                    .uri(format!("/v1/admin/federation/peers/{peer_id}/health"))
                     .header("Authorization", format!("Bearer {token}"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
