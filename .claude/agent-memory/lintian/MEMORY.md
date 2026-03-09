@@ -39,6 +39,16 @@
 - MCP endpoint at /mcp on :8082 requires admin scope
 - SSE broadcast channel bounded at 1024 -- adequate for admin API volume
 
+### conary-test patterns
+- `TestSuite` tracks failed IDs via HashMap but recomputes passed/failed/skipped counts via linear scan each time
+- `StepType` enum owns cloned strings from `TestStep` fields -- could borrow
+- `expand_vars()` always iterates all vars; no early-out for strings without `${`
+- `to_sse()` serializes tagged enum but also manually extracts event name -- double work, plus data payload includes redundant tag wrapper
+- `runs` HashMap in AppState grows without bound (no eviction)
+- `list_runs` uses serde_json round-trip to stringify RunStatus
+- `build_image()` always tars full context dir (Docker API requirement), no image-exists check
+- **Duplication (2026-03-09)**: 5 test fixture constructors (test_state/test_config), handlers+mcp duplicate 5 operations (no service layer), Assertion lacks Default, DistroConfig uses numbered fields, MockBackend not shared, RunStatus stringified 3 ways
+
 ## Performance Notes
 - `db::open_fast()` skips migrations for server hot paths (open_fast vs open)
 - Governor rate limiter DashMaps cleaned every 5 min via `run_limiter_cleanup()` (retain_recent + shrink_to_fit)

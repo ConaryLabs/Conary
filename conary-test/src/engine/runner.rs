@@ -260,6 +260,9 @@ impl TestRunner {
 
     /// Replace `${VAR}` patterns in a string with values from the variable map.
     fn expand_vars(&self, input: &str) -> String {
+        if !input.contains("${") {
+            return input.to_string();
+        }
         let mut result = input.to_string();
         for (key, value) in &self.vars {
             let pattern = format!("${{{key}}}");
@@ -384,31 +387,16 @@ mod tests {
     fn simple_step_run(cmd: &str, assertion: Option<Assertion>) -> TestStep {
         TestStep {
             run: Some(cmd.to_string()),
-            conary: None,
-            file_exists: None,
-            file_not_exists: None,
-            file_executable: None,
-            file_checksum: None,
-            dir_exists: None,
-            sleep: None,
             assert: assertion,
+            ..TestStep::default()
         }
     }
 
     fn make_assertion(exit_code: Option<i32>, stdout_contains: Option<&str>) -> Assertion {
         Assertion {
             exit_code,
-            exit_code_not: None,
             stdout_contains: stdout_contains.map(String::from),
-            stdout_not_contains: None,
-            stdout_contains_all: None,
-            stdout_contains_any: None,
-            stdout_contains_if_success: None,
-            stdout_contains_any_if_success: None,
-            stderr_contains: None,
-            file_exists: None,
-            file_not_exists: None,
-            file_checksum: None,
+            ..Assertion::default()
         }
     }
 

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -11,6 +11,17 @@ pub enum RunStatus {
     Running,
     Completed,
     Cancelled,
+}
+
+impl RunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -45,7 +56,7 @@ pub struct TestSuite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<DateTime<Utc>>,
     #[serde(skip)]
-    failed_ids: HashMap<String, bool>,
+    failed_ids: HashSet<String>,
 }
 
 impl TestSuite {
@@ -57,19 +68,19 @@ impl TestSuite {
             results: Vec::new(),
             started_at: Utc::now(),
             finished_at: None,
-            failed_ids: HashMap::new(),
+            failed_ids: HashSet::new(),
         }
     }
 
     pub fn record(&mut self, result: TestResult) {
         if result.status == TestStatus::Failed {
-            self.failed_ids.insert(result.id.clone(), true);
+            self.failed_ids.insert(result.id.clone());
         }
         self.results.push(result);
     }
 
     pub fn has_failed(&self, id: &str) -> bool {
-        self.failed_ids.contains_key(id)
+        self.failed_ids.contains(id)
     }
 
     pub fn should_skip(&self, depends_on: &Option<Vec<String>>) -> bool {

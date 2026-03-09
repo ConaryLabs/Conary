@@ -111,9 +111,7 @@ pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
             run_id: id,
             suite: suite.name.clone(),
             phase: suite.phase,
-            status: format!("{}", serde_json::to_value(suite.status).unwrap_or_default())
-                .trim_matches('"')
-                .to_string(),
+            status: suite.status.as_str().to_string(),
             total: suite.total(),
             passed: suite.passed(),
             failed: suite.failed(),
@@ -181,48 +179,11 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::distro::{DistroConfig, PathsConfig, RemiConfig, SetupConfig};
-    use crate::config::distro::GlobalConfig;
     use crate::server::routes::create_router;
+    use crate::test_fixtures;
     use axum::body::Body;
     use axum::http::Request;
-    use std::collections::HashMap;
     use tower::ServiceExt;
-
-    fn test_state() -> AppState {
-        let mut distros = HashMap::new();
-        distros.insert(
-            "fedora43".to_string(),
-            DistroConfig {
-                remi_distro: "fedora43".to_string(),
-                repo_name: "conary-fedora43".to_string(),
-                containerfile: None,
-                test_package_1: None,
-                test_binary_1: None,
-                test_package_2: None,
-                test_binary_2: None,
-                test_package_3: None,
-                test_binary_3: None,
-            },
-        );
-
-        let config = GlobalConfig {
-            remi: RemiConfig {
-                endpoint: "https://localhost".to_string(),
-            },
-            paths: PathsConfig {
-                db: "/tmp/test.db".to_string(),
-                conary_bin: "/usr/bin/conary".to_string(),
-                results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
-            },
-            setup: SetupConfig::default(),
-            distros,
-            fixtures: None,
-        };
-
-        AppState::new(config, "/tmp/manifests".to_string())
-    }
 
     #[tokio::test]
     async fn test_health() {
@@ -232,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_run_unknown_distro() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs")
@@ -248,7 +209,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_run_valid_distro() {
-        let state = test_state();
+        let state = test_fixtures::test_app_state();
         let app = create_router(state.clone());
         let req = Request::builder()
             .method("POST")
@@ -268,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_not_found() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/runs/9999")
             .body(Body::empty())
@@ -280,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_runs_empty() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/runs")
             .body(Body::empty())
@@ -298,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_distros() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/distros")
             .body(Body::empty())

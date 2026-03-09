@@ -34,33 +34,14 @@ pub fn create_router(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::distro::{GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
+    use crate::test_fixtures;
     use axum::body::Body;
     use axum::http::Request;
-    use std::collections::HashMap;
     use tower::ServiceExt;
-
-    fn test_state() -> AppState {
-        let config = GlobalConfig {
-            remi: RemiConfig {
-                endpoint: "https://localhost".to_string(),
-            },
-            paths: PathsConfig {
-                db: "/tmp/test.db".to_string(),
-                conary_bin: "/usr/bin/conary".to_string(),
-                results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
-            },
-            setup: SetupConfig::default(),
-            distros: HashMap::new(),
-            fixtures: None,
-        };
-        AppState::new(config, "/tmp/manifests".to_string())
-    }
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/health")
             .body(Body::empty())
@@ -72,7 +53,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_not_found() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/nonexistent")
             .body(Body::empty())
@@ -84,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_not_found() {
-        let app = create_router(test_state());
+        let app = create_router(test_fixtures::test_app_state());
         let req = Request::builder()
             .uri("/v1/runs/12345")
             .body(Body::empty())

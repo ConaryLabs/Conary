@@ -73,20 +73,7 @@ mod tests {
     use super::*;
 
     fn base_assertion() -> Assertion {
-        Assertion {
-            exit_code: None,
-            exit_code_not: None,
-            stdout_contains: None,
-            stdout_not_contains: None,
-            stdout_contains_all: None,
-            stdout_contains_any: None,
-            stdout_contains_if_success: None,
-            stdout_contains_any_if_success: None,
-            stderr_contains: None,
-            file_exists: None,
-            file_not_exists: None,
-            file_checksum: None,
-        }
+        Assertion::default()
     }
 
     #[test]

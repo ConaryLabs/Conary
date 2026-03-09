@@ -47,13 +47,14 @@ pub enum TestEvent {
 impl TestEvent {
     /// Format as SSE text.
     pub fn to_sse(&self) -> String {
-        let (event_name, data) = match self {
-            Self::TestStarted { .. } => ("test_started", serde_json::to_string(self).unwrap()),
-            Self::TestPassed { .. } => ("test_passed", serde_json::to_string(self).unwrap()),
-            Self::TestFailed { .. } => ("test_failed", serde_json::to_string(self).unwrap()),
-            Self::TestSkipped { .. } => ("test_skipped", serde_json::to_string(self).unwrap()),
-            Self::RunComplete { .. } => ("run_complete", serde_json::to_string(self).unwrap()),
+        let event_name = match self {
+            Self::TestStarted { .. } => "test_started",
+            Self::TestPassed { .. } => "test_passed",
+            Self::TestFailed { .. } => "test_failed",
+            Self::TestSkipped { .. } => "test_skipped",
+            Self::RunComplete { .. } => "run_complete",
         };
+        let data = serde_json::to_string(self).unwrap();
         format!("event: {event_name}\ndata: {data}\n\n")
     }
 }

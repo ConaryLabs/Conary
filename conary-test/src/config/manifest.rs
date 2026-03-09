@@ -33,7 +33,7 @@ pub struct TestDef {
     pub group: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TestStep {
     #[serde(default)]
     pub run: Option<String>,
@@ -96,7 +96,7 @@ pub struct FileChecksum {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Assertion {
     #[serde(default)]
     pub exit_code: Option<i32>,

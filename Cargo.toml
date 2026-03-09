@@ -76,6 +76,16 @@ futures = "0.3"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.8"
 
+# Web framework (shared between conary-server and conary-test)
+axum = "0.7"
+tower = "0.5"
+tower-http = "0.6"
+tokio-stream = "0.1"
+
+# MCP (shared between conary-server and conary-test)
+rmcp = "1.1"
+schemars = "1.0"
+
 # Other shared
 fs2 = "0.4"
 log = "0.4"

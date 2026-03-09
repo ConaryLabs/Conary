@@ -29,14 +29,14 @@ bollard = "0.18"
 bytes = "1"
 
 # HTTP server
-axum = "0.7"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
-tokio-stream = "0.1"
+axum.workspace = true
+tower.workspace = true
+tower-http = { workspace = true, features = ["cors"] }
+tokio-stream.workspace = true
 
 # MCP
-rmcp = { version = "1.1", features = ["server", "macros", "transport-streamable-http-server"] }
-schemars = "1.0"
+rmcp = { workspace = true, features = ["server", "macros", "transport-streamable-http-server"] }
+schemars.workspace = true
 
 [[bin]]
 name = "conary-test"

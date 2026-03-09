@@ -308,47 +308,11 @@ impl ServerHandler for TestMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::distro::{DistroConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
-    use std::collections::HashMap;
-
-    fn test_state() -> AppState {
-        let mut distros = HashMap::new();
-        distros.insert(
-            "fedora43".to_string(),
-            DistroConfig {
-                remi_distro: "fedora43".to_string(),
-                repo_name: "conary-fedora43".to_string(),
-                containerfile: None,
-                test_package_1: None,
-                test_binary_1: None,
-                test_package_2: None,
-                test_binary_2: None,
-                test_package_3: None,
-                test_binary_3: None,
-            },
-        );
-
-        let config = GlobalConfig {
-            remi: RemiConfig {
-                endpoint: "https://localhost".to_string(),
-            },
-            paths: PathsConfig {
-                db: "/tmp/test.db".to_string(),
-                conary_bin: "/usr/bin/conary".to_string(),
-                results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
-            },
-            setup: SetupConfig::default(),
-            distros,
-            fixtures: None,
-        };
-
-        AppState::new(config, "/tmp/manifests".to_string())
-    }
+    use crate::test_fixtures;
 
     #[test]
     fn test_mcp_server_info() {
-        let state = test_state();
+        let state = test_fixtures::test_app_state();
         let server = TestMcpServer::new(state);
 
         let info = server.get_info();

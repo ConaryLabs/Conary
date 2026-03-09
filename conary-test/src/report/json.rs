@@ -24,16 +24,10 @@ struct Summary {
 
 /// Serialize a test suite to a JSON string.
 pub fn to_json_report(suite: &TestSuite) -> Result<String> {
-    let status_str = match suite.status {
-        crate::engine::suite::RunStatus::Pending => "pending",
-        crate::engine::suite::RunStatus::Running => "running",
-        crate::engine::suite::RunStatus::Completed => "completed",
-        crate::engine::suite::RunStatus::Cancelled => "cancelled",
-    };
     let report = JsonReport {
         suite_name: &suite.name,
         phase: suite.phase,
-        status: status_str,
+        status: suite.status.as_str(),
         summary: Summary {
             total: suite.total(),
             passed: suite.passed(),

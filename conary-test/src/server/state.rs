@@ -33,24 +33,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::distro::{PathsConfig, RemiConfig, SetupConfig};
-
-    fn test_config() -> GlobalConfig {
-        GlobalConfig {
-            remi: RemiConfig {
-                endpoint: "https://localhost".to_string(),
-            },
-            paths: PathsConfig {
-                db: "/tmp/test.db".to_string(),
-                conary_bin: "/usr/bin/conary".to_string(),
-                results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
-            },
-            setup: SetupConfig::default(),
-            distros: HashMap::new(),
-            fixtures: None,
-        }
-    }
+    use crate::test_fixtures;
 
     #[test]
     fn test_next_run_id_increments() {
@@ -61,7 +44,7 @@ mod tests {
 
     #[test]
     fn test_new_state_has_empty_runs() {
-        let state = AppState::new(test_config(), "/tmp/manifests".to_string());
+        let state = AppState::new(test_fixtures::test_global_config(), "/tmp/manifests".to_string());
         let runs = state.runs.try_read().unwrap();
         assert!(runs.is_empty());
     }
