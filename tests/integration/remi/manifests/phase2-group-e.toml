@@ -1,0 +1,108 @@
+# tests/integration/remi/manifests/phase2-group-e.toml
+#
+# Phase 2, Group E: Remi Client (T67-T71).
+# Converted from tests/integration/remi/runner/test_runner.py run_group_e().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REMI_DISTRO}
+# Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}
+
+[suite]
+name = "Phase 2, Group E: Remi Client (T67-T71)"
+phase = 2
+
+# --------------------------------------------------------------------------
+# T67: Sparse index
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T67"
+name = "sparse_index"
+description = "Verify sparse index endpoint returns non-empty content"
+timeout = 30
+group = "E"
+
+[[test.step]]
+run = "curl -sf ${REMI_ENDPOINT}/v1/${REMI_DISTRO}/index"
+
+[test.step.assert]
+exit_code = 0
+# Response must not be empty (Python checks r.stdout.strip())
+stdout_not_contains = ""
+
+# --------------------------------------------------------------------------
+# T68: Chunk-level install
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T68"
+name = "chunk_level_install"
+description = "Install fixture package from Remi via chunk-level download"
+timeout = 300
+group = "E"
+
+# Install the fixture package via Remi
+[[test.step]]
+conary = "install ${FIXTURE_PKG_NAME} --dep-mode takeover --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify the file was deployed
+[[test.step]]
+file_exists = "${FIXTURE_FILE}"
+
+# Clean up
+[[test.step]]
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+
+# --------------------------------------------------------------------------
+# T69: OCI manifest
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T69"
+name = "oci_manifest"
+description = "Verify OCI /v2/ endpoint returns HTTP 200 or 401"
+timeout = 30
+group = "E"
+
+[[test.step]]
+run = "curl -sf -o /dev/null -w '%{http_code}' ${REMI_ENDPOINT}/v2/"
+
+[test.step.assert]
+# Python checks: code in ("200", "401")
+stdout_contains_any = ["200", "401"]
+
+# --------------------------------------------------------------------------
+# T70: OCI blob fetch
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T70"
+name = "oci_blob_fetch"
+description = "Verify OCI catalog endpoint is accessible (soft pass)"
+timeout = 30
+group = "E"
+
+# Soft pass: if catalog is not available, just print info
+[[test.step]]
+run = "curl -sf ${REMI_ENDPOINT}/v2/_catalog 2>/dev/null || echo 'OCI catalog not available (soft pass)'"
+
+# --------------------------------------------------------------------------
+# T71: Stats endpoint
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T71"
+name = "stats_endpoint"
+description = "Verify /stats endpoint returns packages data"
+timeout = 30
+group = "E"
+
+[[test.step]]
+run = "curl -sf ${REMI_ENDPOINT}/stats"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "packages"

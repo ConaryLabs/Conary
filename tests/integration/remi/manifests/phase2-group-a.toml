@@ -1,0 +1,267 @@
+# tests/integration/remi/manifests/phase2-group-a.toml
+#
+# Phase 2, Group A: Deep Install Flow (T38-T50).
+# Converted from tests/integration/remi/runner/test_runner.py run_group_a().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}, ${FIXTURE_ADDED_FILE},
+#                    ${FIXTURE_MARKER}, ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS},
+#                    ${FIXTURE_V1_HELLO_SHA256}, ${FIXTURE_V2_HELLO_SHA256},
+#                    ${FIXTURE_V2_ADDED_SHA256}
+
+[suite]
+name = "Phase 2, Group A: Deep Install Flow (T38-T50)"
+phase = 2
+
+# --------------------------------------------------------------------------
+# T38: Install fixture v1
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T38"
+name = "install_fixture_v1_with_deps"
+description = "Install CCS fixture package v1 with dependencies"
+timeout = 300
+group = "A"
+fatal = true
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T39: Verify dep files on disk
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T39"
+name = "verify_dep_files_on_disk"
+description = "Verify fixture v1 files and directory exist on disk"
+timeout = 10
+group = "A"
+depends_on = ["T38"]
+
+[[test.step]]
+file_exists = "${FIXTURE_FILE}"
+
+[[test.step]]
+dir_exists = "/usr/share/conary-test"
+
+# --------------------------------------------------------------------------
+# T40: Verify v1 checksum
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T40"
+name = "verify_v1_checksum"
+description = "Verify fixture v1 hello.txt has correct SHA-256 checksum"
+timeout = 10
+group = "A"
+depends_on = ["T38"]
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+
+# --------------------------------------------------------------------------
+# T41: Verify scriptlet ran
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T41"
+name = "verify_scriptlet_ran"
+description = "Verify post-install scriptlet created the marker file"
+timeout = 10
+group = "A"
+depends_on = ["T38"]
+
+[[test.step]]
+file_exists = "${FIXTURE_MARKER}"
+
+# --------------------------------------------------------------------------
+# T42: Remove with scriptlets
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T42"
+name = "remove_with_scriptlets"
+description = "Remove fixture package and verify scriptlet cleanup"
+timeout = 60
+group = "A"
+depends_on = ["T38"]
+
+[[test.step]]
+conary = "remove ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_not_exists = "${FIXTURE_MARKER}"
+
+[[test.step]]
+file_not_exists = "${FIXTURE_FILE}"
+
+# --------------------------------------------------------------------------
+# T43: Reinstall fixture v1
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T43"
+name = "reinstall_fixture_v1"
+description = "Reinstall CCS fixture package v1 for update tests"
+timeout = 300
+group = "A"
+depends_on = ["T42"]
+fatal = true
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T44: Update v1 to v2
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T44"
+name = "update_v1_to_v2"
+description = "Update fixture package from v1 to v2 via CCS install"
+timeout = 300
+group = "A"
+depends_on = ["T43"]
+fatal = true
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T45: Delta update verify
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T45"
+name = "delta_update_verify"
+description = "Verify v2 hello.txt checksum after update"
+timeout = 10
+group = "A"
+depends_on = ["T44"]
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V2_HELLO_SHA256}" }
+
+# --------------------------------------------------------------------------
+# T46: Verify v2 added file
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T46"
+name = "verify_v2_added_file"
+description = "Verify v2 added file exists with correct checksum"
+timeout = 10
+group = "A"
+depends_on = ["T44"]
+
+[[test.step]]
+file_exists = "${FIXTURE_ADDED_FILE}"
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_ADDED_FILE}", sha256 = "${FIXTURE_V2_ADDED_SHA256}" }
+
+# --------------------------------------------------------------------------
+# T47: Rollback after update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T47"
+name = "rollback_after_update"
+description = "Rollback the v1->v2 update using changeset history"
+timeout = 120
+group = "A"
+depends_on = ["T44"]
+
+# Get history and extract the most recent changeset ID, then rollback.
+# The shell pipeline extracts the first [N] pattern from history output.
+[[test.step]]
+run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T48: Rollback filesystem check
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T48"
+name = "rollback_filesystem_check"
+description = "Verify filesystem is restored to v1 state after rollback"
+timeout = 10
+group = "A"
+depends_on = ["T47"]
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+
+[[test.step]]
+file_not_exists = "${FIXTURE_ADDED_FILE}"
+
+# --------------------------------------------------------------------------
+# T49: Pin blocks update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T49"
+name = "pin_blocks_update"
+description = "Pin fixture package, verify pinned status, then unpin"
+timeout = 120
+group = "A"
+depends_on = ["T43"]
+
+# Pin the package
+[[test.step]]
+conary = "pin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify pinned status shows yes
+[[test.step]]
+conary = "list ${FIXTURE_PKG_NAME} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "yes"
+
+# Unpin the package
+[[test.step]]
+conary = "unpin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T50: Orphan detection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T50"
+name = "orphan_detection"
+description = "Remove fixture and verify orphan detection does not crash"
+timeout = 60
+group = "A"
+depends_on = ["T43"]
+
+# Remove the package (may already be removed, check=False equivalent)
+[[test.step]]
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+
+# List orphans -- just verify no crash
+[[test.step]]
+conary = "list --orphans"

@@ -1,0 +1,167 @@
+# tests/integration/remi/manifests/phase2-group-b.toml
+#
+# Phase 2, Group B: Generation Lifecycle (T51-T57).
+# Converted from tests/integration/remi/runner/test_runner.py run_group_b().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Fixture variables: ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS}
+#
+# NOTE: T51-T56 require composefs/EROFS kernel support. The runner should
+# check /proc/filesystems for "erofs" and skip this group if unavailable.
+
+[suite]
+name = "Phase 2, Group B: Generation Lifecycle (T51-T57)"
+phase = 2
+
+# Setup: ensure fixture v1 is installed for generation tests
+[[suite.setup]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+# --------------------------------------------------------------------------
+# T51: Build generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T51"
+name = "build_generation"
+description = "Build a composefs generation from current package state"
+timeout = 120
+group = "B"
+fatal = true
+
+# Generation commands do not accept --db-path
+[[test.step]]
+run = "${CONARY_BIN} system generation build"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "built"
+
+# --------------------------------------------------------------------------
+# T52: Generation list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T52"
+name = "generation_list"
+description = "Verify generation list shows at least one generation"
+timeout = 30
+group = "B"
+depends_on = ["T51"]
+
+[[test.step]]
+run = "${CONARY_BIN} system generation list"
+
+[test.step.assert]
+stdout_not_contains = "No generations"
+
+# --------------------------------------------------------------------------
+# T53: Generation info
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T53"
+name = "generation_info"
+description = "Verify generation info shows package information"
+timeout = 30
+group = "B"
+depends_on = ["T51"]
+
+# Use generation 0 as fallback; the runner should capture the actual
+# generation number from T51 output if available.
+[[test.step]]
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | head -1); ${CONARY_BIN} system generation info ${GEN:-0}"
+
+[test.step.assert]
+stdout_contains = "Packages"
+
+# --------------------------------------------------------------------------
+# T54: Switch generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T54"
+name = "switch_generation"
+description = "Install v2, build second generation, and attempt switch"
+timeout = 300
+group = "B"
+depends_on = ["T51"]
+fatal = true
+
+# Install v2 and build a new generation
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system generation build"
+
+[test.step.assert]
+exit_code = 0
+
+# Switch to latest generation. In unprivileged containers,
+# "permission denied" or "operation not permitted" is acceptable
+# (proves the switch logic ran and reached the mount stage).
+[[test.step]]
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | tail -1); ${CONARY_BIN} system generation switch $GEN"
+
+[test.step.assert]
+# Accept both success (exit 0) and permission errors (non-zero)
+stdout_contains_any_if_success = ["switched", "Generation"]
+
+# --------------------------------------------------------------------------
+# T55: Rollback generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T55"
+name = "rollback_generation"
+description = "Switch back to the first generation (rollback)"
+timeout = 60
+group = "B"
+depends_on = ["T54"]
+
+# Switch to first generation. Permission errors are acceptable.
+[[test.step]]
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | head -1); ${CONARY_BIN} system generation switch $GEN"
+
+[test.step.assert]
+stdout_contains_any_if_success = ["switched", "Generation"]
+
+# --------------------------------------------------------------------------
+# T56: GC old generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T56"
+name = "gc_old_generation"
+description = "Garbage-collect old generations"
+timeout = 60
+group = "B"
+depends_on = ["T54"]
+
+[[test.step]]
+run = "${CONARY_BIN} system generation gc"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T57: System takeover full
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T57"
+name = "system_takeover_full"
+description = "Full system takeover (non-zero exit acceptable, verify no panic)"
+timeout = 300
+group = "B"
+
+[[test.step]]
+conary = "system takeover --skip-conversion --yes"
+
+[test.step.assert]
+# Non-zero exit is acceptable; just verify no panic
+stdout_not_contains = "panic"

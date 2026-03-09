@@ -1,0 +1,144 @@
+# tests/integration/remi/manifests/phase2-group-f.toml
+#
+# Phase 2, Group F: Self-Update (T72-T76).
+# Converted from tests/integration/remi/runner/test_runner.py run_group_f().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+
+[suite]
+name = "Phase 2, Group F: Self-Update (T72-T76)"
+phase = 2
+
+# --------------------------------------------------------------------------
+# T72: Update channel get (default)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T72"
+name = "update_channel_get_default"
+description = "Verify default update channel points to packages.conary.io"
+timeout = 10
+group = "F"
+
+[[test.step]]
+conary = "system update-channel get"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["packages.conary.io", "(default)"]
+
+# --------------------------------------------------------------------------
+# T73: Update channel set
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T73"
+name = "update_channel_set"
+description = "Set a custom update channel and verify it changed"
+timeout = 10
+group = "F"
+depends_on = ["T72"]
+
+# Set custom channel
+[[test.step]]
+conary = "system update-channel set https://mirror.example.com/v1/ccs/conary"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify it changed
+[[test.step]]
+conary = "system update-channel get"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "mirror.example.com"
+stdout_not_contains = "(default)"
+
+# --------------------------------------------------------------------------
+# T74: Update channel reset
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T74"
+name = "update_channel_reset"
+description = "Reset update channel to default and verify"
+timeout = 10
+group = "F"
+depends_on = ["T73"]
+
+# Reset to default
+[[test.step]]
+conary = "system update-channel reset"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify reset
+[[test.step]]
+conary = "system update-channel get"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["packages.conary.io", "(default)"]
+
+# --------------------------------------------------------------------------
+# T75: Self-update check (graceful failure)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T75"
+name = "self_update_check"
+description = "Verify self-update --check runs and shows version info"
+timeout = 30
+group = "F"
+
+[[test.step]]
+conary = "self-update --check"
+
+[test.step.assert]
+stdout_contains_all = ["Current version:", "Update channel:"]
+
+# --------------------------------------------------------------------------
+# T76: Self-update with local mock server
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T76"
+name = "self_update_mock_server"
+description = "Start mock HTTP server, set update channel to it, verify update detection"
+timeout = 60
+group = "F"
+
+# This test orchestrates a local mock HTTP server via shell script:
+# 1. Build a fake CCS package from the current binary
+# 2. Create a latest.json with version 99.0.0
+# 3. Start Python HTTP server on port 19876
+# 4. Point update channel at it
+# 5. Run self-update --check
+# 6. Verify "Update available" and "99.0.0" in output
+# 7. Clean up (reset channel, stop server)
+[[test.step]]
+run = """MOCK_DIR=/tmp/self-update-mock && \
+mkdir -p $MOCK_DIR && \
+BINARY_CONTENT=$(cat ${CONARY_BIN} | wc -c) && \
+cd $MOCK_DIR && \
+tar cf pkg.tar -C / usr/bin/conary && \
+gzip pkg.tar && \
+mv pkg.tar.gz conary-99.0.0.ccs && \
+CCS_SHA=$(sha256sum conary-99.0.0.ccs | cut -d' ' -f1) && \
+CCS_SIZE=$(stat -c%s conary-99.0.0.ccs) && \
+printf '{"version":"99.0.0","download_url":"http://127.0.0.1:19876/conary-99.0.0.ccs","sha256":"%s","size":%s}' "$CCS_SHA" "$CCS_SIZE" > latest && \
+python3 -m http.server 19876 --directory $MOCK_DIR &>/dev/null & \
+SERVER_PID=$! && \
+sleep 1 && \
+${CONARY_BIN} system update-channel set http://127.0.0.1:19876 --db-path ${DB_PATH} && \
+OUTPUT=$(${CONARY_BIN} self-update --check --db-path ${DB_PATH} 2>&1) && \
+kill $SERVER_PID 2>/dev/null; \
+${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} 2>/dev/null; \
+rm -rf $MOCK_DIR; \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_all = ["Update available", "99.0.0"]

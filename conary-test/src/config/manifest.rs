@@ -48,6 +48,8 @@ pub struct TestStep {
     #[serde(default)]
     pub file_checksum: Option<FileChecksum>,
     #[serde(default)]
+    pub dir_exists: Option<String>,
+    #[serde(default)]
     pub sleep: Option<u64>,
     #[serde(default)]
     pub assert: Option<Assertion>,
@@ -62,6 +64,7 @@ pub enum StepType {
     FileNotExists(String),
     FileExecutable(String),
     FileChecksum(FileChecksum),
+    DirExists(String),
     Sleep(u64),
 }
 
@@ -79,6 +82,8 @@ impl TestStep {
             Some(StepType::FileExecutable(path.clone()))
         } else if let Some(chk) = &self.file_checksum {
             Some(StepType::FileChecksum(chk.clone()))
+        } else if let Some(path) = &self.dir_exists {
+            Some(StepType::DirExists(path.clone()))
         } else {
             self.sleep.map(StepType::Sleep)
         }

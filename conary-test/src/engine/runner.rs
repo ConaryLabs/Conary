@@ -163,6 +163,18 @@ impl TestRunner {
                         }
                         last_exec = Some(result);
                     }
+                    StepType::DirExists(path) => {
+                        let expanded = self.expand_vars(&path);
+                        let result = backend
+                            .exec(container_id, &["test", "-d", &expanded], timeout)
+                            .await?;
+                        if result.exit_code != 0 {
+                            failure = Some(format!("directory does not exist: {expanded}"));
+                            last_exec = Some(result);
+                            break;
+                        }
+                        last_exec = Some(result);
+                    }
                     StepType::FileChecksum(chk) => {
                         let expanded_path = self.expand_vars(&chk.path);
                         let cmd = format!("sha256sum {expanded_path}");
@@ -377,6 +389,7 @@ mod tests {
             file_not_exists: None,
             file_executable: None,
             file_checksum: None,
+            dir_exists: None,
             sleep: None,
             assert: assertion,
         }
