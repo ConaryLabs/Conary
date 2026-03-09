@@ -264,6 +264,10 @@ for group in "${RELEASE_GROUPS[@]}"; do
             ;;
     esac
 
+    # Regenerate Cargo.lock to match bumped Cargo.toml versions
+    cargo generate-lockfile --quiet
+    echo "  Updated Cargo.lock"
+
     changelog_entry=$(generate_changelog "$group" "$local_tag" "$new_version")
     if [[ -f CHANGELOG.md ]]; then
         tmp=$(mktemp)
