@@ -196,7 +196,7 @@ impl RemiClient {
         spinner.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
-                .expect("Invalid spinner template"),
+                .unwrap_or(ProgressStyle::default_spinner()),
         );
         spinner.set_message(format!("Converting package (job {})...", job_id));
         spinner.enable_steady_tick(Duration::from_millis(100));
@@ -537,7 +537,7 @@ impl RemiClient {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
-                .expect("Invalid progress bar template")
+                .unwrap_or(ProgressStyle::default_bar())
                 .progress_chars("#>-"),
         );
         pb.set_message(format!("Downloading {}", filename));

@@ -11,6 +11,9 @@ use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 
+/// Forgejo repository path used in all API calls.
+pub const FORGEJO_REPO_PATH: &str = "/repos/peter/Conary";
+
 /// Error returned by Forgejo API helpers.
 ///
 /// Carries an optional HTTP status code from the upstream response so that
@@ -53,7 +56,7 @@ async fn get_config(
 
 /// Build a full Forgejo API URL from a base URL and a path.
 ///
-/// `path` should start with `/` (e.g. `/repos/peter/Conary/actions/workflows`).
+/// `path` should start with `/` (e.g. `"{FORGEJO_REPO_PATH}/actions/workflows"`).
 fn api_url(base: &str, path: &str) -> String {
     format!("{base}/api/v1{path}")
 }
@@ -157,7 +160,7 @@ mod tests {
         // receives a clean base.  Verify the concatenation is correct.
         let base = "https://forge.example.com";
         assert_eq!(
-            api_url(base, "/repos/peter/Conary/mirror-sync"),
+            api_url(base, &format!("{FORGEJO_REPO_PATH}/mirror-sync")),
             "https://forge.example.com/api/v1/repos/peter/Conary/mirror-sync"
         );
     }

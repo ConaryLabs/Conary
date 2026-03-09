@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::server::auth::{Scope, TokenScopes, json_error};
+use crate::server::forgejo::FORGEJO_REPO_PATH;
 use crate::server::ServerState;
 
 use super::{check_scope, validate_path_param};
@@ -68,7 +69,7 @@ pub async fn ci_list_workflows(
     if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
-    match forgejo_get_json(&state, "/repos/peter/Conary/actions/workflows").await {
+    match forgejo_get_json(&state, &format!("{FORGEJO_REPO_PATH}/actions/workflows")).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => e,
     }
@@ -90,7 +91,7 @@ pub async fn ci_list_runs(
     }
     match forgejo_get_json(
         &state,
-        &format!("/repos/peter/Conary/actions/workflows/{name}/runs"),
+        &format!("{FORGEJO_REPO_PATH}/actions/workflows/{name}/runs"),
     )
     .await
     {
@@ -110,7 +111,7 @@ pub async fn ci_get_run(
     if let Some(err) = check_scope(&scopes, Scope::CiRead) {
         return err;
     }
-    match forgejo_get_json(&state, &format!("/repos/peter/Conary/actions/runs/{id}")).await {
+    match forgejo_get_json(&state, &format!("{FORGEJO_REPO_PATH}/actions/runs/{id}")).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => e,
     }
@@ -128,7 +129,7 @@ pub async fn ci_get_logs(
         return err;
     }
 
-    let path = format!("/repos/peter/Conary/actions/runs/{id}/logs");
+    let path = format!("{FORGEJO_REPO_PATH}/actions/runs/{id}/logs");
     match crate::server::forgejo::get(&state, &path).await {
         Ok(text) => (
             StatusCode::OK,
@@ -157,7 +158,7 @@ pub async fn ci_dispatch(
     let body = serde_json::json!({"ref": "main"});
     match forgejo_post_json(
         &state,
-        &format!("/repos/peter/Conary/actions/workflows/{name}/dispatches"),
+        &format!("{FORGEJO_REPO_PATH}/actions/workflows/{name}/dispatches"),
         &body,
     )
     .await
@@ -178,7 +179,7 @@ pub async fn ci_mirror_sync(
         return err;
     }
     let body = serde_json::json!({});
-    match forgejo_post_json(&state, "/repos/peter/Conary/mirror-sync", &body).await {
+    match forgejo_post_json(&state, &format!("{FORGEJO_REPO_PATH}/mirror-sync"), &body).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => e,
     }

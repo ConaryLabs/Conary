@@ -333,7 +333,7 @@ fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}")
-            .expect("Invalid progress bar template")
+            .unwrap_or(ProgressStyle::default_bar())
             .progress_chars("#>-"),
     );
     pb.set_message(name.to_string());
@@ -402,7 +402,7 @@ impl DownloadProgress {
                 .template(
                     "Total: [{bar:40.green/dim}] {bytes}/{total_bytes} ({bytes_per_sec}) - {msg}",
                 )
-                .expect("Invalid progress bar template")
+                .unwrap_or(ProgressStyle::default_bar())
                 .progress_chars("=>-"),
         );
         overall.set_message(format!("0/{} packages", package_count));
@@ -430,7 +430,7 @@ impl DownloadProgress {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} [{elapsed_precise}] {bytes} ({bytes_per_sec}) {msg}")
-                .expect("Invalid spinner template"),
+                .unwrap_or(ProgressStyle::default_spinner()),
         );
         pb.set_message(name.to_string());
         self.multi.add(pb)

@@ -27,6 +27,7 @@ use serde::Deserialize;
 
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
+use crate::server::forgejo::FORGEJO_REPO_PATH;
 
 /// Validate a path parameter against a safe pattern for URL interpolation.
 ///
@@ -193,7 +194,7 @@ impl RemiMcpServer {
     /// `ci.yaml`) with the `ci_list_runs` and `ci_dispatch` tools.
     #[tool(description = "List all CI/CD workflows. Returns workflow names and filenames. Use the filename (e.g. 'ci.yaml') with ci_list_runs and ci_dispatch.")]
     async fn ci_list_workflows(&self) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::get(&self.state, "/repos/peter/Conary/actions/workflows")
+        let text = crate::server::forgejo::get(&self.state, &format!("{FORGEJO_REPO_PATH}/actions/workflows"))
             .await
             .map_err(forgejo_err_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -208,7 +209,7 @@ impl RemiMcpServer {
         validate_path_param(&params.workflow, "workflow")?;
         let text = crate::server::forgejo::get(
             &self.state,
-            &format!("/repos/peter/Conary/actions/workflows/{}/runs", params.workflow),
+            &format!("{FORGEJO_REPO_PATH}/actions/workflows/{}/runs", params.workflow),
         )
         .await
         .map_err(forgejo_err_to_mcp)?;
@@ -223,7 +224,7 @@ impl RemiMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let text = crate::server::forgejo::get(
             &self.state,
-            &format!("/repos/peter/Conary/actions/runs/{}", params.run_id),
+            &format!("{FORGEJO_REPO_PATH}/actions/runs/{}", params.run_id),
         )
         .await
         .map_err(forgejo_err_to_mcp)?;
@@ -238,7 +239,7 @@ impl RemiMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let text = crate::server::forgejo::get(
             &self.state,
-            &format!("/repos/peter/Conary/actions/runs/{}/logs", params.run_id),
+            &format!("{FORGEJO_REPO_PATH}/actions/runs/{}/logs", params.run_id),
         )
         .await
         .map_err(forgejo_err_to_mcp)?;
@@ -257,7 +258,7 @@ impl RemiMcpServer {
         let body = serde_json::json!({"ref": "main"});
         let text = crate::server::forgejo::post(
             &self.state,
-            &format!("/repos/peter/Conary/actions/workflows/{}/dispatches", params.workflow),
+            &format!("{FORGEJO_REPO_PATH}/actions/workflows/{}/dispatches", params.workflow),
             Some(&body),
         )
         .await
@@ -272,7 +273,7 @@ impl RemiMcpServer {
     async fn ci_mirror_sync(&self) -> Result<CallToolResult, McpError> {
         let text = crate::server::forgejo::post(
             &self.state,
-            "/repos/peter/Conary/mirror-sync",
+            &format!("{FORGEJO_REPO_PATH}/mirror-sync"),
             None,
         )
         .await

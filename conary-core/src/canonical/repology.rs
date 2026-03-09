@@ -169,35 +169,29 @@ pub struct RepologyClient {
 
 const USER_AGENT: &str = "conary/0.1 (https://conary.io)";
 
-fn build_client() -> reqwest::Client {
+fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
-        .expect("failed to build HTTP client")
-}
-
-impl Default for RepologyClient {
-    fn default() -> Self {
-        Self::new()
-    }
+        .map_err(|e| Error::DownloadError(format!("failed to build HTTP client: {e}")))
 }
 
 impl RepologyClient {
     /// Create a new client pointing at the public Repology API.
-    pub fn new() -> Self {
-        Self {
-            client: build_client(),
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            client: build_client()?,
             base_url: "https://repology.org".to_string(),
-        }
+        })
     }
 
     /// Create a client with a custom base URL (useful for testing against a
     /// local mock server).
-    pub fn with_base_url(url: &str) -> Self {
-        Self {
-            client: build_client(),
+    pub fn with_base_url(url: &str) -> Result<Self> {
+        Ok(Self {
+            client: build_client()?,
             base_url: url.trim_end_matches('/').to_string(),
-        }
+        })
     }
 
     /// Fetch the response body from a URL, checking for HTTP errors.

@@ -16,7 +16,7 @@ use crate::Result;
 use crate::filesystem::path::safe_join;
 use rusqlite::Connection;
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use super::journal::{JournalRecord, TransactionJournal, find_incomplete_journals};
 use super::{FileType, TransactionEngine, TransactionState, move_file_atomic};
@@ -257,7 +257,7 @@ pub fn rollback_transaction(
                             use std::os::unix::ffi::OsStrExt;
                             let target = std::ffi::OsStr::from_bytes(&target_bytes);
                             let target_str = target.to_string_lossy();
-                            if !validate_symlink_target_for_recovery(&target_str) {
+                            if !validate_symlink_target_for_recovery(&target_str, root, &final_path) {
                                 log::warn!(
                                     "Refusing to restore symlink with unsafe target {:?}",
                                     final_path
@@ -281,7 +281,7 @@ pub fn rollback_transaction(
                         if let Ok(content) = fs::read_to_string(backup_path) {
                             if let Some(target) = content.strip_prefix("SYMLINK:") {
                                 // Sanitize symlink target to prevent path traversal
-                                if !validate_symlink_target_for_recovery(target) {
+                                if !validate_symlink_target_for_recovery(target, root, &final_path) {
                                     log::warn!(
                                         "Refusing to restore symlink with unsafe target {:?} -> {}",
                                         final_path,
@@ -430,16 +430,69 @@ fn get_changeset_id_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<i64> {
 ///
 /// Unlike `sanitize_path` (which rejects `..`), this allows `..` components
 /// since legitimate symlink targets commonly use them (e.g., `../lib/libfoo.so`).
-/// Only rejects null bytes and Windows-style prefixes.
-fn validate_symlink_target_for_recovery(target: &str) -> bool {
+/// Rejects null bytes, Windows-style prefixes, and targets that resolve outside
+/// the install root (matching the staging validation in `validate_symlink_target_for_root`).
+fn validate_symlink_target_for_recovery(
+    target: &str,
+    install_root: &Path,
+    link_path: &Path,
+) -> bool {
     if target.is_empty() || target.contains('\0') {
         return false;
     }
-    for component in Path::new(target).components() {
+
+    let target_path = Path::new(target);
+
+    for component in target_path.components() {
         if matches!(component, Component::Prefix(_)) {
             return false;
         }
     }
+
+    // Bounds check: ensure the resolved target stays within install_root
+    if target_path.is_absolute() {
+        // Normalize the absolute target
+        let mut normalized = PathBuf::from("/");
+        for component in target_path.components() {
+            match component {
+                Component::Normal(c) => normalized.push(c),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    normalized = PathBuf::from("/");
+                }
+            }
+        }
+        let rooted = install_root.join(normalized.strip_prefix("/").unwrap_or(&normalized));
+        if !rooted.starts_with(install_root) {
+            return false;
+        }
+    } else {
+        // Relative target: resolve from the link's parent directory
+        let has_parent_traversal = target_path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir));
+        if has_parent_traversal {
+            let link_parent = link_path.parent().unwrap_or(install_root);
+            let mut resolved = link_parent.to_path_buf();
+            for component in target_path.components() {
+                match component {
+                    Component::Normal(c) => resolved.push(c),
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    Component::Prefix(_) | Component::RootDir => {}
+                }
+            }
+            if !resolved.starts_with(install_root) {
+                return false;
+            }
+        }
+    }
+
     true
 }
 

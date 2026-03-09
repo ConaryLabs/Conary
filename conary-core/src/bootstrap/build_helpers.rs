@@ -100,11 +100,6 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
             let replacement = build_env
                 .get(var_name)
                 .cloned()
-                // WARNING: Falling back to host environment leaks host state
-                // into builds, breaking hermeticity. For bootstrap builds, the
-                // build_env should be fully self-contained.
-                // TODO: Gate this fallback behind an `allow_host_env` flag.
-                .or_else(|| std::env::var(var_name).ok())
                 .unwrap_or_default();
             result = format!(
                 "{}{}{}",
@@ -130,7 +125,6 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
                 let replacement = build_env
                     .get(var_name)
                     .cloned()
-                    .or_else(|| std::env::var(var_name).ok())
                     .unwrap_or_default();
                 result = format!(
                     "{}{}{}",

@@ -57,20 +57,30 @@ impl<R: Read> CpioReader<R> {
             ));
         }
 
-        // Parse hex fields
-        let parse_hex = |start: usize, len: usize| -> io::Result<u32> {
+        // Parse hex fields into u64 to avoid silent truncation on malformed headers
+        let parse_hex = |start: usize, len: usize| -> io::Result<u64> {
             let s = std::str::from_utf8(&header_buf[start..start + len])
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            u32::from_str_radix(s, 16).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            u64::from_str_radix(s, 16).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         };
 
-        let mode = parse_hex(14, 8)?;
-        let uid = parse_hex(22, 8)?;
-        let gid = parse_hex(30, 8)?;
-        let nlink = parse_hex(38, 8)?;
-        let mtime = parse_hex(46, 8)? as u64;
-        let filesize = parse_hex(54, 8)? as u64;
-        let namesize = parse_hex(94, 8)? as u64;
+        let parse_hex_u32 = |start: usize, len: usize| -> io::Result<u32> {
+            let val = parse_hex(start, len)?;
+            u32::try_from(val).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("CPIO header field value {val:#x} overflows u32"),
+                )
+            })
+        };
+
+        let mode = parse_hex_u32(14, 8)?;
+        let uid = parse_hex_u32(22, 8)?;
+        let gid = parse_hex_u32(30, 8)?;
+        let nlink = parse_hex_u32(38, 8)?;
+        let mtime = parse_hex(46, 8)?;
+        let filesize = parse_hex(54, 8)?;
+        let namesize = parse_hex(94, 8)?;
 
         // Guard against unreasonable filename sizes
         if namesize > MAX_NAME_SIZE {

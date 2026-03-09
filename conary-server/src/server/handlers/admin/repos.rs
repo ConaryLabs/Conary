@@ -114,6 +114,13 @@ pub async fn create_repo(
         return json_error(400, "Invalid URL format", "INVALID_INPUT");
     }
 
+    if let Some(ref cu) = body.content_url {
+        let cu_trimmed = cu.trim();
+        if !cu_trimmed.is_empty() && url::Url::parse(cu_trimmed).is_err() {
+            return json_error(400, "Invalid content_url format", "INVALID_INPUT");
+        }
+    }
+
     let input = CreateRepoInput {
         name: name.clone(),
         url,
@@ -179,12 +186,30 @@ pub async fn update_repo(
         return err;
     }
 
-    if body.url.trim().is_empty() {
+    let url = body.url.trim().to_string();
+    if url.is_empty() {
         return json_error(400, "URL is required", "INVALID_INPUT");
+    }
+    if url::Url::parse(&url).is_err() {
+        return json_error(400, "Invalid URL format", "INVALID_INPUT");
+    }
+
+    if let Some(ref n) = body.name {
+        let n = n.trim();
+        if !n.is_empty() && let Some(err) = validate_path_param(n, "repo name") {
+            return err;
+        }
+    }
+
+    if let Some(ref cu) = body.content_url {
+        let cu_trimmed = cu.trim();
+        if !cu_trimmed.is_empty() && url::Url::parse(cu_trimmed).is_err() {
+            return json_error(400, "Invalid content_url format", "INVALID_INPUT");
+        }
     }
 
     let input = UpdateRepoInput {
-        url: body.url.trim().to_string(),
+        url,
         content_url: body.content_url,
         enabled: body.enabled,
         priority: body.priority,

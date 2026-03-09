@@ -98,7 +98,7 @@ impl CasStore {
     ///
     /// Returns `true` if content was written, `false` if it already existed.
     fn atomic_store(&self, hash: &str, content: &[u8]) -> Result<bool> {
-        let path = self.hash_to_path(hash);
+        let path = self.hash_to_path(hash)?;
 
         if path.exists() {
             return Ok(false);
@@ -230,7 +230,7 @@ impl CasStore {
     /// This is useful when the stored content uses a different algorithm
     /// than the CAS's default (e.g., symlinks always use SHA-256).
     fn retrieve_with_algorithm(&self, hash: &str, algorithm: HashAlgorithm) -> Result<Vec<u8>> {
-        let path = self.hash_to_path(hash);
+        let path = self.hash_to_path(hash)?;
 
         if !path.exists() {
             return Err(crate::Error::Io(std::io::Error::new(
@@ -262,20 +262,24 @@ impl CasStore {
 
     /// Check if content with given hash exists in CAS
     pub fn exists(&self, hash: &str) -> bool {
-        self.hash_to_path(hash).exists()
+        self.hash_to_path(hash).is_ok_and(|p| p.exists())
     }
 
     /// Get the filesystem path for a given hash
     ///
     /// Path format: objects/{first2}/{remaining}
     /// Example: abc123... -> objects/ab/c123...
-    pub fn hash_to_path(&self, hash: &str) -> PathBuf {
+    pub fn hash_to_path(&self, hash: &str) -> Result<PathBuf> {
         if hash.len() < 2 {
-            return self.objects_dir.join(hash);
+            return Err(crate::Error::InvalidPath(format!(
+                "hash too short for CAS path (need >= 2 hex chars, got {}): '{}'",
+                hash.len(),
+                hash
+            )));
         }
 
         let (prefix, suffix) = hash.split_at(2);
-        self.objects_dir.join(prefix).join(suffix)
+        Ok(self.objects_dir.join(prefix).join(suffix))
     }
 
     /// Compute hash of content using this store's algorithm
@@ -363,7 +367,9 @@ impl CasStore {
     ///
     /// Only reads the first 8 bytes ("symlink:") instead of the entire file.
     pub fn is_symlink_hash(&self, hash: &str) -> bool {
-        let path = self.hash_to_path(hash);
+        let Ok(path) = self.hash_to_path(hash) else {
+            return false;
+        };
         let Ok(mut file) = fs::File::open(&path) else {
             return false;
         };
@@ -391,7 +397,7 @@ impl CasStore {
         let hash = self.compute_hash(&content);
 
         // Get CAS storage path
-        let cas_path = self.hash_to_path(&hash);
+        let cas_path = self.hash_to_path(&hash)?;
 
         // If already exists in CAS, we're done (deduplication)
         if cas_path.exists() {
@@ -454,7 +460,7 @@ impl CasStore {
         verify_hash: bool,
     ) -> Result<String> {
         let existing_path = existing_path.as_ref();
-        let cas_path = self.hash_to_path(expected_hash);
+        let cas_path = self.hash_to_path(expected_hash)?;
 
         // If already exists in CAS, we're done
         if cas_path.exists() {
@@ -664,7 +670,7 @@ mod tests {
         let cas = CasStore::new(temp_dir.path()).unwrap();
 
         let hash = "abc123def456";
-        let path = cas.hash_to_path(hash);
+        let path = cas.hash_to_path(hash).unwrap();
 
         let expected = temp_dir.path().join("ab").join("c123def456");
         assert_eq!(path, expected);
@@ -720,7 +726,7 @@ mod tests {
         let hash = cas.hardlink_from_existing(&existing_file).unwrap();
 
         // Get CAS file inode
-        let cas_path = cas.hash_to_path(&hash);
+        let cas_path = cas.hash_to_path(&hash).unwrap();
         let cas_inode = fs::metadata(&cas_path).unwrap().ino();
 
         // Should be the same inode (hardlink)

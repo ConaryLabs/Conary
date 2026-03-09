@@ -76,7 +76,7 @@ impl<'db> ConaryProvider<'db> {
         if let Some(&id) = self.name_to_id.get(name) {
             return id;
         }
-        let id = NameId(self.names.len() as u32);
+        let id = NameId(u32::try_from(self.names.len()).expect("resolver name pool overflow"));
         self.names.push(name.to_string());
         self.name_to_id.insert(name.to_string(), id);
         id
@@ -92,7 +92,7 @@ impl<'db> ConaryProvider<'db> {
         if let Some(&existing) = self.version_set_cache.get(&cache_key) {
             return existing;
         }
-        let id = VersionSetId(self.version_sets.len() as u32);
+        let id = VersionSetId(u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"));
         self.version_sets.push((name_id, constraint));
         self.version_set_cache.insert(cache_key, id);
         id
@@ -100,14 +100,14 @@ impl<'db> ConaryProvider<'db> {
 
     /// Intern a display string, returning its `StringId`.
     pub fn intern_string(&mut self, s: &str) -> StringId {
-        let id = StringId(self.strings.len() as u32);
+        let id = StringId(u32::try_from(self.strings.len()).expect("resolver string pool overflow"));
         self.strings.push(s.to_string());
         id
     }
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
     pub fn add_solvable(&mut self, pkg: ConaryPackage) -> SolvableId {
-        let id = SolvableId(self.solvables.len() as u32);
+        let id = SolvableId(u32::try_from(self.solvables.len()).expect("resolver solvable pool overflow"));
         self.solvables.push(pkg);
         id
     }
@@ -266,7 +266,7 @@ impl<'db> ConaryProvider<'db> {
             .iter()
             .enumerate()
             .filter(|(_, s)| s.name == *name)
-            .map(|(i, _)| SolvableId(i as u32))
+            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
             .collect()
     }
 
@@ -277,7 +277,7 @@ impl<'db> ConaryProvider<'db> {
             .iter()
             .enumerate()
             .find(|(_, s)| s.name == *name && s.trove_id.is_some())
-            .map(|(i, _)| SolvableId(i as u32))
+            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
     }
 }
 
@@ -445,7 +445,7 @@ impl DependencyProvider for ConaryProvider<'_> {
                         .iter()
                         .enumerate()
                         .find(|(_, (nid, c))| *nid == dep_name_id && c == constraint)
-                        .map(|(i, _)| VersionSetId(i as u32));
+                        .map(|(i, _)| VersionSetId(u32::try_from(i).expect("resolver version set pool overflow")));
 
                     if let Some(vs_id) = vs_id {
                         requirements.push(ConditionalRequirement::from(vs_id));

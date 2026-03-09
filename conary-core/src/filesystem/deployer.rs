@@ -121,7 +121,7 @@ impl FileDeployer {
     /// - Sets permissions (ownership requires root)
     pub fn deploy_file(&self, path: &str, hash: &str, permissions: u32) -> Result<()> {
         // Get CAS path for this content
-        let cas_path = self.cas.hash_to_path(hash);
+        let cas_path = self.cas.hash_to_path(hash)?;
 
         // Open the CAS file first — serves as existence check AND holds a reference
         // to prevent inode reclaim between check and hardlink (TOCTOU fix)
@@ -554,7 +554,7 @@ mod tests {
             .unwrap();
 
         // Get inodes for both files
-        let cas_path = deployer.cas().hash_to_path(&hash);
+        let cas_path = deployer.cas().hash_to_path(&hash).unwrap();
         let target_path = install_root.join("hardlink_test.txt");
 
         let cas_inode = fs::metadata(&cas_path).unwrap().ino();
@@ -598,7 +598,7 @@ mod tests {
             .unwrap();
 
         // All should share the same inode
-        let cas_path = deployer.cas().hash_to_path(&hash);
+        let cas_path = deployer.cas().hash_to_path(&hash).unwrap();
         let cas_inode = fs::metadata(&cas_path).unwrap().ino();
 
         for path in &["/pkg1/shared.txt", "/pkg2/shared.txt", "/pkg3/shared.txt"] {
@@ -882,7 +882,7 @@ mod tests {
         // Store content in CAS and open the file handle
         let content = b"copy fallback test content";
         let hash = deployer.cas().store(content).unwrap();
-        let cas_path = deployer.cas().hash_to_path(&hash);
+        let cas_path = deployer.cas().hash_to_path(&hash).unwrap();
         let cas_file = fs::File::open(&cas_path).unwrap();
 
         // Use copy_from_cas_fd directly

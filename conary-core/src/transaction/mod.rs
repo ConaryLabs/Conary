@@ -783,7 +783,7 @@ impl<'a> Transaction<'a> {
                 fs::write(&stage_path, format!("SYMLINK:{}", target.display()))?;
             } else {
                 // Try hardlink from CAS, fall back to copy with fsync
-                let cas_path = self.engine.cas.hash_to_path(&stage_info.hash);
+                let cas_path = self.engine.cas.hash_to_path(&stage_info.hash)?;
                 if fs::hard_link(&cas_path, &stage_path).is_err() {
                     let content = self.engine.cas.retrieve(&stage_info.hash)?;
                     let staged_file = File::create(&stage_path)?;
@@ -994,7 +994,7 @@ impl<'a> Transaction<'a> {
     pub fn finish(mut self) -> Result<TransactionResult> {
         let duration = Utc::now()
             .signed_duration_since(self.start_time)
-            .num_milliseconds() as u64;
+            .num_milliseconds().max(0) as u64;
 
         // Clean up working directory
         let work_dir = self.engine.txn_work_dir(&self.uuid);

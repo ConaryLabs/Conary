@@ -159,13 +159,15 @@ impl StageManager {
     }
 
     /// Get the state of a stage
-    pub fn get(&self, stage: BootstrapStage) -> &StageState {
-        self.stages.get(&stage).expect("Stage should exist")
+    pub fn get(&self, stage: BootstrapStage) -> Result<&StageState> {
+        self.stages
+            .get(&stage)
+            .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))
     }
 
     /// Check if a stage is complete
     pub fn is_complete(&self, stage: BootstrapStage) -> bool {
-        self.get(stage).complete
+        self.get(stage).is_ok_and(|s| s.complete)
     }
 
     /// Get the current (next incomplete) stage
@@ -180,7 +182,7 @@ impl StageManager {
 
     /// Get artifact path for a completed stage
     pub fn get_artifact_path(&self, stage: BootstrapStage) -> Option<PathBuf> {
-        self.get(stage).artifact_path.clone()
+        self.get(stage).ok().and_then(|s| s.artifact_path.clone())
     }
 
     /// Mark a stage as complete
@@ -189,7 +191,7 @@ impl StageManager {
         stage: BootstrapStage,
         artifact_path: impl AsRef<Path>,
     ) -> Result<()> {
-        let state = self.stages.get_mut(&stage).expect("Stage should exist");
+        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.complete = true;
         state.completed_at = Some(chrono::Utc::now());
         state.artifact_path = Some(artifact_path.as_ref().to_path_buf());
@@ -200,7 +202,7 @@ impl StageManager {
 
     /// Mark a stage as failed
     pub fn mark_failed(&mut self, stage: BootstrapStage, error: impl Into<String>) -> Result<()> {
-        let state = self.stages.get_mut(&stage).expect("Stage should exist");
+        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.complete = false;
         state.error = Some(error.into());
 
@@ -209,7 +211,7 @@ impl StageManager {
 
     /// Record build duration for a stage
     pub fn record_duration(&mut self, stage: BootstrapStage, duration_secs: u64) -> Result<()> {
-        let state = self.stages.get_mut(&stage).expect("Stage should exist");
+        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.duration_secs = Some(duration_secs);
         self.save()
     }
@@ -219,7 +221,7 @@ impl StageManager {
     /// This enables per-package checkpointing so that a resumed build can
     /// skip packages that were already successfully built.
     pub fn mark_package_complete(&mut self, stage: BootstrapStage, package: &str) -> Result<()> {
-        let state = self.stages.get_mut(&stage).expect("Stage should exist");
+        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         if !state.completed_packages.contains(&package.to_string()) {
             state.completed_packages.push(package.to_string());
         }
@@ -238,7 +240,7 @@ impl StageManager {
     pub fn reset_from(&mut self, stage: BootstrapStage) -> Result<()> {
         let mut current = Some(stage);
         while let Some(s) = current {
-            let state = self.stages.get_mut(&s).expect("Stage should exist");
+            let state = self.stages.get_mut(&s).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {s:?}"))?;
             *state = StageState::default();
             current = s.next();
         }
@@ -249,14 +251,14 @@ impl StageManager {
     pub fn summary(&self) -> Vec<(BootstrapStage, bool, Option<String>)> {
         BootstrapStage::all()
             .iter()
-            .map(|s| {
-                let state = self.get(*s);
+            .filter_map(|s| {
+                let state = self.get(*s).ok()?;
                 let status = if state.complete {
                     Some("complete".to_string())
                 } else {
                     state.error.as_ref().map(|err| format!("failed: {}", err))
                 };
-                (*s, state.complete, status)
+                Some((*s, state.complete, status))
             })
             .collect()
     }

@@ -58,6 +58,12 @@ pub enum BaseError {
 
     #[error("Dependency cycle detected: {0}")]
     DependencyCycle(String),
+
+    #[error("Recipe not loaded for package {0}: recipe must be loaded before build")]
+    RecipeNotLoaded(String),
+
+    #[error("Path contains invalid UTF-8: {0}")]
+    InvalidPath(PathBuf),
 }
 
 /// Build phase for base system
@@ -679,11 +685,11 @@ impl BaseBuilder {
 
     /// Fetch source archive
     fn fetch_source(&mut self, idx: usize) -> Result<PathBuf, BaseError> {
+        let pkg_name = self.packages[idx].name.clone();
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
-        let pkg_name = self.packages[idx].name.clone();
+            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
         let url = recipe.archive_url();
         let filename = recipe.archive_filename();
         let target_path = self.sources_dir.join(&filename);
@@ -701,13 +707,11 @@ impl BaseBuilder {
             .log
             .push_str(&format!("Fetching: {}\n", url));
 
+        let target_str = target_path
+            .to_str()
+            .ok_or_else(|| BaseError::InvalidPath(target_path.clone()))?;
         let output = Command::new("curl")
-            .args([
-                "-fsSL",
-                "-o",
-                target_path.to_str().expect("path must be valid utf-8"),
-                &url,
-            ])
+            .args(["-fsSL", "-o", target_str, &url])
             .output()
             .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
@@ -724,11 +728,11 @@ impl BaseBuilder {
 
     /// Fetch additional sources
     fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), BaseError> {
+        let pkg_name = self.packages[idx].name.clone();
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
-        let pkg_name = self.packages[idx].name.clone();
+            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
 
         let additional: Vec<_> = recipe
             .source
@@ -747,13 +751,11 @@ impl BaseBuilder {
                     .log
                     .push_str(&format!("Fetching: {}\n", filename));
 
+                let target_str = target_path
+                    .to_str()
+                    .ok_or_else(|| BaseError::InvalidPath(target_path.clone()))?;
                 let output = Command::new("curl")
-                    .args([
-                        "-fsSL",
-                        "-o",
-                        target_path.to_str().expect("path must be valid utf-8"),
-                        &url,
-                    ])
+                    .args(["-fsSL", "-o", target_str, &url])
                     .output()
                     .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
@@ -778,11 +780,11 @@ impl BaseBuilder {
 
     /// Verify checksum
     fn verify_checksum(&self, idx: usize, path: &Path) -> Result<(), BaseError> {
+        let pkg_name = &self.packages[idx].name;
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
-        let pkg_name = &self.packages[idx].name;
+            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
         let expected = &recipe.source.checksum;
 
         // Reject placeholder checksums unless skip_verify is enabled
@@ -842,7 +844,7 @@ impl BaseBuilder {
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
+            .ok_or_else(|| BaseError::RecipeNotLoaded(self.packages[idx].name.clone()))?;
 
         if let Some(setup) = &recipe.build.setup {
             let setup = setup.clone();
@@ -874,7 +876,7 @@ impl BaseBuilder {
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
+            .ok_or_else(|| BaseError::RecipeNotLoaded(self.packages[idx].name.clone()))?;
 
         let raw_cmd = match get_cmd(recipe) {
             Some(cmd) if !cmd.is_empty() => cmd.clone(),
@@ -932,7 +934,7 @@ impl BaseBuilder {
         let recipe = self.packages[idx]
             .recipe
             .as_ref()
-            .expect("recipe must be loaded before build");
+            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
 
         // Get environment from recipe
         let recipe_env: HashMap<String, String> = recipe
