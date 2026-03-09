@@ -13,6 +13,8 @@ pub struct TestManifest {
 pub struct SuiteDef {
     pub name: String,
     pub phase: u32,
+    #[serde(default)]
+    pub setup: Vec<TestStep>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +44,8 @@ pub struct TestStep {
     #[serde(default)]
     pub file_not_exists: Option<String>,
     #[serde(default)]
+    pub file_executable: Option<String>,
+    #[serde(default)]
     pub file_checksum: Option<FileChecksum>,
     #[serde(default)]
     pub sleep: Option<u64>,
@@ -56,6 +60,7 @@ pub enum StepType {
     Conary(String),
     FileExists(String),
     FileNotExists(String),
+    FileExecutable(String),
     FileChecksum(FileChecksum),
     Sleep(u64),
 }
@@ -70,6 +75,8 @@ impl TestStep {
             Some(StepType::FileExists(path.clone()))
         } else if let Some(path) = &self.file_not_exists {
             Some(StepType::FileNotExists(path.clone()))
+        } else if let Some(path) = &self.file_executable {
+            Some(StepType::FileExecutable(path.clone()))
         } else if let Some(chk) = &self.file_checksum {
             Some(StepType::FileChecksum(chk.clone()))
         } else {
@@ -88,6 +95,8 @@ pub struct FileChecksum {
 pub struct Assertion {
     #[serde(default)]
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub exit_code_not: Option<i32>,
     #[serde(default)]
     pub stdout_contains: Option<String>,
     #[serde(default)]

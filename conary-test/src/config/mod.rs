@@ -169,4 +169,44 @@ v2_version = "2.0.0"
         assert_eq!(fixtures.test_package_name.as_deref(), Some("conary-test-fixture"));
         assert_eq!(fixtures.v1_version.as_deref(), Some("1.0.0"));
     }
+
+    #[test]
+    fn test_load_phase1_core_manifest() {
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase1-core.toml");
+        if path.exists() {
+            let manifest = load_manifest(path).unwrap();
+            assert!(
+                manifest.test.len() >= 10,
+                "Expected at least 10 tests, got {}",
+                manifest.test.len()
+            );
+
+            // Verify suite metadata
+            assert_eq!(manifest.suite.phase, 1);
+            assert!(!manifest.suite.setup.is_empty(), "Expected setup steps");
+
+            // Verify T01 health check
+            let t01 = &manifest.test[0];
+            assert_eq!(t01.id, "T01");
+            assert_eq!(t01.name, "health_check");
+            assert_eq!(t01.fatal, Some(true));
+
+            // Verify T04 repo sync is fatal
+            let t04 = manifest.test.iter().find(|t| t.id == "T04").unwrap();
+            assert_eq!(t04.fatal, Some(true));
+            assert_eq!(t04.timeout, 300);
+
+            // Verify T08 has file_executable step
+            let t08 = manifest.test.iter().find(|t| t.id == "T08").unwrap();
+            assert!(
+                t08.step.iter().any(|s| s.file_executable.is_some()),
+                "T08 should have a file_executable step"
+            );
+
+            // Verify T10 has exit_code_not assertion
+            let t10 = manifest.test.iter().find(|t| t.id == "T10").unwrap();
+            let assertion = t10.step[0].assert.as_ref().unwrap();
+            assert_eq!(assertion.exit_code_not, Some(0));
+        }
+    }
 }

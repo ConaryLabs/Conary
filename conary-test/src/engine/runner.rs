@@ -150,6 +150,19 @@ impl TestRunner {
                         }
                         last_exec = Some(result);
                     }
+                    StepType::FileExecutable(path) => {
+                        let expanded = self.expand_vars(&path);
+                        let result = backend
+                            .exec(container_id, &["test", "-x", &expanded], timeout)
+                            .await?;
+                        if result.exit_code != 0 {
+                            failure =
+                                Some(format!("file is not executable: {expanded}"));
+                            last_exec = Some(result);
+                            break;
+                        }
+                        last_exec = Some(result);
+                    }
                     StepType::FileChecksum(chk) => {
                         let expanded_path = self.expand_vars(&chk.path);
                         let cmd = format!("sha256sum {expanded_path}");
@@ -362,6 +375,7 @@ mod tests {
             conary: None,
             file_exists: None,
             file_not_exists: None,
+            file_executable: None,
             file_checksum: None,
             sleep: None,
             assert: assertion,
@@ -371,6 +385,7 @@ mod tests {
     fn make_assertion(exit_code: Option<i32>, stdout_contains: Option<&str>) -> Assertion {
         Assertion {
             exit_code,
+            exit_code_not: None,
             stdout_contains: stdout_contains.map(String::from),
             stdout_not_contains: None,
             stderr_contains: None,
@@ -385,6 +400,7 @@ mod tests {
             suite: SuiteDef {
                 name: "test-suite".to_string(),
                 phase: 1,
+                setup: Vec::new(),
             },
             test: tests,
         }

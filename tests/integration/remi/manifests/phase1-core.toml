@@ -1,0 +1,212 @@
+# tests/integration/remi/manifests/phase1-core.toml
+#
+# Phase 1 core Remi integration tests (T01-T10).
+# Converted from tests/integration/remi/runner/test_runner.py run_phase1().
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE},
+#                   ${TEST_BINARY}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
+#                   ${TEST_PACKAGE_3}, ${TEST_BINARY_3}
+
+[suite]
+name = "Phase 1: Core Remi Integration (T01-T10)"
+phase = 1
+
+# Setup: initialize DB and remove default repos (mirrors run_phase1 preamble)
+[[suite.setup]]
+conary = "system init"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH}"
+
+[suite.setup.assert]
+# check = False in Python, so we ignore exit code
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH}"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH}"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH}"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH}"
+
+# --------------------------------------------------------------------------
+# T01: Health Check
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T01"
+name = "health_check"
+description = "Verify Remi endpoint is reachable"
+timeout = 10
+fatal = true
+
+[[test.step]]
+run = "curl -sf ${REMI_ENDPOINT}/health"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T02: Repo Add
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T02"
+name = "repo_add"
+description = "Add a Remi repository"
+timeout = 10
+depends_on = ["T01"]
+
+[[test.step]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T03: Repo List
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T03"
+name = "repo_list"
+description = "Verify added repo appears in repo list"
+timeout = 10
+depends_on = ["T02"]
+
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}"
+
+# --------------------------------------------------------------------------
+# T04: Repo Sync
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T04"
+name = "repo_sync"
+description = "Sync repository metadata"
+timeout = 300
+fatal = true
+depends_on = ["T02"]
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "[OK]"
+
+# --------------------------------------------------------------------------
+# T05: Search Exists
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T05"
+name = "search_exists"
+description = "Search for an existing package"
+timeout = 30
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "search ${TEST_PACKAGE}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_PACKAGE}"
+stdout_not_contains = "No packages found"
+
+# --------------------------------------------------------------------------
+# T06: Search Nonexistent
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T06"
+name = "search_nonexistent"
+description = "Search for a nonexistent package returns no results"
+timeout = 10
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "search zzz-nonexistent-pkg-12345"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "No packages found"
+
+# --------------------------------------------------------------------------
+# T07: Install Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T07"
+name = "install_package"
+description = "Install a test package"
+timeout = 300
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE} --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T08: Verify Files
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T08"
+name = "verify_files"
+description = "Verify installed package binary exists and is executable"
+timeout = 10
+depends_on = ["T07"]
+
+[[test.step]]
+file_exists = "${TEST_BINARY}"
+
+[[test.step]]
+file_executable = "${TEST_BINARY}"
+
+# --------------------------------------------------------------------------
+# T09: List Installed
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T09"
+name = "list_installed"
+description = "Verify installed package appears in package list"
+timeout = 10
+depends_on = ["T07"]
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_PACKAGE}"
+
+# --------------------------------------------------------------------------
+# T10: Install Nonexistent
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T10"
+name = "install_nonexistent"
+description = "Installing a nonexistent package fails with non-zero exit"
+timeout = 30
+depends_on = ["T04"]
+
+[[test.step]]
+conary = "install zzz-nonexistent-pkg-12345 --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0

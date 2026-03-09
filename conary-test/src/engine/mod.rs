@@ -28,6 +28,7 @@ mod tests {
     fn empty_assertion() -> Assertion {
         Assertion {
             exit_code: None,
+            exit_code_not: None,
             stdout_contains: None,
             stdout_not_contains: None,
             stderr_contains: None,

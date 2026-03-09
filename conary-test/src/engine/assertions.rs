@@ -14,6 +14,11 @@ pub fn evaluate_assertion(
     {
         bail!("expected exit code {expected}, got {exit_code}");
     }
+    if let Some(not_expected) = assertion.exit_code_not
+        && exit_code == not_expected
+    {
+        bail!("expected exit code other than {not_expected}, got {exit_code}");
+    }
     if let Some(ref needle) = assertion.stdout_contains
         && !stdout.contains(needle.as_str())
     {
