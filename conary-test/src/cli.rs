@@ -1,7 +1,8 @@
 // conary-test/src/cli.rs
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "conary-test", version, about = "Conary test infrastructure")]
@@ -15,8 +16,8 @@ enum Commands {
     /// Run a test suite
     Run {
         /// Distro to test against
-        #[arg(long)]
-        distro: String,
+        #[arg(long, required_unless_present = "all_distros")]
+        distro: Option<String>,
 
         /// Test phase (1 or 2)
         #[arg(long, default_value = "1")]
@@ -61,6 +62,108 @@ enum ImageCommands {
     List,
 }
 
+/// Load global config from `$CONARY_TEST_CONFIG` or default path.
+fn load_config() -> Result<conary_test::config::distro::GlobalConfig> {
+    let path = std::env::var("CONARY_TEST_CONFIG")
+        .unwrap_or_else(|_| "tests/integration/remi/config.toml".into());
+    conary_test::config::load_global_config(Path::new(&path))
+}
+
+/// Return manifest directory from `$CONARY_TEST_MANIFESTS` or default.
+fn manifest_dir() -> String {
+    std::env::var("CONARY_TEST_MANIFESTS")
+        .unwrap_or_else(|_| "tests/integration/remi/manifests".into())
+}
+
+/// Resolve the containerfile path for a distro.
+fn containerfile_path(
+    config: &conary_test::config::distro::GlobalConfig,
+    distro: &str,
+) -> Result<PathBuf> {
+    let dc = config
+        .distros
+        .get(distro)
+        .with_context(|| format!("unknown distro: {distro}"))?;
+
+    let default_name = format!("Containerfile.{distro}");
+    let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
+
+    let path = PathBuf::from("tests/integration/remi/containers").join(filename);
+    if !path.exists() {
+        bail!("containerfile not found: {}", path.display());
+    }
+    Ok(path)
+}
+
+/// Run tests for a single distro.
+fn run_single_distro(
+    config: &conary_test::config::distro::GlobalConfig,
+    distro: &str,
+    phase: u32,
+    suite_path: Option<&str>,
+) -> Result<bool> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let backend = conary_test::container::BollardBackend::new()?;
+
+        // Resolve and build the image.
+        let cf_path = containerfile_path(config, distro)?;
+        tracing::info!(distro, containerfile = %cf_path.display(), "Building image");
+        let image_tag =
+            conary_test::container::build_distro_image(&backend, &cf_path, distro).await?;
+        tracing::info!(distro, image = %image_tag, "Image built");
+
+        // Create and start the container.
+        let container_config = conary_test::container::ContainerConfig {
+            image: image_tag,
+            privileged: true,
+            ..Default::default()
+        };
+        let container_id = backend.create(container_config).await?;
+        tracing::info!(distro, id = %container_id, "Container created");
+
+        use conary_test::container::ContainerBackend;
+        backend.start(&container_id).await?;
+        tracing::info!(distro, id = %container_id, "Container started");
+
+        // Load the test manifest.
+        let manifest_path = match suite_path {
+            Some(p) => PathBuf::from(p),
+            None => PathBuf::from(manifest_dir()).join(format!("phase{phase}.toml")),
+        };
+        let manifest = conary_test::config::load_manifest(&manifest_path)
+            .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
+
+        // Run the tests.
+        let runner =
+            conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
+        let suite = runner.run(&manifest, &backend, &container_id).await?;
+
+        // Print JSON results.
+        let json = conary_test::report::json::to_json_report(&suite)?;
+        println!("{json}");
+
+        // Write results to file.
+        let results_dir = PathBuf::from(&config.paths.results_dir);
+        std::fs::create_dir_all(&results_dir).ok();
+        let results_file = results_dir.join(format!("{distro}-phase{phase}.json"));
+        conary_test::report::json::write_json_report(&suite, &results_file)?;
+        tracing::info!(path = %results_file.display(), "Results written");
+
+        let has_failures = suite.failed() > 0;
+
+        // Cleanup container.
+        if let Err(e) = backend.stop(&container_id).await {
+            tracing::warn!(error = %e, "Failed to stop container");
+        }
+        if let Err(e) = backend.remove(&container_id).await {
+            tracing::warn!(error = %e, "Failed to remove container");
+        }
+
+        Ok(!has_failures)
+    })
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -72,23 +175,108 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { distro, phase, .. } => {
-            tracing::info!(%distro, %phase, "Starting test run");
-            Ok(())
-        }
-        Commands::Serve { port } => {
-            tracing::info!(%port, "Starting server");
-            Ok(())
-        }
-        Commands::List => Ok(()),
-        Commands::Images { command } => {
-            match command {
-                ImageCommands::Build { distro } => {
-                    tracing::info!(%distro, "Building image");
+        Commands::Run {
+            distro,
+            phase,
+            suite,
+            all_distros,
+        } => {
+            let config = load_config()?;
+
+            let distros: Vec<String> = if all_distros {
+                config.distros.keys().cloned().collect()
+            } else {
+                vec![distro.context("--distro is required when --all-distros is not set")?]
+            };
+
+            let mut all_passed = true;
+            for d in &distros {
+                tracing::info!(distro = %d, phase, "Starting test run");
+                let passed = run_single_distro(&config, d, phase, suite.as_deref())?;
+                if !passed {
+                    all_passed = false;
                 }
-                ImageCommands::List => {}
+            }
+
+            if !all_passed {
+                std::process::exit(1);
             }
             Ok(())
         }
+
+        Commands::Serve { port } => {
+            let config = load_config()?;
+            let state = conary_test::server::AppState::new(config, manifest_dir());
+            tracing::info!(%port, "Starting server");
+            tokio::runtime::Runtime::new()?.block_on(conary_test::server::run_server(state, port))
+        }
+
+        Commands::List => {
+            let dir = manifest_dir();
+            let dir_path = Path::new(&dir);
+
+            if !dir_path.is_dir() {
+                tracing::warn!(path = %dir, "Manifest directory not found");
+                return Ok(());
+            }
+
+            let mut entries: Vec<_> = std::fs::read_dir(dir_path)?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|ext| ext == "toml")
+                })
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+
+            if entries.is_empty() {
+                println!("No test manifests found in {dir}");
+                return Ok(());
+            }
+
+            println!("{:<30} {:<8} TESTS", "NAME", "PHASE");
+            println!("{}", "-".repeat(50));
+            for entry in entries {
+                let path = entry.path();
+                match conary_test::config::load_manifest(&path) {
+                    Ok(manifest) => {
+                        println!(
+                            "{:<30} {:<8} {}",
+                            manifest.suite.name,
+                            manifest.suite.phase,
+                            manifest.test.len()
+                        );
+                    }
+                    Err(e) => {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        tracing::warn!(file = %name, error = %e, "Failed to parse manifest");
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        Commands::Images { command } => match command {
+            ImageCommands::Build { distro } => {
+                let config = load_config()?;
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(async {
+                    let backend = conary_test::container::BollardBackend::new()?;
+                    let cf_path = containerfile_path(&config, &distro)?;
+                    tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
+                    let tag = conary_test::container::build_distro_image(
+                        &backend, &cf_path, &distro,
+                    )
+                    .await?;
+                    tracing::info!(%distro, image = %tag, "Image built successfully");
+                    Ok(())
+                })
+            }
+            ImageCommands::List => {
+                println!("Image listing not yet implemented");
+                Ok(())
+            }
+        },
     }
 }
