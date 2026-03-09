@@ -19,8 +19,8 @@
 			<p>
 				Conary takes its name and core philosophy from the
 				<a href="https://en.wikipedia.org/wiki/Conary_(package_manager)" target="_blank" rel="noopener noreferrer">original Conary package manager</a>
-				developed at <strong>rPath</strong> in the mid-2000s. That project -- led by Erik Troan
-				and Matt Wilson, both former Red Hat engineers -- pioneered ideas that were years ahead of
+				developed by the team at <strong>rPath</strong> in the mid-2000s, many of them former Red Hat engineers.
+				That project pioneered ideas that were years ahead of
 				the mainstream: content-addressable storage for packages, repository-level binary diffs,
 				a SAT-based dependency resolver, and atomic rollback of system state.
 			</p>
