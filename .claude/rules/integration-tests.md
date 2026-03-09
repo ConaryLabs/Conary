@@ -4,6 +4,35 @@ Podman-based integration tests that verify conary works end-to-end on real Linux
 distros (Fedora 43, Ubuntu Noble, Arch). Python 3.11+ test runner, TOML config,
 JSON results.
 
+## Rust Test Engine (conary-test)
+
+New declarative test engine replacing the Python runner. Uses TOML manifests
+and bollard for container management.
+
+### Quick Reference
+
+```bash
+cargo run -p conary-test -- run --distro fedora43 --phase 1
+cargo run -p conary-test -- serve --port 9090
+cargo run -p conary-test -- list
+```
+
+### Manifest Files
+
+```
+tests/integration/remi/manifests/
+  phase1-core.toml          # T01-T10
+  phase1-advanced.toml      # T11-T37
+  phase2-group-a.toml       # T38-T50 (Deep install)
+  phase2-group-b.toml       # T51-T57 (Generations)
+  phase2-group-c.toml       # T58-T61 (Bootstrap)
+  phase2-group-d.toml       # T62-T66 (Recipe/build)
+  phase2-group-e.toml       # T67-T71 (Remi client)
+  phase2-group-f.toml       # T72-T76 (Self-update)
+```
+
+## Python Runner (Legacy)
+
 ## Quick Reference
 
 ```bash

@@ -6,6 +6,8 @@
 cargo build                              # Client-only (default, use for dev)
 cargo build --features server            # With Remi server + conaryd daemon
 cargo test                               # ~200 unit tests + 76 integration tests
+cargo build -p conary-test               # Test infrastructure crate
+cargo test -p conary-test                # Test engine unit tests
 cargo clippy -- -D warnings              # Lint
 ```
 
@@ -53,6 +55,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Changeset**: Atomic transaction (install/remove/rollback)
 - **Flavor**: Build variations (arch, features)
 - **CAS**: Content-addressable storage for files
+- **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP
 
 Database schema is currently **v48** (40+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
 

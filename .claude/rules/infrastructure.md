@@ -65,6 +65,8 @@ Two servers, one CI system.
 - **Phase 2:** `./tests/integration/remi/run.sh --build --distro fedora43 --phase2`
 - **Containers:** `tests/integration/remi/containers/Containerfile.{fedora43,ubuntu-noble,arch}`
 - **Output:** JSON results in `tests/integration/remi/results/`
+- **New Rust engine:** `conary-test` crate with TOML manifests in `tests/integration/remi/manifests/`
+- **Run via:** `cargo run -p conary-test -- run --distro fedora43 --phase 1`
 - **Full docs:** See `.claude/rules/integration-tests.md` and `docs/INTEGRATION-TESTING.md`
 
 ## Version Groups

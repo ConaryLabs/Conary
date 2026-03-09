@@ -2,7 +2,7 @@
 
 ## Workspace Structure
 
-4-crate workspace: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS), `conary-server` (Remi + conaryd). Feature gate: `--features server` enables `conary-server`.
+5-crate workspace: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS), `conary-server` (Remi + conaryd), `conary-test` (test infrastructure). Feature gate: `--features server` enables `conary-server`.
 
 ## Key Modules
 
@@ -65,3 +65,14 @@
 | `src/server/handlers/self_update.rs` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
 | `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |
+
+### conary-test -- Test infrastructure
+
+| Module | Purpose |
+|--------|---------|
+| `src/config/` | TOML manifest and distro config parsing |
+| `src/engine/` | Test suite, runner, assertions |
+| `src/container/` | ContainerBackend trait, bollard implementation |
+| `src/report/` | JSON output, SSE event streaming |
+| `src/server/` | Axum HTTP API, MCP server (rmcp) |
+| `src/cli.rs` | Binary entrypoint |
