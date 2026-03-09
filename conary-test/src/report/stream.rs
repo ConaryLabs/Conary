@@ -1,0 +1,77 @@
+// conary-test/src/report/stream.rs
+
+use serde::Serialize;
+
+/// Server-Sent Event types for live streaming.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", content = "data")]
+pub enum TestEvent {
+    #[serde(rename = "test_started")]
+    TestStarted {
+        run_id: u64,
+        test_id: String,
+        name: String,
+    },
+
+    #[serde(rename = "test_passed")]
+    TestPassed {
+        run_id: u64,
+        test_id: String,
+        duration_ms: u64,
+    },
+
+    #[serde(rename = "test_failed")]
+    TestFailed {
+        run_id: u64,
+        test_id: String,
+        message: String,
+        stdout: Option<String>,
+    },
+
+    #[serde(rename = "test_skipped")]
+    TestSkipped {
+        run_id: u64,
+        test_id: String,
+        message: String,
+    },
+
+    #[serde(rename = "run_complete")]
+    RunComplete {
+        run_id: u64,
+        passed: usize,
+        failed: usize,
+        skipped: usize,
+    },
+}
+
+impl TestEvent {
+    /// Format as SSE text.
+    pub fn to_sse(&self) -> String {
+        let (event_name, data) = match self {
+            Self::TestStarted { .. } => ("test_started", serde_json::to_string(self).unwrap()),
+            Self::TestPassed { .. } => ("test_passed", serde_json::to_string(self).unwrap()),
+            Self::TestFailed { .. } => ("test_failed", serde_json::to_string(self).unwrap()),
+            Self::TestSkipped { .. } => ("test_skipped", serde_json::to_string(self).unwrap()),
+            Self::RunComplete { .. } => ("run_complete", serde_json::to_string(self).unwrap()),
+        };
+        format!("event: {event_name}\ndata: {data}\n\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_event_serialization() {
+        let event = TestEvent::TestPassed {
+            run_id: 1,
+            test_id: "T01".to_string(),
+            duration_ms: 100,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("test_id"));
+        assert!(json.contains("T01"));
+        assert!(json.contains("test_passed"));
+    }
+}
