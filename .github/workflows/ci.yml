@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [ main, develop ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -81,44 +80,3 @@ jobs:
           --ignore RUSTSEC-2023-0071
           --ignore RUSTSEC-2025-0136
 
-  release:
-    name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, security]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build release binaries
-        run: |
-          # Client-only binary
-          cargo build --release
-          cp target/release/conary target/release/conary-client
-
-          # Client with server commands
-          cargo build --release --features server
-          cp target/release/conary target/release/conary-full
-
-          # Standalone Remi server and conaryd daemon
-          cargo build --release -p conary-server
-
-      - name: Generate checksums
-        run: |
-          cd target/release
-          sha256sum conary-client conary-full remi conaryd > SHA256SUMS
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            target/release/conary-client
-            target/release/conary-full
-            target/release/remi
-            target/release/conaryd
-            target/release/SHA256SUMS
