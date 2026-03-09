@@ -26,6 +26,7 @@ tar.workspace = true
 
 # Container management
 bollard = "0.18"
+bytes = "1"
 
 # HTTP server
 axum = "0.7"
