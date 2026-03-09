@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Prerequisites
 
-- **Rust 1.93+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.94+** (edition 2024) -- install via [rustup](https://rustup.rs/)
 - **SQLite** development headers (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora/RHEL, `sqlite` on Arch)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows

@@ -19,7 +19,7 @@ conary repo sync
 conary install nginx
 ```
 
-Remi supports Fedora, Arch, Ubuntu, and Debian. Requires Rust 1.93+. See the [install page](https://conary.io/install) for details.
+Remi supports Fedora, Arch, Ubuntu, and Debian. Requires Rust 1.94+. See the [install page](https://conary.io/install) for details.
 
 ---
 
@@ -335,7 +335,7 @@ No migration needed. Run `conary system init` to create a fresh database.
 
 ## Installation
 
-Requires **Rust 1.93+** (edition 2024).
+Requires **Rust 1.94+** (edition 2024).
 
 ```bash
 # Build from source

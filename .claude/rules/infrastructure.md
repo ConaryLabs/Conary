@@ -7,7 +7,7 @@ Two servers, one CI system.
 - **SSH:** `ssh remi` or `ssh root@ssh.conary.io`
 - **URL:** `https://packages.conary.io` (Cloudflare proxied)
 - **Hardware:** Hetzner, 12 cores, 64GB RAM, 2x 1TB NVMe RAID 0
-- **OS:** Ubuntu 24.04, Rust 1.93
+- **OS:** Ubuntu 24.04, Rust 1.94
 - **Storage:** 1.7TB at `/conary` (ext4 on LVM)
 - **Deploy:** `rsync` source, `cargo build --release --features server`, copy binary, `systemctl restart remi`
 - **Sites:** `./deploy/deploy-sites.sh [site|packages|both]` — NEVER deploy `site/build/` to `/conary/web/`
@@ -20,7 +20,7 @@ Two servers, one CI system.
 
 - **SSH:** `ssh peter@forge.conarylabs.com`
 - **Hardware:** 8GB RAM, 151GB disk
-- **OS:** Fedora 43, Rust 1.93, Podman 5.7
+- **OS:** Fedora 43, Rust 1.94, Podman 5.7
 - **Forgejo:** v14.0.2 at `http://forge.conarylabs.com:3000`
 - **Runner:** v12.7.1, label `linux-native`, host executor (not Docker)
 - **Mirror:** GitHub `ConaryLabs/Conary` synced every 10 minutes

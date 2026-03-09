@@ -504,7 +504,7 @@ mod tests {
     fn test_dry_run_with_recipes() {
         let dir = tempfile::tempdir().unwrap();
         let config = BootstrapConfig::new();
-        let bootstrap = Bootstrap::with_config(dir.path().to_path_buf(), config).unwrap();
+        let bootstrap = Bootstrap::with_config(dir.path(), config).unwrap();
 
         let recipe_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -529,7 +529,7 @@ mod tests {
     fn test_dry_run_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         let config = BootstrapConfig::new();
-        let bootstrap = Bootstrap::with_config(dir.path().to_path_buf(), config).unwrap();
+        let bootstrap = Bootstrap::with_config(dir.path(), config).unwrap();
 
         let recipe_dir = dir.path().join("nonexistent_recipes");
         let report = bootstrap.dry_run(&recipe_dir).unwrap();

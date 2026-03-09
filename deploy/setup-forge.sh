@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   - Fedora 43 with Podman installed
-#   - Rust 1.93+ installed (in /home/peter/.cargo/bin/)
+#   - Rust 1.94+ installed (in /home/peter/.cargo/bin/)
 #   - Git installed
 #
 # What this installs:

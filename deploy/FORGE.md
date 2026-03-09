@@ -8,7 +8,7 @@ Forge (`forge.conarylabs.com`) runs Forgejo for CI/CD with a native Forgejo Runn
 - **OS:** Fedora 43
 - **RAM:** 8GB
 - **Disk:** 151GB
-- **Software:** Rust 1.93, Podman 5.7, Forgejo 14.0.2, Forgejo Runner 12.7.1
+- **Software:** Rust 1.94, Podman 5.7, Forgejo 14.0.2, Forgejo Runner 12.7.1
 
 ## Quick Setup
 

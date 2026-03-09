@@ -470,7 +470,7 @@ mod tests {
     fn verify_empty_image() {
         let builder = ErofsBuilder::new();
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut cursor = Cursor::new(buf.into_inner());
         let info = verify_image(&mut cursor).unwrap();
@@ -493,7 +493,7 @@ mod tests {
         builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000);
 
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut cursor = Cursor::new(buf.into_inner());
         let info = verify_image(&mut cursor).unwrap();
@@ -531,7 +531,7 @@ mod tests {
         builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0);
 
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut cursor = Cursor::new(buf.into_inner());
         let info = verify_image(&mut cursor).unwrap();
@@ -565,7 +565,7 @@ mod tests {
         builder.add_symlink("/usr/bin/python", "python3", 0o777);
 
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut cursor = Cursor::new(buf.into_inner());
         let info = verify_image(&mut cursor).unwrap();
@@ -587,7 +587,7 @@ mod tests {
     fn corrupt_magic_fails() {
         let builder = ErofsBuilder::new();
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut image = buf.into_inner();
         // Corrupt magic at offset 1024.
@@ -610,7 +610,7 @@ mod tests {
     fn corrupt_checksum_fails() {
         let builder = ErofsBuilder::new();
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut image = buf.into_inner();
         // Corrupt checksum at offset 1024 + 4.
@@ -651,7 +651,7 @@ mod tests {
         builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777);
 
         let mut buf = Cursor::new(Vec::new());
-        builder.build(&mut buf).unwrap();
+        let _ = builder.build(&mut buf).unwrap();
 
         let mut cursor = Cursor::new(buf.into_inner());
         let info = verify_image(&mut cursor).unwrap();

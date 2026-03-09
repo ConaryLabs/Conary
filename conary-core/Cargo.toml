@@ -2,7 +2,7 @@
 name = "conary-core"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.94"
 authors = ["Conary Contributors"]
 description = "Core library for the Conary package manager"
 license = "MIT OR Apache-2.0"

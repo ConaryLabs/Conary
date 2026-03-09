@@ -100,7 +100,7 @@ Skip gates if the user said "run hands-off" or "just do it."
 
 ## Conary Project Context
 
-- Rust 2024, Rust 1.93, 4-crate workspace
+- Rust 2024, Rust 1.94, 4-crate workspace
 - Build: `cargo build` (default), `cargo build --features server` (full)
 - Test: `cargo test` (~200 unit/integration tests)
 - Lint: `cargo clippy -- -D warnings`

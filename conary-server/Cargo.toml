@@ -2,7 +2,7 @@
 name = "conary-server"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.94"
 authors = ["Conary Contributors"]
 description = "Remi package server and conaryd daemon for Conary"
 license = "MIT OR Apache-2.0"

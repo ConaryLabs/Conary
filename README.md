@@ -91,7 +91,7 @@ The honest gap: ecosystem maturity. apt and dnf have decades of packages and int
 ## Quick Start
 
 ```bash
-# Build from source (requires Rust 1.93+, Linux only)
+# Build from source (requires Rust 1.94+, Linux only)
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build
@@ -461,7 +461,7 @@ conary federation stats --days 7      # Bandwidth savings report
 
 ## Building
 
-Requires Rust 1.93+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
+Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
 
 ```bash
 cargo build                          # Client only (default)

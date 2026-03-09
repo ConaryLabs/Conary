@@ -131,6 +131,7 @@ fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
 ///
 /// Handles the common pattern of cloning state, spawning a blocking task,
 /// opening a database connection, and mapping errors consistently.
+#[allow(clippy::result_large_err)]
 async fn run_db_query<T: Send + 'static>(
     state: &SharedState,
     f: impl FnOnce(&rusqlite::Connection) -> conary_core::Result<T> + Send + 'static,

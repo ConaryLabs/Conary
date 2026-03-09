@@ -18,7 +18,7 @@
 		<div class="install-block animate-in" style="--stagger: 3">
 			<h2>Build from Source</h2>
 			<p class="install-note">
-				Requires Rust 1.93+, SQLite development headers, and Linux.
+				Requires Rust 1.94+, SQLite development headers, and Linux.
 				Conary uses Linux-specific kernel APIs (namespaces, landlock, seccomp)
 				and does not currently build on macOS or Windows.
 			</p>

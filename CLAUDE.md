@@ -22,7 +22,7 @@ IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
 
 **No Emojis**: Use text markers: `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]`.
 
-**Rust Standards**: Edition 2024, Rust 1.93, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
+**Rust Standards**: Edition 2024, Rust 1.94, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
 
 ## Commit Convention
 

@@ -433,10 +433,12 @@ mod tests {
 
     #[test]
     fn test_trigger_results() {
-        let mut results = TriggerResults::default();
-        results.succeeded = 5;
-        results.failed = 1;
-        results.skipped = 2;
+        let results = TriggerResults {
+            succeeded: 5,
+            failed: 1,
+            skipped: 2,
+            ..Default::default()
+        };
 
         assert!(!results.all_succeeded());
         assert_eq!(results.total(), 8);
