@@ -368,7 +368,64 @@ impl Stage2Builder {
             });
         }
 
+        // Verify checksum (matches Stage 1 behavior)
+        self.verify_checksum(idx, &target_path)?;
+
         Ok(target_path)
+    }
+
+    /// Verify checksum of downloaded file (mirrors Stage 1 logic)
+    fn verify_checksum(&self, idx: usize, path: &Path) -> Result<(), Stage2Error> {
+        let pkg_name = &self.packages[idx].name;
+        let expected = &self.packages[idx].recipe.source.checksum;
+
+        // Reject placeholder checksums unless skip_verify is enabled
+        if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
+            if self.config.skip_verify {
+                warn!(
+                    "  Skipping placeholder checksum (--skip-verify enabled): {}",
+                    expected
+                );
+                return Ok(());
+            }
+            return Err(Stage2Error::BuildFailed {
+                package: pkg_name.clone(),
+                reason: format!(
+                    "Recipe has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
+                    expected
+                ),
+            });
+        }
+
+        // Extract algorithm and hash
+        let (algo, hash) = expected.split_once(':').ok_or_else(|| {
+            Stage2Error::BuildFailed {
+                package: pkg_name.clone(),
+                reason: "Invalid checksum format".to_string(),
+            }
+        })?;
+
+        if algo == "sha256" {
+            let output = Command::new("sha256sum")
+                .arg(path)
+                .output()
+                .map_err(|e| Stage2Error::BuildFailed {
+                    package: pkg_name.clone(),
+                    reason: e.to_string(),
+                })?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let computed = stdout.split_whitespace().next().unwrap_or("");
+            if computed != hash {
+                return Err(Stage2Error::BuildFailed {
+                    package: pkg_name.clone(),
+                    reason: format!("Checksum mismatch: expected {}, got {}", hash, computed),
+                });
+            }
+        } else {
+            warn!("  Unknown checksum algorithm: {}", algo);
+        }
+
+        Ok(())
     }
 
     /// Fetch additional sources (like GMP, MPFR, MPC for GCC)
@@ -419,36 +476,8 @@ impl Stage2Builder {
                 }
             }
 
-            // Verify checksum of additional source
-            if !checksum.is_empty()
-                && !checksum.contains("VERIFY_BEFORE_BUILD")
-                && !checksum.contains("FIXME")
-            {
-                if let Some((algo, hash)) = checksum.split_once(':') {
-                    if algo == "sha256" {
-                        let output = Command::new("sha256sum")
-                            .arg(&target_path)
-                            .output()
-                            .map_err(|e| Stage2Error::BuildFailed {
-                                package: pkg_name.clone(),
-                                reason: e.to_string(),
-                            })?;
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let computed = stdout.split_whitespace().next().unwrap_or("");
-                        if computed != hash {
-                            return Err(Stage2Error::BuildFailed {
-                                package: pkg_name.clone(),
-                                reason: format!(
-                                    "Additional source checksum mismatch for {}: expected {}, got {}",
-                                    filename, hash, computed
-                                ),
-                            });
-                        }
-                    } else {
-                        warn!("  Unknown checksum algorithm for additional source: {}", algo);
-                    }
-                }
-            } else if checksum.contains("VERIFY_BEFORE_BUILD") || checksum.contains("FIXME") {
+            // Verify checksum of additional source (placeholder check first, matching stage1)
+            if checksum.contains("VERIFY_BEFORE_BUILD") || checksum.contains("FIXME") {
                 if !skip_verify {
                     return Err(Stage2Error::BuildFailed {
                         package: pkg_name.clone(),
@@ -459,6 +488,29 @@ impl Stage2Builder {
                     });
                 }
                 warn!("  Skipping placeholder checksum for additional source (--skip-verify enabled)");
+            } else if let Some((algo, hash)) = checksum.split_once(':') {
+                if algo == "sha256" {
+                    let output = Command::new("sha256sum")
+                        .arg(&target_path)
+                        .output()
+                        .map_err(|e| Stage2Error::BuildFailed {
+                            package: pkg_name.clone(),
+                            reason: e.to_string(),
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let computed = stdout.split_whitespace().next().unwrap_or("");
+                    if computed != hash {
+                        return Err(Stage2Error::BuildFailed {
+                            package: pkg_name.clone(),
+                            reason: format!(
+                                "Additional source checksum mismatch for {}: expected {}, got {}",
+                                filename, hash, computed
+                            ),
+                        });
+                    }
+                } else {
+                    warn!("  Unknown checksum algorithm for additional source: {}", algo);
+                }
             }
 
             // Extract to the specified location, stripping top-level directory
