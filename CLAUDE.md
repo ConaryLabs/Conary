@@ -97,3 +97,7 @@ Six composable agents, dispatched by `portage`:
 | **sbuild** | Release verifier | "Use sbuild to prep release" |
 
 For most tasks, just describe what you need and let portage pick the pipeline.
+
+## Dispatch Preference
+
+When executing implementation plans, prefer `/dispatch` over Agent tool for implementation subagents. This routes work to cheaper LLMs while the orchestrator handles planning and review. See `~/.claude/dispatch.toml` for model configuration. To disable, set `enabled = false` in that file or remove this section.
