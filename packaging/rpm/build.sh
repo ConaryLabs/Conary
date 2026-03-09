@@ -31,7 +31,7 @@ echo "Building $NAME $VERSION RPM"
 echo "[1/4] Vendoring dependencies..."
 cd "$REPO_ROOT"
 if [ ! -d vendor ] || [ -z "$(ls -A vendor 2>/dev/null)" ]; then
-    cargo vendor --locked vendor > /dev/null 2>&1
+    cargo vendor vendor > /dev/null 2>&1
 else
     echo "  Using existing vendor directory"
 fi
