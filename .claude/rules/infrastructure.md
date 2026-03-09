@@ -30,15 +30,24 @@ Two servers, one CI system.
 - **Setup script:** `deploy/setup-forge.sh` (full automated install)
 - **Setup docs:** `deploy/FORGE.md`
 
-## CI Workflows (`.forgejo/workflows/`)
+## CI Workflows
+
+### GitHub Actions (`.github/workflows/`)
+
+| Workflow | Trigger | Jobs | Duration |
+|----------|---------|------|----------|
+| `ci.yml` | Push to main/develop, PR | test, security | ~5 min |
+| `release.yml` | Push `v*` tag | build-ccs, build-rpm, build-deb, build-arch, release + Remi deploy | ~15-20 min |
+
+### Forgejo (`.forgejo/workflows/`)
 
 | Workflow | Trigger | Jobs | Duration |
 |----------|---------|------|----------|
 | `ci.yaml` | Push to main, manual | build, test, clippy, remi-smoke | ~5 min |
+| `release.yaml` | Push `v*` tag | Verify release landed on Remi (waits for GH Actions) | ~3 min |
 | `integration.yaml` | Push to main, manual | 3-distro Podman matrix (fedora43, ubuntu-noble, arch) | ~15 min |
 | `e2e.yaml` | Daily 06:00 UTC, manual | 3-distro Phase 1+2 deep E2E | ~20-30 min |
 | `remi-health.yaml` | Every 6 hours, manual | Full endpoint verification | ~60s |
-| `release.yaml` | Push `v*` tag | Build CCS + native packages, publish to Remi | ~20 min |
 
 **Trigger manually:** Forgejo API `POST /api/v1/repos/peter/Conary/actions/workflows/{name}/dispatches` with `{"ref":"main"}`.
 
@@ -53,7 +62,6 @@ Two servers, one CI system.
 | `scripts/release.sh [conary\|erofs\|server\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
-| `scripts/publish-release.sh` | Build CCS + native packages, publish to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
 
 ## Integration Tests
