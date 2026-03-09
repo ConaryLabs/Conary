@@ -357,9 +357,8 @@ impl<'a> DerivedBuilder<'a> {
                 full_path.parent().map_or_else(
                     || Ok(full_path.clone()),
                     |p| {
-                        p.canonicalize().map(|cp| {
-                            cp.join(full_path.file_name().unwrap_or_default())
-                        })
+                        p.canonicalize()
+                            .map(|cp| cp.join(full_path.file_name().unwrap_or_default()))
                     },
                 )
             })

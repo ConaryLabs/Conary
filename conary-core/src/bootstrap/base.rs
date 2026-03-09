@@ -483,9 +483,7 @@ impl BaseBuilder {
             | "gettext" | "perl" | "python" | "cmake" | "ninja" | "meson" => {
                 BaseBuildPhase::DevTools
             }
-            "linux" | "coreutils" | "bash" | "util-linux" | "systemd" => {
-                BaseBuildPhase::CoreSystem
-            }
+            "linux" | "coreutils" | "bash" | "util-linux" | "systemd" => BaseBuildPhase::CoreSystem,
             "grub" | "dosfstools" | "efivar" | "efibootmgr" | "popt" | "dracut" => {
                 BaseBuildPhase::Boot
             }
@@ -980,10 +978,12 @@ impl BaseBuilder {
         };
 
         #[cfg(not(target_os = "linux"))]
-        let sandbox_result: std::result::Result<(i32, String, String), crate::error::Error> =
-            Err(crate::error::Error::ScriptletError(
-                "Sandbox not available on non-Linux".to_string(),
-            ));
+        let sandbox_result: std::result::Result<
+            (i32, String, String),
+            crate::error::Error,
+        > = Err(crate::error::Error::ScriptletError(
+            "Sandbox not available on non-Linux".to_string(),
+        ));
 
         match sandbox_result {
             Ok((code, stdout, stderr)) => {
@@ -1001,7 +1001,10 @@ impl BaseBuilder {
                 if code != 0 {
                     return Err(BaseError::BuildFailed(
                         pkg_name,
-                        format!("{} phase failed (sandboxed, exit {}):\n{}", phase, code, stderr),
+                        format!(
+                            "{} phase failed (sandboxed, exit {}):\n{}",
+                            phase, code, stderr
+                        ),
                     ));
                 }
 
@@ -1170,10 +1173,7 @@ mod tests {
             BaseBuilder::package_phase("openssl"),
             BaseBuildPhase::Libraries
         );
-        assert_eq!(
-            BaseBuilder::package_phase("make"),
-            BaseBuildPhase::DevTools
-        );
+        assert_eq!(BaseBuilder::package_phase("make"), BaseBuildPhase::DevTools);
         assert_eq!(
             BaseBuilder::package_phase("cmake"),
             BaseBuildPhase::DevTools
@@ -1187,10 +1187,7 @@ mod tests {
             BaseBuildPhase::CoreSystem
         );
         assert_eq!(BaseBuilder::package_phase("grub"), BaseBuildPhase::Boot);
-        assert_eq!(
-            BaseBuilder::package_phase("vim"),
-            BaseBuildPhase::Userland
-        );
+        assert_eq!(BaseBuilder::package_phase("vim"), BaseBuildPhase::Userland);
         assert_eq!(
             BaseBuilder::package_phase("unknown-pkg"),
             BaseBuildPhase::Userland

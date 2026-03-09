@@ -185,14 +185,8 @@ mod tests {
     #[test]
     fn test_generation_paths() {
         assert_eq!(generations_dir(), PathBuf::from("/conary/generations"));
-        assert_eq!(
-            generation_path(1),
-            PathBuf::from("/conary/generations/1")
-        );
-        assert_eq!(
-            generation_path(42),
-            PathBuf::from("/conary/generations/42")
-        );
+        assert_eq!(generation_path(1), PathBuf::from("/conary/generations/1"));
+        assert_eq!(generation_path(42), PathBuf::from("/conary/generations/42"));
         assert_eq!(current_link(), PathBuf::from("/conary/current"));
         assert_eq!(gc_roots_dir(), PathBuf::from("/conary/gc-roots"));
     }

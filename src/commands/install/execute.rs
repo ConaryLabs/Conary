@@ -24,8 +24,11 @@ pub fn deploy_files(
     // Phase 1: Check file conflicts BEFORE any changes
     for file in extracted_files {
         if deployer.file_exists(&file.path) {
-            if let Some(existing) = conary_core::db::models::FileEntry::find_by_path(conn, &file.path)? {
-                let owner_trove = conary_core::db::models::Trove::find_by_id(conn, existing.trove_id)?;
+            if let Some(existing) =
+                conary_core::db::models::FileEntry::find_by_path(conn, &file.path)?
+            {
+                let owner_trove =
+                    conary_core::db::models::Trove::find_by_id(conn, existing.trove_id)?;
                 if let Some(owner) = owner_trove
                     && owner.name != pkg_name
                 {

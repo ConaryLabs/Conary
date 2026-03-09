@@ -41,9 +41,7 @@ pub enum VersionCheckResult {
         size: u64,
     },
     /// Already at the latest version
-    UpToDate {
-        version: String,
-    },
+    UpToDate { version: String },
 }
 
 /// Get the update channel URL from settings or fall back to default
@@ -72,10 +70,7 @@ pub fn is_newer(current: &str, remote: &str) -> bool {
 }
 
 /// Check for available updates by querying the update channel
-pub fn check_for_update(
-    channel_url: &str,
-    current_version: &str,
-) -> Result<VersionCheckResult> {
+pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<VersionCheckResult> {
     use reqwest::blocking::Client;
     use std::time::Duration;
 
@@ -190,11 +185,7 @@ pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
 ///
 /// 1. rename() temp binary -> target path (atomic on same filesystem)
 /// 2. Store new binary hash in CAS (best-effort)
-pub fn apply_update(
-    new_binary_path: &Path,
-    target_path: &Path,
-    objects_dir: &str,
-) -> Result<()> {
+pub fn apply_update(new_binary_path: &Path, target_path: &Path, objects_dir: &str) -> Result<()> {
     use crate::filesystem::CasStore;
 
     // Atomic rename (source and target must be on same filesystem)
@@ -389,8 +380,8 @@ mod tests {
 
         // Create a valid but empty gzipped tar
         {
-            use flate2::write::GzEncoder;
             use flate2::Compression;
+            use flate2::write::GzEncoder;
             let file = std::fs::File::create(&ccs_path).unwrap();
             let encoder = GzEncoder::new(file, Compression::default());
             let mut builder = tar::Builder::new(encoder);
@@ -410,8 +401,8 @@ mod tests {
 
         // Create a gzipped tar with a usr/bin/conary entry
         {
-            use flate2::write::GzEncoder;
             use flate2::Compression;
+            use flate2::write::GzEncoder;
             let file = std::fs::File::create(&ccs_path).unwrap();
             let encoder = GzEncoder::new(file, Compression::default());
             let mut builder = tar::Builder::new(encoder);
@@ -421,7 +412,9 @@ mod tests {
             header.set_size(content.len() as u64);
             header.set_mode(0o755);
             header.set_cksum();
-            builder.append_data(&mut header, "usr/bin/conary", &content[..]).unwrap();
+            builder
+                .append_data(&mut header, "usr/bin/conary", &content[..])
+                .unwrap();
             builder.finish().unwrap();
         }
 
@@ -430,7 +423,10 @@ mod tests {
 
         let binary_path = result.unwrap();
         assert!(binary_path.exists());
-        assert_eq!(std::fs::read(&binary_path).unwrap(), b"#!/bin/sh\necho test");
+        assert_eq!(
+            std::fs::read(&binary_path).unwrap(),
+            b"#!/bin/sh\necho test"
+        );
     }
 
     #[test]
@@ -440,7 +436,11 @@ mod tests {
         let target = dir.path().join("conary");
         std::fs::write(&target, b"old").unwrap();
 
-        let result = apply_update(&source, &target, dir.path().join("objects").to_str().unwrap());
+        let result = apply_update(
+            &source,
+            &target,
+            dir.path().join("objects").to_str().unwrap(),
+        );
         assert!(result.is_err());
         // Original target should be unchanged
         assert_eq!(std::fs::read(&target).unwrap(), b"old");

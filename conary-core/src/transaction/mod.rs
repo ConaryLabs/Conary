@@ -930,8 +930,9 @@ impl<'a> Transaction<'a> {
                     result.files_removed += 1;
 
                     // Record per-file removal for granular crash recovery
-                    self.journal
-                        .write(JournalRecord::FileRemoved { path: op.path.clone() })?;
+                    self.journal.write(JournalRecord::FileRemoved {
+                        path: op.path.clone(),
+                    })?;
                 }
             }
         }
@@ -994,7 +995,8 @@ impl<'a> Transaction<'a> {
     pub fn finish(mut self) -> Result<TransactionResult> {
         let duration = Utc::now()
             .signed_duration_since(self.start_time)
-            .num_milliseconds().max(0) as u64;
+            .num_milliseconds()
+            .max(0) as u64;
 
         // Clean up working directory
         let work_dir = self.engine.txn_work_dir(&self.uuid);

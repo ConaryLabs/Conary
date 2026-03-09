@@ -4,6 +4,8 @@
 //! Downloads legacy packages from upstream repositories and converts them
 //! to CCS format, storing chunks in the CAS.
 
+use crate::server::R2Store;
+use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use conary_core::filesystem::path::sanitize_filename;
@@ -13,8 +15,6 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::PackageFormat;
 use conary_core::repository::download_package;
-use crate::server::R2Store;
-use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,24 +28,53 @@ use tracing::{debug, info};
 fn is_critical_system_package(name: &str) -> bool {
     const BLOCKED: &[&str] = &[
         // Core C runtime
-        "glibc", "glibc-common", "glibc-minimal-langpack", "glibc-all-langpacks",
-        "glibc-devel", "libc6", "libc6-dev", "libc-bin", "gcc-libs",
+        "glibc",
+        "glibc-common",
+        "glibc-minimal-langpack",
+        "glibc-all-langpacks",
+        "glibc-devel",
+        "libc6",
+        "libc6-dev",
+        "libc-bin",
+        "gcc-libs",
         // Dynamic linker
-        "ld-linux", "binutils",
+        "ld-linux",
+        "binutils",
         // Init system
-        "systemd", "systemd-libs", "systemd-udev", "systemd-resolved", "libsystemd0",
+        "systemd",
+        "systemd-libs",
+        "systemd-udev",
+        "systemd-resolved",
+        "libsystemd0",
         // Authentication
-        "pam", "linux-pam", "libpam-modules", "libpam-runtime", "shadow-utils",
+        "pam",
+        "linux-pam",
+        "libpam-modules",
+        "libpam-runtime",
+        "shadow-utils",
         // Core utilities
-        "util-linux", "util-linux-core", "coreutils",
+        "util-linux",
+        "util-linux-core",
+        "coreutils",
         // Crypto libraries
-        "openssl-libs", "openssl", "libssl3", "libssl3t64", "libssl1.1", "libcrypto",
+        "openssl-libs",
+        "openssl",
+        "libssl3",
+        "libssl3t64",
+        "libssl1.1",
+        "libcrypto",
         // Kernel interface
-        "linux-api-headers", "kernel-headers", "linux-libc-dev",
+        "linux-api-headers",
+        "kernel-headers",
+        "linux-libc-dev",
         // Privilege escalation
-        "sudo", "polkit", "polkit-libs",
+        "sudo",
+        "polkit",
+        "polkit-libs",
         // NSS/DNS
-        "nss-softokn", "nspr", "ca-certificates",
+        "nss-softokn",
+        "nspr",
+        "ca-certificates",
     ];
     BLOCKED.contains(&name)
 }

@@ -22,6 +22,7 @@
 //! 4. **glibc** - The C library (needs gcc-pass1)
 //! 5. **gcc-pass2** - Full GCC with C/C++ and threading support
 
+use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::{Recipe, parse_recipe_file};
@@ -30,7 +31,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use super::build_helpers;
 use tracing::{info, warn};
 
 /// Errors that can occur during Stage 2 build
@@ -205,20 +205,26 @@ impl Stage2Builder {
     ///
     /// Returns a toolchain pointing at the Stage 2 sysroot.
     pub fn build(&mut self) -> Result<Toolchain, Stage2Error> {
-        info!("Stage 2: Rebuilding {} packages with Stage 1 toolchain", self.packages.len());
+        info!(
+            "Stage 2: Rebuilding {} packages with Stage 1 toolchain",
+            self.packages.len()
+        );
         info!("Sysroot: {}", self.sysroot.display());
         info!("Using Stage 1: {}", self.toolchain.path.display());
 
         let package_count = self.packages.len();
         for idx in 0..package_count {
             let pkg_name = self.packages[idx].name.clone();
-            info!("[{}/{}] Building {pkg_name} (Stage 2)", idx + 1, package_count);
+            info!(
+                "[{}/{}] Building {pkg_name} (Stage 2)",
+                idx + 1,
+                package_count
+            );
 
             self.packages[idx].status = Stage2PackageStatus::Building;
 
             if let Err(e) = self.build_package(idx) {
-                self.packages[idx].status =
-                    Stage2PackageStatus::Failed(e.to_string());
+                self.packages[idx].status = Stage2PackageStatus::Failed(e.to_string());
                 self.save_log(idx)?;
                 return Err(e);
             }
@@ -231,12 +237,11 @@ impl Stage2Builder {
 
         // Create and return the Stage 2 toolchain
         let stage2_prefix = self.sysroot.join("usr");
-        let mut toolchain = Toolchain::from_prefix(&stage2_prefix).map_err(|e| {
-            Stage2Error::BuildFailed {
+        let mut toolchain =
+            Toolchain::from_prefix(&stage2_prefix).map_err(|e| Stage2Error::BuildFailed {
                 package: "toolchain".to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         toolchain.kind = ToolchainKind::Stage2;
 
         Ok(toolchain)
@@ -398,21 +403,20 @@ impl Stage2Builder {
         }
 
         // Extract algorithm and hash
-        let (algo, hash) = expected.split_once(':').ok_or_else(|| {
-            Stage2Error::BuildFailed {
+        let (algo, hash) = expected
+            .split_once(':')
+            .ok_or_else(|| Stage2Error::BuildFailed {
                 package: pkg_name.clone(),
                 reason: "Invalid checksum format".to_string(),
-            }
-        })?;
+            })?;
 
         if algo == "sha256" {
-            let output = Command::new("sha256sum")
-                .arg(path)
-                .output()
-                .map_err(|e| Stage2Error::BuildFailed {
+            let output = Command::new("sha256sum").arg(path).output().map_err(|e| {
+                Stage2Error::BuildFailed {
                     package: pkg_name.clone(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
             let stdout = String::from_utf8_lossy(&output.stdout);
             let computed = stdout.split_whitespace().next().unwrap_or("");
             if computed != hash {
@@ -487,7 +491,9 @@ impl Stage2Builder {
                         ),
                     });
                 }
-                warn!("  Skipping placeholder checksum for additional source (--skip-verify enabled)");
+                warn!(
+                    "  Skipping placeholder checksum for additional source (--skip-verify enabled)"
+                );
             } else if let Some((algo, hash)) = checksum.split_once(':') {
                 if algo == "sha256" {
                     let output = Command::new("sha256sum")
@@ -509,7 +515,10 @@ impl Stage2Builder {
                         });
                     }
                 } else {
-                    warn!("  Unknown checksum algorithm for additional source: {}", algo);
+                    warn!(
+                        "  Unknown checksum algorithm for additional source: {}",
+                        algo
+                    );
                 }
             }
 
@@ -601,7 +610,9 @@ impl Stage2Builder {
 
     /// Run the make phase
     fn run_make(&mut self, idx: usize, build_dir: &Path) -> Result<(), Stage2Error> {
-        self.run_recipe_phase(idx, build_dir, "make", "Building", |r| r.build.make.as_ref())
+        self.run_recipe_phase(idx, build_dir, "make", "Building", |r| {
+            r.build.make.as_ref()
+        })
     }
 
     /// Run the install phase
@@ -645,12 +656,8 @@ impl Stage2Builder {
             .collect();
         let verbose = self.config.verbose;
 
-        let env_vec = build_helpers::merge_build_env(
-            &self.build_env,
-            cross_env,
-            recipe_env,
-            &self.build_env,
-        );
+        let env_vec =
+            build_helpers::merge_build_env(&self.build_env, cross_env, recipe_env, &self.build_env);
 
         let stage1_root = self.toolchain.path.parent().unwrap_or(&self.toolchain.path);
 
@@ -723,8 +730,10 @@ fn compare_dirs(a: &Path, b: &Path) -> Result<(), String> {
     }
 
     // Collect sorted file lists from both directories
-    let a_files = collect_file_list(a).map_err(|e| format!("Error reading {}: {}", a.display(), e))?;
-    let b_files = collect_file_list(b).map_err(|e| format!("Error reading {}: {}", b.display(), e))?;
+    let a_files =
+        collect_file_list(a).map_err(|e| format!("Error reading {}: {}", a.display(), e))?;
+    let b_files =
+        collect_file_list(b).map_err(|e| format!("Error reading {}: {}", b.display(), e))?;
 
     // Compare file counts
     if a_files.len() != b_files.len() {

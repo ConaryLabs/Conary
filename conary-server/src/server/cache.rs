@@ -7,10 +7,10 @@
 //! Uses a database-backed LRU index (chunk_access table) for O(1) stats
 //! and efficient eviction queries, replacing legacy mtime-based scanning.
 
-use conary_core::db::models::ChunkAccess;
 use crate::server::ServerState;
 use crate::server::handlers::human_bytes;
 use anyhow::Result;
+use conary_core::db::models::ChunkAccess;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -209,14 +209,11 @@ impl<'db> Resolver<'db> {
                 }
 
                 if constraints.len() > 1 {
-                    let has_conflict = constraints
-                        .iter()
-                        .enumerate()
-                        .any(|(i, (_, ci))| {
-                            constraints[i + 1..]
-                                .iter()
-                                .any(|(_, cj)| !ci.is_compatible_with(cj))
-                        });
+                    let has_conflict = constraints.iter().enumerate().any(|(i, (_, ci))| {
+                        constraints[i + 1..]
+                            .iter()
+                            .any(|(_, cj)| !ci.is_compatible_with(cj))
+                    });
 
                     if has_conflict {
                         conflicts.push(Conflict::ConflictingConstraints {

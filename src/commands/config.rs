@@ -278,7 +278,6 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
         return Ok(());
     }
 
-
     let mut modified_count = 0;
     let mut missing_count = 0;
     let mut pristine_count = 0;

@@ -11,7 +11,6 @@
 
 use crate::daemon::auth::{Action, AuthChecker, PeerCredentials};
 use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus};
-use conary_core::db::models::{Changeset, DependencyEntry, Trove};
 use axum::{
     Router,
     extract::{Extension, Path, Query, Request, State},
@@ -23,6 +22,7 @@ use axum::{
     },
     routing::{delete, get, post},
 };
+use conary_core::db::models::{Changeset, DependencyEntry, Trove};
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -204,7 +204,10 @@ async fn auth_gate_middleware(
     request: Request,
     next: middleware::Next,
 ) -> Result<Response, ApiError> {
-    if matches!(*request.method(), Method::POST | Method::PUT | Method::DELETE) {
+    if matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::DELETE
+    ) {
         require_auth(&state.auth_checker, &creds, Action::Install)?;
     }
     Ok(next.run(request).await)
@@ -551,10 +554,7 @@ fn build_v1_router(state: SharedState) -> Router<SharedState> {
         // Global event stream
         .route("/events", get(events_handler))
         // Defense-in-depth: reject mutating requests without credentials
-        .layer(middleware::from_fn_with_state(
-            state,
-            auth_gate_middleware,
-        ))
+        .layer(middleware::from_fn_with_state(state, auth_gate_middleware))
 }
 
 // =============================================================================
@@ -1105,8 +1105,9 @@ async fn get_package_files_handler(
         let trove = Trove::find_one_by_name(conn, &pkg_name)?;
         match trove {
             Some(t) => {
-                let trove_id =
-                    t.id.ok_or_else(|| conary_core::Error::NotFound("Package has no ID".to_string()))?;
+                let trove_id = t
+                    .id
+                    .ok_or_else(|| conary_core::Error::NotFound("Package has no ID".to_string()))?;
                 let mut stmt =
                     conn.prepare("SELECT path FROM files WHERE trove_id = ?1 ORDER BY path")?;
                 let files: Vec<String> = stmt

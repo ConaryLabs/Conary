@@ -15,12 +15,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use rmcp::{
-    ErrorData as McpError,
-    ServerHandler,
-    handler::server::tool::ToolRouter,
-    handler::server::wrapper::Parameters,
-    model::*,
-    tool, tool_router,
+    ErrorData as McpError, ServerHandler, handler::server::tool::ToolRouter,
+    handler::server::wrapper::Parameters, model::*, tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -41,7 +37,9 @@ fn validate_path_param(value: &str, param_name: &str) -> Result<(), McpError> {
         || value.contains('/')
         || value.contains("..")
         || value.contains('\0')
-        || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
     {
         Err(McpError::invalid_params(
             format!("Invalid {param_name}: must match [a-zA-Z0-9._-]+"),
@@ -61,9 +59,9 @@ fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 fn service_err_to_mcp(e: ServiceError) -> McpError {
     match e {
-        ServiceError::BadRequest(msg) | ServiceError::NotFound(msg) | ServiceError::Conflict(msg) => {
-            McpError::invalid_params(msg, None)
-        }
+        ServiceError::BadRequest(msg)
+        | ServiceError::NotFound(msg)
+        | ServiceError::Conflict(msg) => McpError::invalid_params(msg, None),
         ServiceError::Internal(msg) => McpError::internal_error(msg, None),
     }
 }
@@ -192,16 +190,23 @@ impl RemiMcpServer {
     ///
     /// Returns workflow names and filenames. Use the filename (e.g.
     /// `ci.yaml`) with the `ci_list_runs` and `ci_dispatch` tools.
-    #[tool(description = "List all CI/CD workflows. Returns workflow names and filenames. Use the filename (e.g. 'ci.yaml') with ci_list_runs and ci_dispatch.")]
+    #[tool(
+        description = "List all CI/CD workflows. Returns workflow names and filenames. Use the filename (e.g. 'ci.yaml') with ci_list_runs and ci_dispatch."
+    )]
     async fn ci_list_workflows(&self) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::get(&self.state, &format!("{FORGEJO_REPO_PATH}/actions/workflows"))
-            .await
-            .map_err(forgejo_err_to_mcp)?;
+        let text = crate::server::forgejo::get(
+            &self.state,
+            &format!("{FORGEJO_REPO_PATH}/actions/workflows"),
+        )
+        .await
+        .map_err(forgejo_err_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     /// List recent CI runs for a specific workflow.
-    #[tool(description = "List recent CI runs for a workflow. The 'workflow' param is the filename, e.g. 'ci.yaml'.")]
+    #[tool(
+        description = "List recent CI runs for a workflow. The 'workflow' param is the filename, e.g. 'ci.yaml'."
+    )]
     async fn ci_list_runs(
         &self,
         Parameters(params): Parameters<WorkflowParams>,
@@ -209,7 +214,10 @@ impl RemiMcpServer {
         validate_path_param(&params.workflow, "workflow")?;
         let text = crate::server::forgejo::get(
             &self.state,
-            &format!("{FORGEJO_REPO_PATH}/actions/workflows/{}/runs", params.workflow),
+            &format!(
+                "{FORGEJO_REPO_PATH}/actions/workflows/{}/runs",
+                params.workflow
+            ),
         )
         .await
         .map_err(forgejo_err_to_mcp)?;
@@ -249,7 +257,9 @@ impl RemiMcpServer {
     /// Trigger a new CI workflow run on the main branch.
     ///
     /// **Not idempotent** -- every call queues a new run.
-    #[tool(description = "Trigger a new CI workflow run on main. NOT idempotent -- every call queues a new run.")]
+    #[tool(
+        description = "Trigger a new CI workflow run on main. NOT idempotent -- every call queues a new run."
+    )]
     async fn ci_dispatch(
         &self,
         Parameters(params): Parameters<WorkflowParams>,
@@ -258,7 +268,10 @@ impl RemiMcpServer {
         let body = serde_json::json!({"ref": "main"});
         let text = crate::server::forgejo::post(
             &self.state,
-            &format!("{FORGEJO_REPO_PATH}/actions/workflows/{}/dispatches", params.workflow),
+            &format!(
+                "{FORGEJO_REPO_PATH}/actions/workflows/{}/dispatches",
+                params.workflow
+            ),
             Some(&body),
         )
         .await
@@ -288,7 +301,9 @@ impl RemiMcpServer {
     /// List all admin API tokens with names, scopes, and last-used timestamps.
     ///
     /// Token hashes are redacted -- only metadata is returned.
-    #[tool(description = "List all admin API tokens with names, scopes, and last-used timestamps. Token hashes are redacted.")]
+    #[tool(
+        description = "List all admin API tokens with names, scopes, and last-used timestamps. Token hashes are redacted."
+    )]
     async fn list_tokens(&self) -> Result<CallToolResult, McpError> {
         let tokens = admin_service::list_tokens(&self.state)
             .await
@@ -302,18 +317,17 @@ impl RemiMcpServer {
     ///
     /// The plaintext token is only shown in this response -- store it
     /// securely. Subsequent `list_tokens` calls only return metadata.
-    #[tool(description = "Create a new admin API token. Returns the plaintext token once -- store it securely.")]
+    #[tool(
+        description = "Create a new admin API token. Returns the plaintext token once -- store it securely."
+    )]
     async fn create_token(
         &self,
         Parameters(params): Parameters<CreateTokenParams>,
     ) -> Result<CallToolResult, McpError> {
-        let created = admin_service::create_token(
-            &self.state,
-            &params.name,
-            params.scopes.as_deref(),
-        )
-        .await
-        .map_err(service_err_to_mcp)?;
+        let created =
+            admin_service::create_token(&self.state, &params.name, params.scopes.as_deref())
+                .await
+                .map_err(service_err_to_mcp)?;
 
         let result = serde_json::json!({
             "id": created.id,
@@ -352,7 +366,9 @@ impl RemiMcpServer {
     // -----------------------------------------------------------------------
 
     /// List all configured repositories.
-    #[tool(description = "List all configured repositories with name, URL, enabled status, priority, last sync, and GPG settings.")]
+    #[tool(
+        description = "List all configured repositories with name, URL, enabled status, priority, last sync, and GPG settings."
+    )]
     async fn list_repos(&self) -> Result<CallToolResult, McpError> {
         let repos = admin_service::list_repos(&self.state)
             .await
@@ -419,7 +435,9 @@ impl RemiMcpServer {
     // -----------------------------------------------------------------------
 
     /// List all federation peers with health information.
-    #[tool(description = "List all federation peers with endpoint, tier, last seen, success rate, and enabled status.")]
+    #[tool(
+        description = "List all federation peers with endpoint, tier, last seen, success rate, and enabled status."
+    )]
     async fn list_peers(&self) -> Result<CallToolResult, McpError> {
         let peers = admin_service::list_peers(&self.state)
             .await
@@ -456,7 +474,9 @@ impl RemiMcpServer {
     ///
     /// The peer ID is derived from the SHA-256 hash of the endpoint.
     /// Returns an error if the peer already exists.
-    #[tool(description = "Add a federation peer by endpoint URL. Peer ID is derived from SHA-256 of the endpoint. Returns an error if the peer already exists.")]
+    #[tool(
+        description = "Add a federation peer by endpoint URL. Peer ID is derived from SHA-256 of the endpoint. Returns an error if the peer already exists."
+    )]
     async fn add_peer(
         &self,
         Parameters(params): Parameters<AddPeerParams>,
@@ -481,7 +501,9 @@ impl RemiMcpServer {
     }
 
     /// Delete a federation peer by its SHA-256 hash ID.
-    #[tool(description = "Delete a federation peer by its SHA-256 hash ID. Returns success or error if not found.")]
+    #[tool(
+        description = "Delete a federation peer by its SHA-256 hash ID. Returns success or error if not found."
+    )]
     async fn delete_peer(
         &self,
         Parameters(params): Parameters<PeerIdParams>,
@@ -508,7 +530,9 @@ impl RemiMcpServer {
 
     /// Query the admin audit log. Returns recent API operations with timing
     /// and (for writes) request/response bodies.
-    #[tool(description = "Query admin audit log. Supports filters: limit, action prefix, since timestamp, token_name.")]
+    #[tool(
+        description = "Query admin audit log. Supports filters: limit, action prefix, since timestamp, token_name."
+    )]
     async fn query_audit_log(
         &self,
         Parameters(params): Parameters<QueryAuditParams>,
@@ -530,7 +554,9 @@ impl RemiMcpServer {
     /// Purge old audit log entries. Deletes entries older than the given date.
     ///
     /// **Not idempotent** -- deleted entries cannot be recovered.
-    #[tool(description = "Delete audit log entries older than a given ISO 8601 date. NOT reversible.")]
+    #[tool(
+        description = "Delete audit log entries older than a given ISO 8601 date. NOT reversible."
+    )]
     async fn purge_audit_log(
         &self,
         Parameters(params): Parameters<PurgeAuditParams>,
@@ -554,18 +580,14 @@ impl RemiMcpServer {
 
 impl ServerHandler for RemiMcpServer {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_server_info(Implementation::new("remi-mcp", env!("CARGO_PKG_VERSION")))
-        .with_instructions(
-            "Remi MCP server -- manage CI workflows, inspect runs, \
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("remi-mcp", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "Remi MCP server -- manage CI workflows, inspect runs, \
              trigger builds, sync mirrors, manage admin tokens, \
              list/inspect repositories, manage federation peers, \
              and query/purge the admin audit log.",
-        )
+            )
     }
 }
 

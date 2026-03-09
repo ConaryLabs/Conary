@@ -3,7 +3,7 @@
 //! These tests exercise the full pipeline: schema setup, canonical package
 //! creation, implementation registration, distro pinning, and resolution.
 
-use conary_core::canonical::rules::{parse_rules, RulesEngine};
+use conary_core::canonical::rules::{RulesEngine, parse_rules};
 use conary_core::db::models::{
     CanonicalPackage, DistroPin, PackageImplementation, PackageOverride,
 };
@@ -30,9 +30,14 @@ fn test_full_canonical_resolution_pinned() {
     let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
     let apache_id = pkg.insert(&conn).unwrap();
 
-    PackageImplementation::new(apache_id, "fedora-41".into(), "httpd".into(), "curated".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
+    PackageImplementation::new(
+        apache_id,
+        "fedora-41".into(),
+        "httpd".into(),
+        "curated".into(),
+    )
+    .insert_or_ignore(&conn)
+    .unwrap();
     PackageImplementation::new(
         apache_id,
         "ubuntu-noble".into(),

@@ -2376,24 +2376,15 @@ mod tests {
         .unwrap();
 
         // Verify new columns on provides
-        conn.execute(
-            "SELECT canonical_id FROM provides LIMIT 0",
-            [],
-        )
-        .unwrap();
+        conn.execute("SELECT canonical_id FROM provides LIMIT 0", [])
+            .unwrap();
 
         // Verify new columns on repositories
-        conn.execute(
-            "SELECT distro FROM repositories LIMIT 0",
-            [],
-        )
-        .unwrap();
+        conn.execute("SELECT distro FROM repositories LIMIT 0", [])
+            .unwrap();
 
         // Verify new columns on repository_packages
-        conn.execute(
-            "SELECT distro FROM repository_packages LIMIT 0",
-            [],
-        )
-        .unwrap();
+        conn.execute("SELECT distro FROM repository_packages LIMIT 0", [])
+            .unwrap();
     }
 }

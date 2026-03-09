@@ -414,10 +414,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         // === Canonical Package Identity ===
-        .route(
-            "/v1/canonical/search",
-            get(canonical::canonical_search),
-        )
+        .route("/v1/canonical/search", get(canonical::canonical_search))
         .route("/v1/canonical/:name", get(canonical::canonical_lookup))
         .route("/v1/groups", get(canonical::groups_list))
         // === Model Collections (for remote include resolution) ===
@@ -583,7 +580,11 @@ pub fn create_external_admin_router(
     // Protected by the same auth middleware as other admin endpoints.
     let state_for_mcp = state.clone();
     let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
-        move || Ok(crate::server::mcp::RemiMcpServer::new(state_for_mcp.clone())),
+        move || {
+            Ok(crate::server::mcp::RemiMcpServer::new(
+                state_for_mcp.clone(),
+            ))
+        },
         Arc::new(
             rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
         ),
@@ -591,25 +592,26 @@ pub fn create_external_admin_router(
     );
 
     // MCP routes require admin scope (MCP tools provide full admin control)
-    let mcp_router = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn(
-            |request: Request<Body>, next: Next| async move {
-                let has_admin = request
-                    .extensions()
-                    .get::<crate::server::auth::TokenScopes>()
-                    .map(|s| s.has_scope(crate::server::auth::Scope::Admin))
-                    .unwrap_or(false);
-                if !has_admin {
-                    return crate::server::auth::json_error(
-                        403,
-                        "Admin scope required for MCP",
-                        "FORBIDDEN",
-                    );
-                }
-                next.run(request).await
-            },
-        ));
+    let mcp_router =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .route_layer(middleware::from_fn(
+                |request: Request<Body>, next: Next| async move {
+                    let has_admin = request
+                        .extensions()
+                        .get::<crate::server::auth::TokenScopes>()
+                        .map(|s| s.has_scope(crate::server::auth::Scope::Admin))
+                        .unwrap_or(false);
+                    if !has_admin {
+                        return crate::server::auth::json_error(
+                            403,
+                            "Admin scope required for MCP",
+                            "FORBIDDEN",
+                        );
+                    }
+                    next.run(request).await
+                },
+            ));
 
     // Auth-protected routes
     let protected = Router::new()
@@ -619,7 +621,10 @@ pub fn create_external_admin_router(
         .route("/v1/admin/tokens/:id", delete(admin::delete_token))
         // CI proxy endpoints
         .route("/v1/admin/ci/workflows", get(admin::ci_list_workflows))
-        .route("/v1/admin/ci/workflows/:name/runs", get(admin::ci_list_runs))
+        .route(
+            "/v1/admin/ci/workflows/:name/runs",
+            get(admin::ci_list_runs),
+        )
         .route("/v1/admin/ci/runs/:id", get(admin::ci_get_run))
         .route("/v1/admin/ci/runs/:id/logs", get(admin::ci_get_logs))
         .route(
@@ -638,11 +643,23 @@ pub fn create_external_admin_router(
         .route("/v1/admin/federation/peers", get(admin::list_peers))
         .route("/v1/admin/federation/peers", post(admin::add_peer))
         .route("/v1/admin/federation/peers/:id", delete(admin::delete_peer))
-        .route("/v1/admin/federation/peers/:id/health", get(admin::peer_health))
-        .route("/v1/admin/federation/config", get(admin::get_federation_config))
-        .route("/v1/admin/federation/config", put(admin::update_federation_config))
+        .route(
+            "/v1/admin/federation/peers/:id/health",
+            get(admin::peer_health),
+        )
+        .route(
+            "/v1/admin/federation/config",
+            get(admin::get_federation_config),
+        )
+        .route(
+            "/v1/admin/federation/config",
+            put(admin::update_federation_config),
+        )
         // Audit log
-        .route("/v1/admin/audit", get(admin::query_audit).delete(admin::purge_audit))
+        .route(
+            "/v1/admin/audit",
+            get(admin::query_audit).delete(admin::purge_audit),
+        )
         // SSE event stream
         .route("/v1/admin/events", get(admin::sse_events))
         // MCP endpoint (admin scope enforced by mcp_router's route_layer)

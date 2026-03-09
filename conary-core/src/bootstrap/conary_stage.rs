@@ -164,8 +164,7 @@ mod tests {
         let sysroot = dir.path().join("sysroot");
         std::fs::create_dir_all(&sysroot).unwrap();
         let config = BootstrapConfig::new();
-        let builder =
-            ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
+        let builder = ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
         // Missing components
         assert!(builder.validate_sysroot().is_err());
     }
@@ -173,11 +172,8 @@ mod tests {
     #[test]
     fn test_rust_bootstrap_url_x86_64() {
         let config = BootstrapConfig::new(); // defaults to x86_64
-        let builder = ConaryStageBuilder::new(
-            PathBuf::from("/tmp"),
-            config,
-            PathBuf::from("/sysroot"),
-        );
+        let builder =
+            ConaryStageBuilder::new(PathBuf::from("/tmp"), config, PathBuf::from("/sysroot"));
         let url = builder.rust_bootstrap_url();
         assert!(url.contains("x86_64-unknown-linux-gnu"));
         assert!(url.contains(RUST_VERSION));
@@ -186,11 +182,8 @@ mod tests {
     #[test]
     fn test_rust_bootstrap_url_aarch64() {
         let config = BootstrapConfig::new().with_target(TargetArch::Aarch64);
-        let builder = ConaryStageBuilder::new(
-            PathBuf::from("/tmp"),
-            config,
-            PathBuf::from("/sysroot"),
-        );
+        let builder =
+            ConaryStageBuilder::new(PathBuf::from("/tmp"), config, PathBuf::from("/sysroot"));
         let url = builder.rust_bootstrap_url();
         assert!(url.contains("aarch64-unknown-linux-gnu"));
     }
@@ -198,11 +191,8 @@ mod tests {
     #[test]
     fn test_rust_bootstrap_url_riscv64() {
         let config = BootstrapConfig::new().with_target(TargetArch::Riscv64);
-        let builder = ConaryStageBuilder::new(
-            PathBuf::from("/tmp"),
-            config,
-            PathBuf::from("/sysroot"),
-        );
+        let builder =
+            ConaryStageBuilder::new(PathBuf::from("/tmp"), config, PathBuf::from("/sysroot"));
         let url = builder.rust_bootstrap_url();
         assert!(url.contains("riscv64gc-unknown-linux-gnu"));
     }
@@ -238,8 +228,7 @@ mod tests {
         std::fs::write(sysroot.join("usr/lib/libc.so"), "").unwrap();
 
         let config = BootstrapConfig::new();
-        let builder =
-            ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
+        let builder = ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
         assert!(builder.validate_sysroot().is_ok());
     }
 
@@ -256,8 +245,7 @@ mod tests {
         std::fs::write(sysroot.join("usr/lib/libc.so"), "").unwrap();
 
         let config = BootstrapConfig::new();
-        let builder =
-            ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
+        let builder = ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
         let err = builder.build().unwrap_err();
         assert!(
             matches!(err, ConaryStageError::NotImplemented(_)),

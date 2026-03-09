@@ -2,8 +2,8 @@
 //! Peer types and registry for federation
 
 use super::config::PeerTier;
-use conary_core::{Error, Result};
 use chrono::{DateTime, Utc};
+use conary_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

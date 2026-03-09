@@ -851,7 +851,9 @@ pub async fn rebuild_bloom(State(state): State<Arc<RwLock<ServerState>>>) -> imp
 }
 
 /// Scan directory for chunk hashes
-pub(crate) async fn scan_chunk_hashes(objects_dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+pub(crate) async fn scan_chunk_hashes(
+    objects_dir: &std::path::Path,
+) -> std::io::Result<Vec<String>> {
     let mut hashes = Vec::new();
 
     if !objects_dir.exists() {

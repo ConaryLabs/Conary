@@ -290,10 +290,7 @@ impl LanguageDepDetector {
 
         for path in paths {
             for dep in Self::detect_provides(path) {
-                result
-                    .entry(dep.class)
-                    .or_default()
-                    .push(dep.name);
+                result.entry(dep.class).or_default().push(dep.name);
             }
         }
 

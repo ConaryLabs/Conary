@@ -65,9 +65,7 @@ pub fn apply_seccomp_filter(
 
 /// Resolve the final list of allowed syscalls from profile, explicit allow/deny,
 /// and wildcard expansion. Returns a sorted, deduplicated list.
-fn resolve_allowed_syscalls(
-    caps: &SyscallCapabilities,
-) -> Result<Vec<String>, EnforcementError> {
+fn resolve_allowed_syscalls(caps: &SyscallCapabilities) -> Result<Vec<String>, EnforcementError> {
     let mut allowed: Vec<String> = Vec::new();
 
     // Expand profile to syscall list

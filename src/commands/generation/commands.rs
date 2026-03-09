@@ -47,10 +47,7 @@ pub fn cmd_generation_list() -> Result<()> {
     }
 
     for (number, meta) in &generations {
-        let kernel = meta
-            .kernel_version
-            .as_deref()
-            .unwrap_or("none");
+        let kernel = meta.kernel_version.as_deref().unwrap_or("none");
         let active = if current == Some(*number) {
             " [active]"
         } else {
@@ -79,14 +76,18 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
     let is_active = current == Some(gen_number);
 
     let status = if is_active { "active" } else { "inactive" };
-    let kernel = meta
-        .kernel_version
-        .as_deref()
-        .unwrap_or("none");
+    let kernel = meta.kernel_version.as_deref().unwrap_or("none");
 
     println!("Generation {gen_number}");
     println!("  Status:   {status}");
-    println!("  Format:   {}", if meta.format.is_empty() { "reflink" } else { &meta.format });
+    println!(
+        "  Format:   {}",
+        if meta.format.is_empty() {
+            "reflink"
+        } else {
+            &meta.format
+        }
+    );
     println!("  Created:  {}", meta.created_at);
     println!("  Packages: {}", meta.package_count);
     println!("  Kernel:   {kernel}");
@@ -94,7 +95,10 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
 
     // Show EROFS-specific info if available
     if let Some(erofs_size) = meta.erofs_size {
-        println!("  Image:    {} (root.erofs)", format_bytes(erofs_size as u64));
+        println!(
+            "  Image:    {} (root.erofs)",
+            format_bytes(erofs_size as u64)
+        );
     } else {
         let size = dir_size_bytes(&gen_dir);
         println!("  Size:     {}", format_bytes(size));
@@ -188,12 +192,14 @@ pub fn cmd_generation_gc(keep: usize) -> Result<()> {
         }
 
         // Remove corresponding BLS entry
-        let bls_path = std::path::PathBuf::from(format!(
-            "/boot/loader/entries/conary-gen-{gen_number}.conf"
-        ));
+        let bls_path =
+            std::path::PathBuf::from(format!("/boot/loader/entries/conary-gen-{gen_number}.conf"));
         if bls_path.exists() {
             if let Err(e) = std::fs::remove_file(&bls_path) {
-                eprintln!("Warning: failed to remove BLS entry {}: {e}", bls_path.display());
+                eprintln!(
+                    "Warning: failed to remove BLS entry {}: {e}",
+                    bls_path.display()
+                );
             } else {
                 info!("Removed BLS entry for generation {gen_number}");
             }
@@ -233,13 +239,7 @@ fn load_gc_roots() -> Vec<i64> {
 
     entries
         .flatten()
-        .filter_map(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .parse::<i64>()
-                .ok()
-        })
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
         .collect()
 }
 
@@ -253,7 +253,6 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .map(|meta| meta.len())
         .sum()
 }
-
 
 #[cfg(test)]
 mod tests {

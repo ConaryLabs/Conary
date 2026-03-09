@@ -929,8 +929,11 @@ pub fn cmd_model_publish(
 
     if is_remote {
         // Remote publish via HTTP PUT
-        let data =
-            conary_core::model::remote::build_collection_data_from_model(&model, &group_name, version);
+        let data = conary_core::model::remote::build_collection_data_from_model(
+            &model,
+            &group_name,
+            version,
+        );
 
         // Sign if key provided
         if let Some(ref key) = signing_key {

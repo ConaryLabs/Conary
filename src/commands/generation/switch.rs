@@ -5,7 +5,7 @@
 //! mount-based switching. The EROFS image is mounted via composefs,
 //! /usr is bind-mounted read-only, and /etc uses an overlayfs.
 
-use super::metadata::{current_link, generation_path, GenerationMetadata};
+use super::metadata::{GenerationMetadata, current_link, generation_path};
 use anyhow::{Context, Result, anyhow};
 use std::process::Command;
 use tracing::{info, warn};
@@ -49,8 +49,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 1: Mount new generation's composefs at staging point
-    std::fs::create_dir_all(staging)
-        .context("Failed to create composefs staging directory")?;
+    std::fs::create_dir_all(staging).context("Failed to create composefs staging directory")?;
 
     // Try with verity_check first, fall back without
     let mount_opts_verity = format!("basedir={cas_dir},verity_check=1");
@@ -101,7 +100,10 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let etc_opts = format!(
         "lowerdir={staging_etc},upperdir=/conary/etc-state/upper,workdir=/conary/etc-state/work"
     );
-    match run_command("mount", &["-t", "overlay", "overlay", "/etc", "-o", &etc_opts]) {
+    match run_command(
+        "mount",
+        &["-t", "overlay", "overlay", "/etc", "-o", &etc_opts],
+    ) {
         Ok(()) => info!("Mounted /etc overlay with composefs lower"),
         Err(e) => {
             warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
@@ -110,8 +112,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 4: Move staging mount to permanent mount point
-    std::fs::create_dir_all(old_mnt)
-        .context("Failed to create permanent composefs mount dir")?;
+    std::fs::create_dir_all(old_mnt).context("Failed to create permanent composefs mount dir")?;
     if let Err(e) = run_command("mount", &["--move", staging, old_mnt]) {
         // Clean up mounts before returning error
         let _ = run_command("umount", &["/usr"]);
@@ -120,8 +121,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 5: Update current symlink
-    update_current_symlink(gen_number)
-        .context("Failed to update current generation symlink")?;
+    update_current_symlink(gen_number).context("Failed to update current generation symlink")?;
 
     info!("Switched to generation {gen_number} (composefs)");
     println!("Switched to generation {gen_number}. Reboot recommended for full consistency.");
@@ -178,11 +178,7 @@ pub fn update_current_symlink(gen_number: i64) -> Result<()> {
         )
     })?;
 
-    info!(
-        "Updated {} -> {}",
-        link.display(),
-        target.display()
-    );
+    info!("Updated {} -> {}", link.display(), target.display());
     Ok(())
 }
 

@@ -350,7 +350,8 @@ impl Kitchen {
         // Check remote patches
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
-                if is_remote_url(&patch.file) && let Some(checksum) = &patch.checksum
+                if is_remote_url(&patch.file)
+                    && let Some(checksum) = &patch.checksum
                 {
                     let key = source_cache_key(checksum);
                     let cached_path = self.config.source_cache.join(&key);

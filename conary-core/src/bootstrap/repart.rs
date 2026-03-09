@@ -101,8 +101,7 @@ pub fn generate_repart_definitions(
     arch: TargetArch,
     esp_size_mb: u64,
 ) -> Result<(), RepartError> {
-    std::fs::create_dir_all(output_dir)
-        .map_err(|e| RepartError::WriteFailed(e.to_string()))?;
+    std::fs::create_dir_all(output_dir).map_err(|e| RepartError::WriteFailed(e.to_string()))?;
 
     let esp = RepartDefinition::esp(esp_size_mb);
     std::fs::write(output_dir.join("00-esp.conf"), esp.to_string())?;

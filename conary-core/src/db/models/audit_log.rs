@@ -116,10 +116,7 @@ pub fn query(
 ///
 /// Returns the number of entries deleted.
 pub fn purge(conn: &Connection, before: &str) -> Result<usize> {
-    let deleted = conn.execute(
-        "DELETE FROM admin_audit_log WHERE timestamp < ?1",
-        [before],
-    )?;
+    let deleted = conn.execute("DELETE FROM admin_audit_log WHERE timestamp < ?1", [before])?;
     Ok(deleted)
 }
 
@@ -236,7 +233,16 @@ mod tests {
         )
         .unwrap();
         insert(
-            &conn, None, "new.action", "GET", "/new", 200, None, None, None, None,
+            &conn,
+            None,
+            "new.action",
+            "GET",
+            "/new",
+            200,
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 

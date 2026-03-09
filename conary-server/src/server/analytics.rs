@@ -5,8 +5,8 @@
 //! This avoids write contention on the database from individual download requests.
 //! A background loop also refreshes the aggregated `download_counts` table.
 
-use conary_core::db::models::{DownloadCount, DownloadStat};
 use anyhow::Result;
+use conary_core::db::models::{DownloadCount, DownloadStat};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;

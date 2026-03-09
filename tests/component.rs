@@ -343,7 +343,9 @@ fn test_default_install_excludes_devel_and_doc() {
 #[test]
 fn test_component_selective_install_database() {
     use conary_core::components::{ComponentClassifier, ComponentType};
-    use conary_core::db::models::{Changeset, ChangesetStatus, Component, FileEntry, Trove, TroveType};
+    use conary_core::db::models::{
+        Changeset, ChangesetStatus, Component, FileEntry, Trove, TroveType,
+    };
 
     let temp_file = NamedTempFile::new().unwrap();
     let db_path = temp_file.path().to_str().unwrap().to_string();

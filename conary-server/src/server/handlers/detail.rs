@@ -5,7 +5,6 @@
 //! package metadata, version history, dependency graphs, and statistics.
 //! All database queries run via `spawn_blocking` for async compatibility.
 
-use conary_core::db::models::DownloadCount;
 use crate::server::ServerState;
 use axum::{
     Json,
@@ -13,6 +12,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::db::models::DownloadCount;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -86,9 +86,10 @@ pub async fn get_package_detail(
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
-    let detail =
-        run_blocking("package detail", move || query_package_detail(&db_path, &distro, &name))
-            .await?;
+    let detail = run_blocking("package detail", move || {
+        query_package_detail(&db_path, &distro, &name)
+    })
+    .await?;
 
     match detail {
         Some(detail) => Ok((
@@ -132,8 +133,10 @@ pub async fn get_dependencies(
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
-    let deps =
-        run_blocking("dependencies", move || query_dependencies(&db_path, &distro, &name)).await?;
+    let deps = run_blocking("dependencies", move || {
+        query_dependencies(&db_path, &distro, &name)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -153,11 +156,10 @@ pub async fn get_reverse_dependencies(
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
-    let rdeps =
-        run_blocking("reverse dependencies", move || {
-            query_reverse_dependencies(&db_path, &distro, &name)
-        })
-        .await?;
+    let rdeps = run_blocking("reverse dependencies", move || {
+        query_reverse_dependencies(&db_path, &distro, &name)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -178,8 +180,10 @@ pub async fn get_popular(
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let packages =
-        run_blocking("popular", move || query_popular(&db_path, distro.as_deref(), limit)).await?;
+    let packages = run_blocking("popular", move || {
+        query_popular(&db_path, distro.as_deref(), limit)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -200,8 +204,10 @@ pub async fn get_recent(
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
-    let packages =
-        run_blocking("recent", move || query_recent(&db_path, distro.as_deref(), limit)).await?;
+    let packages = run_blocking("recent", move || {
+        query_recent(&db_path, distro.as_deref(), limit)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -396,7 +402,10 @@ fn query_reverse_dependencies(
 
     // Find packages whose dependencies contain this package name.
     // Escape LIKE metacharacters to prevent wildcard injection.
-    let escaped = name.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = name
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let pattern = format!("%{}%", escaped);
     let mut stmt = conn.prepare(
         "SELECT DISTINCT rp.name

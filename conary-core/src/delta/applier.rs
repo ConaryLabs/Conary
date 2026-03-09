@@ -95,9 +95,9 @@ impl DeltaApplier {
         let mut decompressed = Vec::new();
         let mut buf = [0u8; 64 * 1024];
         loop {
-            let n = decoder
-                .read(&mut buf)
-                .map_err(|e| Error::DeltaError(format!("Failed to read decompressed data: {}", e)))?;
+            let n = decoder.read(&mut buf).map_err(|e| {
+                Error::DeltaError(format!("Failed to read decompressed data: {}", e))
+            })?;
             if n == 0 {
                 break;
             }

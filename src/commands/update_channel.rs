@@ -10,11 +10,7 @@ pub fn cmd_update_channel_get(db_path: &str) -> Result<()> {
     let conn = db::open(db_path)?;
     let channel = get_update_channel(&conn)?;
     let is_default = channel == DEFAULT_UPDATE_CHANNEL;
-    println!(
-        "{}{}",
-        channel,
-        if is_default { " (default)" } else { "" }
-    );
+    println!("{}{}", channel, if is_default { " (default)" } else { "" });
     Ok(())
 }
 

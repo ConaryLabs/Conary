@@ -202,13 +202,19 @@ impl PackageMetadataBuilder {
     pub fn build(self) -> crate::error::Result<PackageMetadata> {
         Ok(PackageMetadata {
             package_path: self.package_path.ok_or_else(|| {
-                crate::error::Error::InitError("PackageMetadataBuilder: package_path is required".to_string())
+                crate::error::Error::InitError(
+                    "PackageMetadataBuilder: package_path is required".to_string(),
+                )
             })?,
             name: self.name.ok_or_else(|| {
-                crate::error::Error::InitError("PackageMetadataBuilder: name is required".to_string())
+                crate::error::Error::InitError(
+                    "PackageMetadataBuilder: name is required".to_string(),
+                )
             })?,
             version: self.version.ok_or_else(|| {
-                crate::error::Error::InitError("PackageMetadataBuilder: version is required".to_string())
+                crate::error::Error::InitError(
+                    "PackageMetadataBuilder: version is required".to_string(),
+                )
             })?,
             architecture: self.architecture,
             description: self.description,

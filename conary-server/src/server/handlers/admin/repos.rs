@@ -1,17 +1,17 @@
 // conary-server/src/server/handlers/admin/repos.rs
 //! Repository management handlers
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::ServerState;
 use crate::server::admin_service::{self, CreateRepoInput, UpdateRepoInput};
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::ServerState;
 
 use super::{check_scope, validate_path_param};
 
@@ -99,7 +99,11 @@ pub async fn create_repo(
         None => return json_error(400, "Name is required", "INVALID_INPUT"),
     };
     if name.is_empty() || name.len() > 128 {
-        return json_error(400, "Repository name must be 1-128 characters", "INVALID_NAME");
+        return json_error(
+            400,
+            "Repository name must be 1-128 characters",
+            "INVALID_NAME",
+        );
     }
     let name = name.to_string();
     if let Some(err) = validate_path_param(&name, "repo name") {
@@ -196,7 +200,9 @@ pub async fn update_repo(
 
     if let Some(ref n) = body.name {
         let n = n.trim();
-        if !n.is_empty() && let Some(err) = validate_path_param(n, "repo name") {
+        if !n.is_empty()
+            && let Some(err) = validate_path_param(n, "repo name")
+        {
             return err;
         }
     }
@@ -220,10 +226,7 @@ pub async fn update_repo(
     match admin_service::update_repo(&state, &name, input).await {
         Ok(Some(repo)) => {
             let guard = state.read().await;
-            guard.publish_event(
-                "repo.updated",
-                serde_json::json!({"name": &repo.name}),
-            );
+            guard.publish_event("repo.updated", serde_json::json!({"name": &repo.name}));
             drop(guard);
             Json(RepoResponse::from(repo)).into_response()
         }
@@ -253,10 +256,7 @@ pub async fn delete_repo(
     match admin_service::delete_repo(&state, &name).await {
         Ok(true) => {
             let guard = state.read().await;
-            guard.publish_event(
-                "repo.deleted",
-                serde_json::json!({"name": &name}),
-            );
+            guard.publish_event("repo.deleted", serde_json::json!({"name": &name}));
             drop(guard);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -288,10 +288,7 @@ pub async fn sync_repo(
     match admin_service::repo_exists(&state, &name).await {
         Ok(true) => {
             let guard = state.read().await;
-            guard.publish_event(
-                "repo.sync_requested",
-                serde_json::json!({"name": &name}),
-            );
+            guard.publish_event("repo.sync_requested", serde_json::json!({"name": &name}));
             drop(guard);
             (
                 StatusCode::ACCEPTED,

@@ -64,9 +64,7 @@ impl<'db> CanonicalResolver<'db> {
         }
 
         // Try as distro-specific name
-        if let Some(impl_entry) =
-            PackageImplementation::find_by_any_distro_name(self.conn, name)?
-        {
+        if let Some(impl_entry) = PackageImplementation::find_by_any_distro_name(self.conn, name)? {
             let canonical_id = impl_entry.canonical_id;
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
             return Ok(impls
@@ -210,12 +208,8 @@ mod tests {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 = PackageImplementation::new(
-            cid,
-            "fedora-41".into(),
-            "httpd".into(),
-            "curated".into(),
-        );
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
@@ -237,12 +231,8 @@ mod tests {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 = PackageImplementation::new(
-            cid,
-            "fedora-41".into(),
-            "httpd".into(),
-            "curated".into(),
-        );
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,

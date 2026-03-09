@@ -56,8 +56,8 @@ pub fn convert_binary_to_ccs_manifest(
 ) -> CcsManifest {
     use crate::ccs::manifest::{
         AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook, GroupHook,
-        Hooks, Package, PackageDep, Platform, Provides, Requires, ScriptHook, Suggests,
-        SysctlHook, SystemdHook, TmpfilesHook, UserHook,
+        Hooks, Package, PackageDep, Platform, Provides, Requires, ScriptHook, Suggests, SysctlHook,
+        SystemdHook, TmpfilesHook, UserHook,
     };
 
     let platform = bin.platform.as_ref().map(|p| Platform {

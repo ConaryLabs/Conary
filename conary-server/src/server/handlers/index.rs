@@ -1,13 +1,13 @@
 // conary-server/src/server/handlers/index.rs
 //! Repository index endpoints - metadata serving
 
-use conary_core::db::models::RepositoryPackage;
 use crate::server::ServerState;
 use axum::{
     extract::{Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::db::models::RepositoryPackage;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -56,8 +56,7 @@ pub async fn get_metadata(
 
     let db_path = state.read().await.config.db_path.clone();
 
-    let result =
-        tokio::task::spawn_blocking(move || build_metadata(&db_path, &distro)).await;
+    let result = tokio::task::spawn_blocking(move || build_metadata(&db_path, &distro)).await;
 
     match result {
         Ok(Ok(metadata)) => {
@@ -126,9 +125,10 @@ fn build_metadata(
         .iter()
         .map(|pkg| {
             let key = format!("{}:{}", pkg.name, pkg.version);
-            let dependencies = pkg.dependencies.as_ref().and_then(|deps_json| {
-                serde_json::from_str::<Vec<String>>(deps_json).ok()
-            });
+            let dependencies = pkg
+                .dependencies
+                .as_ref()
+                .and_then(|deps_json| serde_json::from_str::<Vec<String>>(deps_json).ok());
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),

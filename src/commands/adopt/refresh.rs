@@ -11,7 +11,9 @@ use anyhow::Result;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
 };
-use conary_core::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{
+    DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+};
 use tracing::{debug, warn};
 
 /// Map of package name -> (version, arch, description).

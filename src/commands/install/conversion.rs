@@ -67,7 +67,10 @@ pub fn try_convert_to_ccs(
     {
         if existing.needs_reconversion() {
             info!("Re-converting {} (algorithm upgraded)", pkg.name());
-            conary_core::db::models::ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
+            conary_core::db::models::ConvertedPackage::delete_by_checksum(
+                &conn,
+                &original_checksum,
+            )?;
         } else {
             // Already converted and up to date
             info!(

@@ -74,6 +74,9 @@ mod tests {
         }
         let version = get_system_package_version("bash");
         assert!(version.is_some(), "bash should have a version");
-        assert!(!version.unwrap().is_empty(), "bash version should not be empty");
+        assert!(
+            !version.unwrap().is_empty(),
+            "bash version should not be empty"
+        );
     }
 }

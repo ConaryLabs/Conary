@@ -156,8 +156,15 @@ struct OciLayout {
 
 /// A file entry for OCI layer construction, distinguishing regular files from symlinks
 enum OciFileEntry {
-    Regular { path: String, content: Vec<u8>, mode: u32 },
-    Symlink { path: String, target: String },
+    Regular {
+        path: String,
+        content: Vec<u8>,
+        mode: u32,
+    },
+    Symlink {
+        path: String,
+        target: String,
+    },
 }
 
 /// Export CCS packages to OCI image format

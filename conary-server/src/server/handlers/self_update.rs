@@ -66,14 +66,16 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                "No self-update packages available",
-            )
-                .into_response());
+            return Err(
+                (StatusCode::NOT_FOUND, "No self-update packages available").into_response()
+            );
         }
         Err(e) => {
-            tracing::error!("Failed to read self-update directory {}: {}", dir.display(), e);
+            tracing::error!(
+                "Failed to read self-update directory {}: {}",
+                dir.display(),
+                e
+            );
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to read package directory",
@@ -99,11 +101,7 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
         .collect();
 
     if versions.is_empty() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "No self-update packages available",
-        )
-            .into_response());
+        return Err((StatusCode::NOT_FOUND, "No self-update packages available").into_response());
     }
 
     versions.sort_by_key(|v| parse_semver(v));
@@ -113,9 +111,7 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
 /// GET /v1/ccs/conary/latest
 ///
 /// Returns metadata about the latest available Conary self-update package.
-pub async fn get_latest(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Response {
+pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let state_guard = state.read().await;
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
@@ -133,11 +129,7 @@ pub async fn get_latest(
         Ok(d) => d,
         Err(e) => {
             tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to read package",
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
         }
     };
 
@@ -163,9 +155,7 @@ pub async fn get_latest(
 /// GET /v1/ccs/conary/versions
 ///
 /// Returns a list of all available self-update versions.
-pub async fn get_versions(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Response {
+pub async fn get_versions(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let state_guard = state.read().await;
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
@@ -175,7 +165,10 @@ pub async fn get_versions(
         Err(e) => return e,
     };
 
-    let latest = versions.last().expect("scan_versions guarantees non-empty").clone();
+    let latest = versions
+        .last()
+        .expect("scan_versions guarantees non-empty")
+        .clone();
 
     let response = VersionsResponse { versions, latest };
 
@@ -220,27 +213,15 @@ pub async fn download(
         Ok(f) => f,
         Err(e) => {
             tracing::error!("Failed to open CCS package {}: {}", ccs_path.display(), e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to read package",
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
         }
     };
 
     let metadata = match file.metadata().await {
         Ok(m) => m,
         Err(e) => {
-            tracing::error!(
-                "Failed to get metadata for {}: {}",
-                ccs_path.display(),
-                e
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to read package",
-            )
-                .into_response();
+            tracing::error!("Failed to get metadata for {}: {}", ccs_path.display(), e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
         }
     };
 

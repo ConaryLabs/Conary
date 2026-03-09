@@ -512,8 +512,7 @@ pub fn is_daemon_running() -> bool {
 /// `is_daemon_running` would redundantly open the lock file just to
 /// probe it, so we skip that check.
 pub fn get_daemon_pid() -> Option<u32> {
-    SystemLock::holder_pid(SystemLock::DEFAULT_PATH)
-        .filter(|_| is_daemon_running())
+    SystemLock::holder_pid(SystemLock::DEFAULT_PATH).filter(|_| is_daemon_running())
 }
 
 /// Run the daemon
@@ -585,7 +584,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
 
     // Get Unix listener
     let unix_listener = socket_manager.take_unix_listener().ok_or_else(|| {
-        conary_core::Error::IoError("Unix listener not bound - check socket configuration".to_string())
+        conary_core::Error::IoError(
+            "Unix listener not bound - check socket configuration".to_string(),
+        )
     })?;
 
     log::info!("Daemon ready, accepting connections");

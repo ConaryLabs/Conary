@@ -104,7 +104,10 @@ impl SocketManager {
             && let Some(ref bind_addr) = self.config.tcp_bind
         {
             let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-                conary_core::Error::IoError(format!("Failed to bind TCP socket at {}: {}", bind_addr, e))
+                conary_core::Error::IoError(format!(
+                    "Failed to bind TCP socket at {}: {}",
+                    bind_addr, e
+                ))
             })?;
 
             log::info!("Listening on TCP: {}", bind_addr);
@@ -162,8 +165,9 @@ fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
     use std::ffi::CString;
 
     // Look up group ID
-    let group_cstr = CString::new(group_name)
-        .map_err(|_| conary_core::Error::ConfigError(format!("Invalid group name: {}", group_name)))?;
+    let group_cstr = CString::new(group_name).map_err(|_| {
+        conary_core::Error::ConfigError(format!("Invalid group name: {}", group_name))
+    })?;
 
     let gid = unsafe {
         let grp = libc::getgrnam(group_cstr.as_ptr());

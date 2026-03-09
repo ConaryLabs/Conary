@@ -52,8 +52,9 @@ impl SystemLock {
     pub fn acquire<P: AsRef<Path>>(path: P) -> Result<Self> {
         let (file, path) = Self::open_lock_file(path)?;
 
-        file.lock_exclusive()
-            .map_err(|e| conary_core::Error::IoError(format!("Failed to acquire system lock: {}", e)))?;
+        file.lock_exclusive().map_err(|e| {
+            conary_core::Error::IoError(format!("Failed to acquire system lock: {}", e))
+        })?;
 
         log::info!("Acquired system lock at {:?}", path);
         Ok(Self { file, path })

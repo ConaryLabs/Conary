@@ -9,15 +9,15 @@
 use std::collections::BTreeMap;
 use std::io::{self, Seek, SeekFrom, Write};
 
-use crate::dirent::{pack_directory, DirEntry, EROFS_FT_DIR, EROFS_FT_REG_FILE, EROFS_FT_SYMLINK};
+use crate::dirent::{DirEntry, EROFS_FT_DIR, EROFS_FT_REG_FILE, EROFS_FT_SYMLINK, pack_directory};
 use crate::inode::{
-    nid_from_offset, InodeInfo, EROFS_COMPACT_INODE_SIZE, EROFS_EXTENDED_INODE_SIZE,
-    EROFS_INODE_CHUNK_BASED, EROFS_INODE_FLAT_INLINE, EROFS_INODE_FLAT_PLAIN, S_IFDIR, S_IFLNK,
-    S_IFREG,
+    EROFS_COMPACT_INODE_SIZE, EROFS_EXTENDED_INODE_SIZE, EROFS_INODE_CHUNK_BASED,
+    EROFS_INODE_FLAT_INLINE, EROFS_INODE_FLAT_PLAIN, InodeInfo, S_IFDIR, S_IFLNK, S_IFREG,
+    nid_from_offset,
 };
 use crate::superblock::{
-    Superblock, EROFS_FEATURE_COMPAT_SB_CHKSUM, EROFS_FEATURE_INCOMPAT_CHUNKED_FILE,
-    EROFS_FEATURE_INCOMPAT_DEVICE_TABLE,
+    EROFS_FEATURE_COMPAT_SB_CHKSUM, EROFS_FEATURE_INCOMPAT_CHUNKED_FILE,
+    EROFS_FEATURE_INCOMPAT_DEVICE_TABLE, Superblock,
 };
 use crate::tail_pack::pack_tail;
 use crate::xattr::build_composefs_xattrs;
@@ -81,9 +81,22 @@ struct TreeNode {
 
 #[derive(Debug)]
 enum NodeKind {
-    Directory { mode: u32, uid: u32, gid: u32 },
-    File { digest: [u8; 32], size: u64, mode: u32, uid: u32, gid: u32 },
-    Symlink { target: String, mode: u32 },
+    Directory {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    File {
+        digest: [u8; 32],
+        size: u64,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    Symlink {
+        target: String,
+        mode: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +220,14 @@ impl ErofsBuilder {
                     let inode_sz = EROFS_COMPACT_INODE_SIZE as u64;
                     node_sizes.push((idx, inode_sz));
                 }
-                NodeKind::File { digest, size, mode, uid, gid, .. } => {
+                NodeKind::File {
+                    digest,
+                    size,
+                    mode,
+                    uid,
+                    gid,
+                    ..
+                } => {
                     let cas_path = cas_path_from_digest(digest);
                     let (xattr_bytes, xattr_icount) = build_composefs_xattrs(&cas_path);
 
@@ -352,7 +372,14 @@ impl ErofsBuilder {
                     inode.write_compact(&mut writer)?;
                     written += EROFS_COMPACT_INODE_SIZE as u64;
                 }
-                NodeKind::File { digest: _, size, mode, uid, gid, .. } => {
+                NodeKind::File {
+                    digest: _,
+                    size,
+                    mode,
+                    uid,
+                    gid,
+                    ..
+                } => {
                     stats.file_count += 1;
                     let (ref xattr_bytes, xattr_icount) = file_xattr_data[&idx];
 
@@ -667,7 +694,7 @@ fn build_file_inode_info(size: u64, mode: u32, uid: u32, gid: u32) -> InodeInfo 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::superblock::{Superblock, EROFS_SUPER_MAGIC, EROFS_SUPER_OFFSET};
+    use crate::superblock::{EROFS_SUPER_MAGIC, EROFS_SUPER_OFFSET, Superblock};
     use std::io::Cursor;
 
     /// Parse a superblock from the image bytes.
@@ -845,7 +872,10 @@ mod tests {
 
         let image = buf.into_inner();
         let sb = parse_superblock(&image);
-        assert_eq!(sb.root_nid, 0, "root directory must be the first inode (NID 0)");
+        assert_eq!(
+            sb.root_nid, 0,
+            "root directory must be the first inode (NID 0)"
+        );
     }
 
     #[test]

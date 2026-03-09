@@ -271,8 +271,10 @@ pub fn cmd_remove(
     // Now commit DB changes after filesystem operations succeeded
     progress.set_phase(RemovePhase::UpdatingDb);
     let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
-        let mut changeset =
-            conary_core::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
+        let mut changeset = conary_core::db::models::Changeset::new(format!(
+            "Remove {}-{}",
+            trove.name, trove.version
+        ));
         let changeset_id = changeset.insert(tx)?;
 
         // Store snapshot metadata for rollback

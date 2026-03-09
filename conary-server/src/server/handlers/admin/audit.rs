@@ -1,16 +1,16 @@
 // conary-server/src/server/handlers/admin/audit.rs
 //! Audit log query and purge handlers
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::ServerState;
 use crate::server::admin_service;
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::ServerState;
 
 use super::check_scope;
 

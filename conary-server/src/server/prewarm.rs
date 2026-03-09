@@ -4,9 +4,9 @@
 //! Downloads and converts popular packages before they're requested,
 //! reducing latency for first-time package fetches.
 
-use conary_core::db::models::RepositoryPackage;
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
+use conary_core::db::models::RepositoryPackage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};

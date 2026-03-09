@@ -6,8 +6,8 @@ use anyhow::Result;
 use conary_core::db;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
-    apply_update, check_for_update, download_update, extract_binary, get_update_channel,
-    verify_binary, LatestVersionInfo, VersionCheckResult,
+    LatestVersionInfo, VersionCheckResult, apply_update, check_for_update, download_update,
+    extract_binary, get_update_channel, verify_binary,
 };
 
 pub fn cmd_self_update(

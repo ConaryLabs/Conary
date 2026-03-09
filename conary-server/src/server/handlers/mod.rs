@@ -4,13 +4,13 @@
 pub mod admin;
 pub mod canonical;
 pub mod chunks;
-pub mod openapi;
 pub mod detail;
 pub mod federation;
 pub mod index;
 pub mod jobs;
 pub mod models;
 pub mod oci;
+pub mod openapi;
 pub mod packages;
 pub mod recipes;
 pub mod search;
@@ -18,9 +18,9 @@ pub mod self_update;
 pub mod sparse;
 pub mod tuf;
 
-use conary_core::db::models::Repository;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use conary_core::db::models::Repository;
 use rusqlite::Connection;
 
 /// Format bytes as human-readable string (e.g., "1.50 KB", "700.00 GB")

@@ -11,7 +11,9 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
     ProvideEntry, Trove, TroveType,
 };
-use conary_core::packages::{DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query};
+use conary_core::packages::{
+    DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+};
 use std::path::PathBuf;
 use tracing::{debug, warn};
 

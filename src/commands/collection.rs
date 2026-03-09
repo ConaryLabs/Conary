@@ -105,7 +105,8 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members =
+        conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     println!("Collection: {} v{}", trove.name, trove.version);
     if let Some(desc) = &trove.description {
@@ -153,7 +154,8 @@ pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Resu
     conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
             // Check if already a member
-            if conary_core::db::models::CollectionMember::is_member(tx, collection_id, member_name)? {
+            if conary_core::db::models::CollectionMember::is_member(tx, collection_id, member_name)?
+            {
                 println!("  {} is already a member, skipping", member_name);
                 continue;
             }
@@ -186,9 +188,11 @@ pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &st
 
     conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
-            if let Some(member) =
-                conary_core::db::models::CollectionMember::find_member(tx, collection_id, member_name)?
-            {
+            if let Some(member) = conary_core::db::models::CollectionMember::find_member(
+                tx,
+                collection_id,
+                member_name,
+            )? {
                 if let Some(id) = member.id {
                     conary_core::db::models::CollectionMember::delete(tx, id)?;
                     println!("  Removed: {}", member_name);
@@ -250,7 +254,8 @@ pub fn cmd_collection_install(
     let collection_id = trove
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members =
+        conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
         println!("Collection '{}' has no members.", name);

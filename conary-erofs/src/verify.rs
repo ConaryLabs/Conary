@@ -91,7 +91,6 @@ impl ParsedInode {
             12 + u64::from(self.xattr_icount - 1) * 4
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -255,9 +254,7 @@ fn extract_digest<R: Read + Seek>(
     while pos + 4 <= ibody.len() {
         let e_name_len = ibody[pos] as usize;
         let e_name_index = ibody[pos + 1];
-        let e_value_size = u16::from_le_bytes(
-            ibody[pos + 2..pos + 4].try_into().unwrap(),
-        ) as usize;
+        let e_value_size = u16::from_le_bytes(ibody[pos + 2..pos + 4].try_into().unwrap()) as usize;
 
         let name_start = pos + 4;
         let name_end = name_start + e_name_len;
@@ -344,14 +341,7 @@ fn walk_directory<R: Read + Seek>(
         reader.read_exact(&mut block)?;
 
         // Parse dirents from this block.
-        parse_dirent_block(
-            reader,
-            &block,
-            &dir_path,
-            meta_blkaddr,
-            block_size,
-            files,
-        )?;
+        parse_dirent_block(reader, &block, &dir_path, meta_blkaddr, block_size, files)?;
     }
 
     Ok(())
@@ -431,19 +421,11 @@ fn parse_dirent_block<R: Read + Seek>(
 
         match de.file_type {
             EROFS_FT_DIR => {
-                walk_directory(
-                    reader,
-                    de.nid,
-                    child_path,
-                    meta_blkaddr,
-                    block_size,
-                    files,
-                )?;
+                walk_directory(reader, de.nid, child_path, meta_blkaddr, block_size, files)?;
             }
             EROFS_FT_REG_FILE => {
                 let child_inode = read_inode(reader, de.nid, meta_blkaddr, block_size)?;
-                let inode_offset =
-                    u64::from(meta_blkaddr) * u64::from(block_size) + de.nid * 32;
+                let inode_offset = u64::from(meta_blkaddr) * u64::from(block_size) + de.nid * 32;
                 let digest = extract_digest(reader, inode_offset, &child_inode)?;
 
                 files.push(FileInfo {

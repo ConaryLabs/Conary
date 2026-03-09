@@ -29,9 +29,9 @@
 //! signed.verify(&trust_policy)?;
 //! ```
 
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::verify::PackageSignature;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

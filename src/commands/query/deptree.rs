@@ -181,7 +181,8 @@ fn print_reverse_tree(
     }
 
     // Find packages that depend on this one
-    let dependents = conary_core::db::models::DependencyEntry::find_dependents(ctx.conn, package_name)?;
+    let dependents =
+        conary_core::db::models::DependencyEntry::find_dependents(ctx.conn, package_name)?;
 
     // Get unique package names
     let mut unique_dependents = Vec::new();

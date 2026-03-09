@@ -305,7 +305,11 @@ mod tests {
         let mut buf = Vec::new();
         inode.write_compact(&mut buf).unwrap();
         let mode = u16::from_le_bytes([buf[4], buf[5]]);
-        assert_eq!(mode, S_IFDIR | 0o755, "directory mode 0o755 must be preserved");
+        assert_eq!(
+            mode,
+            S_IFDIR | 0o755,
+            "directory mode 0o755 must be preserved"
+        );
 
         // Regular file with 0o644
         inode.mode = S_IFREG | 0o644;
@@ -335,24 +339,36 @@ mod tests {
     #[test]
     fn needs_extended_large_uid() {
         let mut inode = test_inode();
-        assert!(!inode.needs_extended(), "small uid/gid/size should not need extended");
+        assert!(
+            !inode.needs_extended(),
+            "small uid/gid/size should not need extended"
+        );
 
         inode.uid = 70000;
-        assert!(inode.needs_extended(), "uid > 65535 must require extended format");
+        assert!(
+            inode.needs_extended(),
+            "uid > 65535 must require extended format"
+        );
     }
 
     #[test]
     fn needs_extended_large_gid() {
         let mut inode = test_inode();
         inode.gid = 70000;
-        assert!(inode.needs_extended(), "gid > 65535 must require extended format");
+        assert!(
+            inode.needs_extended(),
+            "gid > 65535 must require extended format"
+        );
     }
 
     #[test]
     fn needs_extended_large_size() {
         let mut inode = test_inode();
         inode.size = u64::from(u32::MAX) + 1;
-        assert!(inode.needs_extended(), "size > u32::MAX must require extended format");
+        assert!(
+            inode.needs_extended(),
+            "size > u32::MAX must require extended format"
+        );
     }
 
     #[test]
@@ -415,7 +431,10 @@ mod tests {
         // Offset 0x0C is deprecated i_mtime / i_reserved in compact inodes.
         // We always write 0 regardless of the InodeInfo mtime value.
         let reserved = u32::from_le_bytes(buf[0x0C..0x10].try_into().unwrap());
-        assert_eq!(reserved, 0, "compact inode offset 0x0C must be 0 (deprecated field)");
+        assert_eq!(
+            reserved, 0,
+            "compact inode offset 0x0C must be 0 (deprecated field)"
+        );
     }
 
     #[test]
@@ -428,7 +447,10 @@ mod tests {
 
         // i_nb at offset 0x06 (u16)
         let nlink = u16::from_le_bytes(buf[0x06..0x08].try_into().unwrap());
-        assert_eq!(nlink, 42, "compact inode must write i_nb (nlink) at offset 0x06");
+        assert_eq!(
+            nlink, 42,
+            "compact inode must write i_nb (nlink) at offset 0x06"
+        );
     }
 
     #[test]

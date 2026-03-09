@@ -20,26 +20,25 @@ struct DirectoryPeer {
 pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
     let db_path = { state.read().await.config.db_path.clone() };
 
-    let result =
-        tokio::task::spawn_blocking(move || -> conary_core::Result<Vec<DirectoryPeer>> {
-            let conn = conary_core::db::open(&db_path)?;
-            let mut stmt = conn.prepare(
-                "SELECT id, endpoint, tier FROM federation_peers
+    let result = tokio::task::spawn_blocking(move || -> conary_core::Result<Vec<DirectoryPeer>> {
+        let conn = conary_core::db::open(&db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, endpoint, tier FROM federation_peers
              WHERE is_enabled = 1
              ORDER BY tier, endpoint",
-            )?;
+        )?;
 
-            let rows = stmt.query_map([], |row| {
-                Ok(DirectoryPeer {
-                    node_id: row.get(0)?,
-                    endpoint: row.get(1)?,
-                    tier: row.get(2)?,
-                })
-            })?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DirectoryPeer {
+                node_id: row.get(0)?,
+                endpoint: row.get(1)?,
+                tier: row.get(2)?,
+            })
+        })?;
 
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .await;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+    .await;
 
     match result {
         Ok(Ok(peers)) => Json(peers).into_response(),

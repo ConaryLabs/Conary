@@ -25,9 +25,6 @@
 
 use crate::federation::PeerTier;
 use crate::federation::mdns::MdnsDiscovery;
-use conary_core::repository::chunk_fetcher::{
-    ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
-};
 use anyhow::Result;
 use axum::Router;
 use axum::body::Body;
@@ -35,6 +32,9 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use conary_core::repository::chunk_fetcher::{
+    ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

@@ -26,8 +26,8 @@
 //! }
 //! ```
 
-use conary_core::Result;
 use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
+use conary_core::Result;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -412,8 +412,9 @@ impl DaemonClient {
     /// Parse successful response body
     fn parse_response<T: serde::de::DeserializeOwned>(&self, response: HttpResponse) -> Result<T> {
         if response.status_code >= 200 && response.status_code < 300 {
-            serde_json::from_str(&response.body)
-                .map_err(|e| conary_core::Error::IoError(format!("Failed to parse response: {}", e)))
+            serde_json::from_str(&response.body).map_err(|e| {
+                conary_core::Error::IoError(format!("Failed to parse response: {}", e))
+            })
         } else {
             self.parse_error(response)
         }

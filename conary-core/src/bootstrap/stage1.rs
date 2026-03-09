@@ -19,6 +19,7 @@
 //! After this, the sysroot contains a complete toolchain that can build
 //! the base system packages.
 
+use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::{Recipe, parse_recipe_file};
@@ -27,7 +28,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use super::build_helpers;
 use tracing::{info, warn};
 
 /// Errors that can occur during Stage 1 build
@@ -172,7 +172,9 @@ impl Stage1Builder {
             let recipe_path = stage1_dir.join(format!("{}.toml", pkg_name));
 
             if !recipe_path.exists() {
-                return Err(Stage1Error::RecipeNotFound(recipe_path.display().to_string()));
+                return Err(Stage1Error::RecipeNotFound(
+                    recipe_path.display().to_string(),
+                ));
             }
 
             let recipe = parse_recipe_file(&recipe_path)
@@ -391,7 +393,10 @@ impl Stage1Builder {
                         ));
                     }
                 } else {
-                    warn!("  Unknown checksum algorithm for additional source: {}", algo);
+                    warn!(
+                        "  Unknown checksum algorithm for additional source: {}",
+                        algo
+                    );
                 }
             }
 
@@ -600,12 +605,8 @@ impl Stage1Builder {
             .collect();
         let verbose = self.config.verbose;
 
-        let env_vec = build_helpers::merge_build_env(
-            &self.build_env,
-            cross_env,
-            recipe_env,
-            &self.build_env,
-        );
+        let env_vec =
+            build_helpers::merge_build_env(&self.build_env, cross_env, recipe_env, &self.build_env);
 
         let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
 
@@ -672,7 +673,6 @@ impl Stage1Builder {
             .map(|p| (p.name.as_str(), &p.status))
             .collect()
     }
-
 }
 
 #[cfg(test)]

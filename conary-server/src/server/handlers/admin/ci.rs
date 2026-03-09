@@ -1,16 +1,16 @@
 // conary-server/src/server/handlers/admin/ci.rs
 //! CI proxy handlers for Forgejo integration
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::ServerState;
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use crate::server::forgejo::FORGEJO_REPO_PATH;
-use crate::server::ServerState;
 
 use super::{check_scope, validate_path_param};
 

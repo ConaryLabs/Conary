@@ -124,12 +124,7 @@ menuentry "Conary Generation {gen_number} ({date})" {{
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&snippet_path, std::fs::Permissions::from_mode(0o755))
-            .with_context(|| {
-                format!(
-                    "Failed to set permissions on {}",
-                    snippet_path.display()
-                )
-            })?;
+            .with_context(|| format!("Failed to set permissions on {}", snippet_path.display()))?;
     }
 
     info!("Wrote GRUB snippet: {}", snippet_path.display());
@@ -152,9 +147,7 @@ menuentry "Conary Generation {gen_number} ({date})" {{
                 info!("Regenerated GRUB config: {grub_cfg}");
             }
             Ok(s) => {
-                warn!(
-                    "grub-mkconfig exited with status {s}; boot entry may not be active"
-                );
+                warn!("grub-mkconfig exited with status {s}; boot entry may not be active");
             }
             Err(e) => {
                 warn!("Failed to run {mkconfig}: {e}; boot entry may not be active");

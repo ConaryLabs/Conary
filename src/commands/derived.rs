@@ -297,7 +297,8 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' not found", name))?;
 
     // Check parent is installed
-    let parent_installed = conary_core::db::models::Trove::find_by_name(&conn, &derived.parent_name)?;
+    let parent_installed =
+        conary_core::db::models::Trove::find_by_name(&conn, &derived.parent_name)?;
     if parent_installed.is_empty() {
         return Err(anyhow::anyhow!(
             "Parent package '{}' is not installed. Install it first.",

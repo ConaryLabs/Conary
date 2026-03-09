@@ -219,9 +219,15 @@ mod tests {
         // All canonical packages already exist, so insert_or_ignore returns
         // existing IDs -- still counted because id is Some
         // The important thing is no errors and no duplicate rows
-        let pkg = CanonicalPackage::find_by_name(&conn, "curl").unwrap().unwrap();
+        let pkg = CanonicalPackage::find_by_name(&conn, "curl")
+            .unwrap()
+            .unwrap();
         let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap()).unwrap();
-        assert_eq!(impls.len(), 2, "No duplicate implementations after re-ingest");
+        assert_eq!(
+            impls.len(),
+            2,
+            "No duplicate implementations after re-ingest"
+        );
         // count2 can be anything -- the key invariant is no duplicates
         let _ = count2;
     }

@@ -53,34 +53,35 @@ pub async fn canonical_lookup(
 
     let db_path = state.read().await.config.db_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<CanonicalLookupResponse>> {
-        let conn = conary_core::db::open(&db_path)?;
+    let result =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<CanonicalLookupResponse>> {
+            let conn = conary_core::db::open(&db_path)?;
 
-        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
+            use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
-        let pkg = match CanonicalPackage::resolve_name(&conn, &name)? {
-            Some(pkg) => pkg,
-            None => return Ok(None),
-        };
+            let pkg = match CanonicalPackage::resolve_name(&conn, &name)? {
+                Some(pkg) => pkg,
+                None => return Ok(None),
+            };
 
-        let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
+            let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
 
-        Ok(Some(CanonicalLookupResponse {
-            canonical_name: pkg.name,
-            appstream_id: pkg.appstream_id,
-            kind: pkg.kind,
-            description: pkg.description,
-            implementations: impls
-                .into_iter()
-                .map(|i| ImplementationInfo {
-                    distro: i.distro,
-                    distro_name: i.distro_name,
-                    source: i.source,
-                })
-                .collect(),
-        }))
-    })
-    .await;
+            Ok(Some(CanonicalLookupResponse {
+                canonical_name: pkg.name,
+                appstream_id: pkg.appstream_id,
+                kind: pkg.kind,
+                description: pkg.description,
+                implementations: impls
+                    .into_iter()
+                    .map(|i| ImplementationInfo {
+                        distro: i.distro,
+                        distro_name: i.distro_name,
+                        source: i.source,
+                    })
+                    .collect(),
+            }))
+        })
+        .await;
 
     match result {
         Ok(Ok(Some(response))) => Json(response).into_response(),

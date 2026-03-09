@@ -45,8 +45,8 @@
 
 mod base;
 mod build_helpers;
-mod config;
 mod conary_stage;
+mod config;
 mod image;
 pub(crate) mod repart;
 mod stage0;
@@ -58,11 +58,11 @@ mod toolchain;
 pub use base::{
     BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary,
 };
+pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
-pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use stage2::{Stage2Builder, Stage2Error, Stage2Package, Stage2PackageStatus};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use toolchain::{Toolchain, ToolchainKind};
@@ -517,10 +517,7 @@ mod tests {
 
         let report = bootstrap.dry_run(&recipe_dir).unwrap();
         assert_eq!(report.stage1_count, 5, "Expected 5 Stage 1 recipes");
-        assert!(
-            report.base_count >= 10,
-            "Expected at least 10 base recipes"
-        );
+        assert!(report.base_count >= 10, "Expected at least 10 base recipes");
         assert!(report.graph_resolved, "Graph should resolve");
         assert_eq!(
             report.placeholder_count, 0,
@@ -553,7 +550,10 @@ mod tests {
             errors: vec!["test error".to_string()],
             ..Default::default()
         };
-        assert!(!report_with_error.is_ok(), "Report with error should not be ok");
+        assert!(
+            !report_with_error.is_ok(),
+            "Report with error should not be ok"
+        );
 
         let report_with_placeholder = DryRunReport {
             placeholder_count: 1,

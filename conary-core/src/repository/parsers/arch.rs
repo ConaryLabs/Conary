@@ -190,9 +190,7 @@ impl RepositoryParser for ArchParser {
                 .get("CSIZE")
                 .and_then(|v| v.first())
                 .and_then(|s| s.parse().ok())
-                .ok_or_else(|| {
-                    Error::ParseError("Missing or invalid %CSIZE% field".to_string())
-                })?;
+                .ok_or_else(|| Error::ParseError("Missing or invalid %CSIZE% field".to_string()))?;
 
             let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
             let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();

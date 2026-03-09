@@ -13,13 +13,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use conary_core::db::models::Repository;
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
 use conary_core::db::models::federation_peer::FederationPeer;
-use conary_core::db::models::Repository;
 
-use crate::server::auth::{generate_token, hash_token, validate_scopes};
 use crate::server::ServerState;
+use crate::server::auth::{generate_token, hash_token, validate_scopes};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -144,10 +144,7 @@ pub async fn list_tokens(
 }
 
 /// Delete an admin token by ID.  Returns `true` if a row was deleted.
-pub async fn delete_token(
-    state: &Arc<RwLock<ServerState>>,
-    id: i64,
-) -> Result<bool, ServiceError> {
+pub async fn delete_token(state: &Arc<RwLock<ServerState>>, id: i64) -> Result<bool, ServiceError> {
     let db = db_path(state).await;
     blocking(move || {
         let conn = conary_core::db::open_fast(&db)?;
@@ -194,9 +191,7 @@ pub async fn add_peer(
         ));
     }
     if url::Url::parse(&endpoint).is_err() {
-        return Err(ServiceError::BadRequest(
-            "Invalid endpoint URL".to_string(),
-        ));
+        return Err(ServiceError::BadRequest("Invalid endpoint URL".to_string()));
     }
 
     let tier = input.tier.unwrap_or_else(|| "leaf".to_string());
@@ -234,20 +229,15 @@ pub async fn add_peer(
         Ok(None) => Err(ServiceError::Internal(
             "Peer inserted but not found on read-back".to_string(),
         )),
-        Err(ServiceError::Internal(msg)) if msg.contains("UNIQUE constraint") => {
-            Err(ServiceError::Conflict(
-                "Peer with this endpoint already exists".to_string(),
-            ))
-        }
+        Err(ServiceError::Internal(msg)) if msg.contains("UNIQUE constraint") => Err(
+            ServiceError::Conflict("Peer with this endpoint already exists".to_string()),
+        ),
         Err(e) => Err(e),
     }
 }
 
 /// Delete a federation peer by ID.  Returns `true` if a row was deleted.
-pub async fn delete_peer(
-    state: &Arc<RwLock<ServerState>>,
-    id: &str,
-) -> Result<bool, ServiceError> {
+pub async fn delete_peer(state: &Arc<RwLock<ServerState>>, id: &str) -> Result<bool, ServiceError> {
     let db = db_path(state).await;
     let id_owned = id.to_string();
     blocking(move || {
@@ -316,9 +306,7 @@ pub async fn purge_audit(
 // ---------------------------------------------------------------------------
 
 /// List all configured repositories.
-pub async fn list_repos(
-    state: &Arc<RwLock<ServerState>>,
-) -> Result<Vec<Repository>, ServiceError> {
+pub async fn list_repos(state: &Arc<RwLock<ServerState>>) -> Result<Vec<Repository>, ServiceError> {
     let db = db_path(state).await;
     blocking(move || {
         let conn = conary_core::db::open_fast(&db)?;

@@ -6,11 +6,11 @@
 //! - Emitting SSE events for progress tracking
 //! - Supporting cancellation via cancel tokens
 
+use crate::daemon::{DaemonEvent, DaemonState};
 use conary_core::ccs::enhancement::{
     EnhancementOptions, EnhancementPriority, EnhancementRunner, EnhancementType,
     get_pending_by_priority,
 };
-use crate::daemon::{DaemonEvent, DaemonState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -179,8 +179,8 @@ pub async fn execute_enhance_job(
                 break;
             }
 
-            let package_name = get_package_name(&conn, *trove_id)
-                .unwrap_or_else(|| format!("trove_{}", trove_id));
+            let package_name =
+                get_package_name(&conn, *trove_id).unwrap_or_else(|| format!("trove_{}", trove_id));
 
             state_for_loop.emit(DaemonEvent::EnhancementStarted {
                 trove_id: *trove_id,

@@ -25,9 +25,9 @@ pub fn cmd_canonical_show(db_path: &str, name: &str) -> Result<()> {
     }
     println!();
 
-    let pkg_id = pkg.id.ok_or_else(|| {
-        anyhow::anyhow!("Canonical package '{}' has no database ID", name)
-    })?;
+    let pkg_id = pkg
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Canonical package '{}' has no database ID", name))?;
     let impls = PackageImplementation::find_by_canonical(&conn, pkg_id)?;
     if impls.is_empty() {
         println!("No implementations found.");

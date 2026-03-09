@@ -242,10 +242,9 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
         Err(_) => {
             tracing::error!("Conversion semaphore closed (job {})", job_id);
             let mut state_guard = state.write().await;
-            state_guard.job_manager.update_status(
-                &job_id,
-                JobStatus::Failed("Semaphore closed".to_string()),
-            );
+            state_guard
+                .job_manager
+                .update_status(&job_id, JobStatus::Failed("Semaphore closed".to_string()));
             return;
         }
     };

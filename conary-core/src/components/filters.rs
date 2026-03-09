@@ -79,9 +79,7 @@ impl FilterSet {
         // re-sorting the entire vec on every insertion. For equal
         // priorities, preserve insertion order by finding the end of
         // the equal-priority range via partition_point.
-        let pos = self
-            .rules
-            .partition_point(|r| r.priority >= rule.priority);
+        let pos = self.rules.partition_point(|r| r.priority >= rule.priority);
         self.rules.insert(pos, rule);
     }
 

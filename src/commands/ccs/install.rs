@@ -188,7 +188,9 @@ pub fn cmd_ccs_install(
         }
 
         // Store in CAS for rollback support
-        if let Some(ref hash) = file.sha256 && hash.len() == 64 {
+        if let Some(ref hash) = file.sha256
+            && hash.len() == 64
+        {
             let cas_dir = objects_dir.join(&hash[0..2]);
             let cas_path = cas_dir.join(&hash[2..]);
             if !cas_path.exists() {
@@ -227,8 +229,7 @@ pub fn cmd_ccs_install(
             let old = &existing[0];
             if let Some(old_id) = old.id {
                 // Snapshot old trove for rollback support
-                let old_files =
-                    conary_core::db::models::FileEntry::find_by_trove(&tx, old_id)?;
+                let old_files = conary_core::db::models::FileEntry::find_by_trove(&tx, old_id)?;
                 let snapshot = crate::commands::TroveSnapshot {
                     name: old.name.clone(),
                     version: old.version.clone(),

@@ -415,9 +415,8 @@ fn rollback_upgrade(
     conary_core::db::transaction(conn, |tx| {
         // Find and remove the new trove installed by this changeset
         let new_troves: Vec<(i64, String)> = {
-            let mut stmt = tx.prepare(
-                "SELECT id, version FROM troves WHERE installed_by_changeset_id = ?1",
-            )?;
+            let mut stmt =
+                tx.prepare("SELECT id, version FROM troves WHERE installed_by_changeset_id = ?1")?;
             stmt.query_map([changeset_id], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?
@@ -554,7 +553,8 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
         let mut all_files = Vec::new();
         for trove in &troves {
             if let Some(trove_id) = trove.id {
-                let trove_files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+                let trove_files =
+                    conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
                 for file in trove_files {
                     all_files.push((file.path, file.sha256_hash, trove.name.clone()));
                 }

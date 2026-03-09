@@ -11,8 +11,8 @@ use conary_core::delta::DeltaApplier;
 use conary_core::repository::{
     self, DownloadOptions, PackageSource, ResolutionOptions, resolve_package,
 };
-use std::path::Path;
 use conary_core::version::RpmVersion;
+use std::path::Path;
 use tracing::{debug, info, warn};
 
 /// Check whether the repository version is strictly newer than the installed version.
@@ -668,7 +668,8 @@ pub fn cmd_update_group(
     let collection_id = collection
         .id
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
-    let members = conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
+    let members =
+        conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
         println!("Collection '{}' has no members.", name);

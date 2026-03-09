@@ -140,11 +140,7 @@ impl Changeset {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let status_str: String = row.get(2)?;
         let status = status_str.parse::<ChangesetStatus>().map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                2,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
         Ok(Self {

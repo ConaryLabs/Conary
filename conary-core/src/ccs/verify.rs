@@ -279,8 +279,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
                 ContentStatus::Valid { .. }
             )
         )
-        && (policy.allow_unsigned
-            || matches!(signature_status, SignatureStatus::Valid { .. }));
+        && (policy.allow_unsigned || matches!(signature_status, SignatureStatus::Valid { .. }));
 
     Ok(VerificationResult {
         valid,

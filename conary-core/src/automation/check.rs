@@ -146,9 +146,10 @@ impl<'a> AutomationChecker<'a> {
             let (name, installed_ver, repo_ver, cves_str, severity) = row?;
 
             // Use semantic version comparison instead of string comparison
-            let (Ok(installed), Ok(repo)) =
-                (RpmVersion::parse(&installed_ver), RpmVersion::parse(&repo_ver))
-            else {
+            let (Ok(installed), Ok(repo)) = (
+                RpmVersion::parse(&installed_ver),
+                RpmVersion::parse(&repo_ver),
+            ) else {
                 continue;
             };
             if repo <= installed {
@@ -399,8 +400,7 @@ impl<'a> AutomationChecker<'a> {
             }
 
             let dominated = best.get(&name).is_none_or(|(_, existing)| {
-                RpmVersion::parse(existing)
-                    .map_or(true, |existing_ver| existing_ver < repo)
+                RpmVersion::parse(existing).map_or(true, |existing_ver| existing_ver < repo)
             });
             if dominated {
                 best.insert(name, (current, repo_ver));

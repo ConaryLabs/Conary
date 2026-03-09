@@ -6,9 +6,9 @@
 //! root metadata, and performing key rotation.
 
 use crate::ccs::signing::SigningKeyPair;
-use crate::trust::{TrustError, TrustResult};
 use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
 use crate::trust::metadata::{RoleDefinition, RootMetadata, Signed, TUF_SPEC_VERSION};
+use crate::trust::{TrustError, TrustResult};
 use chrono::{Duration, Utc};
 use std::collections::BTreeMap;
 use std::path::Path;

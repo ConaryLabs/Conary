@@ -589,7 +589,10 @@ fn build_manifest(
     };
 
     let manifest_json = serde_json::to_string(&manifest)?;
-    let manifest_digest = format!("sha256:{}", conary_core::hash::sha256(manifest_json.as_bytes()));
+    let manifest_digest = format!(
+        "sha256:{}",
+        conary_core::hash::sha256(manifest_json.as_bytes())
+    );
 
     Ok(Some((manifest_json, manifest_digest)))
 }

@@ -92,7 +92,9 @@ impl<'db> ConaryProvider<'db> {
         if let Some(&existing) = self.version_set_cache.get(&cache_key) {
             return existing;
         }
-        let id = VersionSetId(u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"));
+        let id = VersionSetId(
+            u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"),
+        );
         self.version_sets.push((name_id, constraint));
         self.version_set_cache.insert(cache_key, id);
         id
@@ -100,14 +102,17 @@ impl<'db> ConaryProvider<'db> {
 
     /// Intern a display string, returning its `StringId`.
     pub fn intern_string(&mut self, s: &str) -> StringId {
-        let id = StringId(u32::try_from(self.strings.len()).expect("resolver string pool overflow"));
+        let id =
+            StringId(u32::try_from(self.strings.len()).expect("resolver string pool overflow"));
         self.strings.push(s.to_string());
         id
     }
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
     pub fn add_solvable(&mut self, pkg: ConaryPackage) -> SolvableId {
-        let id = SolvableId(u32::try_from(self.solvables.len()).expect("resolver solvable pool overflow"));
+        let id = SolvableId(
+            u32::try_from(self.solvables.len()).expect("resolver solvable pool overflow"),
+        );
         self.solvables.push(pkg);
         id
     }
@@ -445,7 +450,11 @@ impl DependencyProvider for ConaryProvider<'_> {
                         .iter()
                         .enumerate()
                         .find(|(_, (nid, c))| *nid == dep_name_id && c == constraint)
-                        .map(|(i, _)| VersionSetId(u32::try_from(i).expect("resolver version set pool overflow")));
+                        .map(|(i, _)| {
+                            VersionSetId(
+                                u32::try_from(i).expect("resolver version set pool overflow"),
+                            )
+                        });
 
                     if let Some(vs_id) = vs_id {
                         requirements.push(ConditionalRequirement::from(vs_id));

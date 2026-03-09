@@ -5,8 +5,8 @@
 //! Jobs represent asynchronous operations (install, remove, update, etc.) that
 //! are queued for execution. They persist across daemon restarts.
 
-use conary_core::Result;
 use crate::daemon::{DaemonError, JobId, JobKind, JobStatus};
+use conary_core::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -89,8 +89,8 @@ impl DaemonJob {
         let kind_str = self.kind.as_str();
         let status_str = self.status.as_str();
 
-        let spec_json =
-            serde_json::to_string(&self.spec).map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+        let spec_json = serde_json::to_string(&self.spec)
+            .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
 
         let error_json = self
             .error
@@ -203,8 +203,8 @@ impl DaemonJob {
 
     /// Update job with result
     pub fn set_result(conn: &Connection, id: &str, result: &serde_json::Value) -> Result<bool> {
-        let result_json =
-            serde_json::to_string(result).map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+        let result_json = serde_json::to_string(result)
+            .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
 
         let rows = conn.execute(
             "UPDATE daemon_jobs SET result_json = ?1 WHERE id = ?2",

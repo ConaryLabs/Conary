@@ -135,11 +135,7 @@ pub fn generate_token() -> String {
 pub fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get("authorization")?.to_str().ok()?;
     let token = value.strip_prefix("Bearer ")?;
-    if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    }
+    if token.is_empty() { None } else { Some(token) }
 }
 
 /// Axum middleware that authenticates requests via bearer token.
@@ -170,7 +166,11 @@ pub async fn auth_middleware(
             {
                 return json_error(429, "Too many authentication failures", "RATE_LIMITED");
             }
-            return json_error(401, "Missing or invalid Authorization header", "UNAUTHORIZED");
+            return json_error(
+                401,
+                "Missing or invalid Authorization header",
+                "UNAUTHORIZED",
+            );
         }
     };
 
@@ -187,7 +187,10 @@ pub async fn auth_middleware(
     let token_record = match lookup_result {
         Ok(Ok(Some(record))) => record,
         Ok(Ok(None)) => {
-            tracing::warn!("Auth failed: unknown token (hash prefix: {}...)", &token_hash[..8]);
+            tracing::warn!(
+                "Auth failed: unknown token (hash prefix: {}...)",
+                &token_hash[..8]
+            );
             if let Some(ref l) = limiters
                 && crate::server::rate_limit::check_auth_failure(l, client_ip)
             {
@@ -208,7 +211,9 @@ pub async fn auth_middleware(
     // Store scopes in request extensions
     let scopes = TokenScopes(token_record.scopes.clone());
     request.extensions_mut().insert(scopes);
-    request.extensions_mut().insert(TokenName(token_record.name.clone()));
+    request
+        .extensions_mut()
+        .insert(TokenName(token_record.name.clone()));
 
     // Update last_used_at in background (fire-and-forget, reusing db_path)
     let bg_db_path = db_path;
@@ -232,7 +237,8 @@ pub(crate) fn json_error(status: u16, message: &str, code: &str) -> Response {
     });
 
     (
-        axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+        axum::http::StatusCode::from_u16(status)
+            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
         [("content-type", "application/json")],
         body.to_string(),
     )

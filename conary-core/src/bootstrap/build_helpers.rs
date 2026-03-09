@@ -34,11 +34,7 @@ pub fn tar_flag_for_archive(filename: &str) -> &'static str {
 ///
 /// If `strip_components` is true, strips the top-level directory from the
 /// archive (useful for in-tree dependencies like GMP, MPFR, MPC).
-pub fn extract_tar(
-    archive: &Path,
-    dest: &Path,
-    strip_components: bool,
-) -> Result<(), String> {
+pub fn extract_tar(archive: &Path, dest: &Path, strip_components: bool) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
 
     let archive_str = archive.to_str().expect("archive path must be valid utf-8");
@@ -97,10 +93,7 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
     while let Some(start) = result.find("${") {
         if let Some(end) = result[start..].find('}') {
             let var_name = &result[start + 2..start + end];
-            let replacement = build_env
-                .get(var_name)
-                .cloned()
-                .unwrap_or_default();
+            let replacement = build_env.get(var_name).cloned().unwrap_or_default();
             result = format!(
                 "{}{}{}",
                 &result[..start],
@@ -122,10 +115,7 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
                 .unwrap_or(rest.len());
             if var_end > 0 {
                 let var_name = &rest[..var_end];
-                let replacement = build_env
-                    .get(var_name)
-                    .cloned()
-                    .unwrap_or_default();
+                let replacement = build_env.get(var_name).cloned().unwrap_or_default();
                 result = format!(
                     "{}{}{}",
                     &result[..i],
@@ -235,12 +225,8 @@ pub fn run_sandboxed_command(
     debug!("Running in sandbox: bash -c \"{}\"", cmd);
     debug!("Workdir: {}", workdir.display());
 
-    let mut config = ContainerConfig::pristine_for_bootstrap(
-        sysroot,
-        sources_dir,
-        build_dir,
-        sysroot,
-    );
+    let mut config =
+        ContainerConfig::pristine_for_bootstrap(sysroot, sources_dir, build_dir, sysroot);
 
     config.add_bind_mount(BindMount::readonly(toolchain_root, "/tools"));
     config.workdir = workdir.to_path_buf();
@@ -249,12 +235,7 @@ pub fn run_sandboxed_command(
     let mut sandbox = Sandbox::new(config);
 
     sandbox
-        .execute(
-            "bash",
-            &format!("set -e\n{}", cmd),
-            &[],
-            &env_refs,
-        )
+        .execute("bash", &format!("set -e\n{}", cmd), &[], &env_refs)
         .map_err(|e| e.to_string())
 }
 

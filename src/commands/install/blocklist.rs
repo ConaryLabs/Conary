@@ -16,10 +16,10 @@ const CRITICAL_PACKAGES: &[&str] = &[
     "glibc-minimal-langpack",
     "glibc-all-langpacks",
     "glibc-devel",
-    "libc6",              // Debian/Ubuntu
-    "libc6-dev",          // Debian/Ubuntu
-    "libc-bin",           // Debian/Ubuntu
-    "gcc-libs",           // Arch
+    "libc6",     // Debian/Ubuntu
+    "libc6-dev", // Debian/Ubuntu
+    "libc-bin",  // Debian/Ubuntu
+    "gcc-libs",  // Arch
     // Dynamic linker
     "ld-linux",
     "binutils",
@@ -28,12 +28,12 @@ const CRITICAL_PACKAGES: &[&str] = &[
     "systemd-libs",
     "systemd-udev",
     "systemd-resolved",
-    "libsystemd0",        // Debian/Ubuntu
+    "libsystemd0", // Debian/Ubuntu
     // Authentication
     "pam",
-    "linux-pam",          // Arch
-    "libpam-modules",     // Debian/Ubuntu
-    "libpam-runtime",     // Debian/Ubuntu
+    "linux-pam",      // Arch
+    "libpam-modules", // Debian/Ubuntu
+    "libpam-runtime", // Debian/Ubuntu
     "shadow-utils",
     // Core utilities (running system depends on these)
     "util-linux",
@@ -42,14 +42,14 @@ const CRITICAL_PACKAGES: &[&str] = &[
     // Crypto libraries (in-use by running processes including conary itself)
     "openssl-libs",
     "openssl",
-    "libssl3",            // Debian/Ubuntu
-    "libssl3t64",         // Debian/Ubuntu (time64)
-    "libssl1.1",          // Older Debian
+    "libssl3",    // Debian/Ubuntu
+    "libssl3t64", // Debian/Ubuntu (time64)
+    "libssl1.1",  // Older Debian
     "libcrypto",
     // Kernel interface
-    "linux-api-headers",  // Arch
-    "kernel-headers",     // Fedora
-    "linux-libc-dev",     // Debian/Ubuntu
+    "linux-api-headers", // Arch
+    "kernel-headers",    // Fedora
+    "linux-libc-dev",    // Debian/Ubuntu
     // Privilege escalation
     "sudo",
     "polkit",
@@ -65,7 +65,9 @@ const CRITICAL_PACKAGES: &[&str] = &[
 /// Blocked packages cannot be overlaid or taken over by Conary.
 /// They are always treated as satisfied by the system package manager.
 pub fn is_blocked(name: &str) -> bool {
-    CRITICAL_PACKAGES.iter().any(|p| p.eq_ignore_ascii_case(name))
+    CRITICAL_PACKAGES
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(name))
 }
 
 /// Return the full blocklist for display purposes.

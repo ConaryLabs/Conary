@@ -83,22 +83,17 @@ pub fn parse_appstream_xml(xml: &str) -> Result<Vec<AppStreamComponent>> {
                         summary = None;
                     }
                     b"id" | b"pkgname" | b"name" | b"summary" if in_component => {
-                        current_tag =
-                            Some(String::from_utf8_lossy(tag.as_ref()).into_owned());
+                        current_tag = Some(String::from_utf8_lossy(tag.as_ref()).into_owned());
                     }
                     _ => {}
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_component
-                    && let Some(ref tag) = current_tag
-                {
+                if in_component && let Some(ref tag) = current_tag {
                     let text = e
                         .unescape()
                         .map_err(|err| {
-                            Error::ParseError(format!(
-                                "AppStream XML text decode error: {err}"
-                            ))
+                            Error::ParseError(format!("AppStream XML text decode error: {err}"))
                         })?
                         .into_owned();
                     match tag.as_str() {
@@ -183,10 +178,8 @@ pub fn parse_appstream_yaml(yaml: &str) -> Result<Vec<AppStreamComponent>> {
         if first {
             first = false;
             // Consume the header so the deserializer advances
-            let _header: serde_yaml::Value =
-                serde::Deserialize::deserialize(document).map_err(|e| {
-                    Error::ParseError(format!("DEP-11 YAML header parse error: {e}"))
-                })?;
+            let _header: serde_yaml::Value = serde::Deserialize::deserialize(document)
+                .map_err(|e| Error::ParseError(format!("DEP-11 YAML header parse error: {e}")))?;
             continue;
         }
 
@@ -194,10 +187,7 @@ pub fn parse_appstream_yaml(yaml: &str) -> Result<Vec<AppStreamComponent>> {
             .map_err(|e| Error::ParseError(format!("DEP-11 YAML parse error: {e}")))?;
 
         if let (Some(id), Some(package)) = (doc.id, doc.package) {
-            let name_str = doc
-                .name
-                .and_then(|n| n.c)
-                .unwrap_or_default();
+            let name_str = doc.name.and_then(|n| n.c).unwrap_or_default();
             let summary_str = doc.summary.and_then(|s| s.c);
 
             components.push(AppStreamComponent {
@@ -243,10 +233,7 @@ fn ingest_appstream_inner(
     let mut count = 0;
 
     for comp in components {
-        let mut canonical = CanonicalPackage::new(
-            comp.pkgname.clone(),
-            "package".to_string(),
-        );
+        let mut canonical = CanonicalPackage::new(comp.pkgname.clone(), "package".to_string());
         canonical.appstream_id = Some(comp.id.clone());
         canonical.description = comp.summary.clone();
 
@@ -374,7 +361,9 @@ mod tests {
         assert_eq!(count, 2);
 
         // Verify canonical packages were created
-        let pkg = CanonicalPackage::find_by_name(&conn, "firefox").unwrap().unwrap();
+        let pkg = CanonicalPackage::find_by_name(&conn, "firefox")
+            .unwrap()
+            .unwrap();
         assert_eq!(pkg.appstream_id, Some("org.mozilla.Firefox".to_string()));
 
         // Verify implementations were created

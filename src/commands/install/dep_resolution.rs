@@ -66,7 +66,10 @@ pub fn resolve_missing_deps(
                 debug!("Dependency '{}' is blocked and present on system", dep.name);
                 plan.blocked.push(dep.name.clone());
             } else {
-                debug!("Dependency '{}' is blocked but NOT present on system", dep.name);
+                debug!(
+                    "Dependency '{}' is blocked but NOT present on system",
+                    dep.name
+                );
                 plan.unresolvable.push(dep.clone());
             }
             continue;
@@ -112,8 +115,7 @@ pub fn resolve_missing_deps(
         match dep_mode {
             DepMode::Satisfy => {
                 if system_pm::is_system_package_installed(&dep.name) {
-                    plan.satisfied
-                        .push((dep.name.clone(), "system PM".into()));
+                    plan.satisfied.push((dep.name.clone(), "system PM".into()));
                 } else {
                     // Not on system either -- unresolvable in satisfy mode
                     debug!(
@@ -245,8 +247,8 @@ mod tests {
 
         let missing = vec![
             make_dep("glibc", &["nginx"]),   // blocked
-            make_dep("pcre2", &["nginx"]),    // not blocked, not installed
-            make_dep("openssl", &["nginx"]),  // blocked
+            make_dep("pcre2", &["nginx"]),   // not blocked, not installed
+            make_dep("openssl", &["nginx"]), // blocked
         ];
 
         let plan = resolve_missing_deps(&conn, &missing, DepMode::Takeover);

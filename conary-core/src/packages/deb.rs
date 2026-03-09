@@ -100,9 +100,8 @@ impl DebPackage {
             "Package" => info.name = Some(value.to_string()),
             "Version" => info.version = Some(value.to_string()),
             "Architecture" => {
-                info.architecture = Some(
-                    crate::packages::common::normalize_architecture(value).to_string(),
-                )
+                info.architecture =
+                    Some(crate::packages::common::normalize_architecture(value).to_string())
             }
             "Description" => {
                 // Description is the short description (first line)
@@ -161,12 +160,14 @@ impl DebPackage {
             let trimmed = entry_name.trim_end_matches('/');
             if control_data.is_none() && CONTROL_TAR_NAMES.contains(&trimmed) {
                 let mut buf = Vec::new();
-                entry.read_to_end(&mut buf)
+                entry
+                    .read_to_end(&mut buf)
                     .map_err(|e| Error::InitError(format!("Failed to read control tar: {}", e)))?;
                 control_data = Some(buf);
             } else if data_data.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
                 let mut buf = Vec::new();
-                entry.read_to_end(&mut buf)
+                entry
+                    .read_to_end(&mut buf)
                     .map_err(|e| Error::InitError(format!("Failed to read data tar: {}", e)))?;
                 data_data = Some(buf);
             }
@@ -174,12 +175,10 @@ impl DebPackage {
                 break;
             }
         }
-        let control = control_data.ok_or_else(|| {
-            Error::InitError("control.tar not found in DEB archive".to_string())
-        })?;
-        let data = data_data.ok_or_else(|| {
-            Error::InitError("data.tar not found in DEB archive".to_string())
-        })?;
+        let control = control_data
+            .ok_or_else(|| Error::InitError("control.tar not found in DEB archive".to_string()))?;
+        let data = data_data
+            .ok_or_else(|| Error::InitError("data.tar not found in DEB archive".to_string()))?;
         Ok((control, data))
     }
 
@@ -304,7 +303,7 @@ impl DebPackage {
         Ok(files)
     }
 
-        /// Convert dependency list to Dependency structs
+    /// Convert dependency list to Dependency structs
     fn convert_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
             .map(|dep| {
@@ -465,8 +464,8 @@ impl PackageFormat for DebPackage {
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
         {
-            let mut entry = entry
-                .map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            let mut entry =
+                entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
             let entry_path = entry
                 .path()
@@ -496,17 +495,16 @@ impl PackageFormat for DebPackage {
 
             // Read file content
             let mut content = Vec::new();
-            entry.read_to_end(&mut content).map_err(|e| {
-                Error::InitError(format!("Failed to read file content: {}", e))
-            })?;
+            entry
+                .read_to_end(&mut content)
+                .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
 
             // Compute SHA-256 using shared utility
             let hash = hash::sha256(&content);
 
             extracted_files.push(ExtractedFile {
-                path: normalize_path(&entry_path).map_err(|e| {
-                    Error::InitError(format!("Path normalization failed: {}", e))
-                })?,
+                path: normalize_path(&entry_path)
+                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
                 content,
                 size: i64::try_from(size).unwrap_or(i64::MAX),
                 mode: mode as i32,

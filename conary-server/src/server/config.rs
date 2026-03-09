@@ -759,12 +759,7 @@ impl RemiConfig {
         self.admin
             .external_bind
             .parse()
-            .with_context(|| {
-                format!(
-                    "Invalid external admin bind: {}",
-                    self.admin.external_bind
-                )
-            })
+            .with_context(|| format!("Invalid external admin bind: {}", self.admin.external_bind))
     }
 
     /// Get primary upstream URL (first configured)

@@ -58,9 +58,7 @@ impl HookConverter for RpmHookConverter {
     }
 
     fn post_remove(&self, _hooks: &Hooks) -> Option<String> {
-        Some(
-            ["#!/bin/sh", "set -e", "/sbin/ldconfig"].join("\n"),
-        )
+        Some(["#!/bin/sh", "set -e", "/sbin/ldconfig"].join("\n"))
     }
 }
 

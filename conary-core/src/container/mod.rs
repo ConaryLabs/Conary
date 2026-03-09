@@ -804,8 +804,11 @@ impl Sandbox {
             .map_err(|e| Error::ScriptletError(format!("chdir / after pivot_root: {e}")))?;
 
         // Unmount old root
-        nix::mount::umount2(&std::path::PathBuf::from("/.old_root"), nix::mount::MntFlags::MNT_DETACH)
-            .map_err(|e| Error::ScriptletError(format!("umount old_root: {e}")))?;
+        nix::mount::umount2(
+            &std::path::PathBuf::from("/.old_root"),
+            nix::mount::MntFlags::MNT_DETACH,
+        )
+        .map_err(|e| Error::ScriptletError(format!("umount old_root: {e}")))?;
 
         let _ = std::fs::remove_dir("/.old_root");
 

@@ -257,7 +257,8 @@ pub fn rollback_transaction(
                             use std::os::unix::ffi::OsStrExt;
                             let target = std::ffi::OsStr::from_bytes(&target_bytes);
                             let target_str = target.to_string_lossy();
-                            if !validate_symlink_target_for_recovery(&target_str, root, &final_path) {
+                            if !validate_symlink_target_for_recovery(&target_str, root, &final_path)
+                            {
                                 log::warn!(
                                     "Refusing to restore symlink with unsafe target {:?}",
                                     final_path
@@ -265,11 +266,7 @@ pub fn rollback_transaction(
                                 continue;
                             }
                             if let Err(e) = std::os::unix::fs::symlink(target, &final_path) {
-                                log::warn!(
-                                    "Failed to restore symlink {:?}: {}",
-                                    final_path,
-                                    e
-                                );
+                                log::warn!("Failed to restore symlink {:?}: {}", final_path, e);
                             }
                         }
                         continue;
@@ -281,7 +278,8 @@ pub fn rollback_transaction(
                         if let Ok(content) = fs::read_to_string(backup_path) {
                             if let Some(target) = content.strip_prefix("SYMLINK:") {
                                 // Sanitize symlink target to prevent path traversal
-                                if !validate_symlink_target_for_recovery(target, root, &final_path) {
+                                if !validate_symlink_target_for_recovery(target, root, &final_path)
+                                {
                                     log::warn!(
                                         "Refusing to restore symlink with unsafe target {:?} -> {}",
                                         final_path,
@@ -322,7 +320,9 @@ pub fn rollback_transaction(
             JournalRecord::FileMoved { path, .. } => {
                 // A file was moved from stage to final -- undo by removing from final
                 let final_path = safe_join(root, Path::new(path))?;
-                if (final_path.exists() || final_path.symlink_metadata().is_ok()) && let Err(e) = fs::remove_file(&final_path) {
+                if (final_path.exists() || final_path.symlink_metadata().is_ok())
+                    && let Err(e) = fs::remove_file(&final_path)
+                {
                     log::warn!("Failed to remove moved file {:?}: {}", final_path, e);
                 }
             }

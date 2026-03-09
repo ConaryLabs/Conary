@@ -119,7 +119,9 @@ impl PeerCredentials {
             tracing::warn!(
                 "PID reuse detected: SO_PEERCRED uid={} but /proc/{}/status uid={}. \
                  Denying supplementary group check.",
-                self.uid, self.pid, proc_uid
+                self.uid,
+                self.pid,
+                proc_uid
             );
             return false;
         }

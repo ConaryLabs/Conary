@@ -6,14 +6,14 @@
 //! Clients fetch these via `GET /v1/models/:name` to resolve `[include]`
 //! directives in their system.toml files.
 
-use conary_core::db::models::{CollectionMember, Trove, TroveType};
-use conary_core::model::remote::{CollectionData, CollectionMemberData};
 use crate::server::ServerState;
 use axum::{
     extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::db::models::{CollectionMember, Trove, TroveType};
+use conary_core::model::remote::{CollectionData, CollectionMemberData};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -123,8 +123,7 @@ pub async fn get_model_signature(
 
     let db_path = state.read().await.config.db_path.clone();
 
-    let result =
-        tokio::task::spawn_blocking(move || query_signature(&db_path, &name)).await;
+    let result = tokio::task::spawn_blocking(move || query_signature(&db_path, &name)).await;
 
     match result {
         Ok(Ok(Some(response))) => {
@@ -223,10 +222,8 @@ pub async fn put_model(
     let db_path = state.read().await.config.db_path.clone();
     let force = params.force;
 
-    let result = tokio::task::spawn_blocking(move || {
-        store_collection(&db_path, &name, &body, force)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || store_collection(&db_path, &name, &body, force)).await;
 
     match result {
         Ok(Ok(response)) => {

@@ -474,8 +474,11 @@ fn main() -> Result<()> {
                 }
                 cli::GenerationCommands::Build { summary, db } => {
                     let conn = conary_core::db::open(&db.db_path)?;
-                    let gen_number =
-                        commands::generation::builder::build_generation(&conn, &db.db_path, &summary)?;
+                    let gen_number = commands::generation::builder::build_generation(
+                        &conn,
+                        &db.db_path,
+                        &summary,
+                    )?;
                     println!("Generation {} built.", gen_number);
                     Ok(())
                 }
@@ -502,15 +505,17 @@ fn main() -> Result<()> {
                     if gen_dir.exists() {
                         for entry in std::fs::read_dir(&gen_dir)? {
                             let entry = entry?;
-                            if let Ok(n) = entry.file_name().to_string_lossy().parse::<i64>() && n < current {
+                            if let Ok(n) = entry.file_name().to_string_lossy().parse::<i64>()
+                                && n < current
+                            {
                                 candidates.push(n);
                             }
                         }
                     }
                     candidates.sort();
-                    let previous = candidates.last().ok_or_else(|| {
-                        anyhow::anyhow!("No previous generation to roll back to")
-                    })?;
+                    let previous = candidates
+                        .last()
+                        .ok_or_else(|| anyhow::anyhow!("No previous generation to roll back to"))?;
 
                     commands::generation::switch::switch_live(*previous)?;
                     if let Err(e) = commands::generation::boot::write_boot_entry(*previous) {
@@ -801,30 +806,29 @@ fn main() -> Result<()> {
                     &db.db_path,
                 ),
 
-                cli::LabelCommands::Remove {
-                    label,
-                    db,
-                    force,
-                } => commands::cmd_label_remove(&label, &db.db_path, force),
+                cli::LabelCommands::Remove { label, db, force } => {
+                    commands::cmd_label_remove(&label, &db.db_path, force)
+                }
 
                 cli::LabelCommands::Path {
                     db,
                     add,
                     remove,
                     priority,
-                } => {
-                    commands::cmd_label_path(&db.db_path, add.as_deref(), remove.as_deref(), priority)
-                }
+                } => commands::cmd_label_path(
+                    &db.db_path,
+                    add.as_deref(),
+                    remove.as_deref(),
+                    priority,
+                ),
 
                 cli::LabelCommands::Show { package, db } => {
                     commands::cmd_label_show(&package, &db.db_path)
                 }
 
-                cli::LabelCommands::Set {
-                    package,
-                    label,
-                    db,
-                } => commands::cmd_label_set(&package, &label, &db.db_path),
+                cli::LabelCommands::Set { package, label, db } => {
+                    commands::cmd_label_set(&package, &label, &db.db_path)
+                }
 
                 cli::LabelCommands::Query { label, db } => {
                     commands::cmd_label_query(&label, &db.db_path)
@@ -842,7 +846,9 @@ fn main() -> Result<()> {
                     target,
                     undelegate,
                     db,
-                } => commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db.db_path),
+                } => {
+                    commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db.db_path)
+                }
             },
         },
 
@@ -1685,18 +1691,12 @@ fn main() -> Result<()> {
         // Distro Commands
         // =====================================================================
         Some(Commands::Distro(distro_cmd)) => match distro_cmd {
-            cli::DistroCommands::Set {
-                distro,
-                mixing,
-                db,
-            } => commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing),
-            cli::DistroCommands::Remove { db } => {
-                commands::distro::cmd_distro_remove(&db.db_path)
+            cli::DistroCommands::Set { distro, mixing, db } => {
+                commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing)
             }
+            cli::DistroCommands::Remove { db } => commands::distro::cmd_distro_remove(&db.db_path),
             cli::DistroCommands::List => commands::distro::cmd_distro_list(),
-            cli::DistroCommands::Info { db } => {
-                commands::distro::cmd_distro_info(&db.db_path)
-            }
+            cli::DistroCommands::Info { db } => commands::distro::cmd_distro_info(&db.db_path),
             cli::DistroCommands::Mixing { policy, db } => {
                 commands::distro::cmd_distro_mixing(&db.db_path, &policy)
             }
@@ -1721,14 +1721,10 @@ fn main() -> Result<()> {
         // Groups Commands
         // =====================================================================
         Some(Commands::Groups(grp_cmd)) => match grp_cmd {
-            cli::GroupsCommands::List { db } => {
-                commands::groups::cmd_groups_list(&db.db_path)
+            cli::GroupsCommands::List { db } => commands::groups::cmd_groups_list(&db.db_path),
+            cli::GroupsCommands::Show { name, distro, db } => {
+                commands::groups::cmd_groups_show(&db.db_path, &name, distro.as_deref())
             }
-            cli::GroupsCommands::Show {
-                name,
-                distro,
-                db,
-            } => commands::groups::cmd_groups_show(&db.db_path, &name, distro.as_deref()),
         },
 
         // =====================================================================

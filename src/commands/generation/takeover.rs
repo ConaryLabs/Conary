@@ -43,10 +43,7 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
     let total_system_packages = system_packages.len();
 
     // Build a set of names Conary already tracks
-    let tracked: HashSet<String> = Trove::list_all(conn)?
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
+    let tracked: HashSet<String> = Trove::list_all(conn)?.into_iter().map(|t| t.name).collect();
 
     let mut already_tracked = Vec::new();
     let mut to_adopt = Vec::new();
@@ -104,16 +101,10 @@ pub fn cmd_system_takeover(
 
     // Print inventory summary
     println!("System inventory:");
-    println!(
-        "  Total system packages : {}",
-        plan.total_system_packages
-    );
+    println!("  Total system packages : {}", plan.total_system_packages);
     println!("  Already tracked       : {}", plan.already_tracked.len());
     println!("  To adopt              : {}", plan.to_adopt.len());
-    println!(
-        "  Blocked (critical)    : {}",
-        plan.blocked.len()
-    );
+    println!("  Blocked (critical)    : {}", plan.blocked.len());
     println!();
 
     if !plan.blocked.is_empty() {
@@ -153,10 +144,7 @@ pub fn cmd_system_takeover(
     if plan.to_adopt.is_empty() {
         info!("All system packages are already tracked");
     } else {
-        println!(
-            "[1/4] Adopting {} packages ...",
-            plan.to_adopt.len()
-        );
+        println!("[1/4] Adopting {} packages ...", plan.to_adopt.len());
         crate::commands::cmd_adopt(&plan.to_adopt, db_path, true)?;
         info!("Adoption complete");
     }
@@ -165,8 +153,7 @@ pub fn cmd_system_takeover(
     println!("[2/4] Building initial generation ...");
     let conn =
         conary_core::db::open(db_path).context("Failed to open database for generation build")?;
-    let gen_number =
-        build_generation(&conn, db_path, "System takeover -- initial generation")?;
+    let gen_number = build_generation(&conn, db_path, "System takeover -- initial generation")?;
     info!("Built generation {gen_number}");
 
     // Step 3: Write boot entry (warn on failure, do not abort)
@@ -204,8 +191,7 @@ fn preflight_checks() -> Result<()> {
 
     // Ensure generations directory exists
     let gen_dir = generations_dir();
-    std::fs::create_dir_all(&gen_dir)
-        .context("Failed to create generations directory")?;
+    std::fs::create_dir_all(&gen_dir).context("Failed to create generations directory")?;
 
     // Check composefs support (uses default CAS path for probe)
     let default_cas = std::path::PathBuf::from("/conary/objects");
@@ -237,10 +223,7 @@ fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<String>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "System package query failed: {}",
-            stderr.trim()
-        ));
+        return Err(anyhow!("System package query failed: {}", stderr.trim()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

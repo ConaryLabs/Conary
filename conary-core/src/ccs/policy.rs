@@ -370,8 +370,8 @@ impl BuildPolicy for StripBinariesPolicy {
 /// `.gnu.hash` sections that the native Rust stripper would remove.
 fn strip_elf_with_system_tool(source_path: &Path) -> std::result::Result<Vec<u8>, String> {
     // Copy to a temp file so we don't modify the original
-    let temp_file = tempfile::NamedTempFile::new()
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    let temp_file =
+        tempfile::NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
     std::fs::copy(source_path, temp_file.path())
         .map_err(|e| format!("Failed to copy for stripping: {}", e))?;
 
@@ -397,8 +397,7 @@ fn strip_elf_with_system_tool(source_path: &Path) -> std::result::Result<Vec<u8>
         return Err("No system strip tool available".to_string());
     }
 
-    std::fs::read(temp_file.path())
-        .map_err(|e| format!("Failed to read stripped binary: {}", e))
+    std::fs::read(temp_file.path()).map_err(|e| format!("Failed to read stripped binary: {}", e))
 }
 
 /// Strip debug symbols from an ELF binary using native Rust

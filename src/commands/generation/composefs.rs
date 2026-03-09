@@ -79,9 +79,7 @@ pub fn supports_fsverity(path: &Path) -> bool {
         reserved2: [0; 11],
     };
 
-    let result = unsafe {
-        libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _)
-    };
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _) };
 
     // Close the file handle before cleanup
     drop(file);
@@ -112,7 +110,9 @@ pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
 
     let fsverity = supports_fsverity(cas_dir);
     if !fsverity {
-        debug!("fs-verity not supported on CAS filesystem; composefs will work without integrity verification");
+        debug!(
+            "fs-verity not supported on CAS filesystem; composefs will work without integrity verification"
+        );
     }
 
     Ok(ComposefsCaps { fsverity })

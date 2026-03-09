@@ -44,7 +44,8 @@ pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing reverse dependencies for package: {}", package_name);
     let conn = conary_core::db::open(db_path)?;
 
-    let dependents = conary_core::db::models::DependencyEntry::find_dependents(&conn, package_name)?;
+    let dependents =
+        conary_core::db::models::DependencyEntry::find_dependents(&conn, package_name)?;
 
     if dependents.is_empty() {
         println!(
@@ -54,7 +55,8 @@ pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     } else {
         println!("Packages that depend on '{}':", package_name);
         for dep in dependents {
-            if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(&conn, dep.trove_id) {
+            if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(&conn, dep.trove_id)
+            {
                 // Show the dependency kind if not a plain package
                 let kind_str = if dep.kind != "package" && !dep.kind.is_empty() {
                     format!(" [{}]", dep.kind)
@@ -136,7 +138,8 @@ pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
 
     println!("Capability '{}' is provided by:", capability);
     for provide in &providers {
-        if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(&conn, provide.trove_id) {
+        if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(&conn, provide.trove_id)
+        {
             print!("  {} {}", trove.name, trove.version);
             if let Some(ref ver) = provide.version {
                 print!(" (provides version: {})", ver);

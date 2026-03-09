@@ -381,12 +381,7 @@ mod tests {
     #[test]
     fn test_soname_strategy() {
         let packages = vec![
-            make_pkg(
-                "libcurl",
-                "fedora",
-                &[],
-                &["/usr/lib64/libcurl.so.4.8.0"],
-            ),
+            make_pkg("libcurl", "fedora", &[], &["/usr/lib64/libcurl.so.4.8.0"]),
             make_pkg(
                 "libcurl4",
                 "debian",
@@ -407,18 +402,8 @@ mod tests {
             make_pkg("curl", "fedora", &["http-client"], &["/usr/bin/curl"]),
             make_pkg("curl", "debian", &["http-client"], &["/usr/bin/curl"]),
             // "httpd" vs "apache2" -- only discoverable via provides or binary.
-            make_pkg(
-                "httpd",
-                "fedora",
-                &["webserver"],
-                &["/usr/sbin/httpd"],
-            ),
-            make_pkg(
-                "apache2",
-                "debian",
-                &["webserver"],
-                &["/usr/sbin/httpd"],
-            ),
+            make_pkg("httpd", "fedora", &["webserver"], &["/usr/sbin/httpd"]),
+            make_pkg("apache2", "debian", &["webserver"], &["/usr/sbin/httpd"]),
         ];
 
         let results = run_discovery(&packages);
@@ -434,9 +419,9 @@ mod tests {
         assert!(webserver.is_some());
         assert_eq!(webserver.unwrap().source, "provides");
 
-        let httpd_bin = results.iter().find(|m| {
-            m.canonical_name == "httpd" && m.source == "binary_path"
-        });
+        let httpd_bin = results
+            .iter()
+            .find(|m| m.canonical_name == "httpd" && m.source == "binary_path");
         assert!(httpd_bin.is_some());
 
         // "http-client" from provides should appear (curl provides it from 2 distros).

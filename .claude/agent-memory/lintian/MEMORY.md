@@ -26,6 +26,8 @@
 - `is_enabled` vs `enabled` field naming inconsistency between REST and MCP APIs for peers
 - `forgejo_url` and `forgejo_token` redundantly stored in both AdminSection config and ServerState
 - `validate_path_param` exists in both admin/mod.rs and mcp.rs (different error types, acceptable)
+- `content_url` not validated as URL in create_repo or update_repo
+- `update_repo` handler does not validate `url` via url::Url::parse (create_repo does)
 
 ## Architecture Notes
 - `conary_core::db::models::Repository` has: new(), insert(), update(), delete(), find_by_name(), list_all(), list_enabled()
@@ -41,3 +43,17 @@
 - `db::open_fast()` skips migrations for server hot paths (open_fast vs open)
 - Governor rate limiter DashMaps cleaned every 5 min via `run_limiter_cleanup()` (retain_recent + shrink_to_fit)
 - auth_middleware spawns background `touch()` on every authenticated request (open + write) -- no debouncing
+
+## Review Findings (2026-03-08 full audit)
+- No SQL injection via format strings -- all DB queries use parameterized ?1 bindings
+- No `unwrap()`/`expect()` in non-test server handler code (all are in #[cfg(test)] blocks)
+- File headers compliant across all checked files
+- Path traversal properly guarded via safe_join() and sanitize_path() in filesystem/transaction modules
+- CAS atomic_store uses PID+counter temp names -- race-safe across threads/processes
+- Transaction journal CRC32 integrity checks are solid
+- Bootstrap pipeline has 6+ expect() calls in production paths (base.rs) -- should be errors
+- `expand_env_vars()` leaks host env into sandboxed bootstrap builds (design issue, has TODO)
+- `num_milliseconds() as u64` in transaction finish can wrap on clock skew (P0)
+- Resolver uses `as u32` for pool indices -- safe at current scale but fragile
+- CPIO parser has proper MAX_FILE_SIZE and MAX_NAME_SIZE guards
+- Recovery module's symlink validation is more permissive than staging validation

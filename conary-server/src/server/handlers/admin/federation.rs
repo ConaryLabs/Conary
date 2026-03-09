@@ -1,19 +1,19 @@
 // conary-server/src/server/handlers/admin/federation.rs
 //! Federation peer and config management handlers
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use rusqlite::OptionalExtension;
 
+use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::ServerState;
 
 use super::{check_scope, validate_path_param};
 
@@ -153,10 +153,7 @@ pub async fn delete_peer(
     match admin_service::delete_peer(&state, &id).await {
         Ok(true) => {
             let guard = state.read().await;
-            guard.publish_event(
-                "federation.peer_removed",
-                serde_json::json!({"id": &id}),
-            );
+            guard.publish_event("federation.peer_removed", serde_json::json!({"id": &id}));
             drop(guard);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -408,7 +405,10 @@ mod tests {
         assert_eq!(body["endpoint"], "https://peer1.example.com:7891");
         assert_eq!(body["tier"], "leaf");
         assert_eq!(body["is_enabled"], true);
-        let peer_id = body["id"].as_str().expect("id should be a string").to_string();
+        let peer_id = body["id"]
+            .as_str()
+            .expect("id should be a string")
+            .to_string();
 
         // List peers and verify it appears
         let app2 = rebuild_app(&db_path);

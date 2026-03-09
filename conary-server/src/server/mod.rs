@@ -511,9 +511,9 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         ));
 
         // Spawn periodic cleanup for governor DashMap entries
-        tokio::spawn(crate::server::rate_limit::run_limiter_cleanup(
-            Arc::clone(&limiters),
-        ));
+        tokio::spawn(crate::server::rate_limit::run_limiter_cleanup(Arc::clone(
+            &limiters,
+        )));
 
         admin_rate_limiters = Some(limiters);
 

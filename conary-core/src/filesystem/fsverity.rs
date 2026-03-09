@@ -58,8 +58,7 @@ pub fn enable_fsverity(path: &Path) -> Result<bool> {
 
     // SAFETY: We pass a properly initialized FsverityEnableArg struct to the
     // FS_IOC_ENABLE_VERITY ioctl on a valid file descriptor.
-    let result =
-        unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _) };
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _) };
 
     if result == 0 {
         return Ok(true);

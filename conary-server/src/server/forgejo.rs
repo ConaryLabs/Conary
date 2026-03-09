@@ -62,10 +62,7 @@ fn api_url(base: &str, path: &str) -> String {
 }
 
 /// Send a GET request to the Forgejo API and return the response body text.
-pub async fn get(
-    state: &Arc<RwLock<ServerState>>,
-    path: &str,
-) -> Result<String, ForgejoError> {
+pub async fn get(state: &Arc<RwLock<ServerState>>, path: &str) -> Result<String, ForgejoError> {
     let (base, token, client) = get_config(state).await?;
     let url = api_url(&base, path);
 
@@ -149,7 +146,10 @@ mod tests {
     #[test]
     fn test_api_url() {
         assert_eq!(
-            api_url("https://forge.example.com", "/repos/owner/repo/actions/workflows"),
+            api_url(
+                "https://forge.example.com",
+                "/repos/owner/repo/actions/workflows"
+            ),
             "https://forge.example.com/api/v1/repos/owner/repo/actions/workflows"
         );
     }

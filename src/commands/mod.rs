@@ -14,8 +14,8 @@ mod cook;
 mod derived;
 pub mod distro;
 mod federation;
-pub mod groups;
 pub mod generation;
+pub mod groups;
 mod install;
 mod label;
 mod model;
@@ -121,9 +121,11 @@ pub use trust::{
 };
 #[cfg(feature = "server")]
 pub use trust::{cmd_trust_rotate_key, cmd_trust_sign_targets};
-pub use update_channel::{cmd_update_channel_get, cmd_update_channel_reset, cmd_update_channel_set};
 pub use update::{
     cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
+};
+pub use update_channel::{
+    cmd_update_channel_get, cmd_update_channel_reset, cmd_update_channel_set,
 };
 
 use anyhow::Result;

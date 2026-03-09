@@ -191,7 +191,10 @@ impl StageManager {
         stage: BootstrapStage,
         artifact_path: impl AsRef<Path>,
     ) -> Result<()> {
-        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
+        let state = self
+            .stages
+            .get_mut(&stage)
+            .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.complete = true;
         state.completed_at = Some(chrono::Utc::now());
         state.artifact_path = Some(artifact_path.as_ref().to_path_buf());
@@ -202,7 +205,10 @@ impl StageManager {
 
     /// Mark a stage as failed
     pub fn mark_failed(&mut self, stage: BootstrapStage, error: impl Into<String>) -> Result<()> {
-        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
+        let state = self
+            .stages
+            .get_mut(&stage)
+            .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.complete = false;
         state.error = Some(error.into());
 
@@ -211,7 +217,10 @@ impl StageManager {
 
     /// Record build duration for a stage
     pub fn record_duration(&mut self, stage: BootstrapStage, duration_secs: u64) -> Result<()> {
-        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
+        let state = self
+            .stages
+            .get_mut(&stage)
+            .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         state.duration_secs = Some(duration_secs);
         self.save()
     }
@@ -221,7 +230,10 @@ impl StageManager {
     /// This enables per-package checkpointing so that a resumed build can
     /// skip packages that were already successfully built.
     pub fn mark_package_complete(&mut self, stage: BootstrapStage, package: &str) -> Result<()> {
-        let state = self.stages.get_mut(&stage).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
+        let state = self
+            .stages
+            .get_mut(&stage)
+            .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {stage:?}"))?;
         if !state.completed_packages.contains(&package.to_string()) {
             state.completed_packages.push(package.to_string());
         }
@@ -240,7 +252,10 @@ impl StageManager {
     pub fn reset_from(&mut self, stage: BootstrapStage) -> Result<()> {
         let mut current = Some(stage);
         while let Some(s) = current {
-            let state = self.stages.get_mut(&s).ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {s:?}"))?;
+            let state = self
+                .stages
+                .get_mut(&s)
+                .ok_or_else(|| anyhow::anyhow!("stage not found in tracker: {s:?}"))?;
             *state = StageState::default();
             current = s.next();
         }

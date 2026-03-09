@@ -76,10 +76,7 @@ pub enum JournalRecord {
     StagingComplete { count: usize },
 
     /// Individual file moved from stage to final location (for granular recovery)
-    FileMoved {
-        path: PathBuf,
-        stage_path: PathBuf,
-    },
+    FileMoved { path: PathBuf, stage_path: PathBuf },
 
     /// Individual file removed from filesystem (for granular recovery)
     FileRemoved { path: PathBuf },

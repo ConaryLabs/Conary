@@ -234,7 +234,11 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         .packages
         .into_iter()
         .filter_map(|entry| {
-            let key = (entry.name.clone(), entry.version.clone(), "x86_64".to_string());
+            let key = (
+                entry.name.clone(),
+                entry.version.clone(),
+                "x86_64".to_string(),
+            );
             if !seen.insert(key) {
                 return None;
             }
@@ -244,13 +248,13 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
                 entry.name,
                 entry.version,
                 "remi:server-verified".to_string(), // Marker to avoid false-positive checksum mismatch
-                0,             // Size unknown until download
+                0,                                  // Size unknown until download
                 download_url,
             );
             pkg.architecture = Some("x86_64".to_string());
-            pkg.dependencies = entry.dependencies.map(|deps| {
-                serde_json::to_string(&deps).unwrap_or_default()
-            });
+            pkg.dependencies = entry
+                .dependencies
+                .map(|deps| serde_json::to_string(&deps).unwrap_or_default());
             Some(pkg)
         })
         .collect();

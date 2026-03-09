@@ -5,13 +5,13 @@
 //! available versions, conversion status, and metadata. This enables
 //! efficient incremental client sync without downloading full indices.
 
-use conary_core::db::models::RepositoryPackage;
 use crate::server::ServerState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use conary_core::db::models::RepositoryPackage;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

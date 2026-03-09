@@ -588,8 +588,6 @@ struct StatsRow {
     peer_count: i64,
 }
 
-
-
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();

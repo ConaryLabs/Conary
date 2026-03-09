@@ -242,7 +242,11 @@ impl RemiClient {
                     }
 
                     // Re-request to get manifest (direct request, not recursive poll)
-                    let url = self.package_url(&status.distro, &status.package, status.version.as_deref());
+                    let url = self.package_url(
+                        &status.distro,
+                        &status.package,
+                        status.version.as_deref(),
+                    );
                     let response = self.client.get(&url).send().map_err(|e| {
                         Error::DownloadError(format!("Failed to re-request package: {e}"))
                     })?;

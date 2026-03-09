@@ -7,8 +7,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::server::auth::{TokenScopes, json_error};
 use crate::server::ServerState;
+use crate::server::auth::{TokenScopes, json_error};
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
@@ -25,9 +25,9 @@ pub async fn sse_events(
         return json_error(401, "Not authenticated", "UNAUTHORIZED");
     }
 
-    let filters: Option<Vec<String>> = query.filter.map(|f| {
-        f.split(',').map(|s| s.trim().to_string()).collect()
-    });
+    let filters: Option<Vec<String>> = query
+        .filter
+        .map(|f| f.split(',').map(|s| s.trim().to_string()).collect());
 
     let rx = {
         let s = state.read().await;

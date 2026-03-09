@@ -166,9 +166,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                     .push(pkg.name.clone());
 
                 // Check if this dependency is being removed with no alternative
-                if remove_set.contains(dep_name.as_str())
-                    && !breaking_set.contains(&pkg.name)
-                {
+                if remove_set.contains(dep_name.as_str()) && !breaking_set.contains(&pkg.name) {
                     let has_alternative = (0..solvable_count).any(|j| {
                         let alt_sid = resolvo::SolvableId(j as u32);
                         let alt = provider.get_solvable(alt_sid);
@@ -186,8 +184,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     }
 
     // BFS from breaking packages through reverse deps
-    let mut queue: std::collections::VecDeque<String> =
-        breaking_set.iter().cloned().collect();
+    let mut queue: std::collections::VecDeque<String> = breaking_set.iter().cloned().collect();
     while let Some(broken) = queue.pop_front() {
         if let Some(rdeps) = reverse_deps.get(&broken) {
             for rdep in rdeps {

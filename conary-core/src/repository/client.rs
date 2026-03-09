@@ -279,7 +279,9 @@ impl RepositoryClient {
         }
 
         // Check Content-Length if available to reject oversized responses early
-        if let Some(content_length) = response.content_length() && content_length > MAX_BYTES_RESPONSE_SIZE {
+        if let Some(content_length) = response.content_length()
+            && content_length > MAX_BYTES_RESPONSE_SIZE
+        {
             return Err(Error::DownloadError(format!(
                 "Response too large ({} bytes, max {}): {}",
                 content_length, MAX_BYTES_RESPONSE_SIZE, url
@@ -293,7 +295,9 @@ impl RepositoryClient {
         if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
             return Err(Error::DownloadError(format!(
                 "Response body too large ({} bytes, max {}): {}",
-                bytes.len(), MAX_BYTES_RESPONSE_SIZE, url
+                bytes.len(),
+                MAX_BYTES_RESPONSE_SIZE,
+                url
             )));
         }
 

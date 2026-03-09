@@ -538,9 +538,7 @@ mod tests {
             &downloads,
             "x86_64-conary-linux-gnu"
         ));
-        assert!(
-            Stage0Builder::find_cached_seed(&downloads, "x86_64-conary-linux-gnu").is_none()
-        );
+        assert!(Stage0Builder::find_cached_seed(&downloads, "x86_64-conary-linux-gnu").is_none());
 
         // Create a fake seed tarball
         let seed_path = downloads.join("x86_64-conary-linux-gnu-seed.tar.xz");

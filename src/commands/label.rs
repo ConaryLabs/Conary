@@ -163,8 +163,8 @@ pub fn cmd_label_path(
 
     // Handle modifications
     if let Some(label_str) = add {
-        let label =
-            conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?.ok_or_else(|| {
+        let label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?
+            .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Label '{}' not found. Add it first with 'conary label-add'.",
                     label_str

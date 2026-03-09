@@ -16,19 +16,13 @@ use tracing::{debug, info};
 /// Creates a snapshot of the system state, then builds an EROFS image
 /// containing all installed package files with CAS digest references
 /// suitable for composefs mounting.
-pub fn build_generation(
-    conn: &rusqlite::Connection,
-    db_path: &str,
-    summary: &str,
-) -> Result<i64> {
+pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &str) -> Result<i64> {
     // Step 1: Composefs preflight check
     let obj_dir = objects_dir(db_path);
-    let caps =
-        preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
+    let caps = preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
 
     // Step 2: Ensure generations base directory exists
-    std::fs::create_dir_all(generations_dir())
-        .context("Failed to create generations directory")?;
+    std::fs::create_dir_all(generations_dir()).context("Failed to create generations directory")?;
 
     // Step 3: Create system state snapshot
     let engine = StateEngine::new(conn);
@@ -59,8 +53,7 @@ pub fn build_generation(
     builder.add_directory("/", 0o755, 0, 0);
 
     // Step 6: Add all installed package files
-    let troves =
-        Trove::list_all(conn).context("Failed to list installed packages")?;
+    let troves = Trove::list_all(conn).context("Failed to list installed packages")?;
     let mut files_added: u64 = 0;
 
     for trove in &troves {
@@ -73,9 +66,7 @@ pub fn build_generation(
         };
 
         let files = FileEntry::find_by_trove(conn, trove_id)
-            .with_context(|| {
-                format!("Failed to get files for trove {}", trove.name)
-            })?;
+            .with_context(|| format!("Failed to get files for trove {}", trove.name))?;
 
         for file in &files {
             if is_excluded(&file.path) {
@@ -114,9 +105,8 @@ pub fn build_generation(
 
     // Step 8: Build EROFS image
     let image_path = gen_dir.join("root.erofs");
-    let file = std::fs::File::create(&image_path).with_context(|| {
-        format!("Failed to create EROFS image: {}", image_path.display())
-    })?;
+    let file = std::fs::File::create(&image_path)
+        .with_context(|| format!("Failed to create EROFS image: {}", image_path.display()))?;
     let stats = builder
         .build(BufWriter::new(file))
         .map_err(|e| anyhow!("EROFS build failed: {e}"))?;
@@ -131,13 +121,9 @@ pub fn build_generation(
         debug!("fs-verity supported, enabling on CAS objects");
         let (enabled, already, errors) =
             conary_core::filesystem::fsverity::enable_fsverity_on_cas(&obj_dir);
-        info!(
-            "fs-verity: {enabled} newly enabled, {already} already enabled, {errors} errors"
-        );
+        info!("fs-verity: {enabled} newly enabled, {already} already enabled, {errors} errors");
     } else {
-        debug!(
-            "fs-verity not supported on CAS filesystem, skipping"
-        );
+        debug!("fs-verity not supported on CAS filesystem, skipping");
     }
 
     // Step 10: Write generation metadata
@@ -185,15 +171,11 @@ fn hex_to_digest(hex: &str) -> Result<[u8; 32]> {
 
 /// Get kernel version from DB rather than scanning the generation tree
 /// (since we no longer have a file tree to scan)
-fn detect_kernel_version_from_db(
-    conn: &rusqlite::Connection,
-) -> Option<String> {
+fn detect_kernel_version_from_db(conn: &rusqlite::Connection) -> Option<String> {
     // Look for kernel package in troves
     let troves = Trove::list_all(conn).ok()?;
     for trove in &troves {
-        if trove.name.starts_with("kernel")
-            || trove.name.starts_with("linux-image")
-        {
+        if trove.name.starts_with("kernel") || trove.name.starts_with("linux-image") {
             return Some(trove.version.clone());
         }
     }
@@ -220,9 +202,7 @@ mod tests {
     fn test_hex_to_digest_wrong_length() {
         let result = hex_to_digest("abcd");
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("Expected 64-char")
-        );
+        assert!(result.unwrap_err().to_string().contains("Expected 64-char"));
     }
 
     #[test]

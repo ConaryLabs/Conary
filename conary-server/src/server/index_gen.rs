@@ -5,10 +5,10 @@
 //! The index is used by clients to discover available packages without
 //! querying the server for each package individually.
 
-use conary_core::db::models::ConvertedPackage;
 use crate::server::handlers::human_bytes;
 use anyhow::{Context, Result};
 use chrono::Utc;
+use conary_core::db::models::ConvertedPackage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

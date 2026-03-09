@@ -35,9 +35,11 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
         } else {
             println!("  Components:");
             for comp in &components {
-                let file_count =
-                    conary_core::db::models::FileEntry::find_by_component(&conn, comp.id.unwrap_or(0))?
-                        .len();
+                let file_count = conary_core::db::models::FileEntry::find_by_component(
+                    &conn,
+                    comp.id.unwrap_or(0),
+                )?
+                .len();
                 let default_marker = if conary_core::components::ComponentType::parse(&comp.name)
                     .map(|ct| ct.is_default())
                     .unwrap_or(false)
@@ -68,13 +70,13 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
 
     // Parse the component spec (e.g., "nginx:lib")
-    let (package_name, component_name) = conary_core::components::parse_component_spec(component_spec)
-        .ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid component spec '{}'. Expected format: package:component (e.g., nginx:lib)",
-            component_spec
-        )
-    })?;
+    let (package_name, component_name) =
+        conary_core::components::parse_component_spec(component_spec).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid component spec '{}'. Expected format: package:component (e.g., nginx:lib)",
+                component_spec
+            )
+        })?;
 
     // Find the package
     let troves = conary_core::db::models::Trove::find_by_name(&conn, &package_name)?;
@@ -118,7 +120,8 @@ pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
             }
             None => {
                 // Check if any components exist
-                let components = conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
+                let components =
+                    conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
                 if components.is_empty() {
                     println!(
                         "Package '{}' was installed without component tracking (legacy install)",

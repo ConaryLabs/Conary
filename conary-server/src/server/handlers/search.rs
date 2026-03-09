@@ -57,7 +57,11 @@ async fn get_search_engine(
     let guard = state.read().await;
     match &guard.search_engine {
         Some(engine) => Ok(Arc::clone(engine)),
-        None => Err((StatusCode::SERVICE_UNAVAILABLE, "Search engine not available").into_response()),
+        None => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Search engine not available",
+        )
+            .into_response()),
     }
 }
 

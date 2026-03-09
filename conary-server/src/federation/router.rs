@@ -170,11 +170,7 @@ impl RendezvousRouter {
     }
 
     /// Rendezvous-hash rank and take up to K peers from a single tier
-    fn select_k_from_tier<'a>(
-        &self,
-        chunk_hash: &str,
-        tier_peers: Vec<&'a Peer>,
-    ) -> Vec<&'a Peer> {
+    fn select_k_from_tier<'a>(&self, chunk_hash: &str, tier_peers: Vec<&'a Peer>) -> Vec<&'a Peer> {
         if tier_peers.is_empty() {
             return Vec::new();
         }

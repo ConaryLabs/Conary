@@ -261,7 +261,10 @@ impl TufClient {
         // and streaming unlimited data.
         let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
         let mut body = Vec::with_capacity(
-            response.content_length().unwrap_or(4096).min(Self::MAX_TUF_METADATA_SIZE) as usize,
+            response
+                .content_length()
+                .unwrap_or(4096)
+                .min(Self::MAX_TUF_METADATA_SIZE) as usize,
         );
         response
             .take(Self::MAX_TUF_METADATA_SIZE + 1)

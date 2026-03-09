@@ -153,30 +153,30 @@ impl Superblock {
             };
         }
 
-        put_le!(self.magic, u32);         // 0..4
-        put_le!(self.checksum, u32);      // 4..8
+        put_le!(self.magic, u32); // 0..4
+        put_le!(self.checksum, u32); // 4..8
         put_le!(self.feature_compat, u32); // 8..12
-        put_le!(self.blkszbits, u8);      // 12
-        put_le!(self.sb_extslots, u8);    // 13
-        put_le!(self.root_nid, u16);      // 14..16
-        put_le!(self.inos, u64);          // 16..24
-        put_le!(self.build_time, u64);    // 24..32
+        put_le!(self.blkszbits, u8); // 12
+        put_le!(self.sb_extslots, u8); // 13
+        put_le!(self.root_nid, u16); // 14..16
+        put_le!(self.inos, u64); // 16..24
+        put_le!(self.build_time, u64); // 24..32
         put_le!(self.build_time_nsec, u32); // 32..36
-        put_le!(self.blocks, u32);        // 36..40
-        put_le!(self.meta_blkaddr, u32);  // 40..44
+        put_le!(self.blocks, u32); // 36..40
+        put_le!(self.meta_blkaddr, u32); // 40..44
         put_le!(self.xattr_blkaddr, u32); // 44..48
         buf[off..off + 16].copy_from_slice(&self.uuid); // 48..64
         off += 16;
         buf[off..off + 16].copy_from_slice(&self.volume_name); // 64..80
         off += 16;
         put_le!(self.feature_incompat, u32); // 80..84
-        put_le!(self.u1, u16);            // 84..86
+        put_le!(self.u1, u16); // 84..86
         put_le!(self.extra_devices, u16); // 86..88
-        put_le!(self.devt_slotoff, u16);  // 88..90
-        put_le!(self.dirblkbits, u8);     // 90
+        put_le!(self.devt_slotoff, u16); // 88..90
+        put_le!(self.dirblkbits, u8); // 90
         put_le!(self.xattr_prefix_count, u8); // 91
         put_le!(self.xattr_prefix_start, u32); // 92..96
-        put_le!(self.packed_nid, u64);    // 96..104
+        put_le!(self.packed_nid, u64); // 96..104
         put_le!(self.xattr_filter_reserved, u8); // 104
         buf[off..off + 23].copy_from_slice(&self.reserved); // 105..128
         off += 23;
@@ -318,7 +318,11 @@ mod tests {
         let sb = Superblock::new(4096);
         let mut buf = Vec::new();
         sb.write_to(&mut buf).unwrap();
-        assert_eq!(buf.len(), 1024 + 128, "superblock output must be 1152 bytes");
+        assert_eq!(
+            buf.len(),
+            1024 + 128,
+            "superblock output must be 1152 bytes"
+        );
     }
 
     #[test]
@@ -346,7 +350,10 @@ mod tests {
 
         // Compute and store the checksum.
         sb.checksum = sb.compute_checksum();
-        assert_ne!(sb.checksum, 0, "checksum should not be zero for non-trivial data");
+        assert_ne!(
+            sb.checksum, 0,
+            "checksum should not be zero for non-trivial data"
+        );
 
         // Verify: re-computing with checksum field zeroed yields the same value.
         let expected = sb.compute_checksum();
@@ -365,8 +372,8 @@ mod tests {
         sb.xattr_blkaddr = 2;
         sb.uuid = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         sb.volume_name = *b"testvol\0\0\0\0\0\0\0\0\0";
-        sb.feature_incompat = EROFS_FEATURE_INCOMPAT_CHUNKED_FILE
-            | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
+        sb.feature_incompat =
+            EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
         sb.u1 = 0x00FF;
         sb.extra_devices = 3;
         sb.devt_slotoff = 10;
@@ -391,7 +398,10 @@ mod tests {
         assert_eq!(parsed.blocks, 256);
         assert_eq!(parsed.meta_blkaddr, 1);
         assert_eq!(parsed.xattr_blkaddr, 2);
-        assert_eq!(parsed.uuid, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(
+            parsed.uuid,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
         assert_eq!(&parsed.volume_name[..7], b"testvol");
         assert_eq!(
             parsed.feature_incompat,
@@ -420,7 +430,10 @@ mod tests {
         let sb = Superblock::new(4096);
         let mut buf = Vec::new();
         sb.write_to(&mut buf).unwrap();
-        assert!(buf[..1024].iter().all(|&b| b == 0), "first 1024 bytes must be zero");
+        assert!(
+            buf[..1024].iter().all(|&b| b == 0),
+            "first 1024 bytes must be zero"
+        );
     }
 
     #[test]

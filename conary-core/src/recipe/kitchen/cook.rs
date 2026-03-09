@@ -169,8 +169,7 @@ impl<'a> Cook<'a> {
         };
 
         for patch_info in patches {
-            let patch_path = if is_remote_url(&patch_info.file)
-            {
+            let patch_path = if is_remote_url(&patch_info.file) {
                 let filename = patch_info
                     .file
                     .split('/')

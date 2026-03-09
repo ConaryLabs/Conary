@@ -51,10 +51,7 @@ impl DistroPin {
 
     /// Update the mixing policy on the existing pin
     pub fn set_mixing_policy(conn: &Connection, policy: &str) -> Result<()> {
-        conn.execute(
-            "UPDATE distro_pin SET mixing_policy = ?1",
-            [policy],
-        )?;
+        conn.execute("UPDATE distro_pin SET mixing_policy = ?1", [policy])?;
         Ok(())
     }
 

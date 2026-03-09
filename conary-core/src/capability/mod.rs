@@ -108,9 +108,8 @@ pub fn load_capabilities(
 
     result
         .map(|json| {
-            serde_json::from_str(&json).map_err(|e| {
-                CapabilityError::Other(format!("Failed to parse capabilities: {}", e))
-            })
+            serde_json::from_str(&json)
+                .map_err(|e| CapabilityError::Other(format!("Failed to parse capabilities: {}", e)))
         })
         .transpose()
 }
@@ -231,7 +230,8 @@ pub fn list_packages_with_capabilities(
         ))
     })?;
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(CapabilityError::from)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(CapabilityError::from)
 }
 
 #[cfg(test)]

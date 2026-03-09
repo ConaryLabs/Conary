@@ -88,7 +88,9 @@ mod tests {
         let mut v = vec![0u8; 4096];
         let mut state: u64 = 0xDEAD_BEEF;
         for b in &mut v {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             *b = (state >> 33) as u8;
         }
         v
@@ -106,7 +108,10 @@ mod tests {
     #[test]
     fn lz4_incompressible_returns_none() {
         let data = random_data();
-        assert!(compress_lz4(&data).is_none(), "random data should not compress");
+        assert!(
+            compress_lz4(&data).is_none(),
+            "random data should not compress"
+        );
     }
 
     #[test]
@@ -121,7 +126,10 @@ mod tests {
     #[test]
     fn lzma_incompressible_returns_none() {
         let data = random_data();
-        assert!(compress_lzma(&data).is_none(), "random data should not compress");
+        assert!(
+            compress_lzma(&data).is_none(),
+            "random data should not compress"
+        );
     }
 
     #[test]

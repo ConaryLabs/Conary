@@ -70,7 +70,10 @@ pub fn parse_project_response(name: &str, json: &str) -> Result<RepologyProject>
     let packages: Vec<RepologyPackage> =
         serde_json::from_str(json).map_err(|e| Error::ParseError(e.to_string()))?;
 
-    let implementations = packages.into_iter().map(RepologyImplementation::from).collect();
+    let implementations = packages
+        .into_iter()
+        .map(RepologyImplementation::from)
+        .collect();
 
     Ok(RepologyProject {
         name: name.to_string(),
@@ -87,8 +90,10 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
     let projects = map
         .into_iter()
         .map(|(name, packages)| {
-            let implementations =
-                packages.into_iter().map(RepologyImplementation::from).collect();
+            let implementations = packages
+                .into_iter()
+                .map(RepologyImplementation::from)
+                .collect();
             RepologyProject {
                 name,
                 implementations,
@@ -226,11 +231,7 @@ impl RepologyClient {
 
     /// Fetch a batch of projects and sync recognised implementations into the
     /// database. Returns the number of projects synced.
-    pub async fn sync_to_db(
-        &self,
-        conn: &rusqlite::Connection,
-        start: &str,
-    ) -> Result<usize> {
+    pub async fn sync_to_db(&self, conn: &rusqlite::Connection, start: &str) -> Result<usize> {
         let projects = self.fetch_projects_batch(start).await?;
         let mut count = 0;
 
@@ -243,8 +244,7 @@ impl RepologyClient {
                 .implementations
                 .iter()
                 .filter_map(|imp| {
-                    repo_to_distro(&imp.repo)
-                        .map(|distro| (distro, imp.visiblename.clone()))
+                    repo_to_distro(&imp.repo).map(|distro| (distro, imp.visiblename.clone()))
                 })
                 .collect();
 
@@ -253,10 +253,7 @@ impl RepologyClient {
             }
 
             // Upsert the canonical package — if it already exists, look up its ID
-            let mut canonical = CanonicalPackage::new(
-                project.name.clone(),
-                "package".to_string(),
-            );
+            let mut canonical = CanonicalPackage::new(project.name.clone(), "package".to_string());
             let can_id = match canonical.insert_or_ignore(&tx)? {
                 Some(id) => id,
                 None => {
@@ -270,12 +267,8 @@ impl RepologyClient {
 
             // Upsert each distro implementation
             for (distro, distro_name) in known {
-                let mut imp = PackageImplementation::new(
-                    can_id,
-                    distro,
-                    distro_name,
-                    "repology".to_string(),
-                );
+                let mut imp =
+                    PackageImplementation::new(can_id, distro, distro_name, "repology".to_string());
                 imp.insert_or_ignore(&tx)?;
             }
 

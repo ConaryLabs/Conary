@@ -19,8 +19,8 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
         println!("Loaded {} curated rules", engine.rule_count());
 
         // Persist curated rules into the database
-        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
         use conary_core::canonical::repology::repo_to_distro;
+        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
         let tx = conn.unchecked_transaction()?;
         let mut count = 0;
@@ -65,16 +65,14 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
 
 pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
-    let canonical_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM canonical_packages",
-        [],
-        |row| row.get(0),
-    )?;
-    let impl_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM package_implementations",
-        [],
-        |row| row.get(0),
-    )?;
+    let canonical_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM canonical_packages", [], |row| {
+            row.get(0)
+        })?;
+    let impl_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM package_implementations", [], |row| {
+            row.get(0)
+        })?;
     let group_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM canonical_packages WHERE kind = 'group'",
         [],

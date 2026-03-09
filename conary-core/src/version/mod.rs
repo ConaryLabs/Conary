@@ -37,9 +37,9 @@ impl RpmVersion {
         let epoch = if epoch_str.is_empty() {
             0 // Empty epoch (e.g., ":1.0.0") defaults to 0
         } else {
-            epoch_str
-                .parse::<u64>()
-                .map_err(|e| Error::VersionParse(format!("Invalid epoch in version '{}': {}", s, e)))?
+            epoch_str.parse::<u64>().map_err(|e| {
+                Error::VersionParse(format!("Invalid epoch in version '{}': {}", s, e))
+            })?
         };
 
         let (version, release) = if let Some(dash_pos) = rest.find('-') {

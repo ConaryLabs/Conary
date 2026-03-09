@@ -337,7 +337,9 @@ mod tests {
         assert!(id > 0);
 
         // Find by name
-        let found = CanonicalPackage::find_by_name(&conn, "firefox").unwrap().unwrap();
+        let found = CanonicalPackage::find_by_name(&conn, "firefox")
+            .unwrap()
+            .unwrap();
         assert_eq!(found.name, "firefox");
         assert_eq!(found.kind, "package");
         assert_eq!(found.description, Some("Web browser".to_string()));
@@ -378,12 +380,20 @@ mod tests {
         let mut pkg = CanonicalPackage::new("firefox".to_string(), "package".to_string());
         let can_id = pkg.insert(&conn).unwrap();
 
-        let mut impl_fed =
-            PackageImplementation::new(can_id, "fedora".to_string(), "firefox".to_string(), "auto".to_string());
+        let mut impl_fed = PackageImplementation::new(
+            can_id,
+            "fedora".to_string(),
+            "firefox".to_string(),
+            "auto".to_string(),
+        );
         impl_fed.insert(&conn).unwrap();
 
-        let mut impl_deb =
-            PackageImplementation::new(can_id, "debian".to_string(), "firefox-esr".to_string(), "auto".to_string());
+        let mut impl_deb = PackageImplementation::new(
+            can_id,
+            "debian".to_string(),
+            "firefox-esr".to_string(),
+            "auto".to_string(),
+        );
         impl_deb.insert(&conn).unwrap();
 
         // Find by canonical
@@ -410,8 +420,12 @@ mod tests {
         assert_eq!(found.distro_name, "firefox");
 
         // insert_or_ignore does not fail on duplicate
-        let mut dup =
-            PackageImplementation::new(can_id, "fedora".to_string(), "firefox".to_string(), "auto".to_string());
+        let mut dup = PackageImplementation::new(
+            can_id,
+            "fedora".to_string(),
+            "firefox".to_string(),
+            "auto".to_string(),
+        );
         dup.insert_or_ignore(&conn).unwrap();
     }
 
@@ -423,12 +437,18 @@ mod tests {
         pkg.appstream_id = Some("org.mozilla.firefox".to_string());
         let can_id = pkg.insert(&conn).unwrap();
 
-        let mut impl_deb =
-            PackageImplementation::new(can_id, "debian".to_string(), "firefox-esr".to_string(), "auto".to_string());
+        let mut impl_deb = PackageImplementation::new(
+            can_id,
+            "debian".to_string(),
+            "firefox-esr".to_string(),
+            "auto".to_string(),
+        );
         impl_deb.insert(&conn).unwrap();
 
         // Resolve by canonical name
-        let resolved = CanonicalPackage::resolve_name(&conn, "firefox").unwrap().unwrap();
+        let resolved = CanonicalPackage::resolve_name(&conn, "firefox")
+            .unwrap()
+            .unwrap();
         assert_eq!(resolved.name, "firefox");
 
         // Resolve by AppStream ID

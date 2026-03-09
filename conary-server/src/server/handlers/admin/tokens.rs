@@ -1,17 +1,17 @@
 // conary-server/src/server/handlers/admin/tokens.rs
 //! Token management handlers
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::server::ServerState;
 use crate::server::admin_service::{self, ServiceError};
 use crate::server::auth::{Scope, TokenScopes, json_error};
-use crate::server::ServerState;
 
 use super::check_scope;
 

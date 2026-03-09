@@ -149,7 +149,10 @@ fn show_package_info(
 
     // Calculate total size
     let total_size: i64 = files.iter().map(|f| f.size).sum();
-    println!("Size        : {}", crate::commands::format_bytes(total_size as u64));
+    println!(
+        "Size        : {}",
+        crate::commands::format_bytes(total_size as u64)
+    );
 
     // Dependencies
     let deps = conary_core::db::models::DependencyEntry::find_by_trove(conn, trove_id)?;
@@ -228,4 +231,3 @@ fn list_package_files(
 
     Ok(())
 }
-

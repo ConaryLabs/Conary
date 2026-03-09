@@ -143,8 +143,7 @@ impl ChunkAccess {
         if hashes.is_empty() {
             return Ok(());
         }
-        let mut stmt =
-            conn.prepare("UPDATE chunk_access SET protected = ?1 WHERE hash = ?2")?;
+        let mut stmt = conn.prepare("UPDATE chunk_access SET protected = ?1 WHERE hash = ?2")?;
         let val = i32::from(protected);
         for hash in hashes {
             stmt.execute(params![val, hash])?;

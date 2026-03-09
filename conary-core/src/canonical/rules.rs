@@ -51,8 +51,8 @@ struct RuleFile {
 ///
 /// The YAML must contain a top-level `rules` key with a list of rule objects.
 pub fn parse_rules(yaml: &str) -> Result<Vec<Rule>> {
-    let file: RuleFile =
-        serde_yaml::from_str(yaml).map_err(|e| Error::ParseError(format!("YAML parse error: {e}")))?;
+    let file: RuleFile = serde_yaml::from_str(yaml)
+        .map_err(|e| Error::ParseError(format!("YAML parse error: {e}")))?;
     Ok(file.rules)
 }
 
@@ -110,9 +110,8 @@ impl RulesEngine {
 
         let mut all_rules = Vec::new();
         for path in entries {
-            let content = std::fs::read_to_string(path.as_path()).map_err(|e| {
-                Error::IoError(format!("Cannot read {}: {e}", path.display()))
-            })?;
+            let content = std::fs::read_to_string(path.as_path())
+                .map_err(|e| Error::IoError(format!("Cannot read {}: {e}", path.display())))?;
             let mut rules = parse_rules(&content)?;
             all_rules.append(&mut rules);
         }
@@ -145,7 +144,9 @@ impl RulesEngine {
 
             // Check name match (exact or regex) and expand capture groups.
             if let Some(ref re) = compiled.name_regex {
-                if let Some(caps) = re.captures(name) && !rule.setname.is_empty() {
+                if let Some(caps) = re.captures(name)
+                    && !rule.setname.is_empty()
+                {
                     // Use Captures::expand for correct single-pass group expansion
                     let mut result = String::new();
                     caps.expand(&rule.setname, &mut result);
@@ -273,10 +274,7 @@ rules:
         // curl has no matching rule.
         assert_eq!(engine.resolve("curl", None), None);
         // Regex capture group expansion: libssl-dev -> "ssl"
-        assert_eq!(
-            engine.resolve("libssl-dev", None),
-            Some("ssl".to_string())
-        );
+        assert_eq!(engine.resolve("libssl-dev", None), Some("ssl".to_string()));
     }
 
     #[test]
@@ -314,10 +312,7 @@ rules:
             engine.resolve("vim-enhanced", None),
             Some("vim".to_string())
         );
-        assert_eq!(
-            engine.resolve("nginx", None),
-            Some("nginx".to_string())
-        );
+        assert_eq!(engine.resolve("nginx", None), Some("nginx".to_string()));
         assert_eq!(engine.get_kind("nginx"), Some("group".to_string()));
     }
 }

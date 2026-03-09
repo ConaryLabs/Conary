@@ -62,12 +62,16 @@ pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let pkg_mgr = SystemPackageManager::detect();
     let (system_count, mgr_name) = if pkg_mgr.is_available() {
         let count = match pkg_mgr {
-            SystemPackageManager::Rpm => conary_core::packages::rpm_query::list_installed_packages()
-                .map(|p| p.len())
-                .unwrap_or(0),
-            SystemPackageManager::Dpkg => conary_core::packages::dpkg_query::list_installed_packages()
-                .map(|p| p.len())
-                .unwrap_or(0),
+            SystemPackageManager::Rpm => {
+                conary_core::packages::rpm_query::list_installed_packages()
+                    .map(|p| p.len())
+                    .unwrap_or(0)
+            }
+            SystemPackageManager::Dpkg => {
+                conary_core::packages::dpkg_query::list_installed_packages()
+                    .map(|p| p.len())
+                    .unwrap_or(0)
+            }
             SystemPackageManager::Pacman => {
                 conary_core::packages::pacman_query::list_installed_packages()
                     .map(|p| p.len())

@@ -143,9 +143,10 @@ pub fn cmd_adopt_convert(
     fs::create_dir_all(&output_dir)?;
 
     // 4. Configure rayon thread pool
-    if let Some(j) = jobs && let Err(e) = rayon::ThreadPoolBuilder::new()
-        .num_threads(j)
-        .build_global()
+    if let Some(j) = jobs
+        && let Err(e) = rayon::ThreadPoolBuilder::new()
+            .num_threads(j)
+            .build_global()
     {
         warn!("Could not set thread pool to {j} threads (already initialized): {e}");
     }

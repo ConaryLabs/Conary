@@ -38,7 +38,9 @@ use anyhow::{Context, Result};
 use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
-use conary_core::db::models::{Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry};
+use conary_core::db::models::{
+    Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry,
+};
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::LanguageDepDetector;
 use conary_core::repository;
@@ -201,16 +203,24 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let resolved_name: Option<String> = if let Some(ref target_distro) = from_distro {
         let db_conn = conary_core::db::open(db_path)
             .context("Failed to open database for canonical resolution")?;
-        if let Some(canonical) = conary_core::db::models::CanonicalPackage::resolve_name(&db_conn, package)? {
+        if let Some(canonical) =
+            conary_core::db::models::CanonicalPackage::resolve_name(&db_conn, package)?
+        {
             let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
                 &db_conn,
                 canonical.id.unwrap(),
             )?;
             if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
-                info!("Resolved canonical '{}' -> '{}' for {}", package, imp.distro_name, target_distro);
+                info!(
+                    "Resolved canonical '{}' -> '{}' for {}",
+                    package, imp.distro_name, target_distro
+                );
                 Some(imp.distro_name.clone())
             } else {
-                warn!("No implementation of '{}' found for distro '{}'", package, target_distro);
+                warn!(
+                    "No implementation of '{}' found for distro '{}'",
+                    package, target_distro
+                );
                 None
             }
         } else {
@@ -261,7 +271,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         let conn = conary_core::db::open(db_path)
             .context("Failed to open package database for adoption check")?;
 
-        if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+        if let Some(existing) =
+            conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
             && existing.install_source.is_adopted()
         {
             if !force {
@@ -287,7 +298,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         let conn = conary_core::db::open(db_path)
             .context("Failed to open package database for promotion check")?;
 
-        if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+        if let Some(existing) =
+            conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
             && existing.install_reason == conary_core::db::models::InstallReason::Dependency
         {
             // Check if we're requesting a specific version that differs
@@ -295,7 +307,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
             // Promote to explicit
             let reason = selection_reason.unwrap_or("Explicitly installed by user");
-            conary_core::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
+            conary_core::db::models::Trove::promote_to_explicit(
+                &conn,
+                &package_name,
+                Some(reason),
+            )?;
             println!("Promoted {} from dependency to explicit", package_name);
 
             // If same version (or no version specified), we're done
@@ -444,8 +460,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             info!("Found {} missing dependencies", plan.missing.len());
 
             // Dep-mode-aware resolution
-            let dep_plan =
-                dep_resolution::resolve_missing_deps(&conn, &plan.missing, dep_mode);
+            let dep_plan = dep_resolution::resolve_missing_deps(&conn, &plan.missing, dep_mode);
 
             // Report blocked packages
             if !dep_plan.blocked.is_empty() {
@@ -520,8 +535,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                         dep_names.len()
                     );
                     // Validate that deps are actually resolvable even in dry-run
-                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
-                    {
+                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
                         Ok(to_download) => {
                             for name in &dep_names {
                                 println!("    {}", name);
@@ -534,10 +548,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                             for name in &dep_names {
                                 println!("    {} (resolution pending)", name);
                             }
-                            println!(
-                                "  [WARN] Dependency resolution check failed: {}",
-                                e
-                            );
+                            println!("  [WARN] Dependency resolution check failed: {}", e);
                         }
                     }
                 } else {
@@ -547,12 +558,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                     }
 
                     // Use existing transitive resolution and batch install
-                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
-                    {
+                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
                         Ok(to_download) => {
                             if !to_download.is_empty() {
-                                progress
-                                    .set_phase(pkg.name(), InstallPhase::InstallingDeps);
+                                progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
                                 let temp_dir = TempDir::new()?;
                                 let keyring_dir = keyring_dir(db_path);
                                 let downloaded = repository::download_dependencies(
@@ -562,14 +571,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                                 )?;
 
                                 let parent_name = pkg.name().to_string();
-                                let mut prepared_packages =
-                                    Vec::with_capacity(downloaded.len());
+                                let mut prepared_packages = Vec::with_capacity(downloaded.len());
 
                                 for (dep_name, dep_path) in &downloaded {
-                                    progress.set_status(&format!(
-                                        "Preparing dependency: {}",
-                                        dep_name
-                                    ));
+                                    progress
+                                        .set_status(&format!("Preparing dependency: {}", dep_name));
                                     let reason = format!("Required by {}", parent_name);
                                     match prepare_package_for_batch(
                                         dep_path,
@@ -605,10 +611,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                                         no_scripts,
                                     );
                                     installer.install_batch(prepared_packages)?;
-                                    println!(
-                                        "  [OK] Installed {} dependencies",
-                                        downloaded.len()
-                                    );
+                                    println!("  [OK] Installed {} dependencies", downloaded.len());
                                 }
                             }
                         }

@@ -123,9 +123,7 @@ fn count_existing_paths(paths: &[String], skipped: &mut Vec<String>) -> usize {
 ///
 /// Returns a list of `(deny_path, allowed_path, access_type)` tuples where
 /// a deny path falls under an allowed parent, which landlock cannot enforce.
-fn find_deny_conflicts(
-    caps: &FilesystemCapabilities,
-) -> Vec<(&str, &str, &'static str)> {
+fn find_deny_conflicts(caps: &FilesystemCapabilities) -> Vec<(&str, &str, &'static str)> {
     let mut conflicts = Vec::new();
     for deny_path in &caps.deny {
         for read_path in &caps.read {
