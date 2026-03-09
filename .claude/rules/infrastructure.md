@@ -14,6 +14,8 @@ Two servers, one CI system.
 - **Admin API:** `:8082` (external, bearer token auth) -- token management, CI proxy, SSE events, MCP endpoint
 - **MCP endpoint:** `https://packages.conary.io:8082/mcp` (Streamable HTTP transport for LLM agents)
 - **OpenAPI spec:** `https://packages.conary.io:8082/v1/admin/openapi.json`
+- **Releases:** `/conary/releases/{version}/` with CCS, RPM, DEB, Arch packages + SHA256SUMS, `latest` symlink
+- **Self-update:** `/conary/self-update/conary-{version}.ccs` (served by self-update handler)
 - **Note:** `remi.conary.io` does NOT work through Cloudflare; use `packages.conary.io`
 
 ## Forge (CI/Test)
@@ -36,6 +38,7 @@ Two servers, one CI system.
 | `integration.yaml` | Push to main, manual | 3-distro Podman matrix (fedora43, ubuntu-noble, arch) | ~15 min |
 | `e2e.yaml` | Daily 06:00 UTC, manual | 3-distro Phase 1+2 deep E2E | ~20-30 min |
 | `remi-health.yaml` | Every 6 hours, manual | Full endpoint verification | ~60s |
+| `release.yaml` | Push `v*` tag | Build CCS + native packages, publish to Remi | ~20 min |
 
 **Trigger manually:** Forgejo API `POST /api/v1/repos/peter/Conary/actions/workflows/{name}/dispatches` with `{"ref":"main"}`.
 
@@ -50,6 +53,7 @@ Two servers, one CI system.
 | `scripts/release.sh [conary\|erofs\|server\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
+| `scripts/publish-release.sh` | Build CCS + native packages, publish to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
 
 ## Integration Tests
