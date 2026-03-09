@@ -39,7 +39,7 @@
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">1,800+</span>
+			<span class="stat-value">270+</span>
 			<span class="stat-label">Tests</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>

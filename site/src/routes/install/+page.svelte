@@ -66,7 +66,7 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.1.0</div>
+					<div class="terminal-line t-output">conary 0.3.0</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
