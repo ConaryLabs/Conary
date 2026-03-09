@@ -1,0 +1,31 @@
+# .forgejo/workflows/release.yaml
+# Build and publish packages on version tag push
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: linux-native
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract version from tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing version: $VERSION"
+      - name: Build and publish release
+        run: ./scripts/publish-release.sh --version "$VERSION"
+      - name: Verify self-update endpoint
+        run: |
+          ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+          response=$(curl -sf "$ENDPOINT/v1/ccs/conary/latest" 2>/dev/null) || response=""
+          if echo "$response" | grep -q "$VERSION"; then
+            echo "[OK] Self-update API reports version $VERSION"
+          else
+            echo "[FAILED] Version mismatch or endpoint unavailable"
+            echo "Response: $response"
+            exit 1
+          fi
