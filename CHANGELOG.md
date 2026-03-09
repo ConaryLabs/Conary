@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.3.0] - 2026-03-08
+
+### Fixed
+- **P0**: Negative duration cast wrapping to `u64::MAX` in transaction journal metadata (clock skew/NTP)
+- **P1**: CPIO header field parsing with safe u32 conversion (malformed archive protection)
+- **P1**: Host environment leaking into hermetic bootstrap builds via `expand_env_vars()` fallback
+- **P1**: 14 `expect()` calls in bootstrap pipeline replaced with proper error propagation
+- **P1**: Resolver pool index casts guarded with `u32::try_from()` (7 sites)
+- **P2**: Recovery symlink validation aligned with staging bounds checking (install-root escape)
+- **P2**: Repology client `expect()` replaced with `Result` propagation
+- **P2**: Progress bar template `expect()` calls replaced with fallback styles (5 sites)
+- **P2**: CAS `hash_to_path` rejects short hashes instead of producing malformed paths
+
+### Security
+- Add missing checksum verification in bootstrap stage 2
+
+### Other
+- Four codebase simplify passes — DRY helpers, bug fixes, deduplication, idiomatic Rust
+- Add Claude Code hooks for sensitive file protection and auto-clippy
+- cargo fmt (Rust 2024 edition formatting)
+
+## [server-v0.3.0] - 2026-03-08
+
+### Fixed
+- **P1**: `content_url` not validated in `create_repo` handler
+- **P1**: `url` not validated in `update_repo` handler
+- **P3**: Body field name validation aligned with path parameter validation
+- **P3**: Forgejo repo path extracted to constant (13 occurrences across 3 files)
+
+### Security
+- Add missing checksum verification in bootstrap stage 2
+
+### Other
+- Four codebase simplify passes — DRY helpers, bug fixes, deduplication
+- cargo fmt (Rust 2024 edition formatting)
+
 ## [server-v0.2.1] - 2026-03-07
 
 ### Fixed
