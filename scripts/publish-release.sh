@@ -171,27 +171,10 @@ fi
 echo ""
 
 # --- Step 7: POST CCS to Remi API for each distro ---
+# TODO: Enable when Remi has a package upload endpoint (POST /v1/{distro}/packages).
+# For now, CCS is served via the self-update directory and releases directory.
 echo "=== Publishing CCS to Remi API ==="
-
-for distro in fedora ubuntu arch; do
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo "  [DRY RUN] Would POST $CCS_PKG to $REMI_ENDPOINT/v1/$distro/packages"
-    else
-        printf "  %s... " "$distro"
-        http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -X POST "$REMI_ENDPOINT/v1/$distro/packages" \
-            -F "package=@$CCS_PKG" -F "format=ccs" 2>/dev/null) || http_code="000"
-
-        case "$http_code" in
-            200|201|409)
-                echo "OK ($http_code)"
-                ;;
-            *)
-                echo "WARN: unexpected status $http_code"
-                ;;
-        esac
-    fi
-done
+echo "  [SKIP] Package upload API not yet available on Remi (served via self-update + releases)"
 
 echo ""
 
