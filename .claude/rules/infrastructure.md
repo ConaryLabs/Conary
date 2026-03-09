@@ -64,6 +64,40 @@ Two servers, one CI system.
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
 
+## Release Pipeline
+
+End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and deploys.
+
+### Steps
+
+1. **Bump:** `./scripts/release.sh conary` -- analyzes conventional commits, bumps all version files, updates CHANGELOG.md, commits, tags
+2. **Push:** `git push origin main --tags` -- triggers `.github/workflows/release.yml`
+3. **Build:** GitHub Actions builds 4 packages in parallel containers:
+   - CCS (ubuntu-latest, `packaging/ccs/build.sh`)
+   - RPM (Fedora 43 container, `packaging/rpm/build.sh`)
+   - DEB (Ubuntu 24.04 container, `packaging/deb/build.sh`)
+   - Arch (Arch Linux container, `packaging/arch/build.sh`)
+4. **Release:** Creates GitHub Release with all artifacts + SHA256SUMS
+5. **Deploy:** SSHes to Remi, uploads CCS to `/conary/self-update/`, all packages to `/conary/releases/{version}/`, updates `latest` symlink
+6. **Verify:** Forgejo `release.yaml` waits 120s, then checks Remi self-update API and release directory
+
+### Version Files (all bumped by `release.sh conary`)
+
+| File | Field |
+|------|-------|
+| `Cargo.toml` | `version` |
+| `conary-core/Cargo.toml` | `version` |
+| `Cargo.lock` | regenerated via `cargo generate-lockfile` |
+| `packaging/rpm/conary.spec` | `Version:` |
+| `packaging/arch/PKGBUILD` | `pkgver=` |
+| `packaging/deb/debian/changelog` | prepends new entry |
+| `packaging/ccs/ccs.toml` | `version` |
+| `CHANGELOG.md` | prepends new section |
+
+### Secrets
+
+- `REMI_SSH_KEY` -- GitHub Actions secret, SSH private key for `root@ssh.conary.io`
+
 ## Integration Tests
 
 - **Location:** `tests/integration/remi/` (76 tests: T01-T37 Phase 1, T38-T76 Phase 2)

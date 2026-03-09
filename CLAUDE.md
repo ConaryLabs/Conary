@@ -47,7 +47,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 
 **Release:** Run `./scripts/release.sh [conary|erofs|server|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
 
-**Publish:** Run `./scripts/publish-release.sh` on Forge to build CCS + native packages and upload to Remi. Use `--dry-run` to preview. Automated via `.forgejo/workflows/release.yaml` on `v*` tag push.
+**Publish:** Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds CCS + native packages (RPM/DEB/Arch) in parallel containers and deploys to Remi. Forgejo's `release.yaml` automatically verifies the release landed. See `.claude/rules/infrastructure.md` for details.
 
 ## Architecture Glossary
 
