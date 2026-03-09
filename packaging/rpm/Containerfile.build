@@ -1,13 +1,11 @@
 # packaging/rpm/Containerfile.build
 #
 # Fedora 43 build container for Conary RPMs.
-# Includes Rust toolchain and all build dependencies.
+# Uses rustup for a current toolchain (distro Rust may lag behind MSRV).
 
 FROM registry.fedoraproject.org/fedora:43
 
 RUN dnf install -y \
-        rust \
-        cargo \
         rpm-build \
         openssl-devel \
         xz-devel \
@@ -15,7 +13,13 @@ RUN dnf install -y \
         gcc \
         cmake \
         perl \
+        curl \
     && dnf clean all
+
+# Install rustup with stable toolchain (distro rust package is often behind MSRV)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN mkdir -p /rpmbuild/{BUILD,RPMS,SRPMS,SOURCES,SPECS} /output
 
