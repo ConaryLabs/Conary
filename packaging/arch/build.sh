@@ -37,7 +37,7 @@ fi
 
 # --- Create source tarballs ---
 echo "[2/4] Creating source tarballs..."
-TMPDIR=$(mktemp -d)
+TMPDIR=$(mktemp -d -p "${BUILDTMP:-${TMPDIR:-/tmp}}")
 trap 'rm -rf "$TMPDIR"' EXIT
 
 # Source tarball (excludes heavy dirs)

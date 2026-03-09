@@ -36,7 +36,7 @@ fi
 
 # --- Create build tree ---
 echo "[2/4] Creating build tree..."
-TMPDIR=$(mktemp -d)
+TMPDIR=$(mktemp -d -p "${BUILDTMP:-${TMPDIR:-/tmp}}")
 trap 'rm -rf "$TMPDIR"' EXIT
 
 BUILDDIR="$TMPDIR/$NAME-$VERSION"
