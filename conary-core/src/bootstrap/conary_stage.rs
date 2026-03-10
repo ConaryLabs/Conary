@@ -30,15 +30,12 @@ pub enum ConaryStageError {
     #[error("Conary build failed: {0}")]
     ConaryBuildFailed(String),
 
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
 /// Rust version to bootstrap with
-const RUST_VERSION: &str = "1.93.0";
+const RUST_VERSION: &str = "1.94.0";
 
 /// Conary stage packages
 const CONARY_PACKAGES: &[&str] = &["rust", "conary"];
@@ -105,26 +102,139 @@ impl ConaryStageBuilder {
         format!("https://static.rust-lang.org/dist/rust-{RUST_VERSION}-{target}.tar.xz")
     }
 
-    /// Build Rust from source.
+    /// Download and install the Rust bootstrap binary into the sysroot.
     ///
-    /// Currently a stub -- returns an error to prevent the bootstrap pipeline
-    /// from silently "succeeding" with an empty output directory.
+    /// Downloads the official Rust binary distribution for the target architecture,
+    /// extracts it, and runs `install.sh` to install `rustc` and `cargo` into
+    /// `{sysroot}/usr/`.
     pub fn build_rust(&self) -> Result<PathBuf, ConaryStageError> {
-        Err(ConaryStageError::NotImplemented(
-            "build_rust() is a stub -- Rust cross-compilation build logic is not yet implemented"
-                .to_string(),
-        ))
+        info!("Building Rust {} for sysroot", RUST_VERSION);
+
+        let rust_dir = self._work_dir.join("rust");
+        std::fs::create_dir_all(&rust_dir)?;
+
+        // Download bootstrap binary
+        let url = self.rust_bootstrap_url();
+        let archive = rust_dir.join(format!("rust-{RUST_VERSION}.tar.xz"));
+
+        if !archive.exists() {
+            info!("Downloading Rust bootstrap from {}", url);
+            let status = std::process::Command::new("curl")
+                .args(["-fSL", "-o"])
+                .arg(&archive)
+                .arg(&url)
+                .status()
+                .map_err(|e| ConaryStageError::RustBootstrapFailed(e.to_string()))?;
+            if !status.success() {
+                return Err(ConaryStageError::RustBootstrapFailed(
+                    "curl download failed".into(),
+                ));
+            }
+        }
+
+        // Extract
+        let extract_dir = rust_dir.join("extract");
+        if extract_dir.exists() {
+            std::fs::remove_dir_all(&extract_dir)?;
+        }
+        std::fs::create_dir_all(&extract_dir)?;
+
+        let status = std::process::Command::new("tar")
+            .args(["xf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&extract_dir)
+            .arg("--strip-components=1")
+            .status()
+            .map_err(|e| ConaryStageError::RustBootstrapFailed(e.to_string()))?;
+        if !status.success() {
+            return Err(ConaryStageError::RustBootstrapFailed(
+                "tar extract failed".into(),
+            ));
+        }
+
+        // Run installer
+        let status = std::process::Command::new(extract_dir.join("install.sh"))
+            .arg(format!("--prefix={}/usr", self.sysroot.display()))
+            .status()
+            .map_err(|e| ConaryStageError::RustBuildFailed(e.to_string()))?;
+        if !status.success() {
+            return Err(ConaryStageError::RustBuildFailed(
+                "install.sh failed".into(),
+            ));
+        }
+
+        // Verify
+        let rustc = self.sysroot.join("usr/bin/rustc");
+        let cargo = self.sysroot.join("usr/bin/cargo");
+        if !rustc.exists() {
+            return Err(ConaryStageError::RustBuildFailed(format!(
+                "rustc not found at {}",
+                rustc.display()
+            )));
+        }
+        if !cargo.exists() {
+            return Err(ConaryStageError::RustBuildFailed(format!(
+                "cargo not found at {}",
+                cargo.display()
+            )));
+        }
+
+        info!("[COMPLETE] Rust {} installed to sysroot", RUST_VERSION);
+        Ok(rustc)
     }
 
-    /// Build Conary from source.
+    /// Build Conary from source inside the sysroot.
     ///
-    /// Currently a stub -- returns an error to prevent the bootstrap pipeline
-    /// from silently "succeeding" with an empty output directory.
+    /// Copies the current source tree into the work directory, builds with the
+    /// sysroot's cargo (installed by `build_rust()`), and installs the binary
+    /// to `{sysroot}/usr/bin/conary`.
     pub fn build_conary(&self) -> Result<PathBuf, ConaryStageError> {
-        Err(ConaryStageError::NotImplemented(
-            "build_conary() is a stub -- Conary cross-compilation build logic is not yet implemented"
-                .to_string(),
-        ))
+        info!("Building Conary in sysroot");
+
+        let cargo = self.sysroot.join("usr/bin/cargo");
+        if !cargo.exists() {
+            return Err(ConaryStageError::ConaryBuildFailed(
+                "cargo not found -- run build_rust() first".into(),
+            ));
+        }
+
+        // Copy conary source into work directory
+        let src_dir = self._work_dir.join("conary-src");
+        if !src_dir.exists() {
+            let status = std::process::Command::new("cp")
+                .args(["-a", "."])
+                .arg(&src_dir)
+                .status()
+                .map_err(|e| ConaryStageError::ConaryBuildFailed(e.to_string()))?;
+            if !status.success() {
+                return Err(ConaryStageError::ConaryBuildFailed(
+                    "source copy failed".into(),
+                ));
+            }
+        }
+
+        // Build conary using the sysroot's cargo
+        let status = std::process::Command::new(&cargo)
+            .args(["build", "--release"])
+            .current_dir(&src_dir)
+            .status()
+            .map_err(|e| ConaryStageError::ConaryBuildFailed(e.to_string()))?;
+        if !status.success() {
+            return Err(ConaryStageError::ConaryBuildFailed(
+                "cargo build failed".into(),
+            ));
+        }
+
+        // Install binary to sysroot
+        let binary = src_dir.join("target/release/conary");
+        let dest = self.sysroot.join("usr/bin/conary");
+        std::fs::copy(&binary, &dest).map_err(|e| {
+            ConaryStageError::ConaryBuildFailed(format!("install failed: {e}"))
+        })?;
+
+        info!("[COMPLETE] Conary installed to {}", dest.display());
+        Ok(dest)
     }
 
     /// Run the full Conary stage.
@@ -233,23 +343,18 @@ mod tests {
     }
 
     #[test]
-    fn test_conary_stage_build_returns_not_implemented() {
+    fn test_build_conary_fails_without_cargo() {
         let dir = tempfile::tempdir().unwrap();
         let sysroot = dir.path().join("sysroot");
-
-        // Create the required components
         std::fs::create_dir_all(sysroot.join("usr/bin")).unwrap();
-        std::fs::create_dir_all(sysroot.join("usr/lib")).unwrap();
-        std::fs::write(sysroot.join("usr/bin/gcc"), "").unwrap();
-        std::fs::write(sysroot.join("usr/bin/make"), "").unwrap();
-        std::fs::write(sysroot.join("usr/lib/libc.so"), "").unwrap();
 
         let config = BootstrapConfig::new();
         let builder = ConaryStageBuilder::new(dir.path().to_path_buf(), config, sysroot);
-        let err = builder.build().unwrap_err();
+        let err = builder.build_conary().unwrap_err();
         assert!(
-            matches!(err, ConaryStageError::NotImplemented(_)),
-            "Expected NotImplemented error, got: {err}"
+            matches!(err, ConaryStageError::ConaryBuildFailed(_)),
+            "Expected ConaryBuildFailed error, got: {err}"
         );
+        assert!(err.to_string().contains("cargo not found"));
     }
 }
