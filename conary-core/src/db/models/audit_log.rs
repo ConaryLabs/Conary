@@ -84,9 +84,8 @@ pub fn query(
         param_values.push(Box::new(name.to_string()));
         param_idx += 1;
     }
-    let _ = param_idx; // suppress unused warning
-
-    sql.push_str(&format!(" ORDER BY id DESC LIMIT {limit}"));
+    sql.push_str(&format!(" ORDER BY id DESC LIMIT ?{param_idx}"));
+    param_values.push(Box::new(limit));
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(|p| p.as_ref()).collect();
