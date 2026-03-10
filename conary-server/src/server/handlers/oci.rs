@@ -331,8 +331,11 @@ async fn get_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &s
         }
     };
 
+    // Normalize hash to lowercase to prevent cache bypass with mixed-case digests
+    let hash = super::chunks::normalize_hash(hash);
+
     let state_guard = state.read().await;
-    let chunk_path = state_guard.chunk_cache.chunk_path(hash);
+    let chunk_path = state_guard.chunk_cache.chunk_path(&hash);
 
     // Check if it exists on disk
     match tokio::fs::File::open(&chunk_path).await {
