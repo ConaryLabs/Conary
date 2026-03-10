@@ -937,7 +937,8 @@ pub fn cmd_model_publish(
 
         // Sign if key provided
         if let Some(ref key) = signing_key {
-            let signature = conary_core::model::signing::sign_collection(&data, key);
+            let signature = conary_core::model::signing::sign_collection(&data, key)
+                .map_err(|e| anyhow!("{}", e))?;
             let key_id = conary_core::model::signing::key_id(&key.verifying_key());
             println!(
                 "  Signed collection ({} bytes, key {})",
