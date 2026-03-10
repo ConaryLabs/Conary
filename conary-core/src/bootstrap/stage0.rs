@@ -221,14 +221,63 @@ impl Stage0Builder {
             progress: 0,
         };
 
-        let mut cmd = Command::new("ct-ng");
-        cmd.arg("build")
-            .current_dir(&self.work_dir)
-            .env("CT_PREFIX", &self.config.tools_prefix);
+        let is_root = nix::unistd::getuid().is_root();
 
-        // Set parallelism
-        if self.config.jobs > 1 {
-            cmd.env("CT_JOBS", self.config.jobs.to_string());
+        let mut cmd;
+        if is_root {
+            // ct-ng refuses to run as root; use su to drop to a build user
+            let build_user = Self::find_build_user()?;
+            info!("Running as root, dropping to user '{}' for ct-ng", build_user);
+
+            // Ensure the build user owns the work and output dirs
+            let uid_gid = Command::new("id")
+                .args(["-u", &build_user])
+                .output()
+                .map_err(|e| Stage0Error::BuildFailed(e.to_string()))?;
+            let uid: u32 = String::from_utf8_lossy(&uid_gid.stdout)
+                .trim()
+                .parse()
+                .map_err(|e: std::num::ParseIntError| Stage0Error::BuildFailed(e.to_string()))?;
+            let gid_out = Command::new("id")
+                .args(["-g", &build_user])
+                .output()
+                .map_err(|e| Stage0Error::BuildFailed(e.to_string()))?;
+            let gid: u32 = String::from_utf8_lossy(&gid_out.stdout)
+                .trim()
+                .parse()
+                .map_err(|e: std::num::ParseIntError| Stage0Error::BuildFailed(e.to_string()))?;
+
+            for dir in [&self.work_dir, &self.config.tools_prefix] {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| Stage0Error::BuildFailed(e.to_string()))?;
+                let status = Command::new("chown")
+                    .args(["-R", &format!("{uid}:{gid}"), &dir.to_string_lossy()])
+                    .status()
+                    .map_err(|e| Stage0Error::BuildFailed(e.to_string()))?;
+                if !status.success() {
+                    return Err(Stage0Error::BuildFailed(format!(
+                        "chown -R {uid}:{gid} {} failed", dir.display()
+                    )));
+                }
+            }
+
+            // Build the ct-ng command to run via su
+            let mut ct_env = format!("CT_PREFIX={}", self.config.tools_prefix.display());
+            if self.config.jobs > 1 {
+                ct_env.push_str(&format!(" CT_JOBS={}", self.config.jobs));
+            }
+            cmd = Command::new("su");
+            cmd.args(["-s", "/bin/bash", &build_user, "-c"])
+                .arg(format!("cd {} && {} ct-ng build", self.work_dir.display(), ct_env));
+        } else {
+            cmd = Command::new("ct-ng");
+            cmd.arg("build")
+                .current_dir(&self.work_dir)
+                .env("CT_PREFIX", &self.config.tools_prefix);
+
+            if self.config.jobs > 1 {
+                cmd.env("CT_JOBS", self.config.jobs.to_string());
+            }
         }
 
         // Capture output for logging
@@ -392,6 +441,24 @@ impl Stage0Builder {
         let src_content = std::fs::read_to_string(&self.ct_config)?;
         let dst_content = std::fs::read_to_string(dest).unwrap_or_default();
         Ok(src_content != dst_content)
+    }
+
+    /// Find a non-root user to run ct-ng as (ct-ng refuses to run as root)
+    fn find_build_user() -> Result<String, Stage0Error> {
+        // Prefer 'conary' user, then 'nobody'
+        for user in ["conary", "nobody"] {
+            let status = Command::new("id")
+                .arg(user)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if status.is_ok_and(|s| s.success()) {
+                return Ok(user.to_string());
+            }
+        }
+        Err(Stage0Error::BuildFailed(
+            "no non-root user found for ct-ng (tried: conary, nobody)".into(),
+        ))
     }
 
     /// Verify the built toolchain works
