@@ -519,6 +519,26 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     app
 }
 
+/// Middleware that rejects connections from non-loopback addresses.
+///
+/// The internal admin API on port 8081 has no authentication, so it must
+/// only be accessible from localhost. This middleware enforces that at the
+/// connection level as a defense-in-depth measure.
+async fn require_localhost(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if !addr.ip().is_loopback() {
+        warn!(
+            ip = %addr.ip(),
+            "Rejected non-loopback connection to internal admin API"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
+
 /// Create the admin router (localhost only)
 ///
 /// This router handles privileged operations:
@@ -530,6 +550,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
 ///
 /// SECURITY: This router should ONLY be bound to localhost (127.0.0.1).
 /// Access from external networks should be via SSH tunnel.
+/// The `require_localhost` middleware enforces loopback-only access.
 pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
     Router::new()
         // Admin endpoints - no external CORS, localhost only
@@ -560,6 +581,7 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/admin/tuf/refresh-timestamp",
             post(tuf::refresh_timestamp),
         )
+        .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
 
