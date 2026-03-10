@@ -29,6 +29,9 @@ const CONTROL_TAR_NAMES: &[&str] = &[
 
 const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
 
+/// Maximum size for a single AR member within a DEB archive (2 GB)
+const MAX_DEB_MEMBER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Results of single-pass control tarball extraction
 #[derive(Default)]
 struct ControlTarContents {
@@ -159,12 +162,24 @@ impl DebPackage {
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
             let trimmed = entry_name.trim_end_matches('/');
             if control_data.is_none() && CONTROL_TAR_NAMES.contains(&trimmed) {
+                let entry_size = entry.header().size();
+                if entry_size > MAX_DEB_MEMBER_SIZE {
+                    return Err(Error::InitError(format!(
+                        "DEB archive member too large: {entry_size} bytes"
+                    )));
+                }
                 let mut buf = Vec::new();
                 entry
                     .read_to_end(&mut buf)
                     .map_err(|e| Error::InitError(format!("Failed to read control tar: {}", e)))?;
                 control_data = Some(buf);
             } else if data_data.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
+                let entry_size = entry.header().size();
+                if entry_size > MAX_DEB_MEMBER_SIZE {
+                    return Err(Error::InitError(format!(
+                        "DEB archive member too large: {entry_size} bytes"
+                    )));
+                }
                 let mut buf = Vec::new();
                 entry
                     .read_to_end(&mut buf)
