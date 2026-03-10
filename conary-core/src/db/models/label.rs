@@ -413,7 +413,11 @@ impl LabelPathEntry {
             params![&self.label_id, &self.priority, self.enabled as i32],
         )?;
 
-        let id = conn.last_insert_rowid();
+        let id: i64 = conn.query_row(
+            "SELECT id FROM label_path WHERE label_id = ?1",
+            [&self.label_id],
+            |row| row.get(0),
+        )?;
         self.id = Some(id);
         Ok(id)
     }
