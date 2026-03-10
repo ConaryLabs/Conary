@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Seek, SeekFrom, Write};
 
 use crate::dirent::{DirEntry, EROFS_FT_DIR, EROFS_FT_REG_FILE, EROFS_FT_SYMLINK, pack_directory};
+use crate::error::ErofsError;
 use crate::inode::{
     EROFS_COMPACT_INODE_SIZE, EROFS_EXTENDED_INODE_SIZE, EROFS_INODE_CHUNK_BASED,
     EROFS_INODE_FLAT_INLINE, EROFS_INODE_FLAT_PLAIN, InodeInfo, S_IFDIR, S_IFLNK, S_IFREG,
@@ -123,8 +124,20 @@ fn align_up(offset: u64, align: u64) -> u64 {
 }
 
 /// Pre-allocated zero buffer to avoid heap allocation for padding writes.
-/// 4096 bytes covers any block-sized padding needed during image building.
+/// 4096 bytes covers most block-sized padding; larger padding is written
+/// in chunks via [`write_padding`].
 const ZEROS: [u8; 4096] = [0u8; 4096];
+
+/// Write `remaining` zero bytes to `writer`, handling sizes larger than
+/// the `ZEROS` buffer by writing in chunks.
+fn write_padding(writer: &mut impl Write, mut remaining: usize) -> io::Result<()> {
+    while remaining > 0 {
+        let chunk = remaining.min(ZEROS.len());
+        writer.write_all(&ZEROS[..chunk])?;
+        remaining -= chunk;
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Builder implementation
@@ -148,6 +161,10 @@ impl ErofsBuilder {
     }
 
     /// Add a regular file entry with a CAS digest for external data.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErofsError::PathTraversal`] if the path contains `..` components.
     pub fn add_file(
         &mut self,
         path: &str,
@@ -156,34 +173,56 @@ impl ErofsBuilder {
         mode: u32,
         uid: u32,
         gid: u32,
-    ) {
+    ) -> Result<(), ErofsError> {
         self.entries.push(FsEntry::File {
-            path: normalize_path(path),
+            path: normalize_path(path)?,
             digest: *digest,
             size,
             mode,
             uid,
             gid,
         });
+        Ok(())
     }
 
     /// Add a symbolic link entry.
-    pub fn add_symlink(&mut self, path: &str, target: &str, mode: u32) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErofsError::PathTraversal`] if the path contains `..` components.
+    pub fn add_symlink(
+        &mut self,
+        path: &str,
+        target: &str,
+        mode: u32,
+    ) -> Result<(), ErofsError> {
         self.entries.push(FsEntry::Symlink {
-            path: normalize_path(path),
+            path: normalize_path(path)?,
             target: target.to_string(),
             mode,
         });
+        Ok(())
     }
 
     /// Add a directory entry.
-    pub fn add_directory(&mut self, path: &str, mode: u32, uid: u32, gid: u32) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErofsError::PathTraversal`] if the path contains `..` components.
+    pub fn add_directory(
+        &mut self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<(), ErofsError> {
         self.entries.push(FsEntry::Directory {
-            path: normalize_path(path),
+            path: normalize_path(path)?,
             mode,
             uid,
             gid,
         });
+        Ok(())
     }
 
     /// Build the EROFS image, writing to the provided writer.
@@ -324,7 +363,7 @@ impl ErofsBuilder {
         let sb_end = 1024 + 128;
         let pad_to_meta = meta_start as usize - sb_end;
         if pad_to_meta > 0 {
-            writer.write_all(&ZEROS[..pad_to_meta])?;
+            write_padding(&mut writer, pad_to_meta)?;
         }
 
         // 4b. Write inode table
@@ -343,7 +382,7 @@ impl ErofsBuilder {
             let aligned = align_up(written, 32);
             let pad = aligned - written;
             if pad > 0 {
-                writer.write_all(&ZEROS[..pad as usize])?;
+                write_padding(&mut writer, pad as usize)?;
                 written += pad;
             }
 
@@ -438,7 +477,7 @@ impl ErofsBuilder {
         // Pad inode table to block boundary
         let pad = align_up(written, bs64) - written;
         if pad > 0 {
-            writer.write_all(&ZEROS[..pad as usize])?;
+            write_padding(&mut writer, pad as usize)?;
             written += pad;
         }
 
@@ -455,7 +494,7 @@ impl ErofsBuilder {
         // Pad to final block boundary
         let final_pad = align_up(written, bs64) - written;
         if final_pad > 0 {
-            writer.write_all(&ZEROS[..final_pad as usize])?;
+            write_padding(&mut writer, final_pad as usize)?;
             written += final_pad;
         }
 
@@ -463,7 +502,9 @@ impl ErofsBuilder {
         let root_offset = inode_offsets[&root_idx];
         let root_nid = nid_from_offset(root_offset, meta_blkaddr, bs);
 
-        let mut sb = Superblock::new(bs);
+        let mut sb = Superblock::new(bs).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
+        })?;
         sb.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
         sb.feature_incompat =
             EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
@@ -641,16 +682,15 @@ fn entry_path(entry: &FsEntry) -> &str {
 
 /// Normalize a path: strip leading `/`, ensure no trailing `/`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the path contains `..` components (path traversal).
-fn normalize_path(path: &str) -> String {
+/// Returns [`ErofsError::PathTraversal`] if the path contains `..` components.
+fn normalize_path(path: &str) -> Result<String, ErofsError> {
     let trimmed = path.trim_start_matches('/').trim_end_matches('/');
-    assert!(
-        !trimmed.split('/').any(|c| c == ".."),
-        "path must not contain '..' components: {trimmed}"
-    );
-    trimmed.to_string()
+    if trimmed.split('/').any(|c| c == "..") {
+        return Err(ErofsError::PathTraversal(path.to_string()));
+    }
+    Ok(trimmed.to_string())
 }
 
 /// BFS traversal order starting from root.
@@ -724,7 +764,7 @@ mod tests {
     fn single_file_image() {
         let mut builder = ErofsBuilder::new();
         let digest = [0xAB; 32];
-        builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000);
+        builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -744,8 +784,8 @@ mod tests {
         let mut builder = ErofsBuilder::new();
         let d1 = [0x01; 32];
         let d2 = [0x02; 32];
-        builder.add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0);
-        builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0);
+        builder.add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0).unwrap();
+        builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -763,7 +803,7 @@ mod tests {
     #[test]
     fn symlinks_are_flat_inline() {
         let mut builder = ErofsBuilder::new();
-        builder.add_symlink("/usr/bin/python", "python3", 0o777);
+        builder.add_symlink("/usr/bin/python", "python3", 0o777).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -781,7 +821,7 @@ mod tests {
             let mut digest = [0u8; 32];
             digest[0..4].copy_from_slice(&i.to_le_bytes());
             let path = format!("/files/file_{i:03}");
-            builder.add_file(&path, &digest, 4096, 0o644, 0, 0);
+            builder.add_file(&path, &digest, 4096, 0o644, 0, 0).unwrap();
         }
 
         let mut buf = Cursor::new(Vec::new());
@@ -799,9 +839,9 @@ mod tests {
     #[test]
     fn build_stats_reports_correct_counts() {
         let mut builder = ErofsBuilder::new();
-        builder.add_directory("/etc", 0o755, 0, 0);
-        builder.add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0);
-        builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777);
+        builder.add_directory("/etc", 0o755, 0, 0).unwrap();
+        builder.add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0).unwrap();
+        builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -817,10 +857,10 @@ mod tests {
     fn deterministic_output() {
         let build_image = || {
             let mut builder = ErofsBuilder::new();
-            builder.add_file("/a", &[0x01; 32], 100, 0o644, 0, 0);
-            builder.add_file("/b", &[0x02; 32], 200, 0o644, 0, 0);
-            builder.add_directory("/d", 0o755, 0, 0);
-            builder.add_symlink("/d/link", "target", 0o777);
+            builder.add_file("/a", &[0x01; 32], 100, 0o644, 0, 0).unwrap();
+            builder.add_file("/b", &[0x02; 32], 200, 0o644, 0, 0).unwrap();
+            builder.add_directory("/d", 0o755, 0, 0).unwrap();
+            builder.add_symlink("/d/link", "target", 0o777).unwrap();
 
             let mut buf = Cursor::new(Vec::new());
             let _ = builder.build(&mut buf).unwrap();
@@ -836,7 +876,7 @@ mod tests {
     fn implicit_parent_directories() {
         let mut builder = ErofsBuilder::new();
         // Never explicitly add /usr or /usr/bin
-        builder.add_file("/usr/bin/nginx", &[0xAA; 32], 2048, 0o755, 0, 0);
+        builder.add_file("/usr/bin/nginx", &[0xAA; 32], 2048, 0o755, 0, 0).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -850,7 +890,7 @@ mod tests {
     #[test]
     fn image_is_block_aligned() {
         let mut builder = ErofsBuilder::new();
-        builder.add_file("/test", &[0xFF; 32], 512, 0o644, 0, 0);
+        builder.add_file("/test", &[0xFF; 32], 512, 0o644, 0, 0).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -865,7 +905,7 @@ mod tests {
     #[test]
     fn root_nid_is_zero() {
         let mut builder = ErofsBuilder::new();
-        builder.add_file("/x", &[0x42; 32], 64, 0o644, 0, 0);
+        builder.add_file("/x", &[0x42; 32], 64, 0o644, 0, 0).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
@@ -904,5 +944,22 @@ mod tests {
             0,
             "CHUNKED_FILE feature flag must be set"
         );
+    }
+
+    #[test]
+    fn path_traversal_rejected() {
+        let mut builder = ErofsBuilder::new();
+        assert!(builder.add_file("/../etc/passwd", &[0; 32], 0, 0o644, 0, 0).is_err());
+        assert!(builder.add_symlink("/foo/../bar", "target", 0o777).is_err());
+        assert!(builder.add_directory("/a/b/../c", 0o755, 0, 0).is_err());
+    }
+
+    #[test]
+    fn write_padding_handles_large_sizes() {
+        let mut buf = Vec::new();
+        // Write more than 4096 bytes of padding
+        write_padding(&mut buf, 8200).unwrap();
+        assert_eq!(buf.len(), 8200);
+        assert!(buf.iter().all(|&b| b == 0));
     }
 }
