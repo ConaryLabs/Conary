@@ -81,12 +81,20 @@ impl HookExecutor {
     }
 }
 
-/// Simple string hash for generating unique filenames
+/// Deterministic string hash for generating unique filenames.
+///
+/// Uses FNV-1a (64-bit), which is stable across Rust versions and platforms,
+/// unlike `DefaultHasher` which may change its algorithm between releases.
 pub fn hash_string(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in s.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 #[cfg(test)]
