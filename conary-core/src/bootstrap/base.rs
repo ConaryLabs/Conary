@@ -1147,6 +1147,70 @@ impl BaseBuilder {
     pub fn target_root(&self) -> &Path {
         &self.target_root
     }
+
+    /// Populate the sysroot with essential system configuration files.
+    ///
+    /// Creates /etc/passwd, /etc/group, /etc/shadow, /etc/hostname,
+    /// /etc/os-release, /etc/machine-id, and /etc/fstab.
+    /// These are needed before the first boot -- without them,
+    /// login fails and systemd reports degraded state.
+    pub fn populate_sysroot(root: &Path) -> Result<(), BaseError> {
+        let etc = root.join("etc");
+        fs::create_dir_all(&etc)?;
+
+        // /etc/passwd -- root with no password, plus nobody
+        fs::write(
+            etc.join("passwd"),
+            "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n",
+        )?;
+
+        // /etc/group -- essential groups
+        fs::write(
+            etc.join("group"),
+            "root:x:0:\nwheel:x:10:\ntty:x:5:\nnogroup:x:65534:\n",
+        )?;
+
+        // /etc/shadow -- root with empty password (permits passwordless login)
+        fs::write(
+            etc.join("shadow"),
+            "root::0:0:99999:7:::\nnobody:!:0:0:99999:7:::\n",
+        )?;
+
+        // Restrict shadow permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(etc.join("shadow"), fs::Permissions::from_mode(0o600))?;
+        }
+
+        // /etc/hostname
+        fs::write(etc.join("hostname"), "conary\n")?;
+
+        // /etc/os-release -- required by systemd
+        fs::write(
+            etc.join("os-release"),
+            "NAME=\"Conary Linux\"\n\
+             ID=conary\n\
+             VERSION_ID=0.1\n\
+             PRETTY_NAME=\"Conary Linux 0.1 (Bootstrap)\"\n\
+             HOME_URL=\"https://conary.io\"\n",
+        )?;
+
+        // /etc/machine-id -- empty file, systemd generates on first boot
+        fs::write(etc.join("machine-id"), "")?;
+
+        // /etc/fstab
+        fs::write(
+            etc.join("fstab"),
+            "# /etc/fstab - Conary system\n\
+             LABEL=CONARY_ROOT  /          ext4  defaults,noatime  0 1\n\
+             LABEL=CONARY_ESP   /boot/efi  vfat  defaults,noatime  0 2\n\
+             tmpfs              /tmp       tmpfs defaults,nosuid   0 0\n",
+        )?;
+
+        info!("Sysroot populated with essential system files");
+        Ok(())
+    }
 }
 
 /// Build summary statistics
@@ -1334,5 +1398,27 @@ mod tests {
         assert!(BaseBuilder::packages_for_tier("a").is_some());
         assert!(BaseBuilder::packages_for_tier("b").is_some());
         assert!(BaseBuilder::packages_for_tier("c").is_none());
+    }
+
+    #[test]
+    fn test_populate_sysroot_creates_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        std::fs::create_dir_all(&root).unwrap();
+        BaseBuilder::populate_sysroot(&root).unwrap();
+
+        assert!(root.join("etc/passwd").exists());
+        assert!(root.join("etc/group").exists());
+        assert!(root.join("etc/shadow").exists());
+        assert!(root.join("etc/hostname").exists());
+        assert!(root.join("etc/os-release").exists());
+        assert!(root.join("etc/machine-id").exists());
+        assert!(root.join("etc/fstab").exists());
+
+        let passwd = std::fs::read_to_string(root.join("etc/passwd")).unwrap();
+        assert!(passwd.contains("root:x:0:0"));
+
+        let os_release = std::fs::read_to_string(root.join("etc/os-release")).unwrap();
+        assert!(os_release.contains("Conary Linux"));
     }
 }
