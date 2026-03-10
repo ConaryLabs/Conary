@@ -64,9 +64,9 @@ Everything else depends on this.
 
 - [x] Dry-run validation passes (T58)
 - [x] Stage 0 -> Stage 1 toolchain builds (T59-T61)
-- [ ] Base system builds with checkpointing
-- [ ] Image generation produces bootable output
-- [ ] (Stretch) Boot the image in QEMU and verify
+- [ ] Base system builds with checkpointing (pipeline ready, needs Remi run)
+- [ ] Image generation produces bootable output (pipeline ready, needs Remi run)
+- [ ] (Stretch) Boot the image in QEMU and verify (QEMU tests in orchestrator)
 
 ### Remi Integration
 
