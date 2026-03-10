@@ -84,6 +84,7 @@ esac
     --disable-multilib \
     --disable-bootstrap \
     --disable-libsanitizer \
+    --disable-werror \
     --with-linker-hash-style=gnu
 """
 
@@ -108,7 +109,7 @@ setup = "sed -i 's/char [*]q/const &/' ../src/gcc-%(version)s/libgomp/affinity-f
 workdir = "build"
 
 [build.environment]
-PATH = "/tools/x86_64-conary-linux-gnu/bin:%(sysroot)s/usr/bin:$PATH"
+PATH = "/conary/bootstrap/tools/bin:%(sysroot)s/usr/bin:$PATH"
 CC = "%(target)s-gcc"
 CXX = "%(target)s-g++"
 AR = "%(target)s-ar"
@@ -119,10 +120,10 @@ stage = "stage1"
 target = "x86_64-conary-linux-gnu"
 # Note: sysroot not specified here - gcc-pass2 uses Stage1Builder's sysroot
 # where glibc was installed, specified via --with-sysroot in configure
-cross_tools = "/tools/x86_64-conary-linux-gnu/bin"
+cross_tools = "/conary/bootstrap/tools/bin"
 tool_prefix = "x86_64-conary-linux-gnu"
 
 [variables]
 target = "x86_64-conary-linux-gnu"
-sysroot = "/conary/sysroot/stage1"
+sysroot = "/conary/bootstrap/stage1/sysroot"
 jobs = "$(nproc)"
