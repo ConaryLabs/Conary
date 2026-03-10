@@ -69,18 +69,35 @@ pub async fn get_package(
         return e;
     }
 
-    let state_guard = state.read().await;
+    let db_path = {
+        let state_guard = state.read().await;
+        state_guard.config.db_path.clone()
+    };
 
-    // Check if package is already converted
-    let db_path = &state_guard.config.db_path;
-    match check_converted(db_path, &distro, &name, query.version.as_deref()) {
-        Ok(Some(manifest)) => return Json(manifest).into_response(),
-        Ok(None) => {}
-        Err(e) => {
+    // Check if package is already converted (use spawn_blocking to avoid blocking
+    // the async runtime with synchronous SQLite I/O)
+    let check_distro = distro.clone();
+    let check_name = name.clone();
+    let check_version = query.version.clone();
+    let check_db = db_path.clone();
+    match tokio::task::spawn_blocking(move || {
+        check_converted(&check_db, &check_distro, &check_name, check_version.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(Some(manifest))) => return Json(manifest).into_response(),
+        Ok(Ok(None)) => {}
+        Ok(Err(e)) => {
             tracing::error!("Database error checking conversion: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
         }
+        Err(e) => {
+            tracing::error!("Blocking task failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
     }
+
+    let state_guard = state.read().await;
 
     // Package not converted - check if conversion is already in progress
     let job_key = format!(
@@ -166,8 +183,8 @@ fn check_converted(
 ) -> Result<Option<PackageManifest>, anyhow::Error> {
     use conary_core::db::models::ConvertedPackage;
 
-    // Open database connection
-    let conn = conary_core::db::open(db_path)?;
+    // Open database connection (use open_fast to skip migrations on every request)
+    let conn = conary_core::db::open_fast(db_path)?;
 
     // Query for existing conversion
     let existing = ConvertedPackage::find_by_package_identity(&conn, distro, name, version)?;
