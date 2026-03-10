@@ -146,15 +146,18 @@ impl TufClient {
             Some(signed_targets.signed.version),
         )?;
 
-        // Persist verified state
-        self.persist_metadata(conn, "timestamp", &signed_timestamp)?;
+        // Persist verified state in a single transaction to prevent
+        // inconsistent TUF state if the process crashes mid-persist.
+        let tx = conn.unchecked_transaction()?;
+        self.persist_metadata(&tx, "timestamp", &signed_timestamp)?;
         if snapshot_changed {
-            self.persist_metadata(conn, "snapshot", &signed_snapshot)?;
+            self.persist_metadata(&tx, "snapshot", &signed_snapshot)?;
         }
         if targets_changed {
-            self.persist_metadata(conn, "targets", &signed_targets)?;
-            self.persist_targets(conn, &signed_targets.signed)?;
+            self.persist_metadata(&tx, "targets", &signed_targets)?;
+            self.persist_targets(&tx, &signed_targets.signed)?;
         }
+        tx.commit()?;
 
         info!(
             "TUF update complete: root v{}, targets v{}, snapshot v{}, timestamp v{}",
