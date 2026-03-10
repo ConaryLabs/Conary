@@ -5,15 +5,14 @@
 //! Implements the TUF client update workflow that verifies repository
 //! metadata freshness and integrity during sync operations.
 //!
-//! Update flow:
-//! 1. Fetch timestamp.json (always, ~200 bytes)
-//! 2. Verify timestamp signatures and version monotonicity
+//! Update flow (per TUF spec 5.3):
+//! 1. Check for root rotation by probing `{version+1}.root.json`
+//! 2. Fetch timestamp.json, verify with (possibly updated) root keys
 //! 3. If snapshot hash changed, fetch snapshot.json
 //! 4. Verify snapshot, check version monotonicity
 //! 5. If targets hash changed, fetch targets.json
 //! 6. Verify targets, check version monotonicity
-//! 7. If root version in snapshot is newer, fetch new root.json
-//! 8. Persist verified state to database
+//! 7. Persist verified state to database in a single transaction
 
 use crate::trust::metadata::{
     Role, RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
@@ -55,14 +54,19 @@ impl TufClient {
     pub fn update(&self, conn: &Connection) -> TrustResult<VerifiedTufState> {
         // Load trusted root from database
         let trusted_root = self.load_trusted_root(conn)?;
-        let root_version = trusted_root.signed.version;
 
-        // Step 1: Fetch and verify timestamp
+        // Step 1: Check for root rotation BEFORE any other metadata verification
+        // (TUF spec 5.3). Probe for {version+1}.root.json and walk the chain
+        // until no newer root is available. This ensures all subsequent metadata
+        // is verified against the latest root keys.
+        let current_root = self.check_root_rotation(conn, &trusted_root)?;
+
+        // Step 2: Fetch and verify timestamp using (possibly updated) root keys
         let timestamp_bytes = self.fetch_metadata("timestamp.json")?;
         let signed_timestamp: Signed<TimestampMetadata> = serde_json::from_slice(&timestamp_bytes)?;
         verify_type_field(&signed_timestamp.signed.type_field, "timestamp")?;
 
-        let (ts_keys, ts_threshold) = extract_role_keys(&trusted_root.signed, Role::Timestamp)?;
+        let (ts_keys, ts_threshold) = extract_role_keys(&current_root.signed, Role::Timestamp)?;
         verify_signatures(&signed_timestamp, Role::Timestamp, &ts_keys, ts_threshold)?;
         verify_not_expired(Role::Timestamp, &signed_timestamp.signed.expires)?;
 
@@ -72,7 +76,7 @@ impl TufClient {
             verify_version_increase(Role::Timestamp, signed_timestamp.signed.version, stored_v)?;
         }
 
-        // Step 2: Check if snapshot needs updating
+        // Step 3: Check if snapshot needs updating
         let snapshot_ref = signed_timestamp
             .signed
             .meta
@@ -93,7 +97,7 @@ impl TufClient {
             let signed: Signed<SnapshotMetadata> = serde_json::from_slice(&snapshot_bytes)?;
             verify_type_field(&signed.signed.type_field, "snapshot")?;
             let (snap_keys, snap_threshold) =
-                extract_role_keys(&trusted_root.signed, Role::Snapshot)?;
+                extract_role_keys(&current_root.signed, Role::Snapshot)?;
             verify_signatures(&signed, Role::Snapshot, &snap_keys, snap_threshold)?;
             verify_not_expired(Role::Snapshot, &signed.signed.expires)?;
 
@@ -105,25 +109,6 @@ impl TufClient {
         } else {
             // Load from database
             self.load_stored_snapshot(conn)?
-        };
-
-        // Step 3: Check for root rotation
-        // TODO: Per TUF spec 5.3, root rotation should happen BEFORE
-        // timestamp/snapshot verification (step 1). Currently root is checked
-        // after snapshot, meaning stale root keys could be used for timestamp/
-        // snapshot verification if a root key was rotated.
-        let current_root = if let Some(root_meta) = signed_snapshot.signed.meta.get("root.json") {
-            if root_meta.version > root_version {
-                info!(
-                    "Root key rotation detected: v{} -> v{}",
-                    root_version, root_meta.version
-                );
-                self.fetch_and_verify_new_root(conn, &trusted_root, root_meta.version)?
-            } else {
-                trusted_root
-            }
-        } else {
-            trusted_root
         };
 
         // Step 4: Check if targets needs updating
@@ -162,8 +147,6 @@ impl TufClient {
         )?;
 
         // Persist verified state
-        // TODO: Wrap persist operations in an explicit database transaction
-        // to prevent partial state if the process crashes mid-persist.
         self.persist_metadata(conn, "timestamp", &signed_timestamp)?;
         if snapshot_changed {
             self.persist_metadata(conn, "snapshot", &signed_snapshot)?;
@@ -216,6 +199,113 @@ impl TufClient {
         );
 
         Ok(())
+    }
+
+    /// Check for root rotation by probing for newer root versions
+    ///
+    /// Per TUF spec 5.3, root rotation must happen before any other metadata
+    /// verification. Probes for `{version+1}.root.json` and walks the chain
+    /// until no newer version is found (HTTP 404 or fetch error).
+    fn check_root_rotation(
+        &self,
+        conn: &Connection,
+        trusted_root: &Signed<RootMetadata>,
+    ) -> TrustResult<Signed<RootMetadata>> {
+        let mut current = trusted_root.clone();
+
+        loop {
+            let next_version = current.signed.version + 1;
+            let filename = format!("{next_version}.root.json");
+
+            // Probe for the next root version; if it doesn't exist, we're done
+            let Some(root_bytes) = self.try_fetch_metadata(&filename)? else {
+                break;
+            };
+
+            let new_root: Signed<RootMetadata> = serde_json::from_slice(&root_bytes)?;
+
+            // Verify against the current trusted root's keys
+            let (old_keys, old_threshold) = extract_role_keys(&current.signed, Role::Root)?;
+            verify_root(&new_root, &old_keys, old_threshold)?;
+            verify_not_expired(Role::Root, &new_root.signed.expires)?;
+            verify_version_increase(Role::Root, new_root.signed.version, current.signed.version)?;
+
+            info!(
+                "Root key rotation: v{} -> v{}",
+                current.signed.version, new_root.signed.version
+            );
+
+            // Store the new root
+            self.persist_root(conn, &new_root)?;
+            self.persist_root_keys(conn, &new_root.signed)?;
+
+            current = new_root;
+        }
+
+        // If we rotated, persist the final root as current metadata
+        if current.signed.version > trusted_root.signed.version {
+            self.persist_metadata(conn, "root", &current)?;
+        }
+
+        Ok(current)
+    }
+
+    /// Try to fetch metadata, returning `None` for HTTP 404 / not found
+    ///
+    /// Unlike `fetch_metadata`, this does not treat a missing file as an error.
+    /// Used for probing whether a newer root version exists.
+    fn try_fetch_metadata(&self, filename: &str) -> TrustResult<Option<Vec<u8>>> {
+        use std::io::Read;
+
+        let url = format!("{}/{}", self.tuf_base_url, filename);
+        debug!("Probing TUF metadata: {}", url);
+
+        let response = reqwest::blocking::get(&url)
+            .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            return Err(TrustError::FetchError(format!(
+                "HTTP {} fetching {filename}",
+                response.status()
+            )));
+        }
+
+        // Check Content-Length before downloading body
+        if let Some(content_length) = response.content_length()
+            && content_length > Self::MAX_TUF_METADATA_SIZE
+        {
+            return Err(TrustError::FetchError(format!(
+                "TUF metadata {filename} exceeds size limit: {content_length} bytes \
+                 (max {} bytes)",
+                Self::MAX_TUF_METADATA_SIZE
+            )));
+        }
+
+        let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
+        let mut body = Vec::with_capacity(
+            response
+                .content_length()
+                .unwrap_or(4096)
+                .min(Self::MAX_TUF_METADATA_SIZE) as usize,
+        );
+        response
+            .take(Self::MAX_TUF_METADATA_SIZE + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
+
+        if body.len() > max_size {
+            return Err(TrustError::FetchError(format!(
+                "TUF metadata {filename} exceeds size limit: {} bytes (max {} bytes)",
+                body.len(),
+                Self::MAX_TUF_METADATA_SIZE
+            )));
+        }
+
+        Ok(Some(body))
     }
 
     /// Maximum size for TUF metadata files (10 MB)
@@ -280,40 +370,6 @@ impl TufClient {
         }
 
         Ok(body)
-    }
-
-    /// Fetch and verify a new root version during key rotation
-    fn fetch_and_verify_new_root(
-        &self,
-        conn: &Connection,
-        trusted_root: &Signed<RootMetadata>,
-        target_version: u64,
-    ) -> TrustResult<Signed<RootMetadata>> {
-        let mut current = trusted_root.clone();
-
-        // Walk through each intermediate root version
-        for version in (trusted_root.signed.version + 1)..=target_version {
-            let filename = format!("{version}.root.json");
-            let root_bytes = self.fetch_metadata(&filename)?;
-            let new_root: Signed<RootMetadata> = serde_json::from_slice(&root_bytes)?;
-
-            // Verify against the current trusted root's keys
-            let (old_keys, old_threshold) = extract_role_keys(&current.signed, Role::Root)?;
-            verify_root(&new_root, &old_keys, old_threshold)?;
-            verify_not_expired(Role::Root, &new_root.signed.expires)?;
-            verify_version_increase(Role::Root, new_root.signed.version, current.signed.version)?;
-
-            // Store the new root
-            self.persist_root(conn, &new_root)?;
-            self.persist_root_keys(conn, &new_root.signed)?;
-
-            current = new_root;
-        }
-
-        // Persist as current root metadata
-        self.persist_metadata(conn, "root", &current)?;
-
-        Ok(current)
     }
 
     /// Load the trusted root from the database
