@@ -103,11 +103,11 @@ qemu-system-x86_64 \
 
 ### Initramfs
 
-Minimal cpio archive with static busybox. The busybox binary is downloaded from the official busybox.net static builds (x86_64, musl-linked, checksum-verified).
+Minimal cpio archive with static busybox. Prefer host system's `busybox-static` package (Remi is Ubuntu 24.04); fall back to building busybox 1.37.0 from source with `LDFLAGS="--static"`. The pre-built binaries on busybox.net are outdated (1.35.0 from 2022).
 
 ```
 /init                    # Shell script
-/bin/busybox             # Static binary (~1MB, from busybox.net)
+/bin/busybox             # Static binary (~1MB, from host or built)
 /dev/console             # Device node
 /proc/                   # Mount point
 /sys/                    # Mount point
