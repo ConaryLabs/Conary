@@ -51,6 +51,16 @@ pub enum Stage0Status {
     Failed(String),
 }
 
+/// Single-quote a path for safe interpolation into a shell command string.
+///
+/// Any embedded single quotes are replaced with the sequence `'\''` which
+/// ends the current single-quoted segment, inserts an escaped literal quote,
+/// and reopens the single-quoted segment.
+fn shell_escape_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Builder for Stage 0 toolchain
 pub struct Stage0Builder {
     /// Work directory for the build
@@ -261,14 +271,17 @@ impl Stage0Builder {
                 }
             }
 
-            // Build the ct-ng command to run via su
-            let mut ct_env = format!("CT_PREFIX={}", self.config.tools_prefix.display());
+            // Build the ct-ng command to run via su.
+            // Shell-escape paths to prevent injection via metacharacters.
+            let safe_work_dir = shell_escape_path(&self.work_dir);
+            let safe_prefix = shell_escape_path(&self.config.tools_prefix);
+            let mut ct_env = format!("CT_PREFIX={safe_prefix}");
             if self.config.jobs > 1 {
                 ct_env.push_str(&format!(" CT_JOBS={}", self.config.jobs));
             }
             cmd = Command::new("su");
             cmd.args(["-s", "/bin/bash", &build_user, "-c"])
-                .arg(format!("cd {} && {} ct-ng build", self.work_dir.display(), ct_env));
+                .arg(format!("cd {safe_work_dir} && {ct_env} ct-ng build"));
         } else {
             cmd = Command::new("ct-ng");
             cmd.arg("build")
