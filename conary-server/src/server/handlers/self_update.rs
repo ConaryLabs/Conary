@@ -124,8 +124,8 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
     let latest = versions.last().expect("scan_versions guarantees non-empty");
     let ccs_path = dir.join(format!("conary-{latest}.ccs"));
 
-    // Read file to compute sha256 and size
-    let data = match std::fs::read(&ccs_path) {
+    // Read file to compute sha256 and size (use tokio::fs to avoid blocking async runtime)
+    let data = match tokio::fs::read(&ccs_path).await {
         Ok(d) => d,
         Err(e) => {
             tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
