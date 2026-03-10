@@ -21,12 +21,14 @@ pub struct DistroPin {
 impl DistroPin {
     /// Set the system distro pin (replaces any existing pin)
     pub fn set(conn: &Connection, distro: &str, mixing_policy: &str) -> Result<()> {
-        conn.execute("DELETE FROM distro_pin", [])?;
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM distro_pin", [])?;
+        tx.execute(
             "INSERT INTO distro_pin (distro, mixing_policy, created_at)
              VALUES (?1, ?2, datetime('now'))",
             params![distro, mixing_policy],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
