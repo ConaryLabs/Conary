@@ -85,21 +85,6 @@ pub struct BootstrapConfig {
     /// Number of parallel jobs for building
     pub jobs: usize,
 
-    /// Kernel version for headers
-    pub kernel_version: String,
-
-    /// GCC version
-    pub gcc_version: String,
-
-    /// glibc version
-    pub glibc_version: String,
-
-    /// binutils version
-    pub binutils_version: String,
-
-    /// crosstool-ng version (latest: 1.28.0)
-    pub crosstool_version: String,
-
     /// Path to crosstool-ng config (if using custom)
     pub crosstool_config: Option<PathBuf>,
 
@@ -120,15 +105,10 @@ impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
             target_arch: TargetArch::X86_64,
-            tools_prefix: PathBuf::from("/tools"),
+            tools_prefix: PathBuf::from("/conary/bootstrap/tools"),
             stage1_prefix: PathBuf::from("/conary/stage1"),
             sysroot: PathBuf::from("/conary/sysroot"),
             jobs: num_cpus(),
-            kernel_version: "6.16.1".to_string(),
-            gcc_version: "15.2.0".to_string(),
-            glibc_version: "2.42".to_string(),
-            binutils_version: "2.45".to_string(),
-            crosstool_version: "1.28.0".to_string(),
             crosstool_config: None,
             seed_url: None,
             seed_checksum: None,
@@ -193,30 +173,6 @@ impl BootstrapConfig {
         self
     }
 
-    /// Set the GCC version
-    pub fn with_gcc_version(mut self, version: &str) -> Self {
-        self.gcc_version = version.to_string();
-        self
-    }
-
-    /// Set the glibc version
-    pub fn with_glibc_version(mut self, version: &str) -> Self {
-        self.glibc_version = version.to_string();
-        self
-    }
-
-    /// Set the binutils version
-    pub fn with_binutils_version(mut self, version: &str) -> Self {
-        self.binutils_version = version.to_string();
-        self
-    }
-
-    /// Set the kernel version
-    pub fn with_kernel_version(mut self, version: &str) -> Self {
-        self.kernel_version = version.to_string();
-        self
-    }
-
     /// Get the target triple
     pub fn triple(&self) -> &'static str {
         self.target_arch.triple()
@@ -265,7 +221,7 @@ mod tests {
     fn test_config_defaults() {
         let config = BootstrapConfig::default();
         assert_eq!(config.target_arch, TargetArch::X86_64);
-        assert_eq!(config.tools_prefix, PathBuf::from("/tools"));
+        assert_eq!(config.tools_prefix, PathBuf::from("/conary/bootstrap/tools"));
         assert!(config.jobs > 0);
     }
 
@@ -281,16 +237,6 @@ mod tests {
         assert_eq!(config.tools_prefix, PathBuf::from("/opt/cross"));
         assert_eq!(config.jobs, 8);
         assert!(config.verbose);
-    }
-
-    #[test]
-    fn test_lfs_12_4_defaults() {
-        let config = BootstrapConfig::new();
-        assert_eq!(config.gcc_version, "15.2.0");
-        assert_eq!(config.glibc_version, "2.42");
-        assert_eq!(config.binutils_version, "2.45");
-        assert_eq!(config.kernel_version, "6.16.1");
-        assert_eq!(config.crosstool_version, "1.28.0");
     }
 
     #[test]
@@ -310,7 +256,7 @@ mod tests {
         let config = BootstrapConfig::default();
         assert_eq!(
             config.tool_path("gcc"),
-            PathBuf::from("/tools/bin/x86_64-conary-linux-gnu-gcc")
+            PathBuf::from("/conary/bootstrap/tools/bin/x86_64-conary-linux-gnu-gcc")
         );
     }
 }
