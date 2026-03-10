@@ -169,12 +169,10 @@ impl FileEntry {
     /// Format permissions as rwx string (e.g., -rw-r--r--)
     pub fn format_permissions(&self) -> String {
         let mode = self.permissions as u32;
-        let file_type = if mode & 0o40000 != 0 {
-            'd'
-        } else if mode & 0o120000 == 0o120000 {
-            'l'
-        } else {
-            '-'
+        let file_type = match mode & 0o170000 {
+            0o120000 => 'l',
+            0o040000 => 'd',
+            _ => '-',
         };
 
         let owner_r = if mode & 0o400 != 0 { 'r' } else { '-' };
