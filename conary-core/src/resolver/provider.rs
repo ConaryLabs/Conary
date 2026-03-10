@@ -451,14 +451,20 @@ impl DependencyProvider for ConaryProvider<'_> {
                         .iter()
                         .enumerate()
                         .find(|(_, (nid, c))| *nid == dep_name_id && c == constraint)
-                        .map(|(i, _)| {
-                            VersionSetId(
-                                u32::try_from(i).expect("resolver version set pool overflow"),
-                            )
+                        .and_then(|(i, _)| {
+                            u32::try_from(i).ok().map(VersionSetId)
                         });
 
-                    if let Some(vs_id) = vs_id {
-                        requirements.push(ConditionalRequirement::from(vs_id));
+                    match vs_id {
+                        Some(vs_id) => {
+                            requirements.push(ConditionalRequirement::from(vs_id));
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Version set pool index overflow for dependency '{}' -- skipping",
+                                dep_name
+                            );
+                        }
                     }
                 } else {
                     tracing::warn!(
