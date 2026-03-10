@@ -234,10 +234,11 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         .packages
         .into_iter()
         .filter_map(|entry| {
+            let system_arch = registry::detect_system_arch();
             let key = (
                 entry.name.clone(),
                 entry.version.clone(),
-                "x86_64".to_string(),
+                system_arch.clone(),
             );
             if !seen.insert(key) {
                 return None;
@@ -251,7 +252,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
                 0,                                  // Size unknown until download
                 download_url,
             );
-            pkg.architecture = Some("x86_64".to_string());
+            pkg.architecture = Some(system_arch);
             pkg.dependencies = entry
                 .dependencies
                 .map(|deps| serde_json::to_string(&deps).unwrap_or_default());
