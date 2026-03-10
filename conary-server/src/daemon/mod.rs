@@ -412,13 +412,12 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    /// Open a database connection
+    /// Open a database connection with WAL mode and proper pragmas
     ///
-    /// Creates a new connection to the database. This should be called
-    /// from within `spawn_blocking` for async handlers.
+    /// Uses `open_fast` to set WAL journal mode, busy_timeout, and foreign_keys.
+    /// This should be called from within `spawn_blocking` for async handlers.
     pub fn open_db(&self) -> conary_core::Result<rusqlite::Connection> {
-        rusqlite::Connection::open(&self.db_path)
-            .map_err(|e| conary_core::Error::IoError(format!("Failed to open database: {}", e)))
+        conary_core::db::open_fast(&self.db_path)
     }
 }
 
