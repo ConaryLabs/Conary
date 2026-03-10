@@ -208,7 +208,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         {
             let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
                 &db_conn,
-                canonical.id.unwrap(),
+                canonical.id.ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
             )?;
             if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
                 info!(
