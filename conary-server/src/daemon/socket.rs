@@ -110,6 +110,10 @@ impl SocketManager {
                 ))
             })?;
 
+            log::warn!(
+                "TCP listener enabled -- read endpoints accessible without authentication. \
+                 Use only in trusted networks."
+            );
             log::info!("Listening on TCP: {}", bind_addr);
             self.tcp_listener = Some(tcp_listener);
         }
