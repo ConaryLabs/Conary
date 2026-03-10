@@ -1028,6 +1028,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
 
         for (path, hash, size, mode) in &file_hashes {
+            if hash.len() < 3 {
+                warn!("Skipping file with short hash: {} (hash={})", path, hash);
+                continue;
+            }
             tx.execute(
                 "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
                 [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &size.to_string()],
