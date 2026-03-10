@@ -316,7 +316,11 @@ impl ChangesetTrigger {
             ],
         )?;
 
-        let id = conn.last_insert_rowid();
+        let id: i64 = conn.query_row(
+            "SELECT id FROM changeset_triggers WHERE changeset_id = ?1 AND trigger_id = ?2",
+            params![self.changeset_id, self.trigger_id],
+            |row| row.get(0),
+        )?;
         self.id = Some(id);
         Ok(id)
     }

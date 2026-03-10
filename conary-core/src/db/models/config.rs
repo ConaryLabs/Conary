@@ -164,7 +164,11 @@ impl ConfigFile {
             ],
         )?;
 
-        let id = conn.last_insert_rowid();
+        let id: i64 = conn.query_row(
+            "SELECT id FROM config_files WHERE path = ?1",
+            [&self.path],
+            |row| row.get(0),
+        )?;
         self.id = Some(id);
         Ok(id)
     }
