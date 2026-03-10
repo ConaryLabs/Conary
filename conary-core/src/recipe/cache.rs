@@ -413,19 +413,44 @@ impl BuildCache {
         }))
     }
 
-    /// Verify the integrity of a cached entry
+    /// Compute the SHA-256 checksum of a file
+    fn checksum_file(path: &Path) -> Result<String> {
+        let data = fs::read(path)?;
+        Ok(hash_bytes(HashAlgorithm::Sha256, &data).as_str().to_string())
+    }
+
+    /// Read the stored checksum from a metadata file
+    fn read_checksum(metadata_path: &Path) -> Option<String> {
+        let contents = fs::read_to_string(metadata_path).ok()?;
+        for line in contents.lines() {
+            if let Some(checksum) = line.strip_prefix("checksum=") {
+                return Some(checksum.to_string());
+            }
+        }
+        None
+    }
+
+    /// Verify the integrity of a cached entry by checking its SHA-256 checksum
     fn verify_entry(&self, path: &Path) -> Result<bool> {
-        // Read the CCS file and verify it's a valid archive
-        // For now, just check that it exists and is non-empty
         let metadata = fs::metadata(path)?;
         if metadata.len() == 0 {
             return Ok(false);
         }
 
-        // Could add more sophisticated verification here:
-        // - Check CCS magic bytes
-        // - Verify internal checksums
-        // - Parse manifest
+        // Look up the stored checksum from the metadata file
+        let meta_path = path.with_extension("meta");
+        if let Some(stored_checksum) = Self::read_checksum(&meta_path) {
+            let actual_checksum = Self::checksum_file(path)?;
+            if actual_checksum != stored_checksum {
+                warn!(
+                    "Checksum mismatch: expected {:.16}, got {:.16}",
+                    stored_checksum, actual_checksum
+                );
+                return Ok(false);
+            }
+        }
+        // If no checksum is stored (legacy entry), pass verification
+        // to maintain backward compatibility
 
         Ok(true)
     }
@@ -453,11 +478,14 @@ impl BuildCache {
         // Copy package to cache
         fs::copy(package_path, &cache_path)?;
 
-        // Write metadata
+        // Compute checksum of the cached artifact
+        let checksum = Self::checksum_file(&cache_path)?;
+
+        // Write metadata (including checksum for integrity verification)
         let metadata_path = self.metadata_path(key);
         let metadata = format!(
-            "name={}\nversion={}\nrelease={}\n",
-            recipe.package.name, recipe.package.version, recipe.package.release
+            "name={}\nversion={}\nrelease={}\nchecksum={}\n",
+            recipe.package.name, recipe.package.version, recipe.package.release, checksum
         );
         fs::write(&metadata_path, metadata)?;
 
@@ -999,6 +1027,35 @@ mod tests {
         // Should be expired
         let result = cache.get(&recipe, &toolchain).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cache_verify_corrupted_file() {
+        let temp = TempDir::new().unwrap();
+        let config = CacheConfig {
+            cache_dir: temp.path().to_path_buf(),
+            verify_integrity: true,
+            ..Default::default()
+        };
+        let cache = BuildCache::new(config).unwrap();
+
+        let recipe = make_test_recipe("test", "1.0.0");
+        let toolchain = ToolchainInfo::default();
+
+        // Create and cache a package
+        let package_path = temp.path().join("test.ccs");
+        fs::write(&package_path, b"original content").unwrap();
+        let entry = cache.put(&recipe, &toolchain, &package_path).unwrap();
+
+        // Corrupt the cached file
+        fs::write(&entry.package_path, b"corrupted content").unwrap();
+
+        // Should detect corruption and return None
+        let result = cache.get(&recipe, &toolchain).unwrap();
+        assert!(result.is_none());
+
+        // Corrupted file should have been removed
+        assert!(!entry.package_path.exists());
     }
 
     #[test]
