@@ -58,7 +58,7 @@ configure = """
     --build=$(../src/gcc-%(version)s/config.guess) \
     --host=%(target)s \
     --target=%(target)s \
-    --with-sysroot=/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot \
+    --with-sysroot=/conary/bootstrap/tools/x86_64-conary-linux-gnu/sysroot \
     --with-newlib \
     --without-headers \
     --disable-nls \
@@ -85,16 +85,16 @@ setup = "mkdir -p build && cd build"
 workdir = "build"
 
 [build.environment]
-PATH = "/tools/x86_64-conary-linux-gnu/bin:$PATH"
+PATH = "/conary/bootstrap/tools/bin:$PATH"
 
 [cross]
 stage = "stage1"
 target = "x86_64-conary-linux-gnu"
-sysroot = "/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot"
-cross_tools = "/tools/x86_64-conary-linux-gnu/bin"
+sysroot = "/conary/bootstrap/tools/x86_64-conary-linux-gnu/sysroot"
+cross_tools = "/conary/bootstrap/tools/bin"
 tool_prefix = "x86_64-conary-linux-gnu"
 
 [variables]
 target = "x86_64-conary-linux-gnu"
-sysroot = "/tools/x86_64-conary-linux-gnu/x86_64-conary-linux-gnu/sysroot"
+sysroot = "/conary/bootstrap/tools/x86_64-conary-linux-gnu/sysroot"
 jobs = "$(nproc)"

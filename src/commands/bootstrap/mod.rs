@@ -149,6 +149,12 @@ pub fn cmd_bootstrap_stage0(
 
     let toolchain = builder.build()?;
 
+    // Persist state so Stage 1 can find the toolchain
+    let mut bootstrap = Bootstrap::with_config(work_dir, bootstrap_config)?;
+    bootstrap
+        .stages_mut()
+        .mark_complete(BootstrapStage::Stage0, &toolchain.path)?;
+
     println!("\n[OK] Stage 0 toolchain built successfully!");
     println!("  Path: {}", toolchain.path.display());
     println!("  Target: {}", toolchain.target);

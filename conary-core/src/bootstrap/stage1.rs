@@ -22,6 +22,7 @@
 use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
+use tracing::debug;
 use crate::recipe::{Recipe, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
@@ -608,18 +609,30 @@ impl Stage1Builder {
         let env_vec =
             build_helpers::merge_build_env(&self.build_env, cross_env, recipe_env, &self.build_env);
 
-        let stage0_root = self.stage0.path.parent().unwrap_or(&self.stage0.path);
+        // Stage 1 runs without sandbox -- we control the recipes and need host
+        // tools (make, bash, find, etc.) that aren't in the cross-toolchain.
+        // Sandboxing is applied in Stage 2+ where we build from untrusted recipes.
+        let full_cmd = format!("set -e\n{cmd}");
 
-        let (code, stdout, stderr) = build_helpers::run_sandboxed_command(
-            cmd,
-            workdir,
-            &self.sysroot,
-            &self.work_dir.join("sources"),
-            &self.work_dir.join("build"),
-            stage0_root,
-            &env_vec,
-        )
-        .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e))?;
+        debug!("Running: bash -c \"{}\"", cmd);
+        debug!("Workdir: {}", workdir.display());
+
+        let child = std::process::Command::new("bash")
+            .args(["-c", &full_cmd])
+            .current_dir(workdir)
+            .envs(env_vec.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
+
+        let output = child
+            .wait_with_output()
+            .map_err(|e| Stage1Error::BuildFailed(pkg_name.clone(), e.to_string()))?;
+
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         // Log output
         if !stdout.is_empty() {

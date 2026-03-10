@@ -153,6 +153,11 @@ impl Bootstrap {
         &self.stages
     }
 
+    /// Get the stage manager (mutable)
+    pub fn stages_mut(&mut self) -> &mut StageManager {
+        &mut self.stages
+    }
+
     /// Check if crosstool-ng is available
     pub fn check_prerequisites(&self) -> Result<Prerequisites> {
         Prerequisites::check()
