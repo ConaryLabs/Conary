@@ -207,7 +207,7 @@ fn analyze_package_name(name: &str) -> NameHints {
 
     NameHints {
         is_server: lower.ends_with("-server")
-            || lower.ends_with("d") && !lower.ends_with("lib")
+            || (lower.ends_with("d") && !lower.ends_with("lib"))
             || lower.contains("daemon")
             || lower.contains("service"),
         is_client: lower.ends_with("-client") || lower.ends_with("-cli"),
