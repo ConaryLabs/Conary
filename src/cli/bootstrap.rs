@@ -126,6 +126,14 @@ pub enum BootstrapCommands {
         /// Skip checksum verification (development only)
         #[arg(long)]
         skip_verify: bool,
+
+        /// Build a single package by name
+        #[arg(short = 'P', long)]
+        package: Option<String>,
+
+        /// Build only packages for a specific tier (a, b, c)
+        #[arg(long)]
+        tier: Option<String>,
     },
 
     /// Build Conary stage (Rust + self-hosting)

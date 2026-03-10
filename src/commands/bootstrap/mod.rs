@@ -301,6 +301,8 @@ pub fn cmd_bootstrap_base(
     recipe_dir: Option<&str>,
     verbose: bool,
     skip_verify: bool,
+    package: Option<&str>,
+    tier: Option<&str>,
 ) -> Result<()> {
     println!("Building base system...");
     println!("  Work directory: {}", work_dir);
@@ -336,6 +338,13 @@ pub fn cmd_bootstrap_base(
     }
 
     println!("  Recipe directory: {}", recipe_path.display());
+
+    if let Some(pkg) = package {
+        println!("  Building single package: {}", pkg);
+    }
+    if let Some(t) = tier {
+        println!("  Building tier: {}", t);
+    }
 
     // Build base system
     println!("\nThis will build the complete base system (~52 packages).");
@@ -571,7 +580,7 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose, false),
         BootstrapStage::Stage2 => cmd_bootstrap_stage2(work_dir, None, None, verbose, false),
         BootstrapStage::BaseSystem => {
-            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose, false)
+            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose, false, None, None)
         }
         BootstrapStage::Boot => {
             // Boot is a checkpoint within the base system build (grub, dracut, etc.)
