@@ -277,14 +277,19 @@ impl Trove {
     pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
         // Find packages that:
         // 1. Were installed as dependencies (not explicitly)
-        // 2. Have no other packages depending on them
+        // 2. Are not transitively reachable from any explicitly-installed package
         let sql = format!(
-            "SELECT {} FROM troves \
-             WHERE install_reason = 'dependency' \
-             AND name NOT IN ( \
+            "WITH RECURSIVE reachable(name) AS ( \
                  SELECT DISTINCT depends_on_name FROM dependencies \
                  WHERE trove_id IN (SELECT id FROM troves WHERE install_reason = 'explicit') \
+                 UNION \
+                 SELECT DISTINCT d.depends_on_name FROM dependencies d \
+                 JOIN troves t ON d.trove_id = t.id \
+                 JOIN reachable r ON t.name = r.name \
              ) \
+             SELECT {} FROM troves \
+             WHERE install_reason = 'dependency' \
+             AND name NOT IN (SELECT name FROM reachable) \
              ORDER BY name, version",
             TROVE_COLUMNS
         );
