@@ -85,6 +85,10 @@ pub enum TrustError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// Serialization error during canonical JSON production
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
     /// I/O error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

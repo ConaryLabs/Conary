@@ -31,7 +31,7 @@ pub fn verify_signatures<T: serde::Serialize>(
     keys: &BTreeMap<String, TufKey>,
     threshold: u64,
 ) -> TrustResult<()> {
-    let canonical = canonical_json(&signed.signed);
+    let canonical = canonical_json(&signed.signed)?;
     let mut valid_count: u64 = 0;
     let mut seen_keyids = std::collections::HashSet::new();
 
@@ -232,7 +232,7 @@ mod tests {
         version: u64,
         expires: chrono::DateTime<Utc>,
     ) -> Signed<RootMetadata> {
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(keypair).unwrap();
 
         let mut keys = BTreeMap::new();
         keys.insert(key_id.clone(), tuf_key);
@@ -258,7 +258,7 @@ mod tests {
             roles,
         };
 
-        let sig = sign_tuf_metadata(keypair, &root);
+        let sig = sign_tuf_metadata(keypair, &root).unwrap();
         Signed {
             signed: root,
             signatures: vec![sig],
@@ -271,7 +271,7 @@ mod tests {
         let expires = Utc::now() + Duration::days(365);
         let signed_root = make_test_root(&keypair, 1, expires);
 
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
         let mut keys = BTreeMap::new();
         keys.insert(key_id, tuf_key);
 
@@ -284,7 +284,7 @@ mod tests {
         let expires = Utc::now() + Duration::days(365);
         let signed_root = make_test_root(&keypair, 1, expires);
 
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
         let mut keys = BTreeMap::new();
         keys.insert(key_id, tuf_key);
 
@@ -304,7 +304,7 @@ mod tests {
         let signed_root = make_test_root(&keypair1, 1, expires);
 
         // But verify with keypair2's key
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair2);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair2).unwrap();
         let mut keys = BTreeMap::new();
         keys.insert(key_id, tuf_key);
 
@@ -456,7 +456,7 @@ mod tests {
         let expires = Utc::now() + Duration::days(365);
         let signed_root = make_test_root(&keypair, 1, expires);
 
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
         let mut trusted_keys = BTreeMap::new();
         trusted_keys.insert(key_id, tuf_key);
 
