@@ -161,6 +161,7 @@ pub async fn auth_middleware(
         Some(t) => t.to_owned(),
         None => {
             tracing::warn!("Auth failed: missing or invalid Authorization header");
+            // Check rate limit BEFORE consuming a token to prevent N+1 attempts
             if let Some(ref l) = limiters
                 && crate::server::rate_limit::check_auth_failure(l, client_ip)
             {
