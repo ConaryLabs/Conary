@@ -82,10 +82,11 @@ pub fn find_source_dir(dir: &Path) -> Result<PathBuf, std::io::Error> {
     }
 }
 
-/// Expand environment variable references in a string
+/// Expand environment variables in a string.
 ///
-/// Supports both `$VAR` and `${VAR}` syntax. Checks `build_env` first,
-/// then falls back to the system environment.
+/// Variables use `${VAR}` and `$VAR` syntax. Looks up values in `build_env` only.
+/// Variables not found in `build_env` expand to empty string (host
+/// environment is intentionally not consulted for build hermiticity).
 pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> String {
     let mut result = value.to_string();
 
