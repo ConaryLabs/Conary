@@ -7,6 +7,7 @@
 
 use crate::ccs::signing::SigningKeyPair;
 use crate::trust::metadata::{KeyVal, TufKey, TufSignature};
+use crate::trust::{TrustError, TrustResult};
 use ed25519_dalek::Signer;
 use sha2::{Digest, Sha256};
 
@@ -14,10 +15,10 @@ use sha2::{Digest, Sha256};
 ///
 /// Per the TUF spec, the key ID is the hex-encoded SHA-256 hash of the
 /// OLPC canonical JSON representation of the key.
-pub fn compute_key_id(key: &TufKey) -> String {
-    let canonical = canonical_json(&key);
+pub fn compute_key_id(key: &TufKey) -> TrustResult<String> {
+    let canonical = canonical_json(key)?;
     let hash = Sha256::digest(&canonical);
-    hex::encode(hash)
+    Ok(hex::encode(hash))
 }
 
 /// Produce deterministic (canonical) JSON for a serializable value
@@ -28,10 +29,12 @@ pub fn compute_key_id(key: &TufKey) -> String {
 /// - No trailing commas
 ///
 /// This is used for computing key IDs and for signing metadata.
-pub fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
-    let json_value = serde_json::to_value(value).expect("serialization to Value should not fail");
+pub fn canonical_json<T: serde::Serialize>(value: &T) -> TrustResult<Vec<u8>> {
+    let json_value = serde_json::to_value(value)
+        .map_err(|e| TrustError::SerializationError(format!("Failed to serialize to Value: {e}")))?;
     let sorted = sort_json_value(&json_value);
-    serde_json::to_vec(&sorted).expect("serialization to Vec should not fail")
+    serde_json::to_vec(&sorted)
+        .map_err(|e| TrustError::SerializationError(format!("Failed to serialize to Vec: {e}")))
 }
 
 /// Recursively sort JSON object keys for canonical representation
@@ -55,15 +58,15 @@ fn sort_json_value(value: &serde_json::Value) -> serde_json::Value {
 /// Convert a `SigningKeyPair` to a TUF key with its computed key ID
 ///
 /// Returns `(key_id, tuf_key)` where the public key is hex-encoded.
-pub fn signing_keypair_to_tuf_key(keypair: &SigningKeyPair) -> (String, TufKey) {
+pub fn signing_keypair_to_tuf_key(keypair: &SigningKeyPair) -> TrustResult<(String, TufKey)> {
     let public_hex = hex::encode(keypair.verifying_key().as_bytes());
     let tuf_key = TufKey {
         keytype: "ed25519".to_string(),
         scheme: "ed25519".to_string(),
         keyval: KeyVal { public: public_hex },
     };
-    let key_id = compute_key_id(&tuf_key);
-    (key_id, tuf_key)
+    let key_id = compute_key_id(&tuf_key)?;
+    Ok((key_id, tuf_key))
 }
 
 /// Sign TUF metadata using a `SigningKeyPair`
@@ -73,15 +76,15 @@ pub fn signing_keypair_to_tuf_key(keypair: &SigningKeyPair) -> (String, TufKey) 
 pub fn sign_tuf_metadata<T: serde::Serialize>(
     keypair: &SigningKeyPair,
     metadata: &T,
-) -> TufSignature {
-    let canonical = canonical_json(metadata);
+) -> TrustResult<TufSignature> {
+    let canonical = canonical_json(metadata)?;
     let signature = keypair.signing_key().sign(&canonical);
-    let (key_id, _) = signing_keypair_to_tuf_key(keypair);
+    let (key_id, _) = signing_keypair_to_tuf_key(keypair)?;
 
-    TufSignature {
+    Ok(TufSignature {
         keyid: key_id,
         sig: hex::encode(signature.to_bytes()),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -105,8 +108,8 @@ mod tests {
         let val1 = serde_json::Value::Object(map1);
         let val2 = serde_json::Value::Object(map2);
 
-        let c1 = canonical_json(&val1);
-        let c2 = canonical_json(&val2);
+        let c1 = canonical_json(&val1).unwrap();
+        let c2 = canonical_json(&val2).unwrap();
         assert_eq!(c1, c2);
 
         // Keys should be sorted: apple before zebra
@@ -127,7 +130,7 @@ mod tests {
         outer.insert("top".to_string(), serde_json::Value::from(42));
 
         let val = serde_json::Value::Object(outer);
-        let c = canonical_json(&val);
+        let c = canonical_json(&val).unwrap();
         let s = String::from_utf8(c).unwrap();
 
         // Outer keys sorted: nested before top
@@ -147,7 +150,7 @@ mod tests {
         map.insert("key".to_string(), serde_json::Value::from("value"));
         let val = serde_json::Value::Object(map);
 
-        let c = canonical_json(&val);
+        let c = canonical_json(&val).unwrap();
         let s = String::from_utf8(c).unwrap();
         assert_eq!(s, "{\"key\":\"value\"}");
     }
@@ -162,8 +165,8 @@ mod tests {
             },
         };
 
-        let id1 = compute_key_id(&key);
-        let id2 = compute_key_id(&key);
+        let id1 = compute_key_id(&key).unwrap();
+        let id2 = compute_key_id(&key).unwrap();
         assert_eq!(id1, id2);
         // Should be a hex-encoded SHA-256 (64 chars)
         assert_eq!(id1.len(), 64);
@@ -187,13 +190,13 @@ mod tests {
             },
         };
 
-        assert_ne!(compute_key_id(&key1), compute_key_id(&key2));
+        assert_ne!(compute_key_id(&key1).unwrap(), compute_key_id(&key2).unwrap());
     }
 
     #[test]
     fn test_signing_keypair_to_tuf_key() {
         let keypair = SigningKeyPair::generate();
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
 
         assert_eq!(tuf_key.keytype, "ed25519");
         assert_eq!(tuf_key.scheme, "ed25519");
@@ -201,7 +204,7 @@ mod tests {
         assert_eq!(tuf_key.keyval.public.len(), 64);
         assert!(tuf_key.keyval.public.chars().all(|c| c.is_ascii_hexdigit()));
         // Key ID should be consistent
-        assert_eq!(key_id, compute_key_id(&tuf_key));
+        assert_eq!(key_id, compute_key_id(&tuf_key).unwrap());
     }
 
     #[test]
@@ -216,10 +219,10 @@ mod tests {
             meta: BTreeMap::new(),
         };
 
-        let sig = sign_tuf_metadata(&keypair, &timestamp);
+        let sig = sign_tuf_metadata(&keypair, &timestamp).unwrap();
 
         // Key ID should match
-        let (expected_key_id, _) = signing_keypair_to_tuf_key(&keypair);
+        let (expected_key_id, _) = signing_keypair_to_tuf_key(&keypair).unwrap();
         assert_eq!(sig.keyid, expected_key_id);
 
         // Signature should be hex-encoded (128 chars for 64 bytes)
@@ -227,7 +230,7 @@ mod tests {
         assert!(sig.sig.chars().all(|c| c.is_ascii_hexdigit()));
 
         // Verify the signature manually
-        let canonical = canonical_json(&timestamp);
+        let canonical = canonical_json(&timestamp).unwrap();
         let sig_bytes = hex::decode(&sig.sig).unwrap();
         let signature = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
         keypair
@@ -239,7 +242,7 @@ mod tests {
     #[test]
     fn test_sign_and_wrap_root_metadata() {
         let keypair = SigningKeyPair::generate();
-        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
         let expires = Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap();
 
         let mut keys = BTreeMap::new();
@@ -264,7 +267,7 @@ mod tests {
             roles,
         };
 
-        let sig = sign_tuf_metadata(&keypair, &root);
+        let sig = sign_tuf_metadata(&keypair, &root).unwrap();
         let signed = Signed {
             signed: root,
             signatures: vec![sig],

@@ -39,10 +39,10 @@ pub fn create_initial_root(
 ) -> TrustResult<Signed<RootMetadata>> {
     let expires = Utc::now() + Duration::days(expires_days);
 
-    let (root_key_id, root_tuf_key) = signing_keypair_to_tuf_key(root_key);
-    let (targets_key_id, targets_tuf_key) = signing_keypair_to_tuf_key(targets_key);
-    let (snapshot_key_id, snapshot_tuf_key) = signing_keypair_to_tuf_key(snapshot_key);
-    let (timestamp_key_id, timestamp_tuf_key) = signing_keypair_to_tuf_key(timestamp_key);
+    let (root_key_id, root_tuf_key) = signing_keypair_to_tuf_key(root_key)?;
+    let (targets_key_id, targets_tuf_key) = signing_keypair_to_tuf_key(targets_key)?;
+    let (snapshot_key_id, snapshot_tuf_key) = signing_keypair_to_tuf_key(snapshot_key)?;
+    let (timestamp_key_id, timestamp_tuf_key) = signing_keypair_to_tuf_key(timestamp_key)?;
 
     let mut keys = BTreeMap::new();
     keys.insert(root_key_id.clone(), root_tuf_key);
@@ -90,7 +90,7 @@ pub fn create_initial_root(
         roles,
     };
 
-    let sig = sign_tuf_metadata(root_key, &root);
+    let sig = sign_tuf_metadata(root_key, &root)?;
     Ok(Signed {
         signed: root,
         signatures: vec![sig],
@@ -120,8 +120,8 @@ pub fn rotate_key(
     expires_days: i64,
 ) -> TrustResult<Signed<RootMetadata>> {
     let expires = Utc::now() + Duration::days(expires_days);
-    let (old_key_id, _) = signing_keypair_to_tuf_key(old_key);
-    let (new_key_id, new_tuf_key) = signing_keypair_to_tuf_key(new_key);
+    let (old_key_id, _) = signing_keypair_to_tuf_key(old_key)?;
+    let (new_key_id, new_tuf_key) = signing_keypair_to_tuf_key(new_key)?;
 
     let mut new_root = current_root.signed.clone();
     new_root.version += 1;
@@ -144,9 +144,9 @@ pub fn rotate_key(
     }
 
     // Sign with both old root key and new root key (if rotating root)
-    let mut sigs = vec![sign_tuf_metadata(root_key, &new_root)];
+    let mut sigs = vec![sign_tuf_metadata(root_key, &new_root)?];
     if role_name == "root" {
-        sigs.push(sign_tuf_metadata(new_key, &new_root));
+        sigs.push(sign_tuf_metadata(new_key, &new_root)?);
     }
 
     Ok(Signed {
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(signed.signatures.len(), 1);
 
         // All roles should use the same key
-        let (key_id, _) = signing_keypair_to_tuf_key(&key);
+        let (key_id, _) = signing_keypair_to_tuf_key(&key).unwrap();
         for role_def in signed.signed.roles.values() {
             assert_eq!(role_def.keyids, vec![key_id.clone()]);
             assert_eq!(role_def.threshold, 1);
@@ -197,8 +197,8 @@ mod tests {
         assert_eq!(signed.signed.roles.len(), 4);
 
         // Each role should have a different key
-        let (root_id, _) = signing_keypair_to_tuf_key(&root_key);
-        let (targets_id, _) = signing_keypair_to_tuf_key(&targets_key);
+        let (root_id, _) = signing_keypair_to_tuf_key(&root_key).unwrap();
+        let (targets_id, _) = signing_keypair_to_tuf_key(&targets_key).unwrap();
         assert_ne!(root_id, targets_id);
         assert_eq!(signed.signed.roles["root"].keyids, vec![root_id]);
         assert_eq!(signed.signed.roles["targets"].keyids, vec![targets_id]);
@@ -215,12 +215,12 @@ mod tests {
         assert_eq!(rotated.signed.version, 2);
 
         // Targets role should have the new key
-        let (new_id, _) = signing_keypair_to_tuf_key(&new_targets_key);
+        let (new_id, _) = signing_keypair_to_tuf_key(&new_targets_key).unwrap();
         assert_eq!(rotated.signed.roles["targets"].keyids, vec![new_id.clone()]);
         assert!(rotated.signed.keys.contains_key(&new_id));
 
         // Root role should still have the original key
-        let (root_id, _) = signing_keypair_to_tuf_key(&key);
+        let (root_id, _) = signing_keypair_to_tuf_key(&key).unwrap();
         assert_eq!(rotated.signed.roles["root"].keyids, vec![root_id]);
     }
 
@@ -233,7 +233,7 @@ mod tests {
         assert!(temp_dir.path().join("root.public").exists());
 
         // Key should produce valid signatures
-        let (_, tuf_key) = signing_keypair_to_tuf_key(&keypair);
+        let (_, tuf_key) = signing_keypair_to_tuf_key(&keypair).unwrap();
         assert_eq!(tuf_key.keytype, "ed25519");
     }
 }

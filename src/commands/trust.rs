@@ -2,7 +2,7 @@
 
 //! TUF trust management command implementations
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "server")]
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::db;
@@ -35,7 +35,8 @@ pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     }
 
     let keypair = ceremony::generate_role_key(role, output_dir)?;
-    let (key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&keypair);
+    let (key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&keypair)
+        .map_err(|e| anyhow!("{}", e))?;
 
     println!("Generated {role} key pair:");
     println!("  Private key: {output}/{role}.private");
@@ -277,7 +278,8 @@ pub fn cmd_trust_rotate_key(
     let new_root_json = serde_json::to_vec(&new_root)?;
     client.bootstrap(&conn, &new_root_json)?;
 
-    let (new_key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&new_key);
+    let (new_key_id, _) = conary_core::trust::signing_keypair_to_tuf_key(&new_key)
+        .map_err(|e| anyhow!("{}", e))?;
     println!("Key rotation complete for role: {role}");
     println!("New root version: {}", new_root.signed.version);
     println!("New key ID: {new_key_id}");

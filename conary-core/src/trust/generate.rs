@@ -46,7 +46,7 @@ pub fn generate_targets(
         targets,
     };
 
-    let sig = sign_tuf_metadata(key, &metadata);
+    let sig = sign_tuf_metadata(key, &metadata)?;
     Ok(Signed {
         signed: metadata,
         signatures: vec![sig],
@@ -97,7 +97,7 @@ pub fn generate_snapshot(
         meta,
     };
 
-    let sig = sign_tuf_metadata(key, &metadata);
+    let sig = sign_tuf_metadata(key, &metadata)?;
     Ok(Signed {
         signed: metadata,
         signatures: vec![sig],
@@ -139,7 +139,7 @@ pub fn generate_timestamp(
         meta,
     };
 
-    let sig = sign_tuf_metadata(key, &metadata);
+    let sig = sign_tuf_metadata(key, &metadata)?;
     Ok(Signed {
         signed: metadata,
         signatures: vec![sig],
