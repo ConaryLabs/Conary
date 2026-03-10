@@ -109,20 +109,23 @@ build_conary_if_needed() {
 # ── Directory Setup ───────────────────────────────────────────────────────────
 
 setup_directories() {
-    log_step "Setting up bootstrap directories"
     mkdir -p "$BOOTSTRAP_DIR"/{sources,tools,stage1,sysroot,build,logs,images}
     mkdir -p "$LOG_DIR"
     touch "$PIPELINE_LOG"
+    log_step "Setting up bootstrap directories"
     log_info "Bootstrap root: $BOOTSTRAP_DIR"
 }
 
 # ── Stage 0 + Stage 1 ────────────────────────────────────────────────────────
 
 run_stage0() {
-    log_step "Stage 0: Cross-compilation toolchain"
+    log_step "Stage 0: Cross-compilation toolchain (crosstool-ng)"
+
     "$CONARY_BIN" bootstrap stage0 \
         --work-dir "$BOOTSTRAP_DIR" \
-        --root "$BOOTSTRAP_DIR/sysroot" \
+        --crosstool-config "$PROJECT_DIR/bootstrap/stage0/crosstool.config" \
+        --jobs "$(nproc)" \
+        --verbose \
         2>&1 | tee "$LOG_DIR/stage0.log"
     log_info "[COMPLETE] Stage 0"
 }
@@ -131,8 +134,9 @@ run_stage1() {
     log_step "Stage 1: Self-hosted toolchain"
     "$CONARY_BIN" bootstrap stage1 \
         --work-dir "$BOOTSTRAP_DIR" \
-        --root "$BOOTSTRAP_DIR/sysroot" \
-        --recipe-dir "$PROJECT_DIR/recipes" \
+        --recipe-dir "$PROJECT_DIR/recipes/core" \
+        --jobs "$(nproc)" \
+        --verbose \
         2>&1 | tee "$LOG_DIR/stage1.log"
     log_info "[COMPLETE] Stage 1"
 }
@@ -163,7 +167,7 @@ build_packages() {
             --tier "$tier" \
             --work-dir "$BOOTSTRAP_DIR" \
             --root "$BOOTSTRAP_DIR/sysroot" \
-            --recipe-dir "$PROJECT_DIR/recipes" \
+            --recipe-dir "$PROJECT_DIR/recipes/core" \
             2>&1 | tee "$LOG_DIR/pkg-$pkg.log"; then
             log_info "[$idx/$total] $pkg -- [COMPLETE]"
         else
