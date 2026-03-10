@@ -112,24 +112,25 @@ impl Changeset {
             crate::error::Error::MissingId("Cannot update changeset without ID".to_string())
         })?;
 
-        let timestamp_field = match new_status {
-            ChangesetStatus::Applied => "applied_at",
-            ChangesetStatus::RolledBack => "rolled_back_at",
-            _ => "",
-        };
-
-        if timestamp_field.is_empty() {
-            conn.execute(
-                "UPDATE changesets SET status = ?1 WHERE id = ?2",
-                params![new_status.as_str(), id],
-            )?;
-        } else {
-            conn.execute(
-                &format!(
-                    "UPDATE changesets SET status = ?1, {timestamp_field} = CURRENT_TIMESTAMP WHERE id = ?2"
-                ),
-                params![new_status.as_str(), id],
-            )?;
+        match new_status {
+            ChangesetStatus::Applied => {
+                conn.execute(
+                    "UPDATE changesets SET status = ?1, applied_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    params![new_status.as_str(), id],
+                )?;
+            }
+            ChangesetStatus::RolledBack => {
+                conn.execute(
+                    "UPDATE changesets SET status = ?1, rolled_back_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    params![new_status.as_str(), id],
+                )?;
+            }
+            _ => {
+                conn.execute(
+                    "UPDATE changesets SET status = ?1 WHERE id = ?2",
+                    params![new_status.as_str(), id],
+                )?;
+            }
         }
 
         self.status = new_status;
