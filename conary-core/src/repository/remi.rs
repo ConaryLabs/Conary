@@ -292,8 +292,8 @@ impl RemiClient {
 
     /// Download all chunks for a package
     ///
-    /// Downloads chunks in parallel (up to 4 concurrent) and returns a map
-    /// of hash -> data for assembly.
+    /// Downloads chunks sequentially and returns a map of hash -> data
+    /// for assembly.
     pub fn download_chunks(
         &self,
         manifest: &PackageManifest,
