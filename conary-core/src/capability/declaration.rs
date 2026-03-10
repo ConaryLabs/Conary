@@ -306,13 +306,19 @@ fn validate_port_spec(port: &str) -> Result<(), String> {
         let end_num: u16 = end
             .parse()
             .map_err(|_| format!("invalid port range end: {}", end))?;
+        if start_num == 0 || end_num == 0 {
+            return Err("port 0 is not valid".to_string());
+        }
         if start_num > end_num {
             return Err(format!("port range start {} > end {}", start_num, end_num));
         }
     } else {
-        let _: u16 = port
+        let port_num: u16 = port
             .parse()
             .map_err(|_| format!("invalid port number: {}", port))?;
+        if port_num == 0 {
+            return Err("port 0 is not valid".to_string());
+        }
     }
 
     Ok(())
@@ -788,6 +794,9 @@ mod tests {
         assert!(validate_port_spec("abc").is_err());
         assert!(validate_port_spec("999999").is_err());
         assert!(validate_port_spec("100-50").is_err()); // range reversed
+        assert!(validate_port_spec("0").is_err()); // port 0 not valid
+        assert!(validate_port_spec("0-80").is_err()); // range start port 0
+        assert!(validate_port_spec("80-0").is_err()); // range end port 0 (also reversed)
     }
 
     #[test]
