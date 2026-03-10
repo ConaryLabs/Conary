@@ -21,7 +21,13 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tar::Archive;
-use tracing::debug;
+use tracing::{debug, warn};
+
+/// Maximum size for a single archive entry (512 MB)
+const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Maximum cumulative extraction size (4 GB)
+const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// A parsed CCS package ready for installation
 #[derive(Debug)]
@@ -295,6 +301,7 @@ impl CcsPackage {
         let mut archive = Archive::new(decoder);
 
         let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut total_bytes: u64 = 0;
 
         for entry in archive.entries()? {
             let mut entry = entry?;
@@ -311,6 +318,26 @@ impl CcsPackage {
 
                 // Reconstruct hash from path: ab/cdef123 -> abcdef123
                 if let Some((prefix, suffix)) = path_str.split_once('/') {
+                    if !prefix.chars().all(|c| c.is_ascii_hexdigit())
+                        || !suffix.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        warn!("Skipping non-hex object path: {}", path_str);
+                        continue;
+                    }
+
+                    let entry_size = entry.header().size()?;
+                    if entry_size > MAX_ENTRY_SIZE {
+                        return Err(Error::IoError(format!(
+                            "CCS archive entry exceeds maximum size: {entry_size} bytes"
+                        )));
+                    }
+                    total_bytes += entry_size;
+                    if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
+                        return Err(Error::IoError(
+                            "CCS archive total extraction size exceeds limit".to_string(),
+                        ));
+                    }
+
                     let hash = format!("{}{}", prefix, suffix);
                     let mut content = Vec::new();
                     entry.read_to_end(&mut content)?;
