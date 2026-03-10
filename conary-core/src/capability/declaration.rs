@@ -307,7 +307,7 @@ fn validate_port_spec(port: &str) -> Result<(), String> {
             .parse()
             .map_err(|_| format!("invalid port range end: {}", end))?;
         if start_num == 0 || end_num == 0 {
-            return Err("port 0 is not valid".to_string());
+            return Err("port 0 is not valid for capability declarations".to_string());
         }
         if start_num > end_num {
             return Err(format!("port range start {} > end {}", start_num, end_num));
@@ -317,7 +317,7 @@ fn validate_port_spec(port: &str) -> Result<(), String> {
             .parse()
             .map_err(|_| format!("invalid port number: {}", port))?;
         if port_num == 0 {
-            return Err("port 0 is not valid".to_string());
+            return Err("port 0 is not valid for capability declarations".to_string());
         }
     }
 
