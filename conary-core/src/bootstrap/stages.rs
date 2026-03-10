@@ -278,10 +278,14 @@ impl StageManager {
             .collect()
     }
 
-    /// Save state to disk
+    /// Save state to disk atomically (write to temp file, then rename)
     fn save(&self) -> Result<()> {
         let content = serde_json::to_string_pretty(&self)?;
-        std::fs::write(&self.state_file, content)?;
+        let tmp_path = self.state_file.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &content)
+            .context("Failed to write temporary state file")?;
+        std::fs::rename(&tmp_path, &self.state_file)
+            .context("Failed to atomically rename state file")?;
         Ok(())
     }
 }
