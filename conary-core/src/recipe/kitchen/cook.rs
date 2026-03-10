@@ -100,7 +100,7 @@ impl<'a> Cook<'a> {
             self.log_line(&format!("Fetched additional source: {}", additional.url));
         }
 
-        // Fetch patches
+        // Fetch patches -- all remote patches MUST have checksums
         if let Some(patches) = &self.recipe.patches {
             for patch in &patches.files {
                 if is_remote_url(&patch.file) {
@@ -108,20 +108,17 @@ impl<'a> Cook<'a> {
                     let local_path = self.build_dir.path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
 
-                    if let Some(checksum) = &patch.checksum {
-                        // Patch has a checksum -- fetch through cache with verification
-                        let path = self.kitchen.fetch_source(&patch.file, checksum)?;
-                        fs::copy(&path, &local_path)?;
-                    } else {
-                        // No checksum -- download directly without integrity verification.
-                        // This is a security risk for remote patches; recipe authors
-                        // should add checksums for all remote patches.
-                        tracing::warn!(
-                            "Remote patch {} has no checksum -- downloading without integrity verification",
+                    let checksum = patch.checksum.as_ref().ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "Remote patch '{}' has no checksum. \
+                             All remote patches must include a sha256 checksum \
+                             to prevent MITM or compromised-server attacks. \
+                             Add a 'checksum' field to the patch entry in your recipe.",
                             patch.file
-                        );
-                        crate::recipe::kitchen::archive::download_file(&patch.file, &local_path)?;
-                    }
+                        ))
+                    })?;
+                    let path = self.kitchen.fetch_source(&patch.file, checksum)?;
+                    fs::copy(&path, &local_path)?;
 
                     self.log_line(&format!("Fetched patch: {}", patch.file));
                 }

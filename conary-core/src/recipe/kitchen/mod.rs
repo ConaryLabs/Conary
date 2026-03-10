@@ -309,21 +309,18 @@ impl Kitchen {
         if let Some(patches) = &recipe.patches {
             for patch in &patches.files {
                 if is_remote_url(&patch.file) {
-                    if let Some(checksum) = &patch.checksum {
-                        info!("Fetching patch: {}", patch.file);
-                        let path = self.fetch_source(&patch.file, checksum)?;
-                        fetched.push(path);
-                    } else {
-                        tracing::warn!(
-                            "Remote patch {} has no checksum -- integrity cannot be verified",
+                    let checksum = patch.checksum.as_ref().ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "Remote patch '{}' has no checksum. \
+                             All remote patches must include a sha256 checksum \
+                             to prevent MITM or compromised-server attacks. \
+                             Add a 'checksum' field to the patch entry in your recipe.",
                             patch.file
-                        );
-                        let filename =
-                            patch.file.split('/').next_back().unwrap_or("patch.diff");
-                        let dest = self.config.source_cache.join(filename);
-                        download_file(&patch.file, &dest)?;
-                        fetched.push(dest);
-                    }
+                        ))
+                    })?;
+                    info!("Fetching patch: {}", patch.file);
+                    let path = self.fetch_source(&patch.file, checksum)?;
+                    fetched.push(path);
                 }
             }
         }
