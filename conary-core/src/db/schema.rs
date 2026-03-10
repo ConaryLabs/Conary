@@ -65,7 +65,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     for version in (current_version + 1)..=SCHEMA_VERSION {
         info!("Applying migration to version {}", version);
         let tx = conn.unchecked_transaction()?;
-        match apply_migration(conn, version).and_then(|()| set_schema_version(conn, version)) {
+        match apply_migration(&tx, version).and_then(|()| set_schema_version(&tx, version)) {
             Ok(()) => tx.commit()?,
             Err(e) => {
                 drop(tx); // rollback on drop
