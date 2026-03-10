@@ -9,6 +9,7 @@ pub mod builder;
 pub mod chunk;
 pub mod compress;
 pub mod dirent;
+pub mod error;
 pub mod inode;
 pub mod superblock;
 pub mod tail_pack;
