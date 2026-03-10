@@ -300,7 +300,12 @@ impl Stage1Builder {
             .args([
                 "-fsSL",
                 "-o",
-                target_path.to_str().expect("path must be valid utf-8"),
+                target_path.to_str().ok_or_else(|| {
+                    Stage1Error::SourceFetchFailed(
+                        pkg_name.clone(),
+                        format!("path is not valid UTF-8: {}", target_path.display()),
+                    )
+                })?,
                 &url,
             ])
             .output()
@@ -347,7 +352,12 @@ impl Stage1Builder {
                     .args([
                         "-fsSL",
                         "-o",
-                        target_path.to_str().expect("path must be valid utf-8"),
+                        target_path.to_str().ok_or_else(|| {
+                            Stage1Error::SourceFetchFailed(
+                                pkg_name.clone(),
+                                format!("path is not valid UTF-8: {}", target_path.display()),
+                            )
+                        })?,
                         &url,
                     ])
                     .output()
