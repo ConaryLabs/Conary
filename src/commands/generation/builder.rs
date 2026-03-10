@@ -50,7 +50,8 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     let mut builder = conary_erofs::builder::ErofsBuilder::new();
 
     // Add root directory
-    builder.add_directory("/", 0o755, 0, 0);
+    builder.add_directory("/", 0o755, 0, 0)
+        .map_err(|e| anyhow!("Failed to add root directory: {e}"))?;
 
     // Step 6: Add all installed package files
     let troves = Trove::list_all(conn).context("Failed to list installed packages")?;
@@ -93,14 +94,16 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
             let size = file.size as u64;
 
             // ErofsBuilder handles implicit parent directory creation
-            builder.add_file(&file.path, &digest, size, permissions, 0, 0);
+            builder.add_file(&file.path, &digest, size, permissions, 0, 0)
+                .map_err(|e| anyhow!("Failed to add file {}: {e}", file.path))?;
             files_added += 1;
         }
     }
 
     // Step 7: Add root-level symlinks
     for (link, target) in ROOT_SYMLINKS {
-        builder.add_symlink(&format!("/{link}"), target, 0o777);
+        builder.add_symlink(&format!("/{link}"), target, 0o777)
+            .map_err(|e| anyhow!("Failed to add symlink /{link}: {e}"))?;
     }
 
     // Step 8: Build EROFS image

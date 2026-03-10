@@ -490,7 +490,7 @@ mod tests {
     fn verify_single_file() {
         let mut builder = ErofsBuilder::new();
         let digest = [0xAB; 32];
-        builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000);
+        builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
@@ -527,8 +527,8 @@ mod tests {
         let mut builder = ErofsBuilder::new();
         let d1 = [0x01; 32];
         let d2 = [0x02; 32];
-        builder.add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0);
-        builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0);
+        builder.add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0).unwrap();
+        builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn verify_symlink() {
         let mut builder = ErofsBuilder::new();
-        builder.add_symlink("/usr/bin/python", "python3", 0o777);
+        builder.add_symlink("/usr/bin/python", "python3", 0o777).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
@@ -646,9 +646,9 @@ mod tests {
     #[test]
     fn verify_mixed_content() {
         let mut builder = ErofsBuilder::new();
-        builder.add_directory("/etc", 0o755, 0, 0);
-        builder.add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0);
-        builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777);
+        builder.add_directory("/etc", 0o755, 0, 0).unwrap();
+        builder.add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0).unwrap();
+        builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777).unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
