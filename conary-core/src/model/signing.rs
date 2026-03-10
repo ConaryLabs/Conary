@@ -13,10 +13,13 @@ use super::ModelError;
 use super::remote::CollectionData;
 
 /// Sign canonical JSON of a CollectionData
-pub fn sign_collection(data: &CollectionData, key: &SigningKey) -> Vec<u8> {
-    let canonical = canonical_json(data);
+pub fn sign_collection(
+    data: &CollectionData,
+    key: &SigningKey,
+) -> Result<Vec<u8>, ModelError> {
+    let canonical = canonical_json(data)?;
     let signature = key.sign(canonical.as_bytes());
-    signature.to_bytes().to_vec()
+    Ok(signature.to_bytes().to_vec())
 }
 
 /// Verify a collection signature
@@ -38,7 +41,7 @@ pub fn verify_collection(
             .map_err(|_| ModelError::RemoteFetchError("Invalid signature length".to_string()))?,
     );
 
-    let canonical = canonical_json(data);
+    let canonical = canonical_json(data)?;
     Ok(public_key.verify(canonical.as_bytes(), &signature).is_ok())
 }
 
@@ -71,10 +74,12 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
 ///
 /// Recursively sorts all JSON object keys to ensure deterministic output
 /// regardless of HashMap iteration order.
-fn canonical_json(data: &CollectionData) -> String {
-    let value = serde_json::to_value(data).expect("CollectionData should always serialize");
+fn canonical_json(data: &CollectionData) -> Result<String, ModelError> {
+    let value = serde_json::to_value(data)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}")))?;
     let sorted = sort_json_keys(value);
-    serde_json::to_string(&sorted).expect("sorted JSON should always serialize")
+    serde_json::to_string(&sorted)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize sorted JSON: {e}")))
 }
 
 /// Recursively sort all object keys in a JSON value for deterministic serialization.
@@ -129,7 +134,7 @@ mod tests {
         let key = SigningKey::generate(&mut OsRng);
         let data = create_test_collection_data();
 
-        let signature = sign_collection(&data, &key);
+        let signature = sign_collection(&data, &key).unwrap();
         let public_key = key.verifying_key();
 
         assert!(verify_collection(&data, &signature, &public_key.to_bytes()).unwrap());
@@ -141,7 +146,7 @@ mod tests {
         let key2 = SigningKey::generate(&mut OsRng);
         let data = create_test_collection_data();
 
-        let signature = sign_collection(&data, &key1);
+        let signature = sign_collection(&data, &key1).unwrap();
         let wrong_key = key2.verifying_key();
 
         assert!(!verify_collection(&data, &signature, &wrong_key.to_bytes()).unwrap());
@@ -152,7 +157,7 @@ mod tests {
         let key = SigningKey::generate(&mut OsRng);
         let mut data = create_test_collection_data();
 
-        let signature = sign_collection(&data, &key);
+        let signature = sign_collection(&data, &key).unwrap();
 
         // Tamper with data
         data.version = "2.0.0".to_string();
@@ -182,7 +187,7 @@ mod tests {
     fn test_verify_invalid_public_key_length() {
         let key = SigningKey::generate(&mut OsRng);
         let data = create_test_collection_data();
-        let signature = sign_collection(&data, &key);
+        let signature = sign_collection(&data, &key).unwrap();
 
         let result = verify_collection(&data, &signature, &[0u8; 10]);
         assert!(result.is_err());
@@ -245,7 +250,7 @@ mod tests {
             published_at: "2026-01-15T12:00:00Z".to_string(),
         };
 
-        let signature = sign_collection(&data, &key);
+        let signature = sign_collection(&data, &key).unwrap();
         let public_key = key.verifying_key();
 
         assert!(verify_collection(&data, &signature, &public_key.to_bytes()).unwrap());
