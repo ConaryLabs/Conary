@@ -51,7 +51,9 @@ impl<'db> CanonicalResolver<'db> {
     pub fn expand(&self, name: &str) -> Result<Vec<ResolverCandidate>> {
         // Try as canonical name first
         if let Some(canonical) = CanonicalPackage::find_by_name(self.conn, name)? {
-            let canonical_id = canonical.id.unwrap_or(0);
+            let Some(canonical_id) = canonical.id else {
+                return Ok(vec![]);
+            };
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
             return Ok(impls
                 .into_iter()
