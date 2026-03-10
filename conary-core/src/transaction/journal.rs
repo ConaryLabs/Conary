@@ -126,7 +126,7 @@ impl JournalRecord {
             Self::PreScriptComplete { .. } => TransactionState::PreScriptsComplete,
             Self::Backup { .. } | Self::BackupsComplete { .. } => TransactionState::BackedUp,
             Self::Stage { .. } | Self::StagingComplete { .. } => TransactionState::Staged,
-            Self::FileMoved { .. } | Self::FileRemoved { .. } => TransactionState::Staged,
+            Self::FileMoved { .. } | Self::FileRemoved { .. } => TransactionState::FsApplied,
             Self::FsApplied { .. } | Self::DbCommitIntent { .. } => TransactionState::FsApplied,
             Self::DbApplied { .. } => TransactionState::DbApplied,
             Self::PostAction { .. } => TransactionState::PostScriptsComplete,
