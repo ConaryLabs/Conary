@@ -368,6 +368,12 @@ pub fn cmd_update(
     let delta_count = delta_updates.len();
     let initial_full_count = full_updates.len();
 
+    // Only create a changeset when there is actual work to do
+    if delta_count + initial_full_count == 0 {
+        println!("No updates to apply.");
+        return Ok(());
+    }
+
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = conary_core::db::models::Changeset::new(format!(
             "Update {} package(s)",
