@@ -10,8 +10,8 @@ const MAGIC_NEWC: &[u8] = b"070701";
 const MAGIC_CRC: &[u8] = b"070702";
 /// Maximum allowed filename length in bytes (4 KiB)
 const MAX_NAME_SIZE: u64 = 4096;
-/// Maximum allowed file content size in bytes (2 GiB)
-const MAX_FILE_SIZE: u64 = 2_147_483_648;
+/// Maximum allowed file content size in bytes (512 MB)
+const MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
 /// Extracted CPIO entry metadata
 #[derive(Debug)]
