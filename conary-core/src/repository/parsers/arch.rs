@@ -11,7 +11,10 @@ use crate::repository::client::RepositoryClient;
 use std::collections::HashMap;
 use std::io::Read;
 use tar::Archive;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// Maximum allowed package size (5 GB)
+const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
 
 /// Arch Linux repository parser
 pub struct ArchParser {
@@ -192,8 +195,28 @@ impl RepositoryParser for ArchParser {
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(|| Error::ParseError("Missing or invalid %CSIZE% field".to_string()))?;
 
+            // Validate size - reject unreasonably large packages (>5GB)
+            if size > MAX_PACKAGE_SIZE {
+                warn!(
+                    "Package {} size {} exceeds maximum allowed (5GB), skipping",
+                    name, size
+                );
+                continue;
+            }
+
             let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
             let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
+
+            // Validate filename for path traversal attacks
+            if filename.contains("..")
+                || filename.starts_with('/')
+                || filename.contains("://")
+            {
+                return Err(Error::ParseError(format!(
+                    "Suspicious filename in Arch database: {}",
+                    filename
+                )));
+            }
 
             // Build download URL
             let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
