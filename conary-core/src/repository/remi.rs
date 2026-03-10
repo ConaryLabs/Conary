@@ -120,6 +120,9 @@ pub struct RemiClient {
 impl RemiClient {
     /// Create a new Remi client
     pub fn new(base_url: &str) -> Result<Self> {
+        // Validate URL scheme to prevent SSRF (reject non-HTTP(S) URLs)
+        crate::repository::client::validate_url_scheme(base_url)?;
+
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -637,6 +640,9 @@ impl AsyncRemiClient {
     /// * `base_url` - Base URL of the Remi server
     /// * `cache_dir` - Directory for local chunk cache
     pub fn new(base_url: &str, cache_dir: impl AsRef<Path>) -> Result<Self> {
+        // Validate URL scheme to prevent SSRF (reject non-HTTP(S) URLs)
+        crate::repository::client::validate_url_scheme(base_url)?;
+
         let base_url = base_url.trim_end_matches('/').to_string();
 
         let http_client = reqwest::Client::builder()
