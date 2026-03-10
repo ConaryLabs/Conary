@@ -1297,12 +1297,16 @@ fn main() -> Result<()> {
                 recipe_dir,
                 verbose,
                 skip_verify,
+                package,
+                tier,
             } => commands::cmd_bootstrap_base(
                 &work_dir,
                 &root,
                 recipe_dir.as_deref(),
                 verbose,
                 skip_verify,
+                package.as_deref(),
+                tier.as_deref(),
             ),
 
             cli::BootstrapCommands::Conary {

@@ -257,6 +257,51 @@ impl BaseBuilder {
         ("grub", "boot"),
     ];
 
+    /// Tier A: minimal boot to login prompt (16 packages)
+    const TIER_A_PACKAGES: &'static [&'static str] = &[
+        "zlib", "xz", "zstd", "openssl", "ncurses", "readline",
+        "libcap", "kmod", "elfutils", "dbus", "linux-pam",
+        "util-linux", "coreutils", "bash", "systemd", "linux",
+    ];
+
+    /// Tier B: full base system (adds ~45 packages on top of Tier A)
+    const TIER_B_PACKAGES: &'static [&'static str] = &[
+        "libmnl", "make", "m4", "autoconf", "automake", "libtool",
+        "pkgconf", "bison", "flex", "gettext", "perl", "python",
+        "cmake", "ninja", "meson", "iproute2", "openssh",
+        "grep", "sed", "gawk", "less", "diffutils", "patch",
+        "findutils", "file", "tar", "gzip", "bzip2", "cpio",
+        "ca-certificates", "curl", "wget2", "git",
+        "procps-ng", "psmisc", "shadow", "sudo",
+        "vim", "nano",
+        "popt", "efivar", "efibootmgr", "dosfstools", "grub",
+    ];
+
+    /// Get package names for a specific tier
+    pub fn packages_for_tier(tier: &str) -> Option<&'static [&'static str]> {
+        match tier {
+            "a" => Some(Self::TIER_A_PACKAGES),
+            "b" => Some(Self::TIER_B_PACKAGES),
+            _ => None,
+        }
+    }
+
+    /// Build a single named package
+    pub fn build_single(&mut self, name: &str) -> Result<(), BaseError> {
+        let idx = self.packages.iter().position(|p| p.name == name)
+            .ok_or_else(|| BaseError::RecipeNotFound(name.to_string()))?;
+
+        if self.packages[idx].recipe.is_none() {
+            let recipe = self.load_recipe(&self.packages[idx])?;
+            self.packages[idx].recipe = Some(recipe);
+        }
+
+        self.build_package(idx)?;
+        self.packages[idx].status = BaseBuildStatus::Complete;
+        self.save_log(idx)?;
+        Ok(())
+    }
+
     /// Create a new base system builder
     pub fn new(
         work_dir: impl AsRef<Path>,
@@ -1266,5 +1311,28 @@ mod tests {
         let s = summary.to_string();
         assert!(s.contains("52"));
         assert!(s.contains("40"));
+    }
+
+    #[test]
+    fn test_tier_a_has_16_packages() {
+        assert_eq!(BaseBuilder::TIER_A_PACKAGES.len(), 16);
+    }
+
+    #[test]
+    fn test_tier_b_packages_no_overlap_with_tier_a() {
+        for pkg in BaseBuilder::TIER_B_PACKAGES {
+            assert!(
+                !BaseBuilder::TIER_A_PACKAGES.contains(pkg),
+                "Package {} is in both Tier A and Tier B",
+                pkg
+            );
+        }
+    }
+
+    #[test]
+    fn test_packages_for_tier() {
+        assert!(BaseBuilder::packages_for_tier("a").is_some());
+        assert!(BaseBuilder::packages_for_tier("b").is_some());
+        assert!(BaseBuilder::packages_for_tier("c").is_none());
     }
 }
