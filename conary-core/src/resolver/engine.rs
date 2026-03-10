@@ -67,9 +67,8 @@ impl<'db> Resolver<'db> {
                     constraint: dep.constraint.clone(),
                     required_by: vec![package_name.clone()],
                 });
-            } else {
+            } else if let Some(target) = self.graph.get_node(&dep.to) {
                 // Node exists — check version constraint
-                let target = self.graph.get_node(&dep.to).unwrap();
                 if !dep.constraint.satisfies(&target.version) {
                     conflicts.push(Conflict::UnsatisfiableConstraint {
                         package: dep.to.clone(),
