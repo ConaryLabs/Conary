@@ -360,8 +360,9 @@ impl Interner for ConaryProvider<'_> {
     }
 
     fn resolve_condition(&self, _condition: ConditionId) -> Condition {
-        // We don't use conditions — this should never be called
-        unreachable!("ConaryProvider does not use conditions")
+        // ConaryProvider does not use conditions; return a permissive default
+        // rather than panicking if resolvo ever calls this unexpectedly.
+        Condition::Requirement(VersionSetId::default())
     }
 }
 
