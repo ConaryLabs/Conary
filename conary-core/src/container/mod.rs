@@ -29,7 +29,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, fork};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -506,11 +506,17 @@ impl Sandbox {
 
         match child.wait_timeout(self.config.timeout)? {
             Some(status) => {
-                let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                // Read stdout/stderr directly from pipes (don't call wait again)
+                let mut stdout_str = String::new();
+                let mut stderr_str = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_string(&mut stdout_str);
+                }
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_str);
+                }
                 let code = status.code().unwrap_or(-1);
-                Ok((code, stdout, stderr))
+                Ok((code, stdout_str, stderr_str))
             }
             None => {
                 let _ = child.kill();
