@@ -104,7 +104,7 @@ mkdir -pv %(destdir)s/usr/share/gdb/auto-load/usr/lib
 mv -v %(destdir)s/usr/lib/*gdb.py %(destdir)s/usr/share/gdb/auto-load/usr/lib/ 2>/dev/null || true
 """
 
-setup = "mkdir -p build && cd build"
+setup = "sed -i 's/char [*]q/const &/' ../src/gcc-%(version)s/libgomp/affinity-fmt.c && mkdir -p build && cd build"
 workdir = "build"
 
 [build.environment]
