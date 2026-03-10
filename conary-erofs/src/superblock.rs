@@ -7,6 +7,8 @@
 
 use std::io::{self, Write};
 
+use crate::error::ErofsError;
+
 /// EROFS magic number identifying the filesystem.
 pub const EROFS_SUPER_MAGIC: u32 = 0xE0F5_E1E2;
 
@@ -88,15 +90,18 @@ impl Superblock {
     ///
     /// `block_size` must be a power of two (typically 4096). The `blkszbits`
     /// field is computed as `log2(block_size)`.
-    #[must_use]
-    pub fn new(block_size: u32) -> Self {
-        assert!(
-            block_size.is_power_of_two() && block_size >= 512,
-            "block_size must be a power of two >= 512"
-        );
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErofsError::InvalidBlockSize`] if `block_size` is not a
+    /// power of two or is less than 512.
+    pub fn new(block_size: u32) -> Result<Self, ErofsError> {
+        if !block_size.is_power_of_two() || block_size < 512 {
+            return Err(ErofsError::InvalidBlockSize(block_size));
+        }
         let blkszbits = block_size.trailing_zeros() as u8;
 
-        Self {
+        Ok(Self {
             magic: EROFS_SUPER_MAGIC,
             checksum: 0,
             feature_compat: EROFS_FEATURE_COMPAT_SB_CHKSUM,
@@ -121,7 +126,7 @@ impl Superblock {
             packed_nid: 0,
             xattr_filter_reserved: 0,
             reserved: [0; 23],
-        }
+        })
     }
 
     /// Serialize the superblock to bytes (128 bytes, little-endian).
@@ -315,7 +320,7 @@ mod tests {
 
     #[test]
     fn superblock_total_size() {
-        let sb = Superblock::new(4096);
+        let sb = Superblock::new(4096).unwrap();
         let mut buf = Vec::new();
         sb.write_to(&mut buf).unwrap();
         assert_eq!(
@@ -327,7 +332,7 @@ mod tests {
 
     #[test]
     fn magic_at_offset_1024() {
-        let sb = Superblock::new(4096);
+        let sb = Superblock::new(4096).unwrap();
         let mut buf = Vec::new();
         sb.write_to(&mut buf).unwrap();
 
@@ -337,13 +342,13 @@ mod tests {
 
     #[test]
     fn default_block_size() {
-        let sb = Superblock::new(4096);
+        let sb = Superblock::new(4096).unwrap();
         assert_eq!(sb.blkszbits, 12);
     }
 
     #[test]
     fn checksum_is_valid_crc32c() {
-        let mut sb = Superblock::new(4096);
+        let mut sb = Superblock::new(4096).unwrap();
         sb.inos = 42;
         sb.blocks = 100;
         sb.root_nid = 1;
@@ -362,7 +367,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let mut sb = Superblock::new(4096);
+        let mut sb = Superblock::new(4096).unwrap();
         sb.root_nid = 37;
         sb.inos = 1500;
         sb.build_time = 1_700_000_000;
@@ -427,7 +432,7 @@ mod tests {
 
     #[test]
     fn leading_padding_is_zeroed() {
-        let sb = Superblock::new(4096);
+        let sb = Superblock::new(4096).unwrap();
         let mut buf = Vec::new();
         sb.write_to(&mut buf).unwrap();
         assert!(
@@ -438,30 +443,31 @@ mod tests {
 
     #[test]
     fn alternate_block_size() {
-        let sb = Superblock::new(512);
+        let sb = Superblock::new(512).unwrap();
         assert_eq!(sb.blkszbits, 9);
 
-        let sb = Superblock::new(8192);
+        let sb = Superblock::new(8192).unwrap();
         assert_eq!(sb.blkszbits, 13);
     }
 
     #[test]
-    #[should_panic(expected = "block_size must be a power of two")]
-    fn non_power_of_two_panics() {
-        let _ = Superblock::new(1000);
+    fn invalid_block_size_returns_error() {
+        assert!(Superblock::new(1000).is_err());
+        assert!(Superblock::new(0).is_err());
+        assert!(Superblock::new(256).is_err());
     }
 
     #[test]
     fn struct_size_is_128_bytes() {
-        let sb = Superblock::new(4096);
+        let sb = Superblock::new(4096).unwrap();
         let bytes = sb.to_bytes();
         assert_eq!(bytes.len(), 128);
     }
 
     #[test]
     fn checksum_changes_with_data() {
-        let sb1 = Superblock::new(4096);
-        let mut sb2 = Superblock::new(4096);
+        let sb1 = Superblock::new(4096).unwrap();
+        let mut sb2 = Superblock::new(4096).unwrap();
         sb2.blocks = 999;
 
         assert_ne!(
