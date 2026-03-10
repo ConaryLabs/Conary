@@ -37,11 +37,15 @@ pub fn tar_flag_for_archive(filename: &str) -> &'static str {
 pub fn extract_tar(archive: &Path, dest: &Path, strip_components: bool) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
 
-    let archive_str = archive.to_str().expect("archive path must be valid utf-8");
-    let dest_str = dest.to_str().expect("dest path must be valid utf-8");
+    let archive_str = archive
+        .to_str()
+        .ok_or_else(|| format!("archive path is not valid UTF-8: {}", archive.display()))?;
+    let dest_str = dest
+        .to_str()
+        .ok_or_else(|| format!("dest path is not valid UTF-8: {}", dest.display()))?;
     let filename = archive
         .file_name()
-        .expect("archive path must have a filename")
+        .ok_or_else(|| format!("archive path has no filename: {}", archive.display()))?
         .to_string_lossy();
 
     let flag = tar_flag_for_archive(&filename);
