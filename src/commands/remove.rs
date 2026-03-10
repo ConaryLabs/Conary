@@ -410,41 +410,72 @@ pub fn cmd_autoremove(
         return Ok(());
     }
 
-    println!("\nRemoving {} orphaned package(s)...", orphans.len());
+    // Fixed-point iteration: removing orphans may expose new orphans (transitive chains).
+    // Re-query after each round until no more orphans are found.
+    const MAX_ITERATIONS: usize = 100;
+    let mut total_removed = 0;
+    let mut total_failed = 0;
+    let mut current_orphans = orphans;
 
-    // TODO: Iterate in a fixed-point loop (re-query orphans after each removal) to catch
-    // transitively orphaned packages. Also consider batching removals to avoid re-opening
-    // the DB connection per orphan via cmd_remove.
-
-    // Remove each orphaned package
-    let mut removed_count = 0;
-    let mut failed_count = 0;
-
-    for trove in &orphans {
-        println!("\nRemoving {} {}...", trove.name, trove.version);
-        match cmd_remove(
-            &trove.name,
-            db_path,
-            root,
-            Some(trove.version.clone()),
-            no_scripts,
-            sandbox_mode,
-            false,
-        ) {
-            Ok(()) => {
-                removed_count += 1;
+    for iteration in 0..MAX_ITERATIONS {
+        if iteration > 0 {
+            // Re-query orphans after previous round of removals
+            let conn =
+                conary_core::db::open(db_path).context("Failed to open package database")?;
+            current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
+            if current_orphans.is_empty() {
+                break;
             }
-            Err(e) => {
-                eprintln!("  Failed to remove {}: {}", trove.name, e);
-                failed_count += 1;
+            println!(
+                "\nFound {} additional orphan(s) (iteration {}):",
+                current_orphans.len(),
+                iteration + 1
+            );
+            for trove in &current_orphans {
+                print!("  {} {}", trove.name, trove.version);
+                if let Some(arch) = &trove.architecture {
+                    print!(" [{}]", arch);
+                }
+                println!();
             }
+        } else {
+            println!("\nRemoving {} orphaned package(s)...", current_orphans.len());
+        }
+
+        let mut round_removed = 0;
+        for trove in &current_orphans {
+            println!("\nRemoving {} {}...", trove.name, trove.version);
+            match cmd_remove(
+                &trove.name,
+                db_path,
+                root,
+                Some(trove.version.clone()),
+                no_scripts,
+                sandbox_mode,
+                false,
+            ) {
+                Ok(()) => {
+                    round_removed += 1;
+                }
+                Err(e) => {
+                    eprintln!("  Failed to remove {}: {}", trove.name, e);
+                    total_failed += 1;
+                }
+            }
+        }
+
+        total_removed += round_removed;
+
+        // If nothing was removed this round, no point continuing
+        if round_removed == 0 {
+            break;
         }
     }
 
     println!("\nAutoremove complete:");
-    println!("  Removed: {} package(s)", removed_count);
-    if failed_count > 0 {
-        println!("  Failed: {} package(s)", failed_count);
+    println!("  Removed: {} package(s)", total_removed);
+    if total_failed > 0 {
+        println!("  Failed: {} package(s)", total_failed);
     }
 
     Ok(())
