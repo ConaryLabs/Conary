@@ -135,10 +135,20 @@ impl RepositoryParser for DebianParser {
         // Convert to PackageMetadata
         let mut packages = Vec::new();
         for entry in entries {
+            // Validate size - reject unreasonably large packages (>5GB)
+            const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024; // 5 GB
+
             let size: u64 = entry
                 .size
                 .parse()
                 .map_err(|e| Error::ParseError(format!("Invalid size '{}': {}", entry.size, e)))?;
+
+            if size > MAX_PACKAGE_SIZE {
+                return Err(Error::ParseError(format!(
+                    "Package {} size {} exceeds maximum allowed (5GB)",
+                    entry.package, size
+                )));
+            }
 
             // Parse dependencies
             let dependencies = if let Some(deps) = &entry.depends {
