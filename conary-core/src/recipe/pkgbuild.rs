@@ -357,12 +357,37 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
             .as_str();
         let start = caps.get(0).expect("regex capture group must exist").end();
 
-        // Find matching closing brace (simple nesting)
+        // Find matching closing brace, skipping braces inside strings and comments
         let rest = &content[start..];
         let mut depth = 1;
         let mut end = 0;
-        for (i, c) in rest.chars().enumerate() {
-            match c {
+        let chars: Vec<char> = rest.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                // Skip single-quoted strings (no escapes in bash single quotes)
+                '\'' => {
+                    i += 1;
+                    while i < chars.len() && chars[i] != '\'' {
+                        i += 1;
+                    }
+                }
+                // Skip double-quoted strings (handle backslash escapes)
+                '"' => {
+                    i += 1;
+                    while i < chars.len() && chars[i] != '"' {
+                        if chars[i] == '\\' {
+                            i += 1; // skip escaped char
+                        }
+                        i += 1;
+                    }
+                }
+                // Skip comments until end of line
+                '#' => {
+                    while i < chars.len() && chars[i] != '\n' {
+                        i += 1;
+                    }
+                }
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
@@ -373,6 +398,7 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
                 }
                 _ => {}
             }
+            i += 1;
         }
 
         if end > 0 {
