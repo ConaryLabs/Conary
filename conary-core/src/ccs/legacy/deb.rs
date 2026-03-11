@@ -225,8 +225,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             continue;
         }
 
-        // Create parent directories
-        let dest_path = data_dir.join(file.path.trim_start_matches('/'));
+        // Compute rel_path once; reuse it for both dest_path and the md5sums entry.
+        let rel_path = file.path.trim_start_matches('/');
+        let dest_path = data_dir.join(rel_path);
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -241,8 +242,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     perms.set_mode(file.mode);
                     fs::set_permissions(&dest_path, perms)?;
 
-                    // Add to md5sums (path without leading /)
-                    let rel_path = file.path.trim_start_matches('/');
+                    // Add to md5sums using the already-computed relative path.
                     md5sums.push(format!("{}  {}", compute_md5(content), rel_path));
                 }
             }
