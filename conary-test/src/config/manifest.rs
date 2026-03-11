@@ -46,6 +46,8 @@ pub struct TestStep {
     #[serde(default)]
     pub conary: Option<String>,
     #[serde(default)]
+    pub kill_after_log: Option<KillAfterLog>,
+    #[serde(default)]
     pub file_exists: Option<String>,
     #[serde(default)]
     pub file_not_exists: Option<String>,
@@ -66,6 +68,7 @@ pub struct TestStep {
 pub enum StepType {
     Run(String),
     Conary(String),
+    KillAfterLog(KillAfterLog),
     FileExists(String),
     FileNotExists(String),
     FileExecutable(String),
@@ -80,6 +83,8 @@ impl TestStep {
             Some(StepType::Run(cmd.clone()))
         } else if let Some(cmd) = &self.conary {
             Some(StepType::Conary(cmd.clone()))
+        } else if let Some(config) = &self.kill_after_log {
+            Some(StepType::KillAfterLog(config.clone()))
         } else if let Some(path) = &self.file_exists {
             Some(StepType::FileExists(path.clone()))
         } else if let Some(path) = &self.file_not_exists {
@@ -100,6 +105,18 @@ impl TestStep {
 pub struct FileChecksum {
     pub path: String,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KillAfterLog {
+    pub conary: String,
+    pub pattern: String,
+    #[serde(default = "default_kill_timeout")]
+    pub timeout_seconds: u64,
+}
+
+fn default_kill_timeout() -> u64 {
+    60
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

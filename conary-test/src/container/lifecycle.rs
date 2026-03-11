@@ -4,10 +4,10 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use bollard::Docker;
 use bollard::container::{
-    Config, DownloadFromContainerOptions, LogsOptions, RemoveContainerOptions,
-    StopContainerOptions, UploadToContainerOptions,
+    Config, DownloadFromContainerOptions, KillContainerOptions, LogsOptions,
+    RemoveContainerOptions, StopContainerOptions, UploadToContainerOptions,
 };
-use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::image::BuildImageOptions;
 use bollard::models::HostConfig;
 use bytes::Bytes;
@@ -15,14 +15,25 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tracing::{debug, warn};
 
 use super::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult, VolumeMount};
 
+struct RunningExec {
+    container_id: ContainerId,
+    receiver: Option<mpsc::Receiver<String>>,
+    result_rx: Option<oneshot::Receiver<ExecResult>>,
+    pid: Arc<Mutex<Option<u64>>>,
+    pid_ready: Arc<Notify>,
+}
+
 /// Container backend powered by bollard (Docker/Podman API).
 pub struct BollardBackend {
     docker: Docker,
+    running_execs: Arc<Mutex<HashMap<String, RunningExec>>>,
 }
 
 impl BollardBackend {
@@ -30,7 +41,10 @@ impl BollardBackend {
     pub fn new() -> Result<Self> {
         let docker = Docker::connect_with_local_defaults()
             .context("failed to connect to container runtime")?;
-        Ok(Self { docker })
+        Ok(Self {
+            docker,
+            running_execs: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// Format volume mounts as Docker bind strings (`host:container[:ro]`).
@@ -50,6 +64,16 @@ impl BollardBackend {
     /// Format environment variables as `KEY=VALUE` strings.
     fn format_env(env: &HashMap<String, String>) -> Vec<String> {
         env.iter().map(|(k, v)| format!("{k}={v}")).collect()
+    }
+
+    fn collect_line_fragments(buffer: &mut String, chunk: &str) -> Vec<String> {
+        buffer.push_str(chunk);
+        let mut lines = Vec::new();
+        while let Some(idx) = buffer.find('\n') {
+            let line = buffer.drain(..=idx).collect::<String>();
+            lines.push(line.trim_end_matches('\n').to_string());
+        }
+        lines
     }
 }
 
@@ -227,6 +251,214 @@ impl ContainerBackend for BollardBackend {
             stdout,
             stderr,
         })
+    }
+
+    async fn exec_detached(&self, id: &ContainerId, cmd: &[&str]) -> Result<String> {
+        let exec_opts = CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        };
+
+        let exec_instance = self
+            .docker
+            .create_exec(id, exec_opts)
+            .await
+            .context("failed to create exec")?;
+
+        let exec_id = exec_instance.id.clone();
+        let docker = self.docker.clone();
+        let container_id = id.clone();
+        let (tx, rx) = mpsc::channel(128);
+        let (result_tx, result_rx) = oneshot::channel();
+        let pid = Arc::new(Mutex::new(None));
+        let pid_ready = Arc::new(Notify::new());
+        let pid_for_task = Arc::clone(&pid);
+        let pid_ready_for_task = Arc::clone(&pid_ready);
+        let exec_id_for_task = exec_id.clone();
+
+        tokio::spawn(async move {
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            let mut stdout_buffer = String::new();
+            let mut stderr_buffer = String::new();
+
+            let exec_result = async {
+                let start_result = docker
+                    .start_exec(&exec_id_for_task, None::<StartExecOptions>)
+                    .await
+                    .context("failed to start exec")?;
+
+                if let StartExecResults::Attached { mut output, .. } = start_result {
+                    while let Some(msg) = output.next().await {
+                        match msg.context("failed to read exec output")? {
+                            bollard::container::LogOutput::StdOut { message } => {
+                                let text = String::from_utf8_lossy(&message).to_string();
+                                stdout.push_str(&text);
+                                for line in Self::collect_line_fragments(&mut stdout_buffer, &text) {
+                                    if let Some(value) = line
+                                        .strip_prefix("__CONARY_TEST_PID__=")
+                                        .and_then(|pid_text| pid_text.parse::<u64>().ok())
+                                    {
+                                        *pid_for_task.lock().await = Some(value);
+                                        pid_ready_for_task.notify_waiters();
+                                        continue;
+                                    }
+                                    if tx.send(line).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            bollard::container::LogOutput::StdErr { message } => {
+                                let text = String::from_utf8_lossy(&message).to_string();
+                                stderr.push_str(&text);
+                                for line in Self::collect_line_fragments(&mut stderr_buffer, &text) {
+                                    if tx.send(line).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if !stdout_buffer.is_empty() {
+                    if let Some(value) = stdout_buffer
+                        .strip_prefix("__CONARY_TEST_PID__=")
+                        .and_then(|pid_text| pid_text.parse::<u64>().ok())
+                    {
+                        *pid_for_task.lock().await = Some(value);
+                        pid_ready_for_task.notify_waiters();
+                    } else {
+                        let _ = tx.send(stdout_buffer.clone()).await;
+                    }
+                }
+                if !stderr_buffer.is_empty() {
+                    let _ = tx.send(stderr_buffer.clone()).await;
+                }
+
+                let inspect = docker
+                    .inspect_exec(&exec_id_for_task)
+                    .await
+                    .context("failed to inspect exec")?;
+                let exit_code = inspect.exit_code.unwrap_or(-1);
+
+                Ok::<ExecResult, anyhow::Error>(ExecResult {
+                    exit_code: i32::try_from(exit_code).unwrap_or(-1),
+                    stdout: stdout.replace(
+                        &format!(
+                            "__CONARY_TEST_PID__={}\n",
+                            pid_for_task.lock().await.unwrap_or_default()
+                        ),
+                        "",
+                    ),
+                    stderr,
+                })
+            }
+            .await;
+
+            let result = match exec_result {
+                Ok(result) => result,
+                Err(err) => ExecResult {
+                    exit_code: -1,
+                    stdout,
+                    stderr: err.to_string(),
+                },
+            };
+
+            let _ = result_tx.send(result);
+        });
+
+        self.running_execs.lock().await.insert(
+            exec_id.clone(),
+            RunningExec {
+                container_id,
+                receiver: Some(rx),
+                result_rx: Some(result_rx),
+                pid,
+                pid_ready,
+            },
+        );
+
+        Ok(exec_id)
+    }
+
+    async fn exec_logs(&self, exec_id: &str) -> Result<mpsc::Receiver<String>> {
+        let mut running_execs = self.running_execs.lock().await;
+        let running = running_execs
+            .get_mut(exec_id)
+            .with_context(|| format!("unknown exec id: {exec_id}"))?;
+        running
+            .receiver
+            .take()
+            .with_context(|| format!("exec logs already taken: {exec_id}"))
+    }
+
+    async fn exec_result(&self, exec_id: &str) -> Result<ExecResult> {
+        let result_rx = {
+            let mut running_execs = self.running_execs.lock().await;
+            let running = running_execs
+                .get_mut(exec_id)
+                .with_context(|| format!("unknown exec id: {exec_id}"))?;
+            running
+                .result_rx
+                .take()
+                .with_context(|| format!("exec result already taken: {exec_id}"))?
+        };
+
+        let result = result_rx
+            .await
+            .with_context(|| format!("failed to await exec result for {exec_id}"))?;
+        self.running_execs.lock().await.remove(exec_id);
+        Ok(result)
+    }
+
+    async fn kill(&self, id: &ContainerId, signal: &str) -> Result<()> {
+        self.docker
+            .kill_container(
+                id,
+                Some(KillContainerOptions {
+                    signal: signal.to_string(),
+                }),
+            )
+            .await
+            .context("failed to kill container")?;
+        Ok(())
+    }
+
+    async fn kill_exec(&self, exec_id: &str, signal: &str) -> Result<()> {
+        let (container_id, pid, pid_ready) = {
+            let running_execs = self.running_execs.lock().await;
+            let running = running_execs
+                .get(exec_id)
+                .with_context(|| format!("unknown exec id: {exec_id}"))?;
+            (
+                running.container_id.clone(),
+                Arc::clone(&running.pid),
+                Arc::clone(&running.pid_ready),
+            )
+        };
+
+        if pid.lock().await.is_none() {
+            pid_ready.notified().await;
+        }
+        let target_pid = pid
+            .lock()
+            .await
+            .as_ref()
+            .copied()
+            .with_context(|| format!("exec pid not available for {exec_id}"))?;
+
+        let signal_cmd = format!("kill -s {signal} {target_pid}");
+        let result = self
+            .exec(&container_id, &["sh", "-c", &signal_cmd], Duration::from_secs(10))
+            .await?;
+        if result.exit_code != 0 {
+            bail!("failed to signal exec {exec_id}: {}", result.stderr.trim());
+        }
+        Ok(())
     }
 
     async fn stop(&self, id: &ContainerId) -> Result<()> {
