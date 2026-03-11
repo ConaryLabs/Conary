@@ -898,13 +898,13 @@ async fn server_info(
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "bind_addr": config.bind_addr.to_string(),
-        "db_path": config.db_path.display().to_string(),
-        "chunk_dir": config.chunk_dir.display().to_string(),
+        "db_configured": config.db_path.exists(),
+        "chunk_dir_configured": config.chunk_dir.exists(),
         "max_concurrent_conversions": config.max_concurrent_conversions,
         "cache_max_bytes": config.cache_max_bytes,
         "bloom_filter_enabled": config.enable_bloom_filter,
         "rate_limit_enabled": config.enable_rate_limit,
-        "trusted_proxy_header": state_guard.trusted_proxy_header.clone(),
+        "trusted_proxy_header_set": state_guard.trusted_proxy_header.is_some(),
     }))
 }
 
