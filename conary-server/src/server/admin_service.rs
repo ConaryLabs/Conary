@@ -288,10 +288,20 @@ pub async fn query_audit(
 }
 
 /// Purge audit log entries older than `before`.  Returns the number deleted.
+///
+/// The `before` string must be a valid date in `YYYY-MM-DD` format.
+/// Invalid dates are rejected before reaching SQL.
 pub async fn purge_audit(
     state: &Arc<RwLock<ServerState>>,
     before: &str,
 ) -> Result<usize, ServiceError> {
+    // Validate date format before passing to SQL
+    if chrono::NaiveDate::parse_from_str(before, "%Y-%m-%d").is_err() {
+        return Err(ServiceError::BadRequest(
+            "Invalid date format: expected YYYY-MM-DD".to_string(),
+        ));
+    }
+
     let db = db_path(state).await;
     let before_owned = before.to_string();
     blocking(move || {
