@@ -140,7 +140,9 @@ impl ConvertedPackage {
             package_name: Some(package_name),
             package_version: Some(package_version),
             distro: Some(distro),
-            chunk_hashes_json: Some(serde_json::to_string(chunk_hashes).unwrap_or_default()),
+            chunk_hashes_json: Some(
+                serde_json::to_string(chunk_hashes).unwrap_or_else(|_| "[]".to_string()),
+            ),
             total_size: Some(total_size),
             content_hash: Some(content_hash),
             ccs_path: Some(ccs_path),
