@@ -341,7 +341,8 @@ impl ErofsBuilder {
                 });
             }
 
-            let blocks = pack_directory(&mut dir_entries, bs);
+            let blocks = pack_directory(&mut dir_entries, bs)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             #[allow(clippy::cast_possible_truncation)]
             let blk_addr = (dir_data_cursor / bs64) as u32;
             dir_block_addrs.insert(idx, blk_addr);
