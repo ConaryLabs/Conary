@@ -26,6 +26,7 @@ use super::build_helpers;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::{Recipe, parse_recipe_file};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -715,6 +716,14 @@ impl Stage2Builder {
     }
 }
 
+/// Compute SHA-256 hash of a file's contents
+fn hash_file(path: &Path) -> Result<String, std::io::Error> {
+    let content = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&content);
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// Best-effort directory comparison for reproducibility checking.
 ///
 /// Walks both directory trees and compares file sizes. Full content
@@ -758,6 +767,23 @@ fn compare_dirs(a: &Path, b: &Path) -> Result<(), String> {
 
     if a_relative != b_relative {
         return Err("File tree structure differs".to_string());
+    }
+
+    // Compare file contents by SHA-256 hash
+    for (a_path, rel_path) in a_files.iter().zip(a_relative.iter()) {
+        let b_path = b.join(rel_path);
+        let a_hash = hash_file(a_path)
+            .map_err(|e| format!("Failed to hash {}: {}", a_path.display(), e))?;
+        let b_hash = hash_file(&b_path)
+            .map_err(|e| format!("Failed to hash {}: {}", b_path.display(), e))?;
+        if a_hash != b_hash {
+            return Err(format!(
+                "Content mismatch for {}: {} vs {}",
+                rel_path.display(),
+                a_hash,
+                b_hash
+            ));
+        }
     }
 
     Ok(())
@@ -918,6 +944,23 @@ mod tests {
 
         let result = compare_dirs(&s1, &s2);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reproducibility_content_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create directories with same structure but different content
+        let s1 = dir.path().join("s1");
+        let s2 = dir.path().join("s2");
+        fs::create_dir_all(&s1).unwrap();
+        fs::create_dir_all(&s2).unwrap();
+        fs::write(s1.join("file"), "content_a").unwrap();
+        fs::write(s2.join("file"), "content_b").unwrap();
+
+        let result = compare_dirs(&s1, &s2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Content mismatch"));
     }
 
     #[test]
