@@ -773,7 +773,7 @@ mod tests {
         graph.add_recipe("gcc", &["glibc"]);
         graph.add_recipe("glibc", &["gcc"]);
 
-        let suggestions = graph.suggest_bootstrap_edges();
+        let suggestions = graph.suggest_bootstrap_edges(&BootstrapMode::Auto);
 
         // Should suggest breaking glibc -> gcc (known pattern)
         assert!(suggestions.contains(&("glibc".to_string(), "gcc".to_string())));
