@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// Opaque container identifier returned by the backend.
 pub type ContainerId = String;
@@ -73,6 +74,21 @@ pub trait ContainerBackend: Send + Sync {
 
     /// Execute a command inside a running container.
     async fn exec(&self, id: &ContainerId, cmd: &[&str], timeout: Duration) -> Result<ExecResult>;
+
+    /// Start a command and return an exec ID for later monitoring.
+    async fn exec_detached(&self, id: &ContainerId, cmd: &[&str]) -> Result<String>;
+
+    /// Stream logs from a detached exec instance.
+    async fn exec_logs(&self, exec_id: &str) -> Result<mpsc::Receiver<String>>;
+
+    /// Wait for a detached exec instance to complete and return its result.
+    async fn exec_result(&self, exec_id: &str) -> Result<ExecResult>;
+
+    /// Send a signal to a container (e.g., SIGKILL).
+    async fn kill(&self, id: &ContainerId, signal: &str) -> Result<()>;
+
+    /// Send a signal to a detached exec instance.
+    async fn kill_exec(&self, exec_id: &str, signal: &str) -> Result<()>;
 
     /// Stop a running container.
     async fn stop(&self, id: &ContainerId) -> Result<()>;

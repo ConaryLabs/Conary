@@ -3,12 +3,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{ResourceConstraints, StepType, TestManifest};
+use crate::config::manifest::{KillAfterLog, ResourceConstraints, StepType, TestManifest};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
@@ -201,6 +201,12 @@ impl TestRunner {
                         }
                         last_exec = Some(result);
                     }
+                    StepType::KillAfterLog(config) => {
+                        let result = self
+                            .run_kill_after_log(backend, container_id, &config)
+                            .await?;
+                        last_exec = Some(result);
+                    }
                 }
 
                 // Evaluate assertion if present and we have an exec result.
@@ -250,6 +256,48 @@ impl TestRunner {
         Ok(suite)
     }
 
+    async fn run_kill_after_log(
+        &self,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+        config: &KillAfterLog,
+    ) -> Result<ExecResult> {
+        let expanded = self.substitute_vars(&config.conary);
+        let full_cmd = format!(
+            "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec {} {}",
+            self.config.paths.conary_bin, expanded
+        );
+        let exec_id = backend
+            .exec_detached(container_id, &["sh", "-lc", &full_cmd])
+            .await?;
+        let mut logs = backend.exec_logs(&exec_id).await?;
+        let timeout = Duration::from_secs(config.timeout_seconds);
+
+        let matched = tokio::time::timeout(timeout, async {
+            while let Some(line) = logs.recv().await {
+                if line.contains(&config.pattern) {
+                    return Ok::<bool, anyhow::Error>(true);
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "timed out waiting for log pattern {:?} after {}s",
+                config.pattern,
+                config.timeout_seconds
+            )
+        })??;
+
+        if !matched {
+            bail!("log stream ended before pattern {:?} appeared", config.pattern);
+        }
+
+        backend.kill_exec(&exec_id, "SIGKILL").await?;
+        backend.exec_result(&exec_id).await
+    }
+
     /// Apply per-test resource constraints to a container configuration.
     pub fn apply_resource_constraints(
         &self,
@@ -295,18 +343,23 @@ mod tests {
     use super::*;
     use crate::config::distro::{GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
     use crate::config::manifest::{
-        Assertion, ResourceConstraints, SuiteDef, TestDef, TestManifest, TestStep,
+        Assertion, KillAfterLog, ResourceConstraints, SuiteDef, TestDef, TestManifest, TestStep,
     };
     use crate::container::backend::{ContainerConfig, ExecResult};
     use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Mutex;
+    use tokio::sync::mpsc;
 
     // -- Mock backend --
 
     struct MockBackend {
         exec_calls: Mutex<Vec<Vec<String>>>,
         exec_results: Mutex<Vec<ExecResult>>,
+        detached_calls: Mutex<Vec<Vec<String>>>,
+        log_sequences: Mutex<HashMap<String, Vec<String>>>,
+        detached_results: Mutex<HashMap<String, ExecResult>>,
+        killed_execs: Mutex<Vec<(String, String)>>,
     }
 
     impl MockBackend {
@@ -314,7 +367,28 @@ mod tests {
             Self {
                 exec_calls: Mutex::new(Vec::new()),
                 exec_results: Mutex::new(results),
+                detached_calls: Mutex::new(Vec::new()),
+                log_sequences: Mutex::new(HashMap::new()),
+                detached_results: Mutex::new(HashMap::new()),
+                killed_execs: Mutex::new(Vec::new()),
             }
+        }
+
+        fn with_detached_exec(
+            self,
+            exec_id: &str,
+            logs: Vec<&str>,
+            result: ExecResult,
+        ) -> Self {
+            self.log_sequences.lock().unwrap().insert(
+                exec_id.to_string(),
+                logs.into_iter().map(String::from).collect(),
+            );
+            self.detached_results
+                .lock()
+                .unwrap()
+                .insert(exec_id.to_string(), result);
+            self
         }
 
         #[allow(dead_code)]
@@ -364,6 +438,52 @@ mod tests {
             }
         }
 
+        async fn exec_detached(&self, _id: &ContainerId, cmd: &[&str]) -> Result<String> {
+            self.detached_calls
+                .lock()
+                .unwrap()
+                .push(cmd.iter().map(|s| (*s).to_string()).collect());
+            Ok("exec-1".to_string())
+        }
+
+        async fn exec_logs(&self, exec_id: &str) -> Result<mpsc::Receiver<String>> {
+            let mut rx_logs = self
+                .log_sequences
+                .lock()
+                .unwrap()
+                .remove(exec_id)
+                .unwrap_or_default();
+            let (tx, rx) = mpsc::channel(16);
+            tokio::spawn(async move {
+                for line in rx_logs.drain(..) {
+                    if tx.send(line).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(rx)
+        }
+
+        async fn exec_result(&self, exec_id: &str) -> Result<ExecResult> {
+            self.detached_results
+                .lock()
+                .unwrap()
+                .remove(exec_id)
+                .ok_or_else(|| anyhow::anyhow!("missing detached result for {exec_id}"))
+        }
+
+        async fn kill(&self, _id: &ContainerId, _signal: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn kill_exec(&self, exec_id: &str, signal: &str) -> Result<()> {
+            self.killed_execs
+                .lock()
+                .unwrap()
+                .push((exec_id.to_string(), signal.to_string()));
+            Ok(())
+        }
+
         async fn stop(&self, _id: &ContainerId) -> Result<()> {
             Ok(())
         }
@@ -407,6 +527,14 @@ mod tests {
     fn simple_step_run(cmd: &str, assertion: Option<Assertion>) -> TestStep {
         TestStep {
             run: Some(cmd.to_string()),
+            assert: assertion,
+            ..TestStep::default()
+        }
+    }
+
+    fn simple_step_kill_after_log(config: KillAfterLog, assertion: Option<Assertion>) -> TestStep {
+        TestStep {
+            kill_after_log: Some(config),
             assert: assertion,
             ..TestStep::default()
         }
@@ -556,6 +684,64 @@ mod tests {
         assert_eq!(suite.skipped(), 1);
         assert_eq!(suite.results[1].status, TestStatus::Skipped);
         assert!(suite.results[1].message.as_ref().unwrap().contains("T01"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_kill_after_log() {
+        let backend = MockBackend::new(Vec::new()).with_detached_exec(
+            "exec-1",
+            vec!["Preparing install", "Deploying files", "more output"],
+            ExecResult {
+                exit_code: 137,
+                stdout: "Preparing install\nDeploying files\n".to_string(),
+                stderr: "Killed\n".to_string(),
+            },
+        );
+
+        let manifest = make_manifest(vec![TestDef {
+            id: "T87".to_string(),
+            name: "sigkill_mid_install".to_string(),
+            description: "kills the conary process after matching a log line".to_string(),
+            timeout: 30,
+            step: vec![simple_step_kill_after_log(
+                KillAfterLog {
+                    conary: "ccs install ${PKG}".to_string(),
+                    pattern: "Deploying files".to_string(),
+                    timeout_seconds: 5,
+                },
+                Some(Assertion {
+                    exit_code_not: Some(0),
+                    ..Assertion::default()
+                }),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut overrides = HashMap::new();
+        overrides.insert("PKG".to_string(), "pkg.ccs".to_string());
+        let mut manifest = manifest;
+        manifest
+            .distro_overrides
+            .insert("fedora43".to_string(), overrides);
+
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(suite.failed(), 0);
+        assert_eq!(suite.passed(), 1);
+        assert_eq!(
+            backend.killed_execs.lock().unwrap().as_slice(),
+            [("exec-1".to_string(), "SIGKILL".to_string())]
+        );
+        let detached_calls = backend.detached_calls.lock().unwrap().clone();
+        assert_eq!(detached_calls.len(), 1);
+        assert!(detached_calls[0].join(" ").contains("/usr/local/bin/conary ccs install pkg.ccs"));
     }
 
     #[test]
