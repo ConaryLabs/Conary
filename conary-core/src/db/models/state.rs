@@ -289,6 +289,14 @@ pub struct StateDiff {
 
 impl StateDiff {
     /// Compare two states and return the diff
+    ///
+    // TODO: Memory optimization -- this loads both states fully into memory to
+    // build HashMap lookups. For large systems (10k+ packages), consider a
+    // streaming approach: use a single SQL query with a LEFT JOIN between the
+    // two state_members sets (e.g., `FROM state_members a FULL OUTER JOIN
+    // state_members b ON a.trove_name = b.trove_name WHERE a.state_id = ?1
+    // AND b.state_id = ?2`) and classify rows as added/removed/upgraded in
+    // the query itself, avoiding the need to materialise both member lists.
     pub fn compare(conn: &Connection, from_state_id: i64, to_state_id: i64) -> Result<Self> {
         let from_members = StateMember::find_by_state(conn, from_state_id)?;
         let to_members = StateMember::find_by_state(conn, to_state_id)?;
