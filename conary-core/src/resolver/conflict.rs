@@ -6,9 +6,13 @@
 //! package dependency resolution.
 
 /// A conflict between package requirements
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Conflict {
     /// Version constraint cannot be satisfied
+    #[error(
+        "Package {package} version {installed_version} does not satisfy \
+         constraint {required_constraint} required by {required_by}"
+    )]
     UnsatisfiableConstraint {
         package: String,
         installed_version: String,
@@ -16,60 +20,34 @@ pub enum Conflict {
         required_by: String,
     },
     /// Multiple packages require incompatible versions
+    #[error("{}", format_conflicting_constraints(package, constraints))]
     ConflictingConstraints {
         package: String,
         constraints: Vec<(String, String)>, // (requirer, constraint)
     },
     /// Circular dependency detected
+    #[error("Circular dependency: {}", cycle.join(" -> "))]
     CircularDependency { cycle: Vec<String> },
     /// Package is missing and cannot be found
+    #[error("Missing package {package} required by {}", required_by.join(", "))]
     MissingPackage {
         package: String,
         required_by: Vec<String>,
     },
 }
 
-impl std::fmt::Display for Conflict {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Conflict::UnsatisfiableConstraint {
-                package,
-                installed_version,
-                required_constraint,
-                required_by,
-            } => write!(
-                f,
-                "Package {} version {} does not satisfy constraint {} required by {}",
-                package, installed_version, required_constraint, required_by
-            ),
-            Conflict::ConflictingConstraints {
-                package,
-                constraints,
-            } => {
-                writeln!(
-                    f,
-                    "Conflicting version requirements for package {}:",
-                    package
-                )?;
-                for (requirer, constraint) in constraints {
-                    writeln!(f, "  - {} requires {}", requirer, constraint)?;
-                }
-                Ok(())
-            }
-            Conflict::CircularDependency { cycle } => {
-                write!(f, "Circular dependency: {}", cycle.join(" -> "))
-            }
-            Conflict::MissingPackage {
-                package,
-                required_by,
-            } => {
-                write!(
-                    f,
-                    "Missing package {} required by {}",
-                    package,
-                    required_by.join(", ")
-                )
-            }
-        }
+/// Format conflicting constraints with detail lines.
+fn format_conflicting_constraints(
+    package: &str,
+    constraints: &[(String, String)],
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    writeln!(out, "Conflicting version requirements for package {}:", package)
+        .expect("string write infallible");
+    for (requirer, constraint) in constraints {
+        writeln!(out, "  - {} requires {}", requirer, constraint)
+            .expect("string write infallible");
     }
+    out
 }
