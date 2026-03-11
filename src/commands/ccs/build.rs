@@ -47,10 +47,13 @@ pub fn cmd_ccs_build(
     );
 
     // Determine source directory
-    let source_dir = source
-        .as_ref()
-        .map(|s| Path::new(s).to_path_buf())
-        .unwrap_or_else(|| manifest_path.parent().unwrap().to_path_buf());
+    let source_dir = match source.as_ref() {
+        Some(s) => Path::new(s).to_path_buf(),
+        None => manifest_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("manifest path has no parent directory"))?
+            .to_path_buf(),
+    };
 
     // Parse targets
     let targets: Vec<&str> = if target == "all" {
