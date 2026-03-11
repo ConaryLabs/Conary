@@ -19,7 +19,7 @@ enum Commands {
         #[arg(long, required_unless_present = "all_distros")]
         distro: Option<String>,
 
-        /// Test phase (1 or 2)
+        /// Test phase (1, 2, or 3)
         #[arg(long, default_value = "1")]
         phase: u32,
 
@@ -75,6 +75,37 @@ fn manifest_dir() -> String {
         .unwrap_or_else(|_| "tests/integration/remi/manifests".into())
 }
 
+/// Discover manifests matching a requested phase.
+fn manifests_for_phase(phase: u32) -> Result<Vec<PathBuf>> {
+    let dir = manifest_dir();
+    let dir_path = Path::new(&dir);
+    if !dir_path.is_dir() {
+        bail!("manifest directory not found: {}", dir_path.display());
+    }
+
+    let mut manifests = Vec::new();
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "toml") {
+            continue;
+        }
+
+        let manifest = conary_test::config::load_manifest(&path)
+            .with_context(|| format!("failed to parse manifest: {}", path.display()))?;
+        if manifest.suite.phase == phase {
+            manifests.push(path);
+        }
+    }
+
+    manifests.sort();
+    if manifests.is_empty() {
+        bail!("no manifests found for phase {phase} in {}", dir_path.display());
+    }
+
+    Ok(manifests)
+}
+
 /// Resolve the containerfile path for a distro.
 fn containerfile_path(
     config: &conary_test::config::distro::GlobalConfig,
@@ -126,31 +157,43 @@ fn run_single_distro(
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
 
-        // Load the test manifest.
-        let manifest_path = match suite_path {
-            Some(p) => PathBuf::from(p),
-            None => PathBuf::from(manifest_dir()).join(format!("phase{phase}.toml")),
+        let manifest_paths = match suite_path {
+            Some(p) => vec![PathBuf::from(p)],
+            None => manifests_for_phase(phase)?,
         };
-        let manifest = conary_test::config::load_manifest(&manifest_path)
-            .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
 
-        // Run the tests.
-        let mut runner =
-            conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-        let suite = runner.run(&manifest, &backend, &container_id).await?;
+        let mut aggregate_suite = conary_test::engine::suite::TestSuite::new(
+            &format!("phase-{phase}"),
+            phase,
+        );
+        aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+
+        for manifest_path in &manifest_paths {
+            let manifest = conary_test::config::load_manifest(manifest_path).with_context(|| {
+                format!("failed to load manifest: {}", manifest_path.display())
+            })?;
+
+            let mut runner =
+                conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
+            let suite = runner.run(&manifest, &backend, &container_id).await?;
+            for result in suite.results {
+                aggregate_suite.record(result);
+            }
+        }
+        aggregate_suite.finish();
 
         // Print JSON results.
-        let json = conary_test::report::json::to_json_report(&suite)?;
+        let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
         println!("{json}");
 
         // Write results to file.
         let results_dir = PathBuf::from(&config.paths.results_dir);
         std::fs::create_dir_all(&results_dir).ok();
         let results_file = results_dir.join(format!("{distro}-phase{phase}.json"));
-        conary_test::report::json::write_json_report(&suite, &results_file)?;
+        conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
         tracing::info!(path = %results_file.display(), "Results written");
 
-        let has_failures = suite.failed() > 0;
+        let has_failures = aggregate_suite.failed() > 0;
 
         // Cleanup container.
         if let Err(e) = backend.stop(&container_id).await {
