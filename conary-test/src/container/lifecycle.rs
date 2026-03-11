@@ -118,9 +118,12 @@ impl ContainerBackend for BollardBackend {
             ..Default::default()
         };
 
-        let mut stream = self
-            .docker
-            .build_image(options, None, Some(Bytes::from(tar_bytes)));
+        // Podman rejects an empty X-Registry-Config header on /build, while
+        // bollard emits that header when credentials=None. Pass an explicit
+        // empty config map so the header serializes to "{}" instead.
+        let mut stream =
+            self.docker
+                .build_image(options, Some(HashMap::new()), Some(Bytes::from(tar_bytes)));
 
         while let Some(result) = stream.next().await {
             match result {
