@@ -53,6 +53,8 @@ pub struct DebPackage {
     priority: Option<String>,
     homepage: Option<String>,
     installed_size: Option<u64>,
+    /// Cached data tarball bytes to avoid re-extracting from the AR archive
+    data_tar_cache: Vec<u8>,
 }
 
 impl DebPackage {
@@ -431,6 +433,7 @@ impl PackageFormat for DebPackage {
             priority: control.priority,
             homepage: control.homepage,
             installed_size: control.installed_size,
+            data_tar_cache: data_tar_data,
         })
     }
 
@@ -464,14 +467,8 @@ impl PackageFormat for DebPackage {
             self.meta.package_path()
         );
 
-        let path_str =
-            self.meta.package_path().to_str().ok_or_else(|| {
-                Error::InitError("Package path contains invalid UTF-8".to_string())
-            })?;
-        // Use single-pass AR extraction, then extract files from data tar
-        let (_control_data, data_tar_data) = Self::extract_ar_members(path_str)?;
-
-        let reader = Self::create_tar_decoder(&data_tar_data)?;
+        // Use cached data tarball instead of re-extracting from the AR archive
+        let reader = Self::create_tar_decoder(&self.data_tar_cache)?;
         let mut archive = Archive::new(reader);
         let mut extracted_files = Vec::new();
 
