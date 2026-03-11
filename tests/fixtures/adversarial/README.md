@@ -10,5 +10,6 @@ Layout:
 - `deps/`: interdependent CCS packages for resolver edge cases
 - `large/`: generated stress fixtures that are too large to check in directly
 
-Use `tests/fixtures/adversarial/build-all.sh` to build every fixture set once the
-per-group builder scripts are added in subsequent tasks.
+Use `tests/fixtures/adversarial/build-all.sh` to build every fixture set, or run
+`tests/fixtures/adversarial/build-large.sh` directly to regenerate the large stress
+fixtures in `large/`.
