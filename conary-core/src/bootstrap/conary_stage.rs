@@ -199,11 +199,34 @@ impl ConaryStageBuilder {
             ));
         }
 
+        // Resolve the Conary source root to an absolute path so we don't
+        // accidentally copy whatever the process's cwd happens to be at
+        // runtime.  The source root is the workspace root: two levels above
+        // this crate's Cargo.toml (conary-core/../..).
+        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // CARGO_MANIFEST_DIR points at conary-core/; the workspace root is one
+        // level up.
+        let conary_source_root = crate_dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| {
+                ConaryStageError::ConaryBuildFailed(
+                    "could not determine workspace root from CARGO_MANIFEST_DIR".into(),
+                )
+            })?
+            .canonicalize()
+            .map_err(|e| {
+                ConaryStageError::ConaryBuildFailed(format!(
+                    "could not canonicalize workspace root: {e}"
+                ))
+            })?;
+
         // Copy conary source into work directory
         let src_dir = self._work_dir.join("conary-src");
         if !src_dir.exists() {
             let status = std::process::Command::new("cp")
-                .args(["-a", "."])
+                .args(["-a"])
+                .arg(&conary_source_root)
                 .arg(&src_dir)
                 .status()
                 .map_err(|e| ConaryStageError::ConaryBuildFailed(e.to_string()))?;
