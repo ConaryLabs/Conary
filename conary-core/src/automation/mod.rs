@@ -346,7 +346,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 
     // Validate input is ASCII to avoid panics from split_at on multi-byte chars
     if !s.is_ascii() {
-        return Err(crate::error::Error::Config(format!(
+        return Err(crate::error::Error::ConfigError(format!(
             "Invalid duration string (non-ASCII): {}",
             s
         )));
@@ -354,13 +354,13 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 
     let (num_str, unit) = s.split_at(s.len() - 1);
     if num_str.is_empty() || !num_str.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(crate::error::Error::Config(format!(
+        return Err(crate::error::Error::ConfigError(format!(
             "Invalid duration number: {}",
             num_str
         )));
     }
     let num: u64 = num_str.parse().map_err(|_| {
-        crate::error::Error::Config(format!("Invalid duration number: {}", num_str))
+        crate::error::Error::ConfigError(format!("Invalid duration number: {}", num_str))
     })?;
 
     let seconds = match unit {
@@ -370,7 +370,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         "d" => num * 86400,
         "w" => num * 604800,
         _ => {
-            return Err(crate::error::Error::Config(format!(
+            return Err(crate::error::Error::ConfigError(format!(
                 "Invalid duration unit: {}",
                 unit
             )));

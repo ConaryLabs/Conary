@@ -117,10 +117,6 @@ pub enum Error {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 
-    /// Configuration error (short form)
-    #[error("Config error: {0}")]
-    Config(String),
-
     /// JSON serialization/deserialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
