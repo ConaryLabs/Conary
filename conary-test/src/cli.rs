@@ -135,7 +135,7 @@ fn run_single_distro(
             .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
 
         // Run the tests.
-        let runner =
+        let mut runner =
             conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
         let suite = runner.run(&manifest, &backend, &container_id).await?;
 

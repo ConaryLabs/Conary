@@ -2,12 +2,15 @@
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// Top-level test manifest (one TOML file = one suite).
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestManifest {
     pub suite: SuiteDef,
     pub test: Vec<TestDef>,
+    #[serde(default)]
+    pub distro_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

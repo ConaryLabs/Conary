@@ -45,13 +45,22 @@ impl TestRunner {
         }
     }
 
+    /// Load distro-specific manifest variables into the runner variable map.
+    pub fn load_manifest_vars(&mut self, manifest: &TestManifest) {
+        if let Some(overrides) = manifest.distro_overrides.get(&self.distro) {
+            self.vars.extend(overrides.clone());
+        }
+    }
+
     /// Run all tests in the manifest against the given container.
     pub async fn run(
-        &self,
+        &mut self,
         manifest: &TestManifest,
         backend: &dyn ContainerBackend,
         container_id: &ContainerId,
     ) -> Result<TestSuite> {
+        self.load_manifest_vars(manifest);
+
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
         suite.status = crate::engine::suite::RunStatus::Running;
 
@@ -96,14 +105,14 @@ impl TestRunner {
                         tokio::time::sleep(Duration::from_secs(secs)).await;
                     }
                     StepType::Run(cmd) => {
-                        let expanded = self.expand_vars(&cmd);
+                        let expanded = self.substitute_vars(&cmd);
                         let result = backend
                             .exec(container_id, &["sh", "-c", &expanded], timeout)
                             .await?;
                         last_exec = Some(result);
                     }
                     StepType::Conary(args) => {
-                        let expanded = self.expand_vars(&args);
+                        let expanded = self.substitute_vars(&args);
                         let full_cmd = format!(
                             "{} {} --db-path {}",
                             self.config.paths.conary_bin, expanded, self.config.paths.db
@@ -114,7 +123,7 @@ impl TestRunner {
                         last_exec = Some(result);
                     }
                     StepType::FileExists(path) => {
-                        let expanded = self.expand_vars(&path);
+                        let expanded = self.substitute_vars(&path);
                         let result = backend
                             .exec(container_id, &["test", "-e", &expanded], timeout)
                             .await?;
@@ -126,7 +135,7 @@ impl TestRunner {
                         last_exec = Some(result);
                     }
                     StepType::FileNotExists(path) => {
-                        let expanded = self.expand_vars(&path);
+                        let expanded = self.substitute_vars(&path);
                         let result = backend
                             .exec(container_id, &["test", "!", "-e", &expanded], timeout)
                             .await?;
@@ -138,7 +147,7 @@ impl TestRunner {
                         last_exec = Some(result);
                     }
                     StepType::FileExecutable(path) => {
-                        let expanded = self.expand_vars(&path);
+                        let expanded = self.substitute_vars(&path);
                         let result = backend
                             .exec(container_id, &["test", "-x", &expanded], timeout)
                             .await?;
@@ -150,7 +159,7 @@ impl TestRunner {
                         last_exec = Some(result);
                     }
                     StepType::DirExists(path) => {
-                        let expanded = self.expand_vars(&path);
+                        let expanded = self.substitute_vars(&path);
                         let result = backend
                             .exec(container_id, &["test", "-d", &expanded], timeout)
                             .await?;
@@ -162,7 +171,7 @@ impl TestRunner {
                         last_exec = Some(result);
                     }
                     StepType::FileChecksum(chk) => {
-                        let expanded_path = self.expand_vars(&chk.path);
+                        let expanded_path = self.substitute_vars(&chk.path);
                         let cmd = format!("sha256sum {expanded_path}");
                         let result = backend
                             .exec(container_id, &["sh", "-c", &cmd], timeout)
@@ -268,7 +277,7 @@ impl TestRunner {
     }
 
     /// Replace `${VAR}` patterns in a string with values from the variable map.
-    fn expand_vars(&self, input: &str) -> String {
+    fn substitute_vars(&self, input: &str) -> String {
         if !input.contains("${") {
             return input.to_string();
         }
@@ -419,6 +428,7 @@ mod tests {
                 setup: Vec::new(),
             },
             test: tests,
+            distro_overrides: HashMap::new(),
         }
     }
 
@@ -447,7 +457,7 @@ mod tests {
             group: None,
         }]);
 
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string())
             .await
@@ -481,7 +491,7 @@ mod tests {
             group: None,
         }]);
 
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string())
             .await
@@ -536,7 +546,7 @@ mod tests {
             },
         ]);
 
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string())
             .await
@@ -549,16 +559,26 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_vars() {
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
-        let expanded = runner.expand_vars("curl ${REMI_ENDPOINT}/health");
+    fn test_substitute_vars() {
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut manifest = make_manifest(Vec::new());
+        manifest.distro_overrides.insert(
+            "fedora43".to_string(),
+            HashMap::from([("PKG".to_string(), "tree".to_string())]),
+        );
+        runner.load_manifest_vars(&manifest);
+
+        let expanded = runner.substitute_vars("curl ${REMI_ENDPOINT}/health");
         assert_eq!(expanded, "curl https://packages.conary.io/health");
 
-        let expanded2 = runner.expand_vars("${CONARY_BIN} --db-path ${DB_PATH}");
+        let expanded2 = runner.substitute_vars("${CONARY_BIN} --db-path ${DB_PATH}");
         assert_eq!(
             expanded2,
             "/usr/local/bin/conary --db-path /tmp/conary-test.db"
         );
+
+        let expanded3 = runner.substitute_vars("conary install ${PKG}");
+        assert_eq!(expanded3, "conary install tree");
     }
 
     #[test]
