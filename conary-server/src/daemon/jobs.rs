@@ -144,15 +144,20 @@ impl DaemonJob {
         Ok(job)
     }
 
-    /// List jobs by status
-    pub fn list_by_status(conn: &Connection, status: JobStatus) -> Result<Vec<Self>> {
+    /// List jobs by status, with an optional limit (default 100, max 1000)
+    pub fn list_by_status(
+        conn: &Connection,
+        status: JobStatus,
+        limit: Option<usize>,
+    ) -> Result<Vec<Self>> {
+        let capped = limit.unwrap_or(100).min(1000) as i64;
         let sql = format!(
-            "SELECT {} FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC",
+            "SELECT {} FROM daemon_jobs WHERE status = ?1 ORDER BY created_at ASC LIMIT ?2",
             JOB_COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let jobs = stmt
-            .query_map([status.as_str()], Self::from_row)?
+            .query_map(params![status.as_str(), capped], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(jobs)
     }
@@ -557,12 +562,12 @@ mod tests {
         DaemonJob::update_status(&conn, &job3.id, JobStatus::Completed).unwrap();
 
         // List queued
-        let queued = DaemonJob::list_by_status(&conn, JobStatus::Queued).unwrap();
+        let queued = DaemonJob::list_by_status(&conn, JobStatus::Queued, None).unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].id, job1.id);
 
         // List running
-        let running = DaemonJob::list_by_status(&conn, JobStatus::Running).unwrap();
+        let running = DaemonJob::list_by_status(&conn, JobStatus::Running, None).unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, job2.id);
     }
