@@ -1,0 +1,213 @@
+# tests/integration/remi/manifests/phase3-group-i.toml
+#
+# Phase 3, Group I: Security Boundaries (T97-T106).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+
+[suite]
+name = "Phase 3 Group I: Security Boundaries"
+phase = 3
+
+# --------------------------------------------------------------------------
+# T97: Path traversal blocked
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T97"
+name = "path_traversal_blocked"
+description = "Package with ../../etc/shadow path should be blocked"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traversal/output/path-traversal-malicious.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "traversal"
+
+[[test.step]]
+file_not_exists = "/etc/shadow.bak"
+
+# --------------------------------------------------------------------------
+# T98: Symlink attack blocked
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T98"
+name = "symlink_attack_blocked"
+description = "Symlink overwrite attack against /etc/passwd should be blocked"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-attack/output/symlink-attack-malicious.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "symlink"
+
+[[test.step]]
+file_not_exists = "/etc/passwd.bak"
+
+# --------------------------------------------------------------------------
+# T99: Setuid stripped
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T99"
+name = "setuid_bit_stripped"
+description = "Setuid-marked binaries should be stripped or rejected by policy"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/setuid/output/adversarial-setuid-1.0.0.ccs --allow-unsigned"
+
+[test.step.assert]
+stdout_contains_any_if_success = ["stripped", "Warning"]
+
+[[test.step]]
+run = "stat -c '%a' /usr/bin/setuid-helper 2>/dev/null || true"
+
+[test.step.assert]
+stdout_not_contains = "4755"
+
+# --------------------------------------------------------------------------
+# T100: /proc/self/environ blocked
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T100"
+name = "sandbox_blocks_proc_environ"
+description = "Scriptlet access to /proc/self/environ should be blocked by sandbox policy"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --allow-unsigned --sandbox always"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "sandbox"
+
+# --------------------------------------------------------------------------
+# T101: Network access blocked
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T101"
+name = "sandbox_blocks_network_access"
+description = "Scriptlet network access should be blocked by sandbox policy"
+timeout = 30
+group = "I"
+
+[test.resources]
+network_isolated = true
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0.ccs --allow-unsigned --sandbox always"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "network"
+
+[[test.step]]
+file_not_exists = "/etc/conary-hostile-scriptlet"
+
+# --------------------------------------------------------------------------
+# T102: Write outside target root blocked
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T102"
+name = "sandbox_blocks_write_outside_root"
+description = "Scriptlets writing outside the target root should be blocked by Landlock or sandbox policy"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --allow-unsigned --sandbox always"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "denied"
+
+[[test.step]]
+file_not_exists = "/tmp/conary-escape-marker"
+
+# --------------------------------------------------------------------------
+# T103: Expired signature rejected
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T103"
+name = "expired_signature_rejected"
+description = "Packages with expired GPG signatures should be rejected with a meaningful error"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "expired"
+
+# --------------------------------------------------------------------------
+# T104: Package capabilities without privilege
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T104"
+name = "package_capabilities_require_privilege"
+description = "Installing a package with Linux capabilities should enforce privilege requirements"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "capability"
+
+# --------------------------------------------------------------------------
+# T105: Capabilities exceed policy
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T105"
+name = "capabilities_exceed_policy_rejected"
+description = "Packages requesting capabilities beyond policy allowance should be rejected"
+timeout = 30
+group = "I"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "policy"
+
+# --------------------------------------------------------------------------
+# T106: Decompression bomb rejected
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T106"
+name = "decompression_bomb_rejected"
+description = "A decompression bomb package should be rejected before exhausting resources"
+timeout = 30
+group = "I"
+
+[test.resources]
+memory_limit_mb = 512
+network_isolated = false
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompression-bomb/output/decompression-bomb.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "limit"
