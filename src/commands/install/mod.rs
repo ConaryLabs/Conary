@@ -199,15 +199,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         from_distro,
     } = opts;
 
+    // Open the database once for all pre-install checks (canonical resolution,
+    // adoption check, promotion check). This connection is later promoted to `mut`
+    // for the main install transaction.
+    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+
     // If --from <distro> was specified, resolve the canonical name to that distro's package name
     let resolved_name: Option<String> = if let Some(ref target_distro) = from_distro {
-        let db_conn = conary_core::db::open(db_path)
-            .context("Failed to open database for canonical resolution")?;
         if let Some(canonical) =
-            conary_core::db::models::CanonicalPackage::resolve_name(&db_conn, package)?
+            conary_core::db::models::CanonicalPackage::resolve_name(&conn, package)?
         {
             let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
-                &db_conn,
+                &conn,
                 canonical.id.ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
             )?;
             if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
@@ -267,64 +270,54 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     }
 
     // Check if the package is adopted from the system PM
+    if let Some(existing) =
+        conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+        && existing.install_source.is_adopted()
     {
-        let conn = conary_core::db::open(db_path)
-            .context("Failed to open package database for adoption check")?;
-
-        if let Some(existing) =
-            conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
-            && existing.install_source.is_adopted()
-        {
-            if !force {
-                let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
-                return Err(anyhow::anyhow!(
-                    "Package '{}' is adopted from {}. Use 'conary system adopt --takeover {}' \
-                     to take full ownership, or use '--force' to override.",
-                    package_name,
-                    pkg_mgr.display_name(),
-                    package_name
-                ));
-            }
-            println!(
-                "[INFO] Package '{}' is adopted -- proceeding with --force",
+        if !force {
+            let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
+            return Err(anyhow::anyhow!(
+                "Package '{}' is adopted from {}. Use 'conary system adopt --takeover {}' \
+                 to take full ownership, or use '--force' to override.",
+                package_name,
+                pkg_mgr.display_name(),
                 package_name
-            );
+            ));
         }
+        println!(
+            "[INFO] Package '{}' is adopted -- proceeding with --force",
+            package_name
+        );
     }
 
     // Check if the package is already installed as a dependency - if so, promote it
     // This must happen before we try to download, as we may not need to do anything else
+    if let Some(existing) =
+        conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+        && existing.install_reason == conary_core::db::models::InstallReason::Dependency
     {
-        let conn = conary_core::db::open(db_path)
-            .context("Failed to open package database for promotion check")?;
+        // Check if we're requesting a specific version that differs
+        let needs_version_change = version.as_ref().is_some_and(|v| v != &existing.version);
 
-        if let Some(existing) =
-            conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
-            && existing.install_reason == conary_core::db::models::InstallReason::Dependency
-        {
-            // Check if we're requesting a specific version that differs
-            let needs_version_change = version.as_ref().is_some_and(|v| v != &existing.version);
+        // Promote to explicit
+        let reason = selection_reason.unwrap_or("Explicitly installed by user");
+        conary_core::db::models::Trove::promote_to_explicit(
+            &conn,
+            &package_name,
+            Some(reason),
+        )?;
+        println!("Promoted {} from dependency to explicit", package_name);
 
-            // Promote to explicit
-            let reason = selection_reason.unwrap_or("Explicitly installed by user");
-            conary_core::db::models::Trove::promote_to_explicit(
-                &conn,
-                &package_name,
-                Some(reason),
-            )?;
-            println!("Promoted {} from dependency to explicit", package_name);
-
-            // If same version (or no version specified), we're done
-            if !needs_version_change {
-                println!("{} {} is already installed", package_name, existing.version);
-                return Ok(());
-            }
-            // Otherwise continue with version upgrade
-            info!(
-                "Continuing with version change: {} -> {:?}",
-                existing.version, version
-            );
+        // If same version (or no version specified), we're done
+        if !needs_version_change {
+            println!("{} {} is already installed", package_name, existing.version);
+            return Ok(());
         }
+        // Otherwise continue with version upgrade
+        info!(
+            "Continuing with version change: {} -> {:?}",
+            existing.version, version
+        );
     }
 
     // Create progress tracker for single package installation
@@ -403,7 +396,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
     }
 
-    let mut conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    // Promote the pre-install connection to mutable for the main install transaction
+    let mut conn = conn;
 
     // Build dependency edges from the package
     let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
