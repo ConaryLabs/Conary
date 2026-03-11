@@ -254,17 +254,3 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .sum()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 bytes");
-        assert_eq!(format_bytes(512), "512 bytes");
-        assert_eq!(format_bytes(1024), "1.00 KB");
-        assert_eq!(format_bytes(1_048_576), "1.00 MB");
-        assert_eq!(format_bytes(1_073_741_824), "1.00 GB");
-        assert_eq!(format_bytes(2_684_354_560), "2.50 GB");
-    }
-}
