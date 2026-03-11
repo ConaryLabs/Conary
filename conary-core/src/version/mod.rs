@@ -278,7 +278,14 @@ impl VersionConstraint {
     pub fn satisfies(&self, version: &RpmVersion) -> bool {
         match self {
             VersionConstraint::Any => true,
-            VersionConstraint::Exact(v) => version == v,
+            VersionConstraint::Exact(v) => {
+                // Normalize epoch (default 0) and release (default None)
+                // so that "1.2.3" matches "0:1.2.3" and "1.2.3-" matches "1.2.3"
+                version.epoch == v.epoch
+                    && version.version == v.version
+                    && version.release.as_deref().unwrap_or("")
+                        == v.release.as_deref().unwrap_or("")
+            }
             VersionConstraint::GreaterThan(v) => version > v,
             VersionConstraint::GreaterOrEqual(v) => version >= v,
             VersionConstraint::LessThan(v) => version < v,
@@ -450,6 +457,24 @@ mod tests {
 
         let c2 = VersionConstraint::parse(">= 1.0.0, < 2.0.0").unwrap();
         assert_eq!(c2.to_string(), ">= 1.0.0, < 2.0.0");
+    }
+
+    #[test]
+    fn test_exact_match_normalizes_epoch_and_release() {
+        // "1.2.3" (no epoch/release) should match "0:1.2.3" (explicit epoch 0)
+        let c = VersionConstraint::parse("= 1.2.3").unwrap();
+        let v = RpmVersion::parse("0:1.2.3").unwrap();
+        assert!(c.satisfies(&v));
+
+        // "0:1.2.3" constraint should match "1.2.3" (no epoch)
+        let c = VersionConstraint::parse("= 0:1.2.3").unwrap();
+        let v = RpmVersion::parse("1.2.3").unwrap();
+        assert!(c.satisfies(&v));
+
+        // Release None vs Some should not match
+        let c = VersionConstraint::parse("= 1.2.3").unwrap();
+        let v = RpmVersion::parse("1.2.3-1.fc43").unwrap();
+        assert!(!c.satisfies(&v));
     }
 
     #[test]
