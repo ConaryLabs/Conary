@@ -196,8 +196,17 @@ impl HeuristicInferrer {
 #[allow(dead_code)] // Fields reserved for future use
 struct NameHints {
     is_server: bool,
+    // TODO: use is_client to suppress outbound-listen capability suggestions
+    // for packages that are pure clients (e.g. curl, wget) and avoid
+    // over-broad network profiles for them.
     is_client: bool,
+    // TODO: use is_lib to skip syscall profile assignment for library packages
+    // that have no standalone executable -- libraries inherit their caller's
+    // profile rather than needing their own.
     is_lib: bool,
+    // TODO: use is_dev to gate header/include path write access in the
+    // filesystem capability so -dev packages aren't granted runtime write
+    // access to /usr/include.
     is_dev: bool,
 }
 
