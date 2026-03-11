@@ -63,32 +63,91 @@ impl RpmVersion {
         })
     }
 
-    /// Compare version strings component-by-component.
+    /// Compare version strings using RPM's `rpmvercmp` algorithm.
     ///
-    /// Splits on '.' and compares each segment numerically when possible,
-    /// falling back to lexicographic comparison for non-numeric segments.
-    /// This preserves 4th+ version components that semver would discard.
+    /// The algorithm splits each string into alternating runs of digits and
+    /// non-digit characters (skipping separators like `.` and `-`). Digit
+    /// runs are compared numerically (with leading zeros stripped), alpha
+    /// runs are compared lexicographically, and digit runs always sort
+    /// after alpha runs.
     fn compare_version_strings(a: &str, b: &str) -> Ordering {
-        let a_parts: Vec<&str> = a.split('.').collect();
-        let b_parts: Vec<&str> = b.split('.').collect();
+        let segments_a = Self::split_version_segments(a);
+        let segments_b = Self::split_version_segments(b);
 
-        for i in 0..a_parts.len().max(b_parts.len()) {
-            let a_part = a_parts.get(i).copied().unwrap_or("0");
-            let b_part = b_parts.get(i).copied().unwrap_or("0");
+        for i in 0..segments_a.len().max(segments_b.len()) {
+            let seg_a = segments_a.get(i);
+            let seg_b = segments_b.get(i);
 
-            match (a_part.parse::<u64>(), b_part.parse::<u64>()) {
-                (Ok(a_num), Ok(b_num)) => match a_num.cmp(&b_num) {
-                    Ordering::Equal => continue,
-                    ord => return ord,
-                },
-                _ => match a_part.cmp(b_part) {
-                    Ordering::Equal => continue,
-                    ord => return ord,
-                },
+            match (seg_a, seg_b) {
+                (None, None) => return Ordering::Equal,
+                (Some(_), None) => return Ordering::Greater,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(sa), Some(sb)) => {
+                    let a_is_num = sa.chars().all(|c| c.is_ascii_digit());
+                    let b_is_num = sb.chars().all(|c| c.is_ascii_digit());
+
+                    match (a_is_num, b_is_num) {
+                        // Both numeric: compare as numbers
+                        (true, true) => {
+                            let a_trimmed = sa.trim_start_matches('0');
+                            let b_trimmed = sb.trim_start_matches('0');
+                            match a_trimmed.len().cmp(&b_trimmed.len()) {
+                                Ordering::Equal => match a_trimmed.cmp(b_trimmed) {
+                                    Ordering::Equal => continue,
+                                    ord => return ord,
+                                },
+                                ord => return ord,
+                            }
+                        }
+                        // Digits always beat alphas in RPM
+                        (true, false) => return Ordering::Greater,
+                        (false, true) => return Ordering::Less,
+                        // Both alpha: lexicographic
+                        (false, false) => match sa.cmp(sb) {
+                            Ordering::Equal => continue,
+                            ord => return ord,
+                        },
+                    }
+                }
             }
         }
 
         Ordering::Equal
+    }
+
+    /// Split a version string into alternating runs of digits and non-digits,
+    /// skipping separator characters (`.`, `-`, `_`).
+    fn split_version_segments(s: &str) -> Vec<&str> {
+        let mut segments = Vec::new();
+        let mut i = 0;
+        let bytes = s.as_bytes();
+
+        while i < bytes.len() {
+            // Skip separators
+            if bytes[i] == b'.' || bytes[i] == b'-' || bytes[i] == b'_' {
+                i += 1;
+                continue;
+            }
+
+            let start = i;
+            if bytes[i].is_ascii_digit() {
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            } else {
+                while i < bytes.len()
+                    && !bytes[i].is_ascii_digit()
+                    && bytes[i] != b'.'
+                    && bytes[i] != b'-'
+                    && bytes[i] != b'_'
+                {
+                    i += 1;
+                }
+            }
+            segments.push(&s[start..i]);
+        }
+
+        segments
     }
 
     /// Compare two RPM versions
@@ -391,6 +450,28 @@ mod tests {
 
         let c2 = VersionConstraint::parse(">= 1.0.0, < 2.0.0").unwrap();
         assert_eq!(c2.to_string(), ">= 1.0.0, < 2.0.0");
+    }
+
+    #[test]
+    fn test_rpmvercmp_digits_beat_alpha() {
+        // Digit segments always sort after alpha segments in RPM
+        let v1 = RpmVersion::parse("1.0a").unwrap();
+        let v2 = RpmVersion::parse("1.01").unwrap();
+        assert_eq!(v1.compare(&v2), Ordering::Less);
+    }
+
+    #[test]
+    fn test_rpmvercmp_leading_zeros() {
+        let v1 = RpmVersion::parse("1.001").unwrap();
+        let v2 = RpmVersion::parse("1.1").unwrap();
+        assert_eq!(v1.compare(&v2), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_rpmvercmp_mixed_alpha_numeric() {
+        let v1 = RpmVersion::parse("2.0.1a").unwrap();
+        let v2 = RpmVersion::parse("2.0.1b").unwrap();
+        assert!(v1 < v2);
     }
 
     #[test]
