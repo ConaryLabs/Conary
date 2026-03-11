@@ -189,21 +189,56 @@ pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<Vers
 }
 
 /// Download the CCS package to a temp directory and return the path
+///
+/// Streams the download through a SHA-256 hasher while writing to disk,
+/// avoiding a second full read of the file for verification.
 pub fn download_update(
     download_url: &str,
     expected_sha256: &str,
     dest_dir: &Path,
 ) -> Result<PathBuf> {
-    use crate::repository::RepositoryClient;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
 
     let dest_path = dest_dir.join("conary-update.ccs");
-    let client = RepositoryClient::new()?;
-    client.download_file(download_url, &dest_path)?;
 
-    // Verify SHA-256
-    let content = fs::read(&dest_path)
-        .map_err(|e| Error::IoError(format!("Failed to read downloaded file: {e}")))?;
-    let actual_hash = crate::hash::sha256(&content);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
+
+    let mut response = client
+        .get(download_url)
+        .send()
+        .map_err(|e| Error::DownloadError(format!("Failed to download update: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(Error::DownloadError(format!(
+            "Download failed: HTTP {}",
+            response.status()
+        )));
+    }
+
+    let mut file = fs::File::create(&dest_path)
+        .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        let n = response
+            .read(&mut buf)
+            .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        file.write_all(&buf[..n])
+            .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
+    }
+    file.flush()
+        .map_err(|e| Error::IoError(format!("Failed to flush download file: {e}")))?;
+
+    let actual_hash = hex::encode(hasher.finalize());
     if actual_hash != expected_sha256 {
         fs::remove_file(&dest_path).ok();
         return Err(Error::ChecksumMismatch {
