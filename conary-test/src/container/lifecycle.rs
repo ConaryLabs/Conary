@@ -296,7 +296,8 @@ impl ContainerBackend for BollardBackend {
                             bollard::container::LogOutput::StdOut { message } => {
                                 let text = String::from_utf8_lossy(&message).to_string();
                                 stdout.push_str(&text);
-                                for line in Self::collect_line_fragments(&mut stdout_buffer, &text) {
+                                for line in Self::collect_line_fragments(&mut stdout_buffer, &text)
+                                {
                                     if let Some(value) = line
                                         .strip_prefix("__CONARY_TEST_PID__=")
                                         .and_then(|pid_text| pid_text.parse::<u64>().ok())
@@ -313,7 +314,8 @@ impl ContainerBackend for BollardBackend {
                             bollard::container::LogOutput::StdErr { message } => {
                                 let text = String::from_utf8_lossy(&message).to_string();
                                 stderr.push_str(&text);
-                                for line in Self::collect_line_fragments(&mut stderr_buffer, &text) {
+                                for line in Self::collect_line_fragments(&mut stderr_buffer, &text)
+                                {
                                     if tx.send(line).await.is_err() {
                                         break;
                                     }
@@ -453,7 +455,11 @@ impl ContainerBackend for BollardBackend {
 
         let signal_cmd = format!("kill -s {signal} {target_pid}");
         let result = self
-            .exec(&container_id, &["sh", "-c", &signal_cmd], Duration::from_secs(10))
+            .exec(
+                &container_id,
+                &["sh", "-c", &signal_cmd],
+                Duration::from_secs(10),
+            )
             .await?;
         if result.exit_code != 0 {
             bail!("failed to signal exec {exec_id}: {}", result.stderr.trim());
