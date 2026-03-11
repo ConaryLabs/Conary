@@ -140,110 +140,6 @@ impl ChunkInfo {
     }
 }
 
-/// Builder for constructing content provenance during package creation
-#[allow(dead_code)]
-pub struct ContentProvenanceBuilder {
-    files: Vec<FileHash>,
-    chunks: Vec<ChunkInfo>,
-    components: BTreeMap<String, Vec<FileHash>>,
-}
-
-#[allow(dead_code)]
-impl ContentProvenanceBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            files: Vec::new(),
-            chunks: Vec::new(),
-            components: BTreeMap::new(),
-        }
-    }
-
-    /// Add a file with its hash
-    pub fn add_file(&mut self, path: &str, hash: &str, size: u64, component: &str) {
-        let file_hash = FileHash {
-            path: path.to_string(),
-            hash: hash.to_string(),
-            size,
-        };
-
-        self.files.push(file_hash.clone());
-        self.components
-            .entry(component.to_string())
-            .or_default()
-            .push(file_hash);
-    }
-
-    /// Add a chunk
-    pub fn add_chunk(&mut self, hash: &str, size: u64, offset: u64) {
-        self.chunks.push(ChunkInfo::new(hash, size, offset));
-    }
-
-    /// Build the content provenance
-    pub fn build(self) -> ContentProvenance {
-        use sha2::{Digest, Sha256};
-
-        // Compute merkle root from sorted file hashes
-        let mut hasher = Sha256::new();
-        let mut sorted_files = self.files.clone();
-        sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
-
-        for file in &sorted_files {
-            hasher.update(file.path.as_bytes());
-            hasher.update(file.hash.as_bytes());
-        }
-
-        let merkle_root = format!("sha256:{}", hex::encode(hasher.finalize()));
-
-        // Compute component hashes
-        let mut component_hashes = BTreeMap::new();
-        for (name, files) in &self.components {
-            let mut comp_hasher = Sha256::new();
-            let mut size = 0u64;
-
-            for file in files {
-                comp_hasher.update(file.hash.as_bytes());
-                size += file.size;
-            }
-
-            component_hashes.insert(
-                name.clone(),
-                ComponentHash::new(
-                    &format!("sha256:{}", hex::encode(comp_hasher.finalize())),
-                    size,
-                    files.len() as u64,
-                ),
-            );
-        }
-
-        let total_size: u64 = self.files.iter().map(|f| f.size).sum();
-        let file_count = self.files.len() as u64;
-
-        ContentProvenance {
-            merkle_root: Some(merkle_root),
-            component_hashes,
-            chunk_manifest: self.chunks,
-            total_size,
-            file_count,
-        }
-    }
-}
-
-impl Default for ContentProvenanceBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Internal struct for tracking file hashes
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct FileHash {
-    path: String,
-    hash: String,
-    size: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,24 +152,6 @@ mod tests {
 
         assert_eq!(content.component_hashes.len(), 2);
         assert!(content.verify("sha256:merkleroot"));
-    }
-
-    #[test]
-    fn test_builder() {
-        let mut builder = ContentProvenanceBuilder::new();
-
-        builder.add_file("/usr/bin/app", "sha256:abc", 1000, "runtime");
-        builder.add_file("/usr/lib/libapp.so", "sha256:def", 5000, "lib");
-        builder.add_chunk("sha256:chunk1", 2000, 0);
-        builder.add_chunk("sha256:chunk2", 4000, 2000);
-
-        let content = builder.build();
-
-        assert!(content.merkle_root.is_some());
-        assert_eq!(content.component_hashes.len(), 2);
-        assert_eq!(content.chunk_manifest.len(), 2);
-        assert_eq!(content.file_count, 2);
-        assert_eq!(content.total_size, 6000);
     }
 
     #[test]
