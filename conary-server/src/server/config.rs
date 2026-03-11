@@ -958,12 +958,22 @@ enabled = false
 [security]
 rate_limit = true
 rate_limit_rps = 100
+
+[admin]
+enabled = true
+external_bind = "0.0.0.0:8082"
+bootstrap_token = "bootstrap-token"
 "#;
         let config: RemiConfig = toml::from_str(toml_str).unwrap();
         assert!(config.validate().is_ok());
         assert_eq!(config.server.workers, 4);
         assert!(config.upstream.contains_key("fedora"));
         assert!(!config.federation.enabled);
+        assert!(config.admin.enabled);
+        assert_eq!(
+            config.admin.bootstrap_token.as_deref(),
+            Some("bootstrap-token")
+        );
     }
 
     #[test]

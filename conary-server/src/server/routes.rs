@@ -588,6 +588,7 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/admin/tuf/refresh-timestamp",
             post(tuf::refresh_timestamp),
         )
+        .route("/v1/admin/packages/:distro", post(admin::upload_package))
         .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
