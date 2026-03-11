@@ -86,16 +86,16 @@ determine_bump() {
     while IFS= read -r line; do
         local subject="${line#* }"
 
-        if [[ "$subject" =~ ^(feat|fix|refactor|perf)!: ]] || [[ "$subject" =~ BREAKING\ CHANGE ]]; then
+        if [[ "$subject" =~ ^(feat|fix|refactor|perf)(\(.+\))?!: ]] || [[ "$subject" =~ BREAKING\ CHANGE ]]; then
             echo "major"
             return
         fi
 
-        if [[ "$subject" =~ ^feat: ]] && [[ "$level" != "major" ]]; then
+        if [[ "$subject" =~ ^feat(\(.+\))?: ]] && [[ "$level" != "major" ]]; then
             level="minor"
         fi
 
-        if [[ "$subject" =~ ^(fix|security|perf): ]] && [[ "$level" == "none" ]]; then
+        if [[ "$subject" =~ ^(fix|security|perf)(\(.+\))?: ]] && [[ "$level" == "none" ]]; then
             level="patch"
         fi
     done <<< "$commits"
