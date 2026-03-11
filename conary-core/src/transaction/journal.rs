@@ -366,6 +366,22 @@ impl TransactionJournal {
         }
         Ok(())
     }
+
+    /// Returns true if this is a placeholder journal (used during ownership transfer)
+    fn is_placeholder(&self) -> bool {
+        self.tx_uuid.is_empty()
+    }
+}
+
+impl Drop for TransactionJournal {
+    fn drop(&mut self) {
+        // Clean up placeholder journal files left in temp directories.
+        // These are created by `create_placeholder()` during ownership
+        // transfer in `Transaction::finish()` and `Transaction::abort()`.
+        if self.is_placeholder() && self.path.exists() {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Find incomplete transaction journals in a directory
