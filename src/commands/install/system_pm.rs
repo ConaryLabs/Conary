@@ -5,6 +5,7 @@ use conary_core::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_
 use tracing::debug;
 
 /// Check if a package is installed via the system package manager
+#[must_use]
 pub fn is_system_package_installed(name: &str) -> bool {
     let pm = SystemPackageManager::detect();
     let result = match pm {
@@ -23,6 +24,7 @@ pub fn is_system_package_installed(name: &str) -> bool {
 }
 
 /// Get the version of a system-installed package
+#[must_use]
 #[allow(dead_code)]
 pub fn get_system_package_version(name: &str) -> Option<String> {
     let pm = SystemPackageManager::detect();
