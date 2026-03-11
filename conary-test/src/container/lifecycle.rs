@@ -37,6 +37,38 @@ pub struct BollardBackend {
 }
 
 impl BollardBackend {
+    fn find_build_context(dockerfile: &Path) -> Result<(std::path::PathBuf, String)> {
+        let dockerfile = dockerfile
+            .canonicalize()
+            .context("failed to canonicalize dockerfile path")?;
+
+        let mut candidate = dockerfile
+            .parent()
+            .context("dockerfile has no parent directory")?;
+
+        while let Some(parent) = candidate.parent() {
+            if candidate.join("Cargo.toml").is_file() || candidate.join(".git").exists() {
+                let dockerfile_name = dockerfile
+                    .strip_prefix(candidate)
+                    .context("failed to derive dockerfile path within build context")?
+                    .to_string_lossy()
+                    .to_string();
+                return Ok((candidate.to_path_buf(), dockerfile_name));
+            }
+            candidate = parent;
+        }
+
+        let context_dir = dockerfile
+            .parent()
+            .context("dockerfile has no parent directory")?;
+        let dockerfile_name = dockerfile
+            .file_name()
+            .context("dockerfile has no filename")?
+            .to_string_lossy()
+            .to_string();
+        Ok((context_dir.to_path_buf(), dockerfile_name))
+    }
+
     /// Connect to the local Docker/Podman socket using defaults.
     pub fn new() -> Result<Self> {
         let docker = Docker::connect_with_local_defaults()
@@ -77,6 +109,40 @@ impl BollardBackend {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::BollardBackend;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn build_context_prefers_workspace_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("conary-test-build-context-{unique}"));
+        let dockerfile = root.join("tests/integration/remi/containers/Containerfile.fedora43");
+        let dockerfile_parent = dockerfile.parent().expect("dockerfile parent");
+
+        fs::create_dir_all(dockerfile_parent).expect("create dockerfile directory");
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("write workspace cargo");
+        fs::write(&dockerfile, "FROM scratch\n").expect("write dockerfile");
+
+        let (context_dir, dockerfile_name) =
+            BollardBackend::find_build_context(&dockerfile).expect("resolve build context");
+
+        assert_eq!(context_dir, root);
+        assert_eq!(
+            dockerfile_name,
+            "tests/integration/remi/containers/Containerfile.fedora43"
+        );
+
+        fs::remove_dir_all(&context_dir).expect("cleanup temp build context");
+    }
+}
+
 #[async_trait]
 impl ContainerBackend for BollardBackend {
     async fn build_image(
@@ -85,21 +151,13 @@ impl ContainerBackend for BollardBackend {
         tag: &str,
         build_args: HashMap<String, String>,
     ) -> Result<String> {
-        let context_dir = dockerfile
-            .parent()
-            .context("dockerfile has no parent directory")?;
-
-        let dockerfile_name = dockerfile
-            .file_name()
-            .context("dockerfile has no filename")?
-            .to_string_lossy()
-            .to_string();
+        let (context_dir, dockerfile_name) = Self::find_build_context(dockerfile)?;
 
         // Create a tar archive of the build context directory.
         let tar_bytes = {
             let mut tar_builder = tar::Builder::new(Vec::new());
             tar_builder
-                .append_dir_all(".", context_dir)
+                .append_dir_all(".", &context_dir)
                 .context("failed to tar build context")?;
             tar_builder
                 .into_inner()
