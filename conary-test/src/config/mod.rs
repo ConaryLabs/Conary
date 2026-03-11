@@ -3,7 +3,7 @@
 pub mod distro;
 pub mod manifest;
 
-pub use distro::{DistroConfig, GlobalConfig};
+pub use distro::{DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
 
 use anyhow::Result;
@@ -141,13 +141,14 @@ remove_default_repos = ["fedora", "updates"]
 remi_distro = "fedora43"
 repo_name = "conary-fedora43"
 containerfile = "Containerfile.fedora43"
-test_package_1 = "tree"
-test_binary_1 = "/usr/bin/tree"
+test_package = "tree"
+test_binary = "/usr/bin/tree"
 
 [distros.ubuntu-noble]
 remi_distro = "ubuntu-noble"
 repo_name = "conary-ubuntu-noble"
-test_package_1 = "tree"
+test_package = "tree"
+test_binary = "/usr/bin/tree"
 
 [fixtures]
 test_package_name = "conary-test-fixture"
@@ -162,7 +163,9 @@ v2_version = "2.0.0"
 
         let fedora = &config.distros["fedora43"];
         assert_eq!(fedora.remi_distro, "fedora43");
-        assert_eq!(fedora.test_package_1.as_deref(), Some("tree"));
+        assert_eq!(fedora.test_packages.len(), 1);
+        assert_eq!(fedora.test_packages[0].package, "tree");
+        assert_eq!(fedora.test_packages[0].binary, "/usr/bin/tree");
         assert_eq!(fedora.containerfile.as_deref(), Some("Containerfile.fedora43"));
 
         let fixtures = config.fixtures.as_ref().unwrap();

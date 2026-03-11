@@ -31,23 +31,10 @@ impl TestRunner {
         if let Some(dc) = config.distros.get(&distro) {
             vars.insert("REMI_DISTRO".to_string(), dc.remi_distro.clone());
             vars.insert("REPO_NAME".to_string(), dc.repo_name.clone());
-            if let Some(ref p) = dc.test_package_1 {
-                vars.insert("TEST_PACKAGE_1".to_string(), p.clone());
-            }
-            if let Some(ref b) = dc.test_binary_1 {
-                vars.insert("TEST_BINARY_1".to_string(), b.clone());
-            }
-            if let Some(ref p) = dc.test_package_2 {
-                vars.insert("TEST_PACKAGE_2".to_string(), p.clone());
-            }
-            if let Some(ref b) = dc.test_binary_2 {
-                vars.insert("TEST_BINARY_2".to_string(), b.clone());
-            }
-            if let Some(ref p) = dc.test_package_3 {
-                vars.insert("TEST_PACKAGE_3".to_string(), p.clone());
-            }
-            if let Some(ref b) = dc.test_binary_3 {
-                vars.insert("TEST_BINARY_3".to_string(), b.clone());
+            for (i, tp) in dc.test_packages.iter().enumerate() {
+                let n = i + 1;
+                vars.insert(format!("TEST_PACKAGE_{n}"), tp.package.clone());
+                vars.insert(format!("TEST_BINARY_{n}"), tp.binary.clone());
             }
         }
 
