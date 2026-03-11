@@ -78,8 +78,10 @@ pub fn is_newer(current: &str, remote: &str) -> bool {
         let (patch_num, prerelease) = if let Some(dash_pos) = patch_str.find('-') {
             let patch = patch_str[..dash_pos].parse().unwrap_or(0);
             // Collect all pre-release identifiers (patch remainder + any further dot-separated parts)
-            let mut pre_parts: Vec<String> =
-                patch_str[dash_pos + 1..].split('.').map(String::from).collect();
+            let mut pre_parts: Vec<String> = patch_str[dash_pos + 1..]
+                .split('.')
+                .map(String::from)
+                .collect();
             // Include any additional dot-separated parts beyond the third component
             for part in parts.iter().skip(3) {
                 pre_parts.push(part.to_string());

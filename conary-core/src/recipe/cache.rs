@@ -416,7 +416,9 @@ impl BuildCache {
     /// Compute the SHA-256 checksum of a file
     fn checksum_file(path: &Path) -> Result<String> {
         let data = fs::read(path)?;
-        Ok(hash_bytes(HashAlgorithm::Sha256, &data).as_str().to_string())
+        Ok(hash_bytes(HashAlgorithm::Sha256, &data)
+            .as_str()
+            .to_string())
     }
 
     /// Read the stored checksum from a metadata file

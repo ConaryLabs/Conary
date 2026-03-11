@@ -13,7 +13,6 @@ pub(crate) const TROVE_COLUMNS: &str = "id, name, version, type, architecture, d
     installed_at, installed_by_changeset_id, install_source, install_reason, \
     flavor_spec, pinned, selection_reason, label_id, orphan_since";
 
-
 /// Type of trove (package, component, collection, or redirect)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]

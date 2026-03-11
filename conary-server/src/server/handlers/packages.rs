@@ -81,7 +81,12 @@ pub async fn get_package(
     let check_version = query.version.clone();
     let check_db = db_path.clone();
     match tokio::task::spawn_blocking(move || {
-        check_converted(&check_db, &check_distro, &check_name, check_version.as_deref())
+        check_converted(
+            &check_db,
+            &check_distro,
+            &check_name,
+            check_version.as_deref(),
+        )
     })
     .await
     {

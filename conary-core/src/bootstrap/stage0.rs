@@ -237,7 +237,10 @@ impl Stage0Builder {
         if is_root {
             // ct-ng refuses to run as root; use su to drop to a build user
             let build_user = Self::find_build_user()?;
-            info!("Running as root, dropping to user '{}' for ct-ng", build_user);
+            info!(
+                "Running as root, dropping to user '{}' for ct-ng",
+                build_user
+            );
 
             // Ensure the build user owns the work and output dirs
             let uid_gid = Command::new("id")
@@ -266,7 +269,8 @@ impl Stage0Builder {
                     .map_err(|e| Stage0Error::BuildFailed(e.to_string()))?;
                 if !status.success() {
                     return Err(Stage0Error::BuildFailed(format!(
-                        "chown -R {uid}:{gid} {} failed", dir.display()
+                        "chown -R {uid}:{gid} {} failed",
+                        dir.display()
                     )));
                 }
             }

@@ -211,7 +211,9 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         {
             let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
                 &conn,
-                canonical.id.ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
+                canonical
+                    .id
+                    .ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
             )?;
             if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
                 info!(
@@ -270,8 +272,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     }
 
     // Check if the package is adopted from the system PM
-    if let Some(existing) =
-        conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
         && existing.install_source.is_adopted()
     {
         if !force {
@@ -292,8 +293,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Check if the package is already installed as a dependency - if so, promote it
     // This must happen before we try to download, as we may not need to do anything else
-    if let Some(existing) =
-        conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
         && existing.install_reason == conary_core::db::models::InstallReason::Dependency
     {
         // Check if we're requesting a specific version that differs
@@ -301,11 +301,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
         // Promote to explicit
         let reason = selection_reason.unwrap_or("Explicitly installed by user");
-        conary_core::db::models::Trove::promote_to_explicit(
-            &conn,
-            &package_name,
-            Some(reason),
-        )?;
+        conary_core::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
         println!("Promoted {} from dependency to explicit", package_name);
 
         // If same version (or no version specified), we're done

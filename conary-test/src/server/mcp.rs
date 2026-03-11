@@ -116,10 +116,9 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<StartRunParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result =
-            service::start_run(&self.state, &params.suite, &params.distro, params.phase)
-                .await
-                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let result = service::start_run(&self.state, &params.suite, &params.distro, params.phase)
+            .await
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let value = serde_json::json!({
             "run_id": result.run_id,
@@ -143,9 +142,8 @@ impl TestMcpServer {
         let runs = self.state.runs.read().await;
         match runs.get(&params.run_id) {
             Some(suite) => {
-                let json_str = to_json_report(suite).map_err(|e| {
-                    McpError::internal_error(format!("Report error: {e}"), None)
-                })?;
+                let json_str = to_json_report(suite)
+                    .map_err(|e| McpError::internal_error(format!("Report error: {e}"), None))?;
                 Ok(CallToolResult::success(vec![Content::text(json_str)]))
             }
             None => Err(McpError::invalid_params(

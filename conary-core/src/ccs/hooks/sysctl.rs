@@ -32,9 +32,7 @@ fn validate_sysctl_key(key: &str) -> Result<()> {
 /// Validate sysctl value contains no newline characters
 fn validate_sysctl_value(value: &str) -> Result<()> {
     if value.contains('\n') || value.contains('\r') {
-        return Err(anyhow::anyhow!(
-            "Sysctl value contains newline characters"
-        ));
+        return Err(anyhow::anyhow!("Sysctl value contains newline characters"));
     }
     Ok(())
 }

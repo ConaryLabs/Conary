@@ -178,5 +178,4 @@ mod tests {
     fn test_coverage_bar_half() {
         assert_eq!(coverage_bar(50.0, 10), "[#####-----]");
     }
-
 }

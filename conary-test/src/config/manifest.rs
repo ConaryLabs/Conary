@@ -1,6 +1,6 @@
 // conary-test/src/config/manifest.rs
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 
 /// Top-level test manifest (one TOML file = one suite).
@@ -179,9 +179,7 @@ impl Assertion {
         }
 
         // file_exists vs file_not_exists
-        if let (Some(exists), Some(not_exists)) =
-            (&self.file_exists, &self.file_not_exists)
-        {
+        if let (Some(exists), Some(not_exists)) = (&self.file_exists, &self.file_not_exists) {
             if exists == not_exists {
                 bail!(
                     "{}: conflicting assertion: file_exists and file_not_exists \

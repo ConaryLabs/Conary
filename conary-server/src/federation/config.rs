@@ -115,8 +115,7 @@ fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
             // Check if endpoint's domain has at least one subdomain level
             // beyond the pattern's base domain. A bare domain (e.g. "conary.io")
             // must NOT match "*.conary.io" -- the wildcard requires a subdomain.
-            if endpoint_domain.ends_with(&format!(".{}", pattern_domain))
-            {
+            if endpoint_domain.ends_with(&format!(".{}", pattern_domain)) {
                 // Also verify scheme matches
                 let endpoint_scheme = endpoint.split("://").next().unwrap_or("");
                 let pattern_scheme = pattern.split("://").next().unwrap_or("");

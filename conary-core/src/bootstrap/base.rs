@@ -259,22 +259,70 @@ impl BaseBuilder {
 
     /// Tier A: minimal boot to login prompt (16 packages)
     const TIER_A_PACKAGES: &'static [&'static str] = &[
-        "zlib", "xz", "zstd", "openssl", "ncurses", "readline",
-        "libcap", "kmod", "elfutils", "dbus", "linux-pam",
-        "util-linux", "coreutils", "bash", "systemd", "linux",
+        "zlib",
+        "xz",
+        "zstd",
+        "openssl",
+        "ncurses",
+        "readline",
+        "libcap",
+        "kmod",
+        "elfutils",
+        "dbus",
+        "linux-pam",
+        "util-linux",
+        "coreutils",
+        "bash",
+        "systemd",
+        "linux",
     ];
 
     /// Tier B: full base system (adds ~45 packages on top of Tier A)
     const TIER_B_PACKAGES: &'static [&'static str] = &[
-        "libmnl", "make", "m4", "autoconf", "automake", "libtool",
-        "pkgconf", "bison", "flex", "gettext", "perl", "python",
-        "cmake", "ninja", "meson", "iproute2", "openssh",
-        "grep", "sed", "gawk", "less", "diffutils", "patch",
-        "findutils", "file", "tar", "gzip", "bzip2", "cpio",
-        "ca-certificates", "curl", "wget2", "git",
-        "procps-ng", "psmisc", "shadow", "sudo",
-        "vim", "nano",
-        "popt", "efivar", "efibootmgr", "dosfstools", "grub",
+        "libmnl",
+        "make",
+        "m4",
+        "autoconf",
+        "automake",
+        "libtool",
+        "pkgconf",
+        "bison",
+        "flex",
+        "gettext",
+        "perl",
+        "python",
+        "cmake",
+        "ninja",
+        "meson",
+        "iproute2",
+        "openssh",
+        "grep",
+        "sed",
+        "gawk",
+        "less",
+        "diffutils",
+        "patch",
+        "findutils",
+        "file",
+        "tar",
+        "gzip",
+        "bzip2",
+        "cpio",
+        "ca-certificates",
+        "curl",
+        "wget2",
+        "git",
+        "procps-ng",
+        "psmisc",
+        "shadow",
+        "sudo",
+        "vim",
+        "nano",
+        "popt",
+        "efivar",
+        "efibootmgr",
+        "dosfstools",
+        "grub",
     ];
 
     /// Get package names for a specific tier
@@ -288,7 +336,10 @@ impl BaseBuilder {
 
     /// Build a single named package
     pub fn build_single(&mut self, name: &str) -> Result<(), BaseError> {
-        let idx = self.packages.iter().position(|p| p.name == name)
+        let idx = self
+            .packages
+            .iter()
+            .position(|p| p.name == name)
             .ok_or_else(|| BaseError::RecipeNotFound(name.to_string()))?;
 
         if self.packages[idx].recipe.is_none() {

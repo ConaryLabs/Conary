@@ -118,9 +118,9 @@ pub(crate) mod test_helpers {
             cache_dir: db_path.parent().unwrap().join("cache"),
             ..Default::default()
         };
-        let state = Arc::new(tokio::sync::RwLock::new(
-            crate::server::ServerState::new(config),
-        ));
+        let state = Arc::new(tokio::sync::RwLock::new(crate::server::ServerState::new(
+            config,
+        )));
         crate::server::routes::create_external_admin_router(state, None)
     }
 }

@@ -68,12 +68,7 @@ pub trait ContainerBackend: Send + Sync {
     async fn start(&self, id: &ContainerId) -> Result<()>;
 
     /// Execute a command inside a running container.
-    async fn exec(
-        &self,
-        id: &ContainerId,
-        cmd: &[&str],
-        timeout: Duration,
-    ) -> Result<ExecResult>;
+    async fn exec(&self, id: &ContainerId, cmd: &[&str], timeout: Duration) -> Result<ExecResult>;
 
     /// Stop a running container.
     async fn stop(&self, id: &ContainerId) -> Result<()>;

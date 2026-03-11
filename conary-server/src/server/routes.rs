@@ -314,8 +314,7 @@ async fn ban_middleware(
     // Only count authentication/authorization failures (401/403) toward the
     // ban threshold. Other error codes (400, 404) are too noisy and would
     // cause false-positive bans from normal client errors.
-    if (response.status() == StatusCode::UNAUTHORIZED
-        || response.status() == StatusCode::FORBIDDEN)
+    if (response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN)
         && ban_list.record_failure(&ip).await
     {
         warn!(ip = %ip, "IP banned due to repeated auth failures");
@@ -741,8 +740,7 @@ async fn readiness_check(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let db_ok =
-            db_path.exists() || db_path.parent().is_some_and(|p| p.exists() && p.is_dir());
+        let db_ok = db_path.exists() || db_path.parent().is_some_and(|p| p.exists() && p.is_dir());
         let chunk_dir_ok = chunk_dir.exists() && chunk_dir.is_dir();
         let cache_dir_ok = cache_dir.exists() && cache_dir.is_dir();
         let disk_ok = check_disk_space(&chunk_dir, 10 * 1024 * 1024 * 1024);

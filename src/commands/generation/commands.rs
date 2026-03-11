@@ -253,4 +253,3 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .map(|meta| meta.len())
         .sum()
 }
-

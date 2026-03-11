@@ -447,8 +447,24 @@ static NETWORK_CLIENT_EXTRA: &[&str] = &["poll", "select"];
 
 /// Additional syscalls for GUI applications
 static GUI_APP_EXTRA: &[&str] = &[
-    "socket", "connect", "recvmsg", "sendmsg", "poll", "ioctl", "fcntl", "dup", "dup2", "pipe",
-    "pipe2", "eventfd", "eventfd2", "memfd_create", "shmat", "shmdt", "shmget", "shmctl",
+    "socket",
+    "connect",
+    "recvmsg",
+    "sendmsg",
+    "poll",
+    "ioctl",
+    "fcntl",
+    "dup",
+    "dup2",
+    "pipe",
+    "pipe2",
+    "eventfd",
+    "eventfd2",
+    "memfd_create",
+    "shmat",
+    "shmdt",
+    "shmget",
+    "shmctl",
 ];
 
 /// Additional syscalls for system daemons (privilege, filesystem management)
@@ -569,11 +585,9 @@ impl SyscallProfile {
                 IO_MUX_SYSCALLS,
                 PROCESS_SIGNAL_SYSCALLS,
             ]),
-            Self::NetworkClient => compose_profile(&[
-                BASE_SYSCALLS,
-                NETWORK_SYSCALLS,
-                NETWORK_CLIENT_EXTRA,
-            ]),
+            Self::NetworkClient => {
+                compose_profile(&[BASE_SYSCALLS, NETWORK_SYSCALLS, NETWORK_CLIENT_EXTRA])
+            }
             Self::GuiApp => compose_profile(&[BASE_SYSCALLS, GUI_APP_EXTRA]),
             Self::SystemDaemon => compose_profile(&[
                 BASE_SYSCALLS,

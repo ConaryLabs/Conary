@@ -13,10 +13,7 @@ use super::ModelError;
 use super::remote::CollectionData;
 
 /// Sign canonical JSON of a CollectionData
-pub fn sign_collection(
-    data: &CollectionData,
-    key: &SigningKey,
-) -> Result<Vec<u8>, ModelError> {
+pub fn sign_collection(data: &CollectionData, key: &SigningKey) -> Result<Vec<u8>, ModelError> {
     let canonical = canonical_json(data)?;
     let signature = key.sign(canonical.as_bytes());
     Ok(signature.to_bytes().to_vec())
@@ -75,8 +72,9 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
 /// Recursively sorts all JSON object keys to ensure deterministic output
 /// regardless of HashMap iteration order.
 fn canonical_json(data: &CollectionData) -> Result<String, ModelError> {
-    let value = serde_json::to_value(data)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}")))?;
+    let value = serde_json::to_value(data).map_err(|e| {
+        ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}"))
+    })?;
     let sorted = sort_json_keys(value);
     serde_json::to_string(&sorted)
         .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize sorted JSON: {e}")))

@@ -96,7 +96,9 @@ pub fn cmd_sync_hook_install(remove: bool) -> Result<()> {
         // Install hooks
         match pkg_mgr {
             SystemPackageManager::Rpm => {
-                let filter_path = paths.filter.ok_or_else(|| anyhow::anyhow!("RPM hook paths missing filter path"))?;
+                let filter_path = paths
+                    .filter
+                    .ok_or_else(|| anyhow::anyhow!("RPM hook paths missing filter path"))?;
                 ensure_parent_dir(filter_path)?;
                 fs::write(filter_path, RPM_FILTER_CONTENT)?;
                 ensure_parent_dir(paths.script)?;

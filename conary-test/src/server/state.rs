@@ -3,8 +3,8 @@
 use crate::config::distro::GlobalConfig;
 use crate::engine::suite::TestSuite;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -64,16 +64,20 @@ mod tests {
 
     #[test]
     fn test_new_state_has_empty_runs() {
-        let state =
-            AppState::new(test_fixtures::test_global_config(), "/tmp/manifests".to_string());
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
         let runs = state.runs.try_read().unwrap();
         assert!(runs.is_empty());
     }
 
     #[tokio::test]
     async fn test_eviction_removes_oldest_run() {
-        let state =
-            AppState::new(test_fixtures::test_global_config(), "/tmp/manifests".to_string());
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
 
         // Insert MAX_RUNS + 1 entries to trigger eviction.
         for i in 0..=MAX_RUNS {

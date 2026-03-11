@@ -392,7 +392,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "write" => libc::SYS_write,
         "close" => libc::SYS_close,
         "fstat" => libc::SYS_fstat,
-        "poll" => libc::SYS_ppoll,   // aarch64 uses ppoll
+        "poll" => libc::SYS_ppoll, // aarch64 uses ppoll
         "lseek" => libc::SYS_lseek,
         "pread64" => libc::SYS_pread64,
         "pwrite64" => libc::SYS_pwrite64,
@@ -400,8 +400,8 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "fcntl" => libc::SYS_fcntl,
         "flock" => libc::SYS_flock,
         "dup" => libc::SYS_dup,
-        "dup2" => libc::SYS_dup3,    // aarch64 has dup3, not dup2
-        "pipe" => libc::SYS_pipe2,   // aarch64 has pipe2, not pipe
+        "dup2" => libc::SYS_dup3,  // aarch64 has dup3, not dup2
+        "pipe" => libc::SYS_pipe2, // aarch64 has pipe2, not pipe
         "pipe2" => libc::SYS_pipe2,
 
         // Memory management
@@ -418,7 +418,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         // Process
         "clone" => libc::SYS_clone,
         "clone3" => libc::SYS_clone3,
-        "fork" => return None,       // aarch64 has no fork; use clone
+        "fork" => return None, // aarch64 has no fork; use clone
         "execve" => libc::SYS_execve,
         "exit" => libc::SYS_exit,
         "exit_group" => libc::SYS_exit_group,
@@ -459,29 +459,29 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "epoll_create" => libc::SYS_epoll_create1, // aarch64 only has epoll_create1
         "epoll_ctl" => libc::SYS_epoll_ctl,
         "epoll_pwait" => libc::SYS_epoll_pwait,
-        "epoll_wait" => libc::SYS_epoll_pwait,     // aarch64 uses epoll_pwait
+        "epoll_wait" => libc::SYS_epoll_pwait, // aarch64 uses epoll_pwait
         "pselect6" => libc::SYS_pselect6,
-        "select" => libc::SYS_pselect6,            // aarch64 uses pselect6
+        "select" => libc::SYS_pselect6, // aarch64 uses pselect6
 
         // Filesystem (*at variants are the native aarch64 interface)
         "openat" => libc::SYS_openat,
-        "open" => libc::SYS_openat,                // map legacy open -> openat
+        "open" => libc::SYS_openat, // map legacy open -> openat
         "newfstatat" => libc::SYS_newfstatat,
-        "stat" => libc::SYS_newfstatat,            // map legacy stat -> newfstatat
-        "lstat" => libc::SYS_newfstatat,           // map legacy lstat -> newfstatat
+        "stat" => libc::SYS_newfstatat, // map legacy stat -> newfstatat
+        "lstat" => libc::SYS_newfstatat, // map legacy lstat -> newfstatat
         "statx" => libc::SYS_statx,
         "getdents64" => libc::SYS_getdents64,
-        "access" => libc::SYS_faccessat,           // map legacy access -> faccessat
-        "mkdir" => libc::SYS_mkdirat,              // map legacy mkdir -> mkdirat
-        "unlink" => libc::SYS_unlinkat,            // map legacy unlink -> unlinkat
-        "rmdir" => libc::SYS_unlinkat,             // rmdir is unlinkat with AT_REMOVEDIR
-        "rename" => libc::SYS_renameat,            // map legacy rename -> renameat
-        "link" => libc::SYS_linkat,                // map legacy link -> linkat
-        "symlink" => libc::SYS_symlinkat,          // map legacy symlink -> symlinkat
-        "readlink" => libc::SYS_readlinkat,        // map legacy readlink -> readlinkat
-        "chmod" => libc::SYS_fchmodat,             // map legacy chmod -> fchmodat
+        "access" => libc::SYS_faccessat, // map legacy access -> faccessat
+        "mkdir" => libc::SYS_mkdirat,    // map legacy mkdir -> mkdirat
+        "unlink" => libc::SYS_unlinkat,  // map legacy unlink -> unlinkat
+        "rmdir" => libc::SYS_unlinkat,   // rmdir is unlinkat with AT_REMOVEDIR
+        "rename" => libc::SYS_renameat,  // map legacy rename -> renameat
+        "link" => libc::SYS_linkat,      // map legacy link -> linkat
+        "symlink" => libc::SYS_symlinkat, // map legacy symlink -> symlinkat
+        "readlink" => libc::SYS_readlinkat, // map legacy readlink -> readlinkat
+        "chmod" => libc::SYS_fchmodat,   // map legacy chmod -> fchmodat
         "fchmod" => libc::SYS_fchmod,
-        "chown" => libc::SYS_fchownat,             // map legacy chown -> fchownat
+        "chown" => libc::SYS_fchownat, // map legacy chown -> fchownat
         "fchown" => libc::SYS_fchown,
         "chroot" => libc::SYS_chroot,
         "chdir" => libc::SYS_chdir,
@@ -494,7 +494,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
 
         // IPC / shared memory
         "eventfd2" => libc::SYS_eventfd2,
-        "eventfd" => libc::SYS_eventfd2,           // aarch64 only has eventfd2
+        "eventfd" => libc::SYS_eventfd2, // aarch64 only has eventfd2
         "shmat" => libc::SYS_shmat,
         "shmdt" => libc::SYS_shmdt,
         "shmget" => libc::SYS_shmget,

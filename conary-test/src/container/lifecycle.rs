@@ -94,9 +94,9 @@ impl ContainerBackend for BollardBackend {
             ..Default::default()
         };
 
-        let mut stream =
-            self.docker
-                .build_image(options, None, Some(Bytes::from(tar_bytes)));
+        let mut stream = self
+            .docker
+            .build_image(options, None, Some(Bytes::from(tar_bytes)));
 
         while let Some(result) = stream.next().await {
             match result {
@@ -121,11 +121,7 @@ impl ContainerBackend for BollardBackend {
         let env = Self::format_env(&config.env);
 
         let host_config = HostConfig {
-            binds: if binds.is_empty() {
-                None
-            } else {
-                Some(binds)
-            },
+            binds: if binds.is_empty() { None } else { Some(binds) },
             privileged: Some(config.privileged),
             network_mode: Some(config.network_mode.clone()),
             ..Default::default()
@@ -162,12 +158,7 @@ impl ContainerBackend for BollardBackend {
         Ok(())
     }
 
-    async fn exec(
-        &self,
-        id: &ContainerId,
-        cmd: &[&str],
-        timeout: Duration,
-    ) -> Result<ExecResult> {
+    async fn exec(&self, id: &ContainerId, cmd: &[&str], timeout: Duration) -> Result<ExecResult> {
         let exec_opts = CreateExecOptions {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
@@ -205,10 +196,7 @@ impl ContainerBackend for BollardBackend {
                 }
             };
 
-            if tokio::time::timeout(timeout, collect_future)
-                .await
-                .is_err()
-            {
+            if tokio::time::timeout(timeout, collect_future).await.is_err() {
                 warn!(id = %id, cmd = ?cmd, "exec timed out");
                 return Ok(ExecResult {
                     exit_code: -1,
@@ -271,9 +259,7 @@ impl ContainerBackend for BollardBackend {
 
         // The response is a tar archive; extract the first file.
         let mut archive = tar::Archive::new(tar_bytes.as_slice());
-        let mut entries = archive
-            .entries()
-            .context("failed to read tar entries")?;
+        let mut entries = archive.entries().context("failed to read tar entries")?;
 
         if let Some(entry) = entries.next() {
             let mut entry = entry.context("failed to read tar entry")?;

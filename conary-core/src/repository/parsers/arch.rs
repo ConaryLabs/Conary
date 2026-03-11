@@ -208,10 +208,7 @@ impl RepositoryParser for ArchParser {
             let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
 
             // Validate filename for path traversal attacks
-            if filename.contains("..")
-                || filename.starts_with('/')
-                || filename.contains("://")
-            {
+            if filename.contains("..") || filename.starts_with('/') || filename.contains("://") {
                 return Err(Error::ParseError(format!(
                     "Suspicious filename in Arch database: {}",
                     filename

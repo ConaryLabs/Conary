@@ -30,8 +30,9 @@ pub fn compute_key_id(key: &TufKey) -> TrustResult<String> {
 ///
 /// This is used for computing key IDs and for signing metadata.
 pub fn canonical_json<T: serde::Serialize>(value: &T) -> TrustResult<Vec<u8>> {
-    let json_value = serde_json::to_value(value)
-        .map_err(|e| TrustError::SerializationError(format!("Failed to serialize to Value: {e}")))?;
+    let json_value = serde_json::to_value(value).map_err(|e| {
+        TrustError::SerializationError(format!("Failed to serialize to Value: {e}"))
+    })?;
     let sorted = sort_json_value(&json_value);
     serde_json::to_vec(&sorted)
         .map_err(|e| TrustError::SerializationError(format!("Failed to serialize to Vec: {e}")))
@@ -190,7 +191,10 @@ mod tests {
             },
         };
 
-        assert_ne!(compute_key_id(&key1).unwrap(), compute_key_id(&key2).unwrap());
+        assert_ne!(
+            compute_key_id(&key1).unwrap(),
+            compute_key_id(&key2).unwrap()
+        );
     }
 
     #[test]

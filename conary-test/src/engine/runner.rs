@@ -143,8 +143,7 @@ impl TestRunner {
                             .exec(container_id, &["test", "-x", &expanded], timeout)
                             .await?;
                         if result.exit_code != 0 {
-                            failure =
-                                Some(format!("file is not executable: {expanded}"));
+                            failure = Some(format!("file is not executable: {expanded}"));
                             last_exec = Some(result);
                             break;
                         }
@@ -233,10 +232,7 @@ impl TestRunner {
 
             // Fatal test: stop the entire suite on failure.
             if status == TestStatus::Failed && test_def.fatal.unwrap_or(false) {
-                warn!(
-                    "[{}] fatal test failed, stopping suite",
-                    test_def.id
-                );
+                warn!("[{}] fatal test failed, stopping suite", test_def.id);
                 break;
             }
         }
@@ -464,11 +460,13 @@ mod tests {
         assert_eq!(suite.passed(), 0);
         assert_eq!(suite.failed(), 1);
         assert_eq!(suite.results[0].status, TestStatus::Failed);
-        assert!(suite.results[0]
-            .message
-            .as_ref()
-            .unwrap()
-            .contains("exit code"));
+        assert!(
+            suite.results[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("exit code")
+        );
     }
 
     #[tokio::test]
@@ -515,11 +513,7 @@ mod tests {
         assert_eq!(suite.failed(), 1);
         assert_eq!(suite.skipped(), 1);
         assert_eq!(suite.results[1].status, TestStatus::Skipped);
-        assert!(suite.results[1]
-            .message
-            .as_ref()
-            .unwrap()
-            .contains("T01"));
+        assert!(suite.results[1].message.as_ref().unwrap().contains("T01"));
     }
 
     #[test]

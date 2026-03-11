@@ -420,8 +420,7 @@ pub fn cmd_autoremove(
     for iteration in 0..MAX_ITERATIONS {
         if iteration > 0 {
             // Re-query orphans after previous round of removals
-            let conn =
-                conary_core::db::open(db_path).context("Failed to open package database")?;
+            let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
             current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
             if current_orphans.is_empty() {
                 break;
@@ -439,7 +438,10 @@ pub fn cmd_autoremove(
                 println!();
             }
         } else {
-            println!("\nRemoving {} orphaned package(s)...", current_orphans.len());
+            println!(
+                "\nRemoving {} orphaned package(s)...",
+                current_orphans.len()
+            );
         }
 
         let mut round_removed = 0;

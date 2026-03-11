@@ -58,7 +58,10 @@ stdout_contains = "ok"
         assert_eq!(test.step.len(), 1);
 
         let step = &test.step[0];
-        assert_eq!(step.run.as_deref(), Some("curl -sf http://localhost:8081/health"));
+        assert_eq!(
+            step.run.as_deref(),
+            Some("curl -sf http://localhost:8081/health")
+        );
         let assertion = step.assert.as_ref().unwrap();
         assert_eq!(assertion.exit_code, Some(0));
         assert_eq!(assertion.stdout_contains.as_deref(), Some("ok"));
@@ -167,17 +170,22 @@ v2_version = "2.0.0"
         assert_eq!(fedora.test_packages.len(), 1);
         assert_eq!(fedora.test_packages[0].package, "tree");
         assert_eq!(fedora.test_packages[0].binary, "/usr/bin/tree");
-        assert_eq!(fedora.containerfile.as_deref(), Some("Containerfile.fedora43"));
+        assert_eq!(
+            fedora.containerfile.as_deref(),
+            Some("Containerfile.fedora43")
+        );
 
         let fixtures = config.fixtures.as_ref().unwrap();
-        assert_eq!(fixtures.test_package_name.as_deref(), Some("conary-test-fixture"));
+        assert_eq!(
+            fixtures.test_package_name.as_deref(),
+            Some("conary-test-fixture")
+        );
         assert_eq!(fixtures.v1_version.as_deref(), Some("1.0.0"));
     }
 
     #[test]
     fn test_load_phase1_advanced_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase1-advanced.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase1-advanced.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert!(
@@ -287,8 +295,7 @@ v2_version = "2.0.0"
 
     #[test]
     fn test_load_phase2_group_a_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-a.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-a.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
@@ -320,8 +327,15 @@ v2_version = "2.0.0"
 
             // Verify T42 has file_not_exists steps
             let t42 = manifest.test.iter().find(|t| t.id == "T42").unwrap();
-            let not_exists_count = t42.step.iter().filter(|s| s.file_not_exists.is_some()).count();
-            assert_eq!(not_exists_count, 2, "T42 should have 2 file_not_exists steps");
+            let not_exists_count = t42
+                .step
+                .iter()
+                .filter(|s| s.file_not_exists.is_some())
+                .count();
+            assert_eq!(
+                not_exists_count, 2,
+                "T42 should have 2 file_not_exists steps"
+            );
 
             // Verify T48 depends on T47
             let t48 = manifest.test.iter().find(|t| t.id == "T48").unwrap();
@@ -331,8 +345,7 @@ v2_version = "2.0.0"
 
     #[test]
     fn test_load_phase2_group_b_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-b.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-b.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
@@ -360,8 +373,7 @@ v2_version = "2.0.0"
 
     #[test]
     fn test_load_phase2_group_c_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-c.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-c.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
@@ -391,8 +403,7 @@ v2_version = "2.0.0"
 
     #[test]
     fn test_load_phase2_group_d_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-d.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-d.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
@@ -410,23 +421,23 @@ v2_version = "2.0.0"
             // Verify T66 uses exit_code_not and stdout_contains_any
             let t66 = manifest.test.iter().find(|t| t.id == "T66").unwrap();
             let a66 = t66.step[0].assert.as_ref().unwrap();
-            assert_eq!(a66.exit_code_not, Some(0), "T66 should require non-zero exit");
+            assert_eq!(
+                a66.exit_code_not,
+                Some(0),
+                "T66 should require non-zero exit"
+            );
             assert!(
                 a66.stdout_contains_any.is_some(),
                 "T66 should use stdout_contains_any"
             );
             let any66 = a66.stdout_contains_any.as_ref().unwrap();
-            assert!(
-                any66.len() >= 5,
-                "T66 should check for at least 5 keywords"
-            );
+            assert!(any66.len() >= 5, "T66 should check for at least 5 keywords");
         }
     }
 
     #[test]
     fn test_load_phase2_group_e_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-e.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-e.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
@@ -465,8 +476,7 @@ v2_version = "2.0.0"
 
     #[test]
     fn test_load_phase2_group_f_manifest() {
-        let path =
-            std::path::Path::new("../tests/integration/remi/manifests/phase2-group-f.toml");
+        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-f.toml");
         if path.exists() {
             let manifest = load_manifest(path).unwrap();
             assert_eq!(manifest.suite.phase, 2);

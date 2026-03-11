@@ -26,7 +26,10 @@ mod tests {
     #[test]
     fn container_config_with_values() {
         let mut env = HashMap::new();
-        env.insert("REMI_ENDPOINT".to_string(), "https://example.com".to_string());
+        env.insert(
+            "REMI_ENDPOINT".to_string(),
+            "https://example.com".to_string(),
+        );
 
         let cfg = ContainerConfig {
             image: "alpine:latest".to_string(),

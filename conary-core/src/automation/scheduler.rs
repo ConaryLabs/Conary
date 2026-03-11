@@ -11,8 +11,8 @@ use crate::error::Result;
 use crate::model::AutomationConfig;
 #[allow(unused_imports)]
 use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 /// State of the automation scheduler

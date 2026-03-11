@@ -54,14 +54,12 @@ static VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Pre-compiled regex for extracting quoted values from arrays
-static ARRAY_VALUE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"["']([^"']+)["']"#).expect("invalid array value regex")
-});
+static ARRAY_VALUE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"["']([^"']+)["']"#).expect("invalid array value regex"));
 
 /// Pre-compiled regex for extracting function definitions
-static FN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex")
-});
+static FN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex"));
 
 #[derive(Error, Debug)]
 pub enum PkgbuildError {

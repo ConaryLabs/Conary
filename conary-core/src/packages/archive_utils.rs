@@ -42,8 +42,7 @@ pub fn check_file_size(path: &str, size: u64) -> bool {
 pub fn get_file_metadata(path: &str) -> Result<(i64, i32)> {
     use std::os::unix::fs::MetadataExt;
 
-    let meta = std::fs::metadata(path).map_err(|e| {
-        crate::error::Error::InitError(format!("Failed to stat {}: {}", path, e))
-    })?;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| crate::error::Error::InitError(format!("Failed to stat {}: {}", path, e)))?;
     Ok((meta.len() as i64, meta.mode() as i32))
 }

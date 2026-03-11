@@ -221,7 +221,10 @@ mod tests {
     fn test_config_defaults() {
         let config = BootstrapConfig::default();
         assert_eq!(config.target_arch, TargetArch::X86_64);
-        assert_eq!(config.tools_prefix, PathBuf::from("/conary/bootstrap/tools"));
+        assert_eq!(
+            config.tools_prefix,
+            PathBuf::from("/conary/bootstrap/tools")
+        );
         assert!(config.jobs > 0);
     }
 

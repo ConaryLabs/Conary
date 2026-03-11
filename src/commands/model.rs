@@ -732,7 +732,10 @@ pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> 
     );
 
     if total_drift > 0 {
-        return Err(anyhow!("remote drift detected: {} drift(s) found", total_drift));
+        return Err(anyhow!(
+            "remote drift detected: {} drift(s) found",
+            total_drift
+        ));
     }
 
     Ok(())

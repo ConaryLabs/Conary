@@ -33,9 +33,15 @@ mod tests {
 
     #[test]
     fn test_dep_mode_from_str() {
-        assert_eq!(DepMode::from_str("satisfy", false).unwrap(), DepMode::Satisfy);
+        assert_eq!(
+            DepMode::from_str("satisfy", false).unwrap(),
+            DepMode::Satisfy
+        );
         assert_eq!(DepMode::from_str("adopt", false).unwrap(), DepMode::Adopt);
-        assert_eq!(DepMode::from_str("takeover", false).unwrap(), DepMode::Takeover);
+        assert_eq!(
+            DepMode::from_str("takeover", false).unwrap(),
+            DepMode::Takeover
+        );
         assert!(DepMode::from_str("invalid", false).is_err());
     }
 

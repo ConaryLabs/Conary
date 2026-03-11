@@ -551,8 +551,8 @@ fn compare_dirs(a: &Path, b: &Path) -> Result<(), String> {
     // Compare file contents by SHA-256 hash
     for (a_path, rel_path) in a_files.iter().zip(a_relative.iter()) {
         let b_path = b.join(rel_path);
-        let a_hash = hash_file(a_path)
-            .map_err(|e| format!("Failed to hash {}: {}", a_path.display(), e))?;
+        let a_hash =
+            hash_file(a_path).map_err(|e| format!("Failed to hash {}: {}", a_path.display(), e))?;
         let b_hash = hash_file(&b_path)
             .map_err(|e| format!("Failed to hash {}: {}", b_path.display(), e))?;
         if a_hash != b_hash {

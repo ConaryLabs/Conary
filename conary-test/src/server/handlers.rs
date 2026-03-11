@@ -56,10 +56,7 @@ pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!(summaries))
 }
 
-pub async fn get_run(
-    State(state): State<AppState>,
-    Path(id): Path<u64>,
-) -> impl IntoResponse {
+pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> impl IntoResponse {
     match service::get_run(&state, id).await {
         Ok(value) => (StatusCode::OK, Json(value)),
         Err(e) => {
