@@ -114,53 +114,7 @@ mod tests {
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
-    /// Build an axum app backed by a temporary database with one pre-seeded
-    /// admin token (`test-admin-token-12345`, scopes = `admin`).
-    ///
-    /// Returns the router and the database path so callers can inspect DB
-    /// state if needed.  The `tempfile::TempDir` is leaked intentionally --
-    /// tests are short-lived and the OS reclaims the directory on process
-    /// exit.
-    async fn test_app() -> (axum::Router, std::path::PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-
-        // Initialize DB with full schema
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .unwrap();
-            conary_core::db::schema::migrate(&conn).unwrap();
-        }
-
-        let config = crate::server::ServerConfig {
-            db_path: db_path.clone(),
-            chunk_dir: tmp.path().join("chunks"),
-            cache_dir: tmp.path().join("cache"),
-            ..Default::default()
-        };
-        std::fs::create_dir_all(&config.chunk_dir).unwrap();
-        std::fs::create_dir_all(&config.cache_dir).unwrap();
-
-        let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
-
-        // Build the external admin router (includes auth middleware)
-        let app = crate::server::routes::create_external_admin_router(state, None);
-
-        // Seed a bootstrap token for tests
-        let test_token = "test-admin-token-12345";
-        let hash = crate::server::auth::hash_token(test_token);
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conary_core::db::models::admin_token::create(&conn, "test-admin", &hash, "admin")
-                .unwrap();
-        }
-
-        // Leak the TempDir so it outlives the test (cleaned up at process exit)
-        std::mem::forget(tmp);
-
-        (app, db_path)
-    }
+    use super::super::test_helpers::test_app;
 
     #[tokio::test]
     async fn test_unauthenticated_request_rejected() {
