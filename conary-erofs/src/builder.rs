@@ -343,6 +343,8 @@ impl ErofsBuilder {
 
             let blocks = pack_directory(&mut dir_entries, bs)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            // Block address fits in u32: EROFS images are capped at 2^32 blocks
+            // (~16 TiB at 4 KiB block size), far beyond any practical image size.
             #[allow(clippy::cast_possible_truncation)]
             let blk_addr = (dir_data_cursor / bs64) as u32;
             dir_block_addrs.insert(idx, blk_addr);
@@ -352,6 +354,8 @@ impl ErofsBuilder {
 
         // Total image size (block-aligned)
         let total_size = align_up(dir_data_cursor, bs64);
+        // Block count fits in u32: the EROFS superblock `blocks` field is u32,
+        // so image size is architecturally limited to 2^32 blocks (~16 TiB at 4 KiB).
         #[allow(clippy::cast_possible_truncation)]
         let total_blocks = (total_size / bs64) as u32;
 
@@ -392,6 +396,9 @@ impl ErofsBuilder {
                 NodeKind::Directory { mode, uid, gid } => {
                     stats.dir_count += 1;
                     let dir_blocks = &dir_blocks_map[&idx];
+                    // dir_blocks.len() is a usize; widening to u64 is always
+                    // safe on 64-bit targets and intentional on 32-bit where
+                    // the product could exceed usize but not u64.
                     #[allow(clippy::cast_possible_truncation)]
                     let dir_size = (dir_blocks.len() as u64) * bs64;
                     let blk_addr = dir_block_addrs[&idx];
@@ -711,6 +718,11 @@ fn bfs_order(arena: &[TreeNode], root: usize) -> Vec<usize> {
 /// Build an `InodeInfo` for a regular file in chunk-based mode.
 ///
 /// Used to determine whether extended inode format is needed (based on uid/gid/size).
+///
+/// The `mode as u16` truncation is intentional: POSIX mode bits fit in 12 bits
+/// (permission + setuid/setgid/sticky) and the file type constant `S_IFREG`
+/// is already defined as u16. The `& 0o7777` mask ensures only permission bits
+/// are retained before OR-ing with the file type.
 #[allow(clippy::cast_possible_truncation)]
 fn build_file_inode_info(size: u64, mode: u32, uid: u32, gid: u32) -> InodeInfo {
     InodeInfo {
