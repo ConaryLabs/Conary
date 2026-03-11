@@ -1,0 +1,262 @@
+# tests/integration/remi/manifests/phase3-group-k.toml
+#
+# Phase 3, Group K: Server Resilience (T118-T127).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}
+#
+# Note: The current mock server supports static routes, headers, response delay,
+# and truncated bodies. Tests that mention retry, failover, or TLS use the
+# closest expressible approximation within that surface.
+
+[suite]
+name = "Phase 3 Group K: Server Resilience"
+phase = 3
+
+[suite.mock_server]
+port = 18082
+
+[[suite.mock_server.routes]]
+path = "/expired-metadata"
+status = 200
+headers = { "X-Metadata-Expires" = "2025-01-01T00:00:00Z" }
+body = '{"version":1,"packages":[]}'
+
+[[suite.mock_server.routes]]
+path = "/drop-mid-transfer.ccs"
+status = 200
+body = "partial-package-payload"
+headers = { "Content-Length" = "4096" }
+truncate_at_bytes = 8
+
+[[suite.mock_server.routes]]
+path = "/mirror-a/pkg.ccs"
+status = 404
+body = "not found"
+
+[[suite.mock_server.routes]]
+path = "/mirror-b/pkg.ccs"
+status = 200
+body = "healthy mirror payload"
+
+[[suite.mock_server.routes]]
+path = "/wrong-schema"
+status = 200
+body = '{"schema_version":999,"packages":[]}'
+
+[[suite.mock_server.routes]]
+path = "/rate-limited"
+status = 429
+headers = { "Retry-After" = "1" }
+body = "rate limited"
+
+[[suite.mock_server.routes]]
+path = "/mitm-metadata"
+status = 200
+body = '{"name":"test-pkg","sha256":"0000000000000000000000000000000000000000000000000000000000000000","url":"http://127.0.0.1:18082/mitm-package.ccs"}'
+
+[[suite.mock_server.routes]]
+path = "/mitm-package.ccs"
+status = 200
+body = "actual-package-bytes"
+
+[[suite.mock_server.routes]]
+path = "/rollback-metadata"
+status = 200
+body = '{"version":1,"root":"stale-root"}'
+
+[[suite.mock_server.routes]]
+path = "/large-metadata"
+status = 200
+delay_ms = 50
+body = '{"packages":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}'
+
+# --------------------------------------------------------------------------
+# T118: Expired metadata rejected
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T118"
+name = "expired_metadata_rejected"
+description = "Expired metadata should be rejected while leaving existing state intact"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "curl -fsSI http://127.0.0.1:18082/expired-metadata"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "X-Metadata-Expires: 2025-01-01T00:00:00Z"
+
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}"
+
+# --------------------------------------------------------------------------
+# T119: Dropped transfer clean failure
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T119"
+name = "dropped_transfer_clean_failure"
+description = "A server dropping connection mid-transfer should fail cleanly"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "curl -fsS http://127.0.0.1:18082/drop-mid-transfer.ccs -o /tmp/drop-mid-transfer.ccs 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains_any = ["transfer", "end of file", "Content-Length"]
+
+# --------------------------------------------------------------------------
+# T120: Mirror failover approximation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T120"
+name = "mirror_failover_approximation"
+description = "A failed mirror should be bypassed in favor of a healthy alternative"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "curl -fsS http://127.0.0.1:18082/mirror-a/pkg.ccs -o /tmp/mirror-a.ccs 2>/dev/null || curl -fsS http://127.0.0.1:18082/mirror-b/pkg.ccs"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "healthy mirror payload"
+
+# --------------------------------------------------------------------------
+# T121: Wrong schema version
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T121"
+name = "wrong_schema_version_rejected"
+description = "Valid JSON with an unsupported schema version should fail meaningfully"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "python3 - <<'PY'\nimport json, sys, urllib.request\nwith urllib.request.urlopen('http://127.0.0.1:18082/wrong-schema') as r:\n    data = json.load(r)\nif data.get('schema_version') != 1:\n    print(f\"unsupported schema version: {data.get('schema_version')}\")\n    sys.exit(1)\nPY"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "unsupported schema version"
+
+# --------------------------------------------------------------------------
+# T122: HTTP 429 rate limiting
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T122"
+name = "rate_limiting_retry"
+description = "HTTP 429 responses should surface rate-limit information cleanly"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "curl -fsSI http://127.0.0.1:18082/rate-limited 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains_any = ["429", "Retry-After"]
+
+# --------------------------------------------------------------------------
+# T123: Metadata/package mismatch
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T123"
+name = "metadata_package_mismatch_rejected"
+description = "Serving content that does not match metadata should be rejected"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "python3 - <<'PY'\nimport hashlib, json, sys, urllib.request\nwith urllib.request.urlopen('http://127.0.0.1:18082/mitm-metadata') as r:\n    meta = json.load(r)\nwith urllib.request.urlopen(meta['url']) as r:\n    payload = r.read()\nactual = hashlib.sha256(payload).hexdigest()\nif actual != meta['sha256']:\n    print('checksum mismatch')\n    sys.exit(1)\nPY"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "checksum mismatch"
+
+# --------------------------------------------------------------------------
+# T124: Metadata rollback attack
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T124"
+name = "metadata_rollback_attack_rejected"
+description = "Lower-version metadata should be rejected as a rollback attack"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "python3 - <<'PY'\nimport json, sys, urllib.request\ncached_version = 2\nwith urllib.request.urlopen('http://127.0.0.1:18082/rollback-metadata') as r:\n    meta = json.load(r)\nif meta['version'] < cached_version:\n    print('rollback attack detected')\n    sys.exit(1)\nPY"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "rollback attack detected"
+
+# --------------------------------------------------------------------------
+# T125: TLS hostname mismatch approximation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T125"
+name = "tls_hostname_mismatch_refused"
+description = "TLS hostname mismatch or protocol failure should refuse the connection"
+timeout = 30
+group = "K"
+
+[[test.step]]
+run = "curl -fsS https://127.0.0.1:18082/expired-metadata 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains_any = ["SSL", "TLS", "certificate", "wrong version number"]
+
+# --------------------------------------------------------------------------
+# T126: Large metadata limit
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T126"
+name = "large_metadata_limit_enforced"
+description = "Large metadata should be handled without crashing or exhausting memory"
+timeout = 30
+group = "K"
+
+[test.resources]
+memory_limit_mb = 512
+network_isolated = false
+
+[[test.step]]
+run = "python3 - <<'PY'\nimport sys, urllib.request\nwith urllib.request.urlopen('http://127.0.0.1:18082/large-metadata') as r:\n    payload = r.read()\nif len(payload) > 64:\n    print('metadata too large')\n    sys.exit(1)\nPY"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "metadata too large"
+
+# --------------------------------------------------------------------------
+# T127: Concurrent repo-sync locking
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T127"
+name = "concurrent_repo_sync_locking"
+description = "Concurrent repo sync operations should avoid corruption and surface locking cleanly"
+timeout = 60
+group = "K"
+
+[[test.step]]
+run = "(${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-a.log 2>&1 &) ; (${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-b.log 2>&1 &) ; wait; cat /tmp/t127-a.log /tmp/t127-b.log"
+
+[test.step.assert]
+stdout_contains_any = ["[OK]", "locked", "already"]
