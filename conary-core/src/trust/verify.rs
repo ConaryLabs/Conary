@@ -15,6 +15,7 @@ use chrono::Utc;
 use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::Digest;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Verify that a signed metadata document has enough valid signatures
 ///
@@ -198,6 +199,21 @@ pub fn extract_role_keys(
     }
 
     Ok((role_keys, role_def.threshold))
+}
+
+/// Verify a file's SHA-256 hash matches the expected value from a `MetaFile` reference
+///
+/// Reads the file at `path` and verifies its content hash. IO errors include
+/// the file path for easier debugging.
+pub fn verify_file(meta_ref: &MetaFile, path: &Path) -> TrustResult<()> {
+    let content = std::fs::read(path).map_err(|e| {
+        TrustError::VerificationFailed(format!(
+            "failed to read file for verification ({}): {}",
+            path.display(),
+            e
+        ))
+    })?;
+    verify_metadata_hash(meta_ref, &content)
 }
 
 /// Verify root metadata self-signatures using its own keys
@@ -448,6 +464,25 @@ mod tests {
         let (keys, threshold) = extract_role_keys(&signed_root.signed, Role::Targets).unwrap();
         assert_eq!(threshold, 1);
         assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_file_missing_path_context() {
+        let mut hashes = BTreeMap::new();
+        hashes.insert("sha256".to_string(), "abc".to_string());
+        let meta_ref = MetaFile {
+            version: 1,
+            length: None,
+            hashes: Some(hashes),
+        };
+
+        let result = verify_file(&meta_ref, std::path::Path::new("/nonexistent/file.json"));
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("/nonexistent/file.json"),
+            "Error should contain file path, got: {err_msg}"
+        );
     }
 
     #[test]
