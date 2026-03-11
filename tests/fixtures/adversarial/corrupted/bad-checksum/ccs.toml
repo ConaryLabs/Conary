@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-bad-checksum"
+version = "1.0.0"
+description = "Base fixture for checksum corruption tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-bad-checksum"]
+binaries = ["/usr/bin/hello"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
