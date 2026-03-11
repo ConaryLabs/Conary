@@ -62,11 +62,36 @@ impl ModelLock {
         Ok(())
     }
 
-    /// Build a lockfile from resolved remote collections
+    /// Build a lockfile from resolved remote collections.
     ///
     /// Takes a vec of (name, label, collection_data) tuples representing
     /// all remote includes that were resolved.
+    ///
+    /// The `model_hash` field is left empty. Use [`Self::from_resolved_with_model`]
+    /// to populate it at construction time, or set `metadata.model_hash` after
+    /// construction.
     pub fn from_resolved(collections: &[(String, String, &CollectionData)]) -> Self {
+        Self::build_locked(collections, String::new())
+    }
+
+    /// Build a lockfile from resolved remote collections, computing the model
+    /// hash from the raw model file bytes.
+    ///
+    /// This ensures `model_hash` is always populated when the model content is
+    /// available, avoiding lockfiles with an empty hash.
+    pub fn from_resolved_with_model(
+        collections: &[(String, String, &CollectionData)],
+        model_bytes: &[u8],
+    ) -> Self {
+        let model_hash = format!("sha256:{}", crate::hash::sha256(model_bytes));
+        Self::build_locked(collections, model_hash)
+    }
+
+    /// Shared construction logic for lockfile builders.
+    fn build_locked(
+        collections: &[(String, String, &CollectionData)],
+        model_hash: String,
+    ) -> Self {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
         let locked: Vec<LockedCollection> = collections
@@ -84,7 +109,7 @@ impl ModelLock {
         Self {
             metadata: LockMetadata {
                 generated_at: now,
-                model_hash: String::new(),
+                model_hash,
             },
             collections: locked,
         }
