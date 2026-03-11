@@ -8,7 +8,7 @@ use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Column list for Changeset SELECT queries (avoids repetition across methods)
 const CHANGESET_COLUMNS: &str = "id, description, status, created_at, applied_at, \
-    rolled_back_at, reversed_by_changeset_id, tx_uuid";
+    rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata";
 
 /// Changeset status
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
@@ -37,6 +37,10 @@ pub struct Changeset {
     pub reversed_by_changeset_id: Option<i64>,
     /// Transaction UUID for crash recovery correlation
     pub tx_uuid: Option<String>,
+    /// Serialized trove metadata snapshot stored before removal operations,
+    /// enabling rollback of remove changesets (added in schema v7).
+    /// JSON-encoded trove information; `None` for install/update changesets.
+    pub metadata: Option<String>,
 }
 
 impl Changeset {
@@ -51,6 +55,7 @@ impl Changeset {
             rolled_back_at: None,
             reversed_by_changeset_id: None,
             tx_uuid: None,
+            metadata: None,
         }
     }
 
@@ -65,6 +70,7 @@ impl Changeset {
             rolled_back_at: None,
             reversed_by_changeset_id: None,
             tx_uuid: Some(tx_uuid),
+            metadata: None,
         }
     }
 
@@ -153,6 +159,7 @@ impl Changeset {
             rolled_back_at: row.get(5)?,
             reversed_by_changeset_id: row.get(6)?,
             tx_uuid: row.get(7)?,
+            metadata: row.get(8)?,
         })
     }
 }
