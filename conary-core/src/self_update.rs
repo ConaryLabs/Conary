@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::warn;
 
 /// Default update channel URL
 pub const DEFAULT_UPDATE_CHANNEL: &str = "https://packages.conary.io/v1/ccs/conary";
@@ -279,12 +280,22 @@ pub fn apply_update(new_binary_path: &Path, target_path: &Path, objects_dir: &st
     })?;
 
     // Register new binary in CAS (best-effort: if this fails, binary still works)
-    let content = fs::read(target_path).unwrap_or_default();
+    let content = match fs::read(target_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!(
+                path = %target_path.display(),
+                error = %e,
+                "failed to read updated binary for CAS registration"
+            );
+            Vec::new()
+        }
+    };
     if !content.is_empty()
         && let Ok(cas) = CasStore::new(objects_dir)
         && let Err(e) = cas.store(&content)
     {
-        eprintln!("Warning: failed to register in CAS: {e}");
+        warn!(error = %e, "failed to register updated binary in CAS");
     }
 
     Ok(())
