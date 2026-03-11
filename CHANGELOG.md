@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [erofs-v0.1.2] - 2026-03-11
+
+### Fixed
+- unused BuildStats must_use in erofs builder tests
+
+### Other
+- docs(erofs): document cast_possible_truncation allowances
+- chore(erofs): remove unused dependencies
+- fix(erofs): add bounds check for dirent nameoff u16
+- fix(erofs): write padding in chunks to handle block sizes larger than 4096
+- fix(erofs): convert normalize_path to return Result instead of panicking
+- fix(erofs): define ErofsError type, convert Superblock::new to return Result
+
 ## [v0.3.0] - 2026-03-08
 
 ### Fixed
