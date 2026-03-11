@@ -4,6 +4,146 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.4.0] - 2026-03-11
+
+### Fixed
+- resolve clippy warnings and test compilation after Phase 4
+
+### Other
+- refactor(cli): add #[must_use] on query functions
+- refactor(cli): add #[must_use] on query functions
+- docs(db): document changeset metadata field
+- docs(canonical): add TODO comments for unused NameHints fields
+- fix(bootstrap): use absolute paths for build tools
+- fix(bootstrap): sanitize PATH in bootstrap build environment
+- refactor(db): remove unused TROVE_COLUMNS_PREFIXED constant
+- docs(label): document Label wildcard matching semantics
+- refactor(trust): add cfg(target_os) guards for platform-specific code
+- refactor(provenance): rename DnaHashError::ShortInput to InputTooShort
+- refactor(trust): use typed ParseRoleError for TUF role parsing
+- refactor(repository): remove unnecessary Debug derives from internal types
+- fix(ccs): handle non-UTF-8 root path in user_group hook
+- refactor(ccs): compute DEB relative path once instead of twice
+- refactor(db): move format_size utility to conary-core::util module
+- refactor(repository): rename isize_val to installed_size_str
+- fix(recipe): update test to use new suggest_bootstrap_edges signature
+- fix(capability): use Path::starts_with() for path prefix matching
+- feat(capability): add aarch64 syscall mappings for seccomp enforcement
+- refactor(capability): deduplicate syscall profile lists
+- feat(recipe): make RecipeGraph bootstrap edges configurable
+- fix(recipe): handle strings and comments in PKGBUILD brace counting
+- perf(recipe): use LazyLock for PKGBUILD regex patterns
+- perf(recipe): stream file hashing in provenance capture
+- perf(recipe): eliminate double CCS build in plate()
+- refactor(bootstrap): extract shared PackageBuildRunner from stage1/stage2/base
+- fix(packages): return Result from get_file_metadata
+- refactor(cli): use ValueEnum for SandboxMode and DepMode
+- fix(packages): propagate file open errors in detect_format
+- docs(transaction): document symlink validation asymmetry in recovery
+- security(derived): validate override target paths
+- fix(transaction): fix BackupInfo size conversion
+- fix(resolver): remove trailing newline from ConflictingConstraints display
+- refactor(provenance): remove unused ContentProvenanceBuilder
+- fix(canonical): replace expect with error propagation in repology
+- refactor(ccs): define BuilderError thiserror enum
+- refactor(repository): remove dead alternative handling code in debian parser
+- refactor(trust): use TrustResult in ceremony functions
+- perf(self_update): stream download through hasher
+- fix(transaction): clean orphaned journal files after recovery
+- fix(repository): add per-chunk retry for transient download errors
+- fix(self_update): log warnings on file read failures
+- fix(model): populate model_hash in lockfile
+- fix(cli): fix model check exit code on validation failure
+- fix(trust): preserve file path context in verify_file errors
+- fix(repository): add retry logic for transient errors in poll_for_completion
+- docs(db): document FileEntry::insert_or_replace ownership semantics
+- docs(db): add TODO for StateDiff streaming optimization
+- docs(db): document model pattern inconsistency
+- fix(db): log warnings on Trove::from_row parse fallbacks
+- fix(db): use valid JSON default for ConvertedPackage fields
+- docs(db): document transaction requirement for batch_insert
+- fix(db): wrap DownloadStat::insert_batch in transaction
+- refactor(cli): deduplicate format_bytes to shared utility
+- fix(filesystem): log warning when symlink deployment skips existing directory
+- perf(packages): cache DEB data tarball to avoid double extraction
+- chore(packages): remove unused warn import from arch.rs
+- perf(resolver): add HashMap index for version set lookup
+- perf(transaction): cache hash computation in planner
+- refactor(resolver): convert Conflict enum to thiserror
+- fix(dependencies): fix is_lib_file .so substring false positive
+- refactor(cli): remove blanket dead_code allow from progress module
+- perf(cli): consolidate DB opens in cmd_install
+- refactor(core): remove duplicate error variants
+- perf(packages): single-pass Arch package parsing
+- refactor(filesystem): migrate fsverity errors to thiserror
+- fix(dependencies): error on version parse failure instead of string fallback
+- fix(automation): use AtomicBool for daemon stop flag
+- fix(dependencies): approximate soname by stripping minor/patch version
+- fix(self_update): handle pre-release versions in is_newer comparison
+- fix(version): normalize epoch and release for exact version matching
+- fix(version): implement RPM-compatible version comparison
+- fix(cli): replace expect on Tokio runtime with error propagation
+- fix(container): capture stdout/stderr in fork-based isolation
+- fix(provenance): use try_from for timestamp i64->u64 conversion
+- fix(cli): replace expect/unwrap with proper error propagation
+- fix(model): fix diamond include false positive in cycle detection
+- fix(bootstrap): compare file contents in reproducibility check
+- fix(cli): replace process::exit calls with proper error returns
+- fix(bootstrap): return error from current_stage when all stages complete
+- fix(ccs): handle mode "0" in directory hook
+- fix(ccs): use deterministic hash for tmpfiles config naming
+- fix(recipe): verify cached artifact checksums on retrieval
+- fix(db): fix format_permissions symlink detection bitmask
+- fix(db): use parameter binding for LIMIT in audit_log query
+- fix(db): remove format-based SQL column injection in Changeset::update_status
+- fix(db): make DistroPin::set atomic
+- fix(db): use recursive CTE for transitive orphan detection
+- fix(resolver): handle version set pool overflow gracefully
+- fix(bootstrap): replace expect with error propagation for path validation
+- fix(resolver): replace unwrap with if-let in dependency graph
+- fix(resolver): handle missing canonical_id instead of defaulting to 0
+- fix(update): don't create changeset when no updates needed
+- fix(resolver): replace expect with error propagation in canonical resolution
+- fix(capability): fix operator precedence in server package detection
+- fix(remove): iterate autoremove to fixed point
+- docs(repository): fix download_chunks doc to match sequential implementation
+- fix(repository): detect system architecture instead of hardcoding x86_64
+- fix(capability): improve port 0 rejection error message
+- security(recipe): require checksums for remote patches
+- fix(capability): reject port 0 in validate_port_spec
+- security(recipe): warn on remote patches without checksums
+- security(packages): reduce CPIO max file size allocation
+- security(packages): add package size validation to Arch and Debian parsers
+- security(repository): add path traversal validation to Arch package parser
+- security(ccs): validate sysctl key and value before writing config
+- security(ccs): validate alternative name and path in hooks
+- fix(transaction): map FileMoved/FileRemoved to FsApplied state for correct recovery
+- fix(model): replace expect() with error propagation in canonical_json
+- fix(container): read pipes directly after wait_timeout instead of double-wait
+- fix(trust): wrap TUF persist operations in database transaction
+- security(trust): fix TUF root rotation to happen before metadata verification per spec 5.3
+- fix(trust): make canonical_json return Result instead of panicking
+- fix(erofs): convert normalize_path to return Result instead of panicking
+- security(packages): add size limit to DEB archive member extraction
+- security(ccs): add size limits and hex validation to archive extraction
+- docs(bootstrap): fix expand_env_vars docstring to match hermetic behavior
+- fix(bootstrap): use atomic write-then-rename for state file persistence
+- security(bootstrap): fix shell injection in stage0 ct-ng invocation
+- security(repository): validate URL scheme in RemiClient constructor
+- fix(resolver): replace unreachable!() with safe default in resolve_condition
+- fix(install): replace unwrap on canonical.id with proper error
+- fix(cli): use checked multiplication for cache_max_bytes to prevent overflow
+- fix(remove): commit DB changes before file deletion for crash safety
+- fix(install): guard against short hash before slicing in single-install path
+- fix(db): pass transaction ref to migration functions instead of bare connection
+- fix(db): use SELECT after upsert instead of last_insert_rowid
+- fix(bootstrap): Stage 1 builds successfully on Remi
+- fix(bootstrap): disable GCC plugins for static toolchain, drop root for ct-ng
+- refactor(bootstrap): remove hardcoded versions, fix ct-ng config and stage0
+- feat(bootstrap): implement build_rust() and build_conary() for Tier C
+- feat(bootstrap): add initramfs generation and sysroot population
+- feat(bootstrap): add per-package and per-tier build mode
+
 ## [server-v0.3.1] - 2026-03-11
 
 ### Fixed
