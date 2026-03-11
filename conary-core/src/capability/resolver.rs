@@ -408,20 +408,29 @@ impl<'a> CapabilityResolver<'a> {
     }
 
     /// Check if a path pattern matches a required path
+    ///
+    /// Uses `Path::starts_with()` for component-by-component prefix matching,
+    /// which correctly handles cases like `/var/cache` not matching
+    /// `/var/cachefiles` (string `starts_with` would incorrectly match).
     fn path_matches(&self, pattern: &str, required: &str) -> bool {
+        use std::path::Path;
+
+        let pattern_path = Path::new(pattern);
+        let required_path = Path::new(required);
+
         // Exact match
-        if pattern == required {
+        if pattern_path == required_path {
             return true;
         }
 
         // Prefix match (e.g., /var/cache matches /var/cache/nginx)
-        if required.starts_with(pattern) && required[pattern.len()..].starts_with('/') {
+        if required_path.starts_with(pattern_path) {
             return true;
         }
 
         // Glob-style matching (e.g., /var/cache/* matches /var/cache/nginx)
         if let Some(prefix) = pattern.strip_suffix("/*")
-            && required.starts_with(prefix)
+            && required_path.starts_with(prefix)
         {
             return true;
         }
@@ -621,14 +630,19 @@ mod tests {
 
     // Helper for testing without resolver instance
     fn path_matches_pattern(pattern: &str, required: &str) -> bool {
-        if pattern == required {
+        use std::path::Path;
+
+        let pattern_path = Path::new(pattern);
+        let required_path = Path::new(required);
+
+        if pattern_path == required_path {
             return true;
         }
-        if required.starts_with(pattern) && required[pattern.len()..].starts_with('/') {
+        if required_path.starts_with(pattern_path) {
             return true;
         }
         if let Some(prefix) = pattern.strip_suffix("/*")
-            && required.starts_with(prefix)
+            && required_path.starts_with(prefix)
         {
             return true;
         }
