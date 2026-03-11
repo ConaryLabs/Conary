@@ -120,10 +120,7 @@ fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
         crate::daemon::JobKind::Rollback => Action::Rollback,
         crate::daemon::JobKind::Verify => Action::Verify,
         crate::daemon::JobKind::GarbageCollect => Action::GarbageCollect,
-        // Enhance is a background admin operation; map to GarbageCollect
-        // (requires root/admin privilege) since there is no dedicated
-        // Action::Enhance variant.
-        crate::daemon::JobKind::Enhance => Action::GarbageCollect,
+        crate::daemon::JobKind::Enhance => Action::Enhance,
     }
 }
 

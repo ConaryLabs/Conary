@@ -189,6 +189,8 @@ pub enum Action {
     Verify,
     /// Garbage collection
     GarbageCollect,
+    /// Background capability/metadata enhancement of converted packages
+    Enhance,
     /// Cancel a job
     CancelJob,
 }
@@ -204,6 +206,7 @@ impl Action {
             Action::Rollback => "com.conary.daemon.rollback",
             Action::Verify => "com.conary.daemon.verify",
             Action::GarbageCollect => "com.conary.daemon.gc",
+            Action::Enhance => "com.conary.daemon.enhance",
             Action::CancelJob => "com.conary.daemon.cancel",
         }
     }
@@ -554,6 +557,15 @@ mod tests {
         assert!(Action::Query.is_read_only());
         assert!(!Action::Install.is_read_only());
         assert!(!Action::Remove.is_read_only());
+        assert!(!Action::Enhance.is_read_only());
+    }
+
+    #[test]
+    fn test_action_enhance_polkit_action() {
+        assert_eq!(
+            Action::Enhance.polkit_action(),
+            "com.conary.daemon.enhance"
+        );
     }
 
     #[test]
