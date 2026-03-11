@@ -445,26 +445,15 @@ impl DependencyProvider for ConaryProvider<'_> {
                 // Find or create the name id (we can't mutate self in async,
                 // so we look up existing names only)
                 if let Some(&dep_name_id) = self.name_to_id.get(dep_name) {
-                    // Find a matching version set
-                    let vs_id = self
-                        .version_sets
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (nid, c))| *nid == dep_name_id && c == constraint)
-                        .and_then(|(i, _)| {
-                            u32::try_from(i).ok().map(VersionSetId)
-                        });
-
-                    match vs_id {
-                        Some(vs_id) => {
-                            requirements.push(ConditionalRequirement::from(vs_id));
-                        }
-                        None => {
-                            tracing::warn!(
-                                "Version set pool index overflow for dependency '{}' -- skipping",
-                                dep_name
-                            );
-                        }
+                    // O(1) lookup via version_set_cache instead of linear scan
+                    let cache_key = (dep_name_id.0, constraint.clone());
+                    if let Some(&vs_id) = self.version_set_cache.get(&cache_key) {
+                        requirements.push(ConditionalRequirement::from(vs_id));
+                    } else {
+                        tracing::warn!(
+                            "Version set not interned for dependency '{}' -- skipping",
+                            dep_name
+                        );
                     }
                 } else {
                     tracing::warn!(
