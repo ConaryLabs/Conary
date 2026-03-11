@@ -1,0 +1,23 @@
+[package]
+name = "dep-or-consumer"
+version = "1.0.0"
+description = "Consumer of the shared OR-style provider capability"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-or-consumer"]
+binaries = ["/usr/bin/dep-or-consumer-v1"]
+
+[requires]
+capabilities = ["dep-or-provider"]
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

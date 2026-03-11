@@ -1,0 +1,23 @@
+[package]
+name = "dep-virtual-provider"
+version = "1.0.0"
+description = "Provides a virtual mail transport capability"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-virtual-provider", "mail-transport-agent"]
+binaries = ["/usr/bin/dep-virtual-provider-v1"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

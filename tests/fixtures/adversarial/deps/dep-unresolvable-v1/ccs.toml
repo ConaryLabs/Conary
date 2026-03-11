@@ -1,0 +1,25 @@
+[package]
+name = "dep-unresolvable"
+version = "1.0.0"
+description = "Fixture with an unresolvable dependency"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-unresolvable"]
+binaries = ["/usr/bin/dep-unresolvable-v1"]
+
+[requires]
+capabilities = []
+packages = [
+    { name = "nonexistent-package", version = ">=1.0" },
+]
+
+[components]
+default = ["runtime"]
+
+[hooks]

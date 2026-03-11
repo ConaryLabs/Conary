@@ -1,0 +1,25 @@
+[package]
+name = "dep-libb"
+version = "1.0.0"
+description = "Library B depends on liba"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-libb"]
+binaries = ["/usr/bin/dep-libb-v1"]
+
+[requires]
+capabilities = []
+packages = [
+    { name = "dep-liba", version = ">=1.0" },
+]
+
+[components]
+default = ["runtime"]
+
+[hooks]
