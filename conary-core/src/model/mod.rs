@@ -351,7 +351,9 @@ fn resolve_includes_recursive(
     }
 
     for include_spec in includes {
-        // Cycle detection
+        // Cycle detection: only flag if spec is on the current recursion stack.
+        // Using a stack-based approach so diamond includes (A->B->D, A->C->D)
+        // don't falsely trigger cycle detection when D is seen via two paths.
         if visited.contains(include_spec) {
             return Err(ModelError::ConflictingSpecs(format!(
                 "Circular include detected: {}",
@@ -378,6 +380,9 @@ fn resolve_includes_recursive(
                 depth + 1,
             )?;
         }
+
+        // Remove from stack on backtrack so diamond includes work correctly
+        visited.remove(include_spec);
 
         // Track packages contributed by this include for layer info
         let mut layer_packages = Vec::new();
