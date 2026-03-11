@@ -246,6 +246,9 @@ impl LanguageDepDetector {
     }
 
     /// Detect shared library soname from file path
+    ///
+    /// Approximates the soname by stripping minor/patch version numbers from
+    /// `.so.X.Y.Z` filenames, keeping only the major version: `libfoo.so.X`.
     fn detect_soname(path: &str) -> Option<String> {
         // Must be in a lib directory and end with .so or .so.X
         if !path.contains("/lib") {
@@ -259,7 +262,23 @@ impl LanguageDepDetector {
             return None;
         }
 
-        // Return the soname (the filename is usually the soname or close to it)
+        // Strip minor/patch version to approximate the soname.
+        // e.g., "libfoo.so.1.2.3" -> "libfoo.so.1"
+        //        "libfoo.so" -> "libfoo.so" (no version suffix)
+        if let Some(so_pos) = filename.find(".so") {
+            let after_so = &filename[so_pos + 3..]; // everything after ".so"
+            if after_so.is_empty() {
+                // Plain .so file (e.g., "libfoo.so")
+                return Some(filename.to_string());
+            }
+            if let Some(rest) = after_so.strip_prefix('.') {
+                // Has version suffix like ".1.2.3" -- keep only the major version
+                let major = rest.split('.').next().unwrap_or(rest);
+                let base = &filename[..so_pos];
+                return Some(format!("{base}.so.{major}"));
+            }
+        }
+
         Some(filename.to_string())
     }
 
@@ -473,12 +492,25 @@ mod tests {
 
     #[test]
     fn test_detect_soname_multiarch() {
+        // libz.so.1.2.13 should be stripped to the soname libz.so.1
         let provides =
             LanguageDepDetector::detect_provides("/usr/lib/x86_64-linux-gnu/libz.so.1.2.13");
         assert!(
             provides
                 .iter()
-                .any(|d| d.class == DependencyClass::Soname && d.name == "libz.so.1.2.13")
+                .any(|d| d.class == DependencyClass::Soname && d.name == "libz.so.1"),
+            "Expected libz.so.1, got: {:?}",
+            provides
+        );
+    }
+
+    #[test]
+    fn test_detect_soname_plain_so() {
+        let provides = LanguageDepDetector::detect_provides("/usr/lib64/libfoo.so");
+        assert!(
+            provides
+                .iter()
+                .any(|d| d.class == DependencyClass::Soname && d.name == "libfoo.so")
         );
     }
 
