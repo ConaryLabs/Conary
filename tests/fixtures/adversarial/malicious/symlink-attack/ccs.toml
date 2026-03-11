@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-symlink-attack"
+version = "1.0.0"
+description = "Base fixture for symlink overwrite attack tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-symlink-attack"]
+binaries = []
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
