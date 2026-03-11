@@ -36,17 +36,15 @@ pub enum Conflict {
     },
 }
 
-/// Format conflicting constraints with detail lines.
+/// Format conflicting constraints without a trailing newline.
 fn format_conflicting_constraints(
     package: &str,
     constraints: &[(String, String)],
 ) -> String {
     use std::fmt::Write;
-    let mut out = String::new();
-    writeln!(out, "Conflicting version requirements for package {}:", package)
-        .expect("string write infallible");
+    let mut out = format!("Conflicting version requirements for package {}:", package);
     for (requirer, constraint) in constraints {
-        writeln!(out, "  - {} requires {}", requirer, constraint)
+        write!(out, "\n  - {} requires {}", requirer, constraint)
             .expect("string write infallible");
     }
     out
