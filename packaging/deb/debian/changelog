@@ -1,3 +1,9 @@
+conary (0.4.0-1) unstable; urgency=medium
+
+  * Release 0.4.0
+
+ -- Conary Contributors <contributors@conary.io>  Wed, 11 Mar 2026 12:44:31 -0700
+
 conary (0.3.1-1) unstable; urgency=medium
 
   * Release 0.3.1
