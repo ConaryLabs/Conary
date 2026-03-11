@@ -14,8 +14,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 use super::{ExtractedFile, FileToRemove, FileType, OperationType};
+
+/// Convert a signed size (from SQLite i64) to u64, logging a warning if negative.
+fn safe_size(size: i64, path: &Path) -> u64 {
+    match u64::try_from(size) {
+        Ok(v) => v,
+        Err(_) => {
+            warn!(
+                "Negative file size {} for {}, treating as 0",
+                size,
+                path.display()
+            );
+            0
+        }
+    }
+}
 
 /// A planned operation to perform
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,7 +315,7 @@ impl<'a> TransactionPlanner<'a> {
                         },
                         current_hash: Some(existing.sha256_hash),
                         mode: existing.permissions as u32,
-                        size: existing.size.try_into().unwrap_or(0),
+                        size: safe_size(existing.size, path),
                     });
 
                     plan.operations.push(PlannedOperation {
@@ -324,7 +340,7 @@ impl<'a> TransactionPlanner<'a> {
                         },
                         current_hash: Some(old_file.hash.clone()),
                         mode: old_file.mode,
-                        size: old_file.size.try_into().unwrap_or(0),
+                        size: safe_size(old_file.size, path),
                     });
 
                     plan.operations.push(PlannedOperation {
@@ -401,7 +417,7 @@ impl<'a> TransactionPlanner<'a> {
                     file_type: FileType::Regular,
                     current_hash: Some(old_file.hash.clone()),
                     mode: old_file.mode,
-                    size: old_file.size.try_into().unwrap_or(0),
+                    size: safe_size(old_file.size, &PathBuf::from(&old_file.path)),
                 });
 
                 plan.operations.push(PlannedOperation {
