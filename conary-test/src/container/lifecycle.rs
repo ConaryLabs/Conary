@@ -47,7 +47,10 @@ impl BollardBackend {
             .context("dockerfile has no parent directory")?;
 
         while let Some(parent) = candidate.parent() {
-            if candidate.join("Cargo.toml").is_file() || candidate.join(".git").exists() {
+            if candidate.join("Cargo.toml").is_file()
+                || candidate.join(".git").exists()
+                || (candidate.join("config.toml").is_file() && candidate.join("runner").is_dir())
+            {
                 let dockerfile_name = dockerfile
                     .strip_prefix(candidate)
                     .context("failed to derive dockerfile path within build context")?
