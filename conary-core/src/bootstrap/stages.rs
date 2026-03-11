@@ -171,13 +171,15 @@ impl StageManager {
     }
 
     /// Get the current (next incomplete) stage
-    pub fn current_stage(&self) -> Result<BootstrapStage> {
+    ///
+    /// Returns `None` when all stages are complete.
+    pub fn current_stage(&self) -> Result<Option<BootstrapStage>> {
         for stage in BootstrapStage::all() {
             if !self.is_complete(*stage) {
-                return Ok(*stage);
+                return Ok(Some(*stage));
             }
         }
-        Ok(BootstrapStage::Image) // All complete
+        Ok(None)
     }
 
     /// Get artifact path for a completed stage

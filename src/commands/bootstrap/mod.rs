@@ -564,8 +564,10 @@ pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
         println!();
     }
 
-    let current = bootstrap.stages().current_stage()?;
-    println!("\nNext stage: {}", current);
+    match bootstrap.stages().current_stage()? {
+        Some(current) => println!("\nNext stage: {}", current),
+        None => println!("\nAll stages complete."),
+    }
 
     Ok(())
 }
@@ -575,7 +577,11 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming bootstrap...");
 
     let mut bootstrap = Bootstrap::new(work_dir)?;
-    let current = bootstrap.resume()?;
+
+    let Some(current) = bootstrap.resume()? else {
+        println!("All bootstrap stages are already complete.");
+        return Ok(());
+    };
 
     println!("Resuming from: {}", current);
 
