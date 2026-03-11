@@ -428,10 +428,35 @@ fn get_changeset_id_by_uuid(conn: &Connection, tx_uuid: &str) -> Result<i64> {
 
 /// Permissive symlink target validation for recovery.
 ///
-/// Unlike `sanitize_path` (which rejects `..`), this allows `..` components
-/// since legitimate symlink targets commonly use them (e.g., `../lib/libfoo.so`).
-/// Rejects null bytes, Windows-style prefixes, and targets that resolve outside
-/// the install root (matching the staging validation in `validate_symlink_target_for_root`).
+/// # Asymmetry with normal-operation validation
+///
+/// During normal operations, symlink targets are validated by
+/// [`validate_symlink_target_for_root`](super::validate_symlink_target_for_root) in
+/// `mod.rs` and [`FileDeployer::validate_symlink_target`] in `deployer.rs`.
+/// Those validators reject `..` components outright via `sanitize_path`, since
+/// the deployer controls what gets written and can enforce strict rules.
+///
+/// Recovery **must be more permissive** because:
+///
+/// 1. **Restoring existing state**: Recovery restores files that were already on
+///    disk before the transaction started. Those symlinks may have been created
+///    by other tools or older Conary versions that allowed `..` traversal.
+///
+/// 2. **Partial completion**: A crash can leave the filesystem in a state where
+///    some files have been moved but others have not. Refusing to restore a
+///    backup because its symlink target contains `..` would leave the system in
+///    a worse state than before recovery.
+///
+/// 3. **Legitimate use of `..`**: Real packages commonly use relative symlinks
+///    with parent traversal (e.g., `../lib/libfoo.so.1`). The strict deployer
+///    validation allows these when they stay within the install root, but the
+///    recovery validator must independently verify this without access to the
+///    deployer's `install_root` join logic.
+///
+/// This function therefore allows `..` components but still enforces:
+/// - No null bytes
+/// - No Windows-style path prefixes
+/// - Resolved target must remain within the install root
 fn validate_symlink_target_for_recovery(
     target: &str,
     install_root: &Path,
