@@ -6,6 +6,7 @@ use crate::error::Result;
 use crate::flavor::FlavorSpec;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
+use tracing::warn;
 
 /// Column list for Trove SELECT queries (avoids repetition across methods)
 pub(crate) const TROVE_COLUMNS: &str = "id, name, version, type, architecture, description, \
@@ -319,30 +320,68 @@ impl Trove {
 
         // Handle install_source with default for older databases
         let source_str: Option<String> = row.get(8)?;
-        let install_source = source_str
-            .and_then(|s| s.parse::<InstallSource>().ok())
-            .unwrap_or(InstallSource::File);
+        let install_source = match &source_str {
+            Some(s) => match s.parse::<InstallSource>() {
+                Ok(src) => src,
+                Err(_) => {
+                    warn!(
+                        value = %s,
+                        "Trove::from_row: failed to parse install_source, falling back to File"
+                    );
+                    InstallSource::File
+                }
+            },
+            None => {
+                warn!("Trove::from_row: missing install_source, falling back to File");
+                InstallSource::File
+            }
+        };
 
         // Handle install_reason with default for older databases
         let reason_str: Option<String> = row.get(9)?;
-        let install_reason = reason_str
-            .and_then(|s| s.parse::<InstallReason>().ok())
-            .unwrap_or(InstallReason::Explicit);
+        let install_reason = match &reason_str {
+            Some(s) => match s.parse::<InstallReason>() {
+                Ok(reason) => reason,
+                Err(_) => {
+                    warn!(
+                        value = %s,
+                        "Trove::from_row: failed to parse install_reason, falling back to Explicit"
+                    );
+                    InstallReason::Explicit
+                }
+            },
+            None => {
+                warn!("Trove::from_row: missing install_reason, falling back to Explicit");
+                InstallReason::Explicit
+            }
+        };
 
         // flavor_spec is nullable
         let flavor_spec: Option<String> = row.get(10)?;
 
         // Handle pinned with default for older databases
-        let pinned: i32 = row.get(11).unwrap_or(0);
+        let pinned: i32 = row.get(11).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read pinned column, falling back to 0");
+            0
+        });
 
         // Handle selection_reason (added in v16)
-        let selection_reason: Option<String> = row.get(12).unwrap_or(None);
+        let selection_reason: Option<String> = row.get(12).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read selection_reason column, falling back to None");
+            None
+        });
 
         // Handle label_id (added in v20)
-        let label_id: Option<i64> = row.get(13).unwrap_or(None);
+        let label_id: Option<i64> = row.get(13).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read label_id column, falling back to None");
+            None
+        });
 
         // Handle orphan_since (added in v39)
-        let orphan_since: Option<String> = row.get(14).unwrap_or(None);
+        let orphan_since: Option<String> = row.get(14).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read orphan_since column, falling back to None");
+            None
+        });
 
         Ok(Self {
             id: Some(row.get(0)?),
