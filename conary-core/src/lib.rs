@@ -34,6 +34,7 @@ pub mod self_update;
 pub mod transaction;
 pub mod trigger;
 pub mod trust;
+pub mod util;
 pub mod version;
 
 pub use automation::{

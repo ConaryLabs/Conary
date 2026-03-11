@@ -82,21 +82,11 @@ pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_gu
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerEngine, TriggerStatus};
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 
-/// Format a byte count as a human-readable size string
+/// Format a byte count as a human-readable size string.
+///
+/// Delegates to [`crate::util::format_size`].
 pub fn format_size(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = KB * 1024;
-    const GB: i64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
+    crate::util::format_size(bytes)
 }
 
 #[cfg(test)]
