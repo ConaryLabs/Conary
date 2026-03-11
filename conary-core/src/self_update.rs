@@ -58,15 +58,90 @@ pub fn set_update_channel(conn: &Connection, url: &str) -> Result<()> {
 }
 
 /// Compare two semver version strings. Returns true if `remote` is newer than `current`.
+///
+/// Handles pre-release versions per SemVer rules:
+/// - A pre-release version (e.g., `1.0.0-alpha.1`) is always older than its
+///   release counterpart (`1.0.0`).
+/// - Pre-release identifiers are compared left-to-right: numeric identifiers
+///   are compared as integers, alphanumeric identifiers are compared
+///   lexicographically, and numeric identifiers always sort before
+///   alphanumeric ones.
 pub fn is_newer(current: &str, remote: &str) -> bool {
-    let parse = |v: &str| -> (u64, u64, u64) {
+    let parse = |v: &str| -> ((u64, u64, u64), Option<Vec<String>>) {
+        // Split off pre-release suffix from the patch component
         let parts: Vec<&str> = v.split('.').collect();
         let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
         let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        (major, minor, patch)
+
+        let patch_str = parts.get(2).copied().unwrap_or("0");
+        let (patch_num, prerelease) = if let Some(dash_pos) = patch_str.find('-') {
+            let patch = patch_str[..dash_pos].parse().unwrap_or(0);
+            // Collect all pre-release identifiers (patch remainder + any further dot-separated parts)
+            let mut pre_parts: Vec<String> =
+                patch_str[dash_pos + 1..].split('.').map(String::from).collect();
+            // Include any additional dot-separated parts beyond the third component
+            for part in parts.iter().skip(3) {
+                pre_parts.push(part.to_string());
+            }
+            (patch, Some(pre_parts))
+        } else {
+            let patch = patch_str.parse().unwrap_or(0);
+            // Check if there are parts beyond patch that contain a pre-release marker
+            if parts.len() > 3 {
+                // No dash in patch, but extra components exist; treat as normal version
+                (patch, None)
+            } else {
+                (patch, None)
+            }
+        };
+
+        ((major, minor, patch_num), prerelease)
     };
-    parse(remote) > parse(current)
+
+    let (remote_ver, remote_pre) = parse(remote);
+    let (current_ver, current_pre) = parse(current);
+
+    match remote_ver.cmp(&current_ver) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => {
+            // Same version number: compare pre-release
+            match (&current_pre, &remote_pre) {
+                // Both releases (no pre-release) => not newer
+                (None, None) => false,
+                // Remote is a release, current is pre-release => remote is newer
+                (Some(_), None) => true,
+                // Remote is pre-release, current is release => remote is older
+                (None, Some(_)) => false,
+                // Both pre-release: compare identifiers
+                (Some(cur), Some(rem)) => {
+                    compare_prerelease(rem, cur) == std::cmp::Ordering::Greater
+                }
+            }
+        }
+    }
+}
+
+/// Compare pre-release identifier lists per SemVer 2.0 rules.
+fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
+    for (ai, bi) in a.iter().zip(b.iter()) {
+        let a_num = ai.parse::<u64>();
+        let b_num = bi.parse::<u64>();
+        let ord = match (a_num, b_num) {
+            // Both numeric: compare as integers
+            (Ok(an), Ok(bn)) => an.cmp(&bn),
+            // Numeric sorts before alphanumeric
+            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+            // Both alphanumeric: lexicographic
+            (Err(_), Err(_)) => ai.cmp(bi),
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    // Fewer identifiers => lower precedence
+    a.len().cmp(&b.len())
 }
 
 /// Check for available updates by querying the update channel
@@ -261,6 +336,19 @@ mod tests {
         assert!(is_newer("0.99.99", "1.0.0"));
         assert!(is_newer("1", "2"));
         assert!(is_newer("1.0", "1.1"));
+    }
+
+    #[test]
+    fn test_is_newer_prerelease() {
+        // Pre-release is older than release
+        assert!(!is_newer("1.0.0", "1.0.0-alpha.1"));
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0"));
+        // Pre-release ordering
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha.2"));
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-beta.1"));
+        assert!(!is_newer("1.0.0-beta.1", "1.0.0-alpha.1"));
+        // Same pre-release is not newer
+        assert!(!is_newer("1.0.0-alpha.1", "1.0.0-alpha.1"));
     }
 
     fn create_test_db() -> rusqlite::Connection {
