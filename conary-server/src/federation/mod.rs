@@ -697,12 +697,27 @@ impl ChunkFetcher for FederatedChunkFetcher {
         let mut results = HashMap::new();
         let mut remaining = Vec::new();
 
-        // Check local cache first
-        for hash in hashes {
-            if let Ok(data) = self.local_cache.fetch(hash).await {
-                results.insert(hash.clone(), data);
-            } else {
-                remaining.push(hash.clone());
+        // Check local cache in parallel (IO-bound file reads)
+        let cache_lookups: Vec<_> = hashes
+            .iter()
+            .map(|hash| {
+                let h = hash.clone();
+                async move {
+                    let data = self.local_cache.fetch(&h).await;
+                    (h, data)
+                }
+            })
+            .collect();
+
+        let cache_results = futures::future::join_all(cache_lookups).await;
+        for (hash, result) in cache_results {
+            match result {
+                Ok(data) => {
+                    results.insert(hash, data);
+                }
+                Err(_) => {
+                    remaining.push(hash);
+                }
             }
         }
 
