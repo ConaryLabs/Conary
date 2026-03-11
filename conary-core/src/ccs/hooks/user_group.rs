@@ -116,7 +116,13 @@ impl HookExecutor {
 
         // Critical: use --root for target installations
         if !self.is_live_root() {
-            cmd.args(["--root", self.root.to_str().unwrap_or("/")]);
+            let root_str = self.root.to_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "install root path contains non-UTF-8 characters: {}",
+                    self.root.display()
+                )
+            })?;
+            cmd.args(["--root", root_str]);
         }
 
         if system {
