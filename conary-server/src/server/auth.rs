@@ -118,10 +118,20 @@ impl std::fmt::Display for Scope {
 }
 
 /// Validate that all scopes in a comma-separated string are valid.
-/// Returns Err with the first invalid scope found.
+///
+/// Returns `Err` with the first invalid scope found. Empty strings — either
+/// a bare `""` or empty segments produced by leading/trailing/doubled commas
+/// like `",admin"` or `"admin,"` — are explicitly rejected so that callers
+/// can never store a token with a meaningless blank scope.
 pub fn validate_scopes(scopes: &str) -> Result<(), String> {
+    if scopes.is_empty() {
+        return Err(String::new());
+    }
     for scope in scopes.split(',') {
         let trimmed = scope.trim();
+        if trimmed.is_empty() {
+            return Err(String::new());
+        }
         if Scope::parse(trimmed).is_none() {
             return Err(trimmed.to_string());
         }
@@ -354,5 +364,20 @@ mod tests {
     fn test_validate_scopes_invalid() {
         let err = validate_scopes("admin,bogus").unwrap_err();
         assert_eq!(err, "bogus");
+    }
+
+    #[test]
+    fn test_validate_scopes_empty_string_rejected() {
+        assert!(validate_scopes("").is_err());
+    }
+
+    #[test]
+    fn test_validate_scopes_empty_segment_rejected() {
+        // Trailing comma produces an empty segment
+        assert!(validate_scopes("admin,").is_err());
+        // Leading comma
+        assert!(validate_scopes(",admin").is_err());
+        // Doubled comma
+        assert!(validate_scopes("admin,,ci:read").is_err());
     }
 }
