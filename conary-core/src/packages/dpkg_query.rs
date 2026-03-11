@@ -175,8 +175,11 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             continue;
         }
 
-        // Get file metadata
-        let (size, mode) = get_file_metadata(&path);
+        // Get file metadata (skip files that cannot be stat'd, e.g., removed files)
+        let (size, mode) = match get_file_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
 
         // Look up md5sum from pre-loaded digest map
         let search_path = path.strip_prefix('/').unwrap_or(&path);

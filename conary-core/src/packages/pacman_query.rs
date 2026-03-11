@@ -181,8 +181,11 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             continue;
         }
 
-        // Get file metadata
-        let (size, mode) = get_file_metadata(&path);
+        // Get file metadata (skip files that cannot be stat'd, e.g., broken symlinks)
+        let (size, mode) = match get_file_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
 
         // Try to get mtree digest
         let digest = get_file_digest(name, &path);
