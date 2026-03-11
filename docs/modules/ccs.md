@@ -158,6 +158,13 @@ end assertions:
   forwarding. That is enough for the Phase 3 manifest flow, but it is not yet a
   repo-native orchestrator abstraction with richer auth, snapshot, or serial
   console handling.
+- Adversarial fixture publishing path:
+  The initial Task 24 publish attempt reached `https://packages.conary.io`, but
+  every upload to `/test-fixtures/adversarial/` failed, and a direct GET to
+  that path returned the main HTML package index rather than a browsable static
+  artifact directory. The Remi-side publish/hosting path for adversarial
+  fixtures still needs to be wired up before those artifacts can be verified
+  end-to-end from CI.
 
 These should be treated as follow-up work after the Phase 3 plan lands so the
 manifest coverage can move from "planned and parseable" to fully executable
