@@ -5,6 +5,7 @@
 //! Commands for declarative system state management using model files.
 
 use std::path::Path;
+use std::process;
 
 use anyhow::{Result, anyhow};
 use conary_core::db;
@@ -542,7 +543,7 @@ pub fn cmd_model_check(
         return Ok(());
     }
 
-    // System doesn't match model
+    // System doesn't match model - report drift and exit with non-zero code
     if verbose {
         println!("DRIFT: System does not match model");
         println!();
@@ -556,8 +557,10 @@ pub fn cmd_model_check(
         println!("Run with --verbose for details, or 'model-diff' for full output");
     }
 
-    // Return error to indicate drift
-    Err(anyhow!("system drift detected: {} difference(s) from model", diff.actions.len()))
+    // Exit with code 2 to distinguish drift (expected check failure) from
+    // runtime errors (code 1). This avoids an anyhow error message on stderr
+    // that duplicates the structured output already printed above.
+    process::exit(2)
 }
 
 /// Create a model file from current system state
