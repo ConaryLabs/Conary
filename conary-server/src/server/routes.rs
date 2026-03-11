@@ -309,17 +309,14 @@ async fn ban_middleware(
     // Process request
     let response = next.run(request).await;
 
-    // Check for suspicious failures
-    // 400 Bad Request (often malformed input/hash)
-    // 401/403 (auth failures)
-    // 404 on admin endpoints (probing)
-    if (response.status() == StatusCode::BAD_REQUEST
-        || response.status() == StatusCode::UNAUTHORIZED
-        || response.status() == StatusCode::FORBIDDEN
-        || (response.status() == StatusCode::NOT_FOUND && path.starts_with("/v1/admin")))
+    // Only count authentication/authorization failures (401/403) toward the
+    // ban threshold. Other error codes (400, 404) are too noisy and would
+    // cause false-positive bans from normal client errors.
+    if (response.status() == StatusCode::UNAUTHORIZED
+        || response.status() == StatusCode::FORBIDDEN)
         && ban_list.record_failure(&ip).await
     {
-        warn!(ip = %ip, "IP banned due to repeated failures");
+        warn!(ip = %ip, "IP banned due to repeated auth failures");
     }
 
     Ok(response)
