@@ -300,57 +300,129 @@ impl DaemonError {
     }
 }
 
-/// Events emitted by the daemon
+/// Events emitted by the daemon and broadcast over SSE streams.
+///
+/// Every event is serialized with a `"type"` discriminant field (snake_case)
+/// so clients can dispatch on `event.type` without knowing the full schema.
+///
+/// Job lifecycle events (`JobQueued` → `JobStarted` → `JobCompleted` /
+/// `JobFailed` / `JobCancelled`) follow a predictable state machine. Progress
+/// and phase events may appear zero or more times in between.
+///
+/// Enhancement events are independent of the job lifecycle and may be emitted
+/// concurrently by the background enhancement worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
-    /// Job was queued
-    JobQueued { job_id: JobId, position: usize },
-    /// Job execution started
-    JobStarted { job_id: JobId },
-    /// Job phase changed
-    JobPhase { job_id: JobId, phase: String },
-    /// Job progress update
-    JobProgress {
+    /// A job was accepted and placed in the operation queue.
+    JobQueued {
+        /// Unique identifier for the job.
         job_id: JobId,
-        current: u64,
-        total: u64,
-        message: String,
+        /// Zero-based position in the queue (0 means next to run).
+        position: usize,
     },
-    /// Job completed successfully
-    JobCompleted { job_id: JobId, duration_ms: u64 },
-    /// Job failed
-    JobFailed { job_id: JobId, error: DaemonError },
-    /// Job was cancelled
-    JobCancelled { job_id: JobId },
-    /// Package was installed
-    PackageInstalled { name: String, version: String },
-    /// Package was removed
-    PackageRemoved { name: String, version: String },
-    /// System state snapshot created
-    StateCreated { state_number: i64 },
-    /// Automation check complete
-    AutomationCheckComplete { pending_actions: usize },
-    /// Enhancement started for a package
-    EnhancementStarted { trove_id: i64, package_name: String },
-    /// Enhancement progress for a package
-    EnhancementProgress {
-        trove_id: i64,
-        package_name: String,
-        current: u32,
-        total: u32,
+    /// A job left the queue and began executing.
+    JobStarted {
+        /// Unique identifier for the job.
+        job_id: JobId,
+    },
+    /// The job moved to a new named execution phase (e.g. "resolving", "downloading").
+    JobPhase {
+        /// Unique identifier for the job.
+        job_id: JobId,
+        /// Human-readable phase name.
         phase: String,
     },
-    /// Enhancement completed for a package
-    EnhancementCompleted {
+    /// Incremental progress update within the current phase.
+    JobProgress {
+        /// Unique identifier for the job.
+        job_id: JobId,
+        /// Number of units completed so far.
+        current: u64,
+        /// Total units to complete (may be 0 if unknown).
+        total: u64,
+        /// Human-readable progress message.
+        message: String,
+    },
+    /// A job finished successfully.
+    JobCompleted {
+        /// Unique identifier for the job.
+        job_id: JobId,
+        /// Wall-clock elapsed time in milliseconds.
+        duration_ms: u64,
+    },
+    /// A job terminated with an error.
+    JobFailed {
+        /// Unique identifier for the job.
+        job_id: JobId,
+        /// Structured RFC 7807 error describing what went wrong.
+        error: DaemonError,
+    },
+    /// A job was cancelled before or during execution.
+    JobCancelled {
+        /// Unique identifier for the job.
+        job_id: JobId,
+    },
+    /// A package was successfully installed to the system.
+    PackageInstalled {
+        /// Package name (e.g. "nginx").
+        name: String,
+        /// Installed version string.
+        version: String,
+    },
+    /// A package was successfully removed from the system.
+    PackageRemoved {
+        /// Package name (e.g. "nginx").
+        name: String,
+        /// Removed version string.
+        version: String,
+    },
+    /// A new system state snapshot (generation) was committed to the database.
+    StateCreated {
+        /// Generation number of the newly created state.
+        state_number: i64,
+    },
+    /// The automation scheduler completed a check cycle.
+    AutomationCheckComplete {
+        /// Number of deferred actions (e.g. security updates) waiting to run.
+        pending_actions: usize,
+    },
+    /// Background enhancement of a converted package has started.
+    EnhancementStarted {
+        /// Database trove ID of the package being enhanced.
         trove_id: i64,
+        /// Human-readable package name.
         package_name: String,
+    },
+    /// Incremental progress from the enhancement pipeline.
+    EnhancementProgress {
+        /// Database trove ID of the package being enhanced.
+        trove_id: i64,
+        /// Human-readable package name.
+        package_name: String,
+        /// Number of packages processed so far in the current batch.
+        current: u32,
+        /// Total packages to process in the current batch.
+        total: u32,
+        /// Current enhancement phase (e.g. "analyzing", "inferring").
+        phase: String,
+    },
+    /// Enhancement finished successfully for a package.
+    EnhancementCompleted {
+        /// Database trove ID of the package that was enhanced.
+        trove_id: i64,
+        /// Human-readable package name.
+        package_name: String,
+        /// Whether capability metadata was inferred during enhancement.
         capabilities_inferred: bool,
     },
-    /// Enhancement failed for a package
+    /// Enhancement failed for a package.
     EnhancementFailed {
+        /// Database trove ID of the package that failed enhancement.
         trove_id: i64,
+        /// Human-readable package name.
         package_name: String,
+        /// Error description from the enhancement pipeline.
         error: String,
     },
 }
