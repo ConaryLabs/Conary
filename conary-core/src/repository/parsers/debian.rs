@@ -60,12 +60,9 @@ impl DebianParser {
         for dep_group in depends_str.split(',') {
             let dep_group = dep_group.trim();
 
-            // Handle alternatives (pkg1 | pkg2) - take first alternative
-            let dep = if let Some(first_alt) = dep_group.split('|').next() {
-                first_alt.trim()
-            } else {
-                dep_group
-            };
+            // Handle alternatives (pkg1 | pkg2) - take first alternative.
+            // split() always yields at least one element, so indexing is safe.
+            let dep = dep_group.split('|').next().unwrap_or(dep_group).trim();
 
             // Parse package name and version constraint
             if let Some((name, constraint)) = self.parse_dependency(dep) {
