@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "conary-test", version, about = "Conary test infrastructure")]
@@ -129,6 +130,56 @@ fn containerfile_path(
     Ok(path)
 }
 
+fn host_results_dir() -> PathBuf {
+    std::env::var("CONARY_TEST_RESULTS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("tests/integration/remi/results"))
+}
+
+async fn initialize_container_state(
+    config: &conary_test::config::distro::GlobalConfig,
+    backend: &conary_test::container::BollardBackend,
+    container_id: &conary_test::container::ContainerId,
+) -> Result<()> {
+    use conary_test::container::ContainerBackend;
+
+    let db_parent = Path::new(&config.paths.db)
+        .parent()
+        .context("db path has no parent directory")?
+        .display()
+        .to_string();
+    let init_cmd = format!(
+        "mkdir -p {db_parent} && {} system init --db-path {}",
+        config.paths.conary_bin, config.paths.db
+    );
+    let init_result = backend
+        .exec(container_id, &["sh", "-c", &init_cmd], Duration::from_secs(120))
+        .await?;
+    if init_result.exit_code != 0 {
+        bail!(
+            "failed to initialize conary database: {}{}",
+            init_result.stdout,
+            init_result.stderr
+        );
+    }
+
+    for repo in &config.setup.remove_default_repos {
+        let remove_cmd = format!(
+            "{} repo remove {} --db-path {} >/dev/null 2>&1 || true",
+            config.paths.conary_bin, repo, config.paths.db
+        );
+        backend
+            .exec(
+                container_id,
+                &["sh", "-c", &remove_cmd],
+                Duration::from_secs(30),
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
 /// Run tests for a single distro.
 fn run_single_distro(
     config: &conary_test::config::distro::GlobalConfig,
@@ -139,6 +190,8 @@ fn run_single_distro(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let backend = conary_test::container::BollardBackend::new()?;
+        let host_results_dir = host_results_dir();
+        std::fs::create_dir_all(&host_results_dir).ok();
 
         // Resolve and build the image.
         let cf_path = containerfile_path(config, distro)?;
@@ -151,6 +204,11 @@ fn run_single_distro(
         let container_config = conary_test::container::ContainerConfig {
             image: image_tag,
             privileged: true,
+            volumes: vec![conary_test::container::VolumeMount {
+                host_path: host_results_dir.display().to_string(),
+                container_path: config.paths.results_dir.clone(),
+                read_only: false,
+            }],
             ..Default::default()
         };
         let container_id = backend.create(container_config).await?;
@@ -159,6 +217,7 @@ fn run_single_distro(
         use conary_test::container::ContainerBackend;
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
+        initialize_container_state(config, &backend, &container_id).await?;
 
         let manifest_paths = match suite_path {
             Some(p) => vec![PathBuf::from(p)],
@@ -187,9 +246,7 @@ fn run_single_distro(
         println!("{json}");
 
         // Write results to file.
-        let results_dir = PathBuf::from(&config.paths.results_dir);
-        std::fs::create_dir_all(&results_dir).ok();
-        let results_file = results_dir.join(format!("{distro}-phase{phase}.json"));
+        let results_file = host_results_dir.join(format!("{distro}-phase{phase}.json"));
         conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
         tracing::info!(path = %results_file.display(), "Results written");
 
