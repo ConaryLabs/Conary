@@ -2,7 +2,7 @@
 
 use crate::config::load_manifest;
 use crate::engine::suite::TestSuite;
-use crate::report::json::to_json_report;
+use crate::report::json::to_json_value;
 use crate::server::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -128,12 +128,8 @@ pub async fn get_run(
 ) -> impl IntoResponse {
     let runs = state.runs.read().await;
     match runs.get(&id) {
-        Some(suite) => match to_json_report(suite) {
-            Ok(json_str) => {
-                let value: serde_json::Value =
-                    serde_json::from_str(&json_str).unwrap_or_default();
-                (StatusCode::OK, Json(value))
-            }
+        Some(suite) => match to_json_value(suite) {
+            Ok(value) => (StatusCode::OK, Json(value)),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("report error: {e}")})),
