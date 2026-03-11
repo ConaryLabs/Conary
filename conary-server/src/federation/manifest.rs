@@ -121,7 +121,7 @@ impl FederationManifest {
     ///
     /// This serializes the manifest without the signature field
     /// to create a deterministic byte representation.
-    fn canonical_bytes(&self) -> Vec<u8> {
+    fn canonical_bytes(&self) -> Result<Vec<u8>, ManifestError> {
         // Create a copy without signature for canonical representation
         let canonical = CanonicalManifest {
             version: self.version,
@@ -133,12 +133,20 @@ impl FederationManifest {
         };
 
         // Use JSON for deterministic serialization
-        serde_json::to_vec(&canonical).expect("manifest serialization should not fail")
+        serde_json::to_vec(&canonical)
+            .map_err(|e| ManifestError::InvalidData(format!("canonical serialization failed: {e}")))
     }
 
     /// Sign the manifest with the given key pair
+    ///
+    /// # Panics
+    ///
+    /// Panics if the manifest cannot be serialized to canonical bytes, which
+    /// should never happen for well-formed manifests.
     pub fn sign(&self, keypair: &SigningKeyPair) -> Self {
-        let canonical = self.canonical_bytes();
+        let canonical = self
+            .canonical_bytes()
+            .expect("well-formed manifest should serialize");
         let signature = keypair.sign(&canonical);
 
         Self {
@@ -207,7 +215,7 @@ impl FederationManifest {
         let sig = Signature::from_slice(&sig_bytes)
             .map_err(|e| ManifestError::InvalidSignature(format!("invalid signature: {e}")))?;
 
-        let canonical = self.canonical_bytes();
+        let canonical = self.canonical_bytes()?;
         verifying_key
             .verify(&canonical, &sig)
             .map_err(|_| ManifestError::SignatureFailed)?;
