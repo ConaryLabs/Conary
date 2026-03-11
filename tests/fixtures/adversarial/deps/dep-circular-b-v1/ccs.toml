@@ -1,0 +1,25 @@
+[package]
+name = "dep-circular-b"
+version = "1.0.0"
+description = "Circular dependency fixture B"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-circular-b"]
+binaries = ["/usr/bin/dep-circular-b-v1"]
+
+[requires]
+capabilities = []
+packages = [
+    { name = "dep-circular-a", version = ">=1.0" },
+]
+
+[components]
+default = ["runtime"]
+
+[hooks]

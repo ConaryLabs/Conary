@@ -1,0 +1,23 @@
+[package]
+name = "dep-virtual-consumer"
+version = "1.0.0"
+description = "Consumes a virtual mail transport capability"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-virtual-consumer"]
+binaries = ["/usr/bin/dep-virtual-consumer-v1"]
+
+[requires]
+capabilities = ["mail-transport-agent"]
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

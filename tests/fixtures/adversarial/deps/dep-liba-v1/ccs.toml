@@ -1,0 +1,25 @@
+[package]
+name = "dep-liba"
+version = "1.0.0"
+description = "Library A version 1"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-liba", "dep-liba-abi-v1", "dep-or-provider"]
+binaries = ["/usr/bin/dep-liba-v1"]
+
+[requires]
+capabilities = []
+packages = [
+    { name = "dep-base", version = ">=1.0, <2.0" },
+]
+
+[components]
+default = ["runtime"]
+
+[hooks]

@@ -1,0 +1,26 @@
+[package]
+name = "dep-app"
+version = "1.0.0"
+description = "Application with chained dependency requirements"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-app"]
+binaries = ["/usr/bin/dep-app-v1"]
+
+[requires]
+capabilities = []
+packages = [
+    { name = "dep-liba", version = ">=1.0, <2.0" },
+    { name = "dep-libb", version = ">=1.0" },
+]
+
+[components]
+default = ["runtime"]
+
+[hooks]

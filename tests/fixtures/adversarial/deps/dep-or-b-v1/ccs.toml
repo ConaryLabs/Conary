@@ -1,0 +1,23 @@
+[package]
+name = "dep-or-b"
+version = "1.0.0"
+description = "Alternative provider B for OR-style capability tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-or-b", "dep-or-provider"]
+binaries = ["/usr/bin/dep-or-b-v1"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

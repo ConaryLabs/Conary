@@ -1,0 +1,23 @@
+[package]
+name = "dep-base"
+version = "2.0.0"
+description = "Base dependency fixture version 2"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["dep-base", "dep-base-api-v2"]
+binaries = ["/usr/bin/dep-base-v2"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
