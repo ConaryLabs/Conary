@@ -150,8 +150,7 @@ impl TestMcpServer {
         let run_id = AppState::next_run_id();
         let suite = TestSuite::new(&params.suite, params.phase);
 
-        let mut runs = self.state.runs.write().await;
-        runs.insert(run_id, suite);
+        self.state.insert_run(run_id, suite).await;
 
         let result = serde_json::json!({
             "run_id": run_id,
