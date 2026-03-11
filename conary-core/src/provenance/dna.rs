@@ -8,9 +8,9 @@ use std::fmt;
 /// Errors that can occur when creating a `DnaHash`
 #[derive(Debug, thiserror::Error)]
 pub enum DnaHashError {
-    /// Input bytes are shorter than the required 32 bytes
+    /// Input bytes are not the required 32 bytes
     #[error("DNA hash requires {expected} bytes, got {actual}")]
-    ShortInput { expected: usize, actual: usize },
+    InputTooShort { expected: usize, actual: usize },
 
     /// Hex decoding failed
     #[error("hex decode error: {0}")]
@@ -40,7 +40,7 @@ impl DnaHash {
     /// Returns an error if `bytes` is not exactly 32 bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DnaHashError> {
         if bytes.len() != 32 {
-            return Err(DnaHashError::ShortInput {
+            return Err(DnaHashError::InputTooShort {
                 expected: 32,
                 actual: bytes.len(),
             });
