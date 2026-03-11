@@ -257,8 +257,9 @@ impl LanguageDepDetector {
 
         let filename = Path::new(path).file_name()?.to_str()?;
 
-        // Check for .so files
-        if !filename.contains(".so") {
+        // Check for .so files -- must end with ".so" or contain ".so."
+        // to avoid false positives like "reason.socket" or "also_not_a_lib"
+        if !filename.ends_with(".so") && !filename.contains(".so.") {
             return None;
         }
 
@@ -500,6 +501,27 @@ mod tests {
                 .iter()
                 .any(|d| d.class == DependencyClass::Soname && d.name == "libz.so.1"),
             "Expected libz.so.1, got: {:?}",
+            provides
+        );
+    }
+
+    #[test]
+    fn test_detect_soname_no_false_positive() {
+        // "reason.socket" contains ".so" as a substring but is not a shared library
+        let provides =
+            LanguageDepDetector::detect_provides("/usr/lib64/reason.socket");
+        assert!(
+            !provides.iter().any(|d| d.class == DependencyClass::Soname),
+            "reason.socket should not be detected as a soname: {:?}",
+            provides
+        );
+
+        // "also_not_a_lib.sorted" contains ".so" as a substring
+        let provides =
+            LanguageDepDetector::detect_provides("/usr/lib/also_not_a_lib.sorted");
+        assert!(
+            !provides.iter().any(|d| d.class == DependencyClass::Soname),
+            "also_not_a_lib.sorted should not be detected as a soname: {:?}",
             provides
         );
     }
