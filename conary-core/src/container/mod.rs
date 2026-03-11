@@ -440,15 +440,48 @@ impl Sandbox {
         let script_path = root_dir.path().join("script.sh");
         write_executable_script(&script_path, script_content)?;
 
+        // Set up pipes before fork to capture child stdout/stderr
+        use std::os::unix::io::AsRawFd;
+        let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create stdout pipe: {e}")))?;
+        let (stderr_read_fd, stderr_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create stderr pipe: {e}")))?;
+
         // Fork and execute in isolated namespaces
         let start = Instant::now();
 
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child }) => {
-                // Parent: wait for child with timeout
-                self.wait_for_child(child, start)
+                // Parent: close write ends of pipes (dropping OwnedFd closes them)
+                drop(stdout_write_fd);
+                drop(stderr_write_fd);
+
+                // Wait for child, then read captured output
+                let (code, _, _) = self.wait_for_child(child, start)?;
+
+                // Read stdout from pipe
+                let mut stdout_str = String::new();
+                let mut stdout_file = std::fs::File::from(stdout_read_fd);
+                let _ = stdout_file.read_to_string(&mut stdout_str);
+
+                // Read stderr from pipe
+                let mut stderr_str = String::new();
+                let mut stderr_file = std::fs::File::from(stderr_read_fd);
+                let _ = stderr_file.read_to_string(&mut stderr_str);
+
+                Ok((code, stdout_str, stderr_str))
             }
             Ok(ForkResult::Child) => {
+                // Child: close read ends of pipes
+                drop(stdout_read_fd);
+                drop(stderr_read_fd);
+
+                // Redirect stdout and stderr to pipe write ends
+                let _ = nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1); // STDOUT_FILENO
+                let _ = nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2); // STDERR_FILENO
+                drop(stdout_write_fd);
+                drop(stderr_write_fd);
+
                 // Child: set up namespaces and execute
                 let result = self.child_setup_and_execute(
                     root_dir.path(),
@@ -461,7 +494,13 @@ impl Sandbox {
                 // Exit with appropriate code
                 std::process::exit(result.unwrap_or(127));
             }
-            Err(e) => Err(Error::ScriptletError(format!("Fork failed: {}", e))),
+            Err(e) => {
+                drop(stdout_read_fd);
+                drop(stdout_write_fd);
+                drop(stderr_read_fd);
+                drop(stderr_write_fd);
+                Err(Error::ScriptletError(format!("Fork failed: {}", e)))
+            }
         }
     }
 
