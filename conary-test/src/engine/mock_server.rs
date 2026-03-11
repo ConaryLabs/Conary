@@ -112,7 +112,11 @@ pub async fn start_mock_server(
         port = config.port
     );
     let readiness = backend
-        .exec(container_id, &["sh", "-c", &wait_cmd], Duration::from_secs(10))
+        .exec(
+            container_id,
+            &["sh", "-c", &wait_cmd],
+            Duration::from_secs(10),
+        )
         .await?;
     if readiness.exit_code != 0 {
         bail!("mock server did not become ready on port {}", config.port);

@@ -100,7 +100,10 @@ fn manifests_for_phase(phase: u32) -> Result<Vec<PathBuf>> {
 
     manifests.sort();
     if manifests.is_empty() {
-        bail!("no manifests found for phase {phase} in {}", dir_path.display());
+        bail!(
+            "no manifests found for phase {phase} in {}",
+            dir_path.display()
+        );
     }
 
     Ok(manifests)
@@ -162,16 +165,13 @@ fn run_single_distro(
             None => manifests_for_phase(phase)?,
         };
 
-        let mut aggregate_suite = conary_test::engine::suite::TestSuite::new(
-            &format!("phase-{phase}"),
-            phase,
-        );
+        let mut aggregate_suite =
+            conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
         aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
 
         for manifest_path in &manifest_paths {
-            let manifest = conary_test::config::load_manifest(manifest_path).with_context(|| {
-                format!("failed to load manifest: {}", manifest_path.display())
-            })?;
+            let manifest = conary_test::config::load_manifest(manifest_path)
+                .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
 
             let mut runner =
                 conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
