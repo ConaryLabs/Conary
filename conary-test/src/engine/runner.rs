@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{KillAfterLog, ResourceConstraints, StepType, TestManifest};
+use crate::config::manifest::{KillAfterLog, ResourceConstraints, StepType, TestDef, TestManifest};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::mock_server::start_mock_server;
@@ -91,146 +91,8 @@ impl TestRunner {
                 continue;
             }
 
-            let start = Instant::now();
-            let timeout = Duration::from_secs(test_def.timeout);
-            let mut last_exec: Option<ExecResult> = None;
-            let mut failure: Option<String> = None;
-
-            for step in &test_def.step {
-                let step_type = match step.step_type() {
-                    Some(st) => st,
-                    None => {
-                        failure = Some("step has no recognized type".to_string());
-                        break;
-                    }
-                };
-
-                match step_type {
-                    StepType::Sleep(secs) => {
-                        tokio::time::sleep(Duration::from_secs(secs)).await;
-                    }
-                    StepType::Run(cmd) => {
-                        let expanded = self.substitute_vars(&cmd);
-                        let result = backend
-                            .exec(container_id, &["sh", "-c", &expanded], timeout)
-                            .await?;
-                        last_exec = Some(result);
-                    }
-                    StepType::Conary(args) => {
-                        let expanded = self.substitute_vars(&args);
-                        let full_cmd = format!(
-                            "{} {} --db-path {}",
-                            self.config.paths.conary_bin, expanded, self.config.paths.db
-                        );
-                        let result = backend
-                            .exec(container_id, &["sh", "-c", &full_cmd], timeout)
-                            .await?;
-                        last_exec = Some(result);
-                    }
-                    StepType::FileExists(path) => {
-                        let expanded = self.substitute_vars(&path);
-                        let result = backend
-                            .exec(container_id, &["test", "-e", &expanded], timeout)
-                            .await?;
-                        if result.exit_code != 0 {
-                            failure = Some(format!("file does not exist: {expanded}"));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        last_exec = Some(result);
-                    }
-                    StepType::FileNotExists(path) => {
-                        let expanded = self.substitute_vars(&path);
-                        let result = backend
-                            .exec(container_id, &["test", "!", "-e", &expanded], timeout)
-                            .await?;
-                        if result.exit_code != 0 {
-                            failure = Some(format!("file unexpectedly exists: {expanded}"));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        last_exec = Some(result);
-                    }
-                    StepType::FileExecutable(path) => {
-                        let expanded = self.substitute_vars(&path);
-                        let result = backend
-                            .exec(container_id, &["test", "-x", &expanded], timeout)
-                            .await?;
-                        if result.exit_code != 0 {
-                            failure = Some(format!("file is not executable: {expanded}"));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        last_exec = Some(result);
-                    }
-                    StepType::DirExists(path) => {
-                        let expanded = self.substitute_vars(&path);
-                        let result = backend
-                            .exec(container_id, &["test", "-d", &expanded], timeout)
-                            .await?;
-                        if result.exit_code != 0 {
-                            failure = Some(format!("directory does not exist: {expanded}"));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        last_exec = Some(result);
-                    }
-                    StepType::FileChecksum(chk) => {
-                        let expanded_path = self.substitute_vars(&chk.path);
-                        let cmd = format!("sha256sum {expanded_path}");
-                        let result = backend
-                            .exec(container_id, &["sh", "-c", &cmd], timeout)
-                            .await?;
-                        if result.exit_code != 0 {
-                            failure = Some(format!(
-                                "sha256sum failed on {expanded_path}: {}",
-                                result.stderr.trim()
-                            ));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        // sha256sum output format: "<hash>  <path>"
-                        let actual_hash = result
-                            .stdout
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string();
-                        if actual_hash != chk.sha256 {
-                            failure = Some(format!(
-                                "checksum mismatch for {expanded_path}: expected {}, got {actual_hash}",
-                                chk.sha256
-                            ));
-                            last_exec = Some(result);
-                            break;
-                        }
-                        last_exec = Some(result);
-                    }
-                    StepType::KillAfterLog(config) => {
-                        let result = self
-                            .run_kill_after_log(backend, container_id, &config)
-                            .await?;
-                        last_exec = Some(result);
-                    }
-                }
-
-                // Evaluate assertion if present and we have an exec result.
-                if let Some(ref assertion) = step.assert {
-                    let exec = last_exec.as_ref().expect("assertion without exec result");
-                    if let Err(e) =
-                        evaluate_assertion(assertion, exec.exit_code, &exec.stdout, &exec.stderr)
-                    {
-                        failure = Some(format!("assertion failed: {e}"));
-                        break;
-                    }
-                }
-            }
-
-            let elapsed = start.elapsed().as_millis() as u64;
-            let (status, message) = match failure {
-                Some(msg) => (TestStatus::Failed, Some(msg)),
-                None => (TestStatus::Passed, None),
-            };
+            let (status, message, elapsed, last_exec) =
+                self.run_test_attempt(test_def, backend, container_id).await?;
 
             info!(
                 "[{}] {}: {status:?} ({elapsed}ms)",
@@ -259,6 +121,215 @@ impl TestRunner {
 
         suite.finish();
         Ok(suite)
+    }
+
+    async fn run_test_attempt(
+        &self,
+        test_def: &TestDef,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
+        let attempts = if test_def.flaky.unwrap_or(false) {
+            test_def.retries.unwrap_or(3).max(1)
+        } else {
+            1
+        };
+        let majority = attempts / 2 + 1;
+
+        let mut pass_count = 0_u32;
+        let mut fail_count = 0_u32;
+        let mut last_failure: Option<String> = None;
+        let mut last_exec: Option<ExecResult> = None;
+        let mut total_elapsed = 0_u64;
+
+        for _ in 0..attempts {
+            let (status, message, elapsed, exec) = self
+                .run_test_once(test_def, backend, container_id)
+                .await?;
+            total_elapsed += elapsed;
+            last_exec = exec;
+
+            if status == TestStatus::Passed {
+                pass_count += 1;
+            } else {
+                fail_count += 1;
+                last_failure = message;
+            }
+
+            let remaining = attempts.saturating_sub(pass_count + fail_count);
+            if pass_count >= majority {
+                let message = if attempts > 1 {
+                    Some(format!(
+                        "flaky test passed majority: {pass_count}/{attempts} successful attempts"
+                    ))
+                } else {
+                    None
+                };
+                return Ok((TestStatus::Passed, message, total_elapsed, last_exec));
+            }
+            if pass_count + remaining < majority {
+                break;
+            }
+        }
+
+        let message = if attempts > 1 {
+            Some(format!(
+                "flaky test failed majority: {pass_count}/{attempts} successful attempts; last failure: {}",
+                last_failure.unwrap_or_else(|| "unknown failure".to_string())
+            ))
+        } else {
+            last_failure
+        };
+
+        Ok((TestStatus::Failed, message, total_elapsed, last_exec))
+    }
+
+    async fn run_test_once(
+        &self,
+        test_def: &TestDef,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
+        let start = Instant::now();
+        let timeout = Duration::from_secs(test_def.timeout);
+        let mut last_exec: Option<ExecResult> = None;
+        let mut failure: Option<String> = None;
+
+        for step in &test_def.step {
+            let step_type = match step.step_type() {
+                Some(st) => st,
+                None => {
+                    failure = Some("step has no recognized type".to_string());
+                    break;
+                }
+            };
+
+            match step_type {
+                StepType::Sleep(secs) => {
+                    tokio::time::sleep(Duration::from_secs(secs)).await;
+                }
+                StepType::Run(cmd) => {
+                    let expanded = self.substitute_vars(&cmd);
+                    let result = backend
+                        .exec(container_id, &["sh", "-c", &expanded], timeout)
+                        .await?;
+                    last_exec = Some(result);
+                }
+                StepType::Conary(args) => {
+                    let expanded = self.substitute_vars(&args);
+                    let full_cmd = format!(
+                        "{} {} --db-path {}",
+                        self.config.paths.conary_bin, expanded, self.config.paths.db
+                    );
+                    let result = backend
+                        .exec(container_id, &["sh", "-c", &full_cmd], timeout)
+                        .await?;
+                    last_exec = Some(result);
+                }
+                StepType::FileExists(path) => {
+                    let expanded = self.substitute_vars(&path);
+                    let result = backend
+                        .exec(container_id, &["test", "-e", &expanded], timeout)
+                        .await?;
+                    if result.exit_code != 0 {
+                        failure = Some(format!("file does not exist: {expanded}"));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    last_exec = Some(result);
+                }
+                StepType::FileNotExists(path) => {
+                    let expanded = self.substitute_vars(&path);
+                    let result = backend
+                        .exec(container_id, &["test", "!", "-e", &expanded], timeout)
+                        .await?;
+                    if result.exit_code != 0 {
+                        failure = Some(format!("file unexpectedly exists: {expanded}"));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    last_exec = Some(result);
+                }
+                StepType::FileExecutable(path) => {
+                    let expanded = self.substitute_vars(&path);
+                    let result = backend
+                        .exec(container_id, &["test", "-x", &expanded], timeout)
+                        .await?;
+                    if result.exit_code != 0 {
+                        failure = Some(format!("file is not executable: {expanded}"));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    last_exec = Some(result);
+                }
+                StepType::DirExists(path) => {
+                    let expanded = self.substitute_vars(&path);
+                    let result = backend
+                        .exec(container_id, &["test", "-d", &expanded], timeout)
+                        .await?;
+                    if result.exit_code != 0 {
+                        failure = Some(format!("directory does not exist: {expanded}"));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    last_exec = Some(result);
+                }
+                StepType::FileChecksum(chk) => {
+                    let expanded_path = self.substitute_vars(&chk.path);
+                    let cmd = format!("sha256sum {expanded_path}");
+                    let result = backend
+                        .exec(container_id, &["sh", "-c", &cmd], timeout)
+                        .await?;
+                    if result.exit_code != 0 {
+                        failure = Some(format!(
+                            "sha256sum failed on {expanded_path}: {}",
+                            result.stderr.trim()
+                        ));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    let actual_hash = result
+                        .stdout
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    if actual_hash != chk.sha256 {
+                        failure = Some(format!(
+                            "checksum mismatch for {expanded_path}: expected {}, got {actual_hash}",
+                            chk.sha256
+                        ));
+                        last_exec = Some(result);
+                        break;
+                    }
+                    last_exec = Some(result);
+                }
+                StepType::KillAfterLog(config) => {
+                    let result = self
+                        .run_kill_after_log(backend, container_id, &config)
+                        .await?;
+                    last_exec = Some(result);
+                }
+            }
+
+            if let Some(ref assertion) = step.assert {
+                let exec = last_exec.as_ref().expect("assertion without exec result");
+                if let Err(e) =
+                    evaluate_assertion(assertion, exec.exit_code, &exec.stdout, &exec.stderr)
+                {
+                    failure = Some(format!("assertion failed: {e}"));
+                    break;
+                }
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        let (status, message) = match failure {
+            Some(msg) => (TestStatus::Failed, Some(msg)),
+            None => (TestStatus::Passed, None),
+        };
+
+        Ok((status, message, elapsed, last_exec))
     }
 
     async fn run_kill_after_log(
@@ -581,6 +652,8 @@ mod tests {
             name: "pass_test".to_string(),
             description: "should pass".to_string(),
             timeout: 30,
+            flaky: None,
+            retries: None,
             step: vec![simple_step_run(
                 "echo ok",
                 Some(make_assertion(Some(0), Some("ok"))),
@@ -615,6 +688,8 @@ mod tests {
             name: "fail_test".to_string(),
             description: "should fail".to_string(),
             timeout: 30,
+            flaky: None,
+            retries: None,
             step: vec![simple_step_run(
                 "false",
                 Some(make_assertion(Some(0), None)),
@@ -658,6 +733,8 @@ mod tests {
                 name: "dep_fail".to_string(),
                 description: "will fail".to_string(),
                 timeout: 30,
+                flaky: None,
+                retries: None,
                 step: vec![simple_step_run(
                     "false",
                     Some(make_assertion(Some(0), None)),
@@ -672,6 +749,8 @@ mod tests {
                 name: "depends_on_t01".to_string(),
                 description: "should be skipped".to_string(),
                 timeout: 30,
+                flaky: None,
+                retries: None,
                 step: vec![simple_step_run("echo hello", None)],
                 resources: None,
                 depends_on: Some(vec!["T01".to_string()]),
@@ -709,6 +788,8 @@ mod tests {
             name: "sigkill_mid_install".to_string(),
             description: "kills the conary process after matching a log line".to_string(),
             timeout: 30,
+            flaky: None,
+            retries: None,
             step: vec![simple_step_kill_after_log(
                 KillAfterLog {
                     conary: "ccs install ${PKG}".to_string(),
@@ -748,6 +829,114 @@ mod tests {
         let detached_calls = backend.detached_calls.lock().unwrap().clone();
         assert_eq!(detached_calls.len(), 1);
         assert!(detached_calls[0].join(" ").contains("/usr/local/bin/conary ccs install pkg.ccs"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_flaky_majority_pass() {
+        let backend = MockBackend::new(vec![
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "first fail".to_string(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        ]);
+
+        let manifest = make_manifest(vec![TestDef {
+            id: "T94".to_string(),
+            name: "flaky_majority_pass".to_string(),
+            description: "passes when most attempts succeed".to_string(),
+            timeout: 30,
+            flaky: Some(true),
+            retries: Some(3),
+            step: vec![simple_step_run(
+                "echo ok",
+                Some(make_assertion(Some(0), Some("ok"))),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(suite.passed(), 1);
+        assert_eq!(suite.failed(), 0);
+        assert!(
+            suite.results[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("2/3")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_runner_flaky_majority_fail() {
+        let backend = MockBackend::new(vec![
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "first fail".to_string(),
+            },
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "second fail".to_string(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        ]);
+
+        let manifest = make_manifest(vec![TestDef {
+            id: "T95".to_string(),
+            name: "flaky_majority_fail".to_string(),
+            description: "fails when most attempts fail".to_string(),
+            timeout: 30,
+            flaky: Some(true),
+            retries: Some(3),
+            step: vec![simple_step_run(
+                "echo ok",
+                Some(make_assertion(Some(0), Some("ok"))),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(suite.passed(), 0);
+        assert_eq!(suite.failed(), 1);
+        assert!(
+            suite.results[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("failed majority")
+        );
     }
 
     #[test]
