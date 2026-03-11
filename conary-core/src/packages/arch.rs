@@ -103,55 +103,6 @@ impl ArchPackage {
         Ok(info)
     }
 
-    /// Extract file list from tar archive
-    fn extract_file_list(path: &str) -> Result<Vec<PackageFile>> {
-        let mut archive = Self::open_archive(path)?;
-        let mut files = Vec::new();
-
-        for entry in archive
-            .entries()
-            .map_err(|e| Error::InitError(format!("Failed to read archive entries: {}", e)))?
-        {
-            let entry = entry
-                .map_err(|e| Error::InitError(format!("Failed to read archive entry: {}", e)))?;
-
-            let entry_path = entry
-                .path()
-                .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
-                .to_string_lossy()
-                .to_string();
-
-            if ARCH_METADATA_FILES.contains(&entry_path.as_str()) {
-                continue;
-            }
-
-            // Skip directories
-            if entry.header().entry_type().is_dir() {
-                continue;
-            }
-
-            let size = entry
-                .header()
-                .size()
-                .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
-
-            let mode = entry
-                .header()
-                .mode()
-                .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
-
-            files.push(PackageFile {
-                path: normalize_path(&entry_path)
-                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
-                size: i64::try_from(size).unwrap_or(i64::MAX),
-                mode: mode as i32,
-                sha256: None, // We'll compute this during extraction if needed
-            });
-        }
-
-        Ok(files)
-    }
-
     /// Parse .INSTALL file content to extract scriptlets
     ///
     /// Arch .INSTALL files contain shell functions like:
@@ -252,33 +203,6 @@ impl ArchPackage {
         }
     }
 
-    /// Extract .INSTALL file from archive
-    fn extract_install_script(path: &str) -> Option<String> {
-        let mut archive = Self::open_archive(path).ok()?;
-
-        for entry_result in archive.entries().ok()? {
-            let entry = match entry_result {
-                Ok(e) => e,
-                Err(e) => {
-                    warn!("Skipping corrupted archive entry in {}: {}", path, e);
-                    continue;
-                }
-            };
-
-            let entry_path = entry.path().ok()?.to_string_lossy().to_string();
-
-            if entry_path == ".INSTALL" {
-                let mut entry = entry;
-                let mut content = String::new();
-                if entry.read_to_string(&mut content).is_ok() {
-                    return Some(content);
-                }
-            }
-        }
-
-        None
-    }
-
     /// Parse dependencies from strings like "glibc>=2.34" or "package: description"
     fn parse_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
@@ -337,9 +261,11 @@ impl PackageFormat for ArchPackage {
     fn parse(path: &str) -> Result<Self> {
         debug!("Parsing Arch package: {}", path);
 
-        // Open archive and find .PKGINFO
+        // Single-pass: decompress once and extract all metadata + file list
         let mut archive = Self::open_archive(path)?;
         let mut pkginfo_content = None;
+        let mut install_content = None;
+        let mut files = Vec::new();
 
         for entry in archive
             .entries()
@@ -354,13 +280,43 @@ impl PackageFormat for ArchPackage {
                 .to_string_lossy()
                 .to_string();
 
-            if entry_path == ".PKGINFO" {
-                let mut content = String::new();
-                entry
-                    .read_to_string(&mut content)
-                    .map_err(|e| Error::InitError(format!("Failed to read .PKGINFO: {}", e)))?;
-                pkginfo_content = Some(content);
-                break;
+            match entry_path.as_str() {
+                ".PKGINFO" => {
+                    let mut content = String::new();
+                    entry
+                        .read_to_string(&mut content)
+                        .map_err(|e| Error::InitError(format!("Failed to read .PKGINFO: {}", e)))?;
+                    pkginfo_content = Some(content);
+                }
+                ".INSTALL" => {
+                    let mut content = String::new();
+                    if entry.read_to_string(&mut content).is_ok() {
+                        install_content = Some(content);
+                    }
+                }
+                name if ARCH_METADATA_FILES.contains(&name) => {
+                    // Skip other metadata files (.MTREE, .BUILDINFO)
+                }
+                _ => {
+                    // Collect file list entry (skip directories)
+                    if !entry.header().entry_type().is_dir() {
+                        let size = entry
+                            .header()
+                            .size()
+                            .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
+                        let mode = entry
+                            .header()
+                            .mode()
+                            .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
+                        files.push(PackageFile {
+                            path: normalize_path(&entry_path)
+                                .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                            size: i64::try_from(size).unwrap_or(i64::MAX),
+                            mode: mode as i32,
+                            sha256: None,
+                        });
+                    }
+                }
             }
         }
 
@@ -378,9 +334,6 @@ impl PackageFormat for ArchPackage {
             .version
             .ok_or_else(|| Error::InitError("Package version not found in .PKGINFO".to_string()))?;
 
-        // Extract file list
-        let files = Self::extract_file_list(path)?;
-
         // Parse dependencies
         let mut dependencies = Vec::new();
         dependencies.extend(Self::parse_dependencies(
@@ -396,8 +349,8 @@ impl PackageFormat for ArchPackage {
             DependencyType::Build,
         ));
 
-        // Extract scriptlets from .INSTALL file
-        let scriptlets = Self::extract_install_script(path)
+        // Parse scriptlets from .INSTALL file (already extracted in single pass)
+        let scriptlets = install_content
             .map(|content| Self::parse_install_script(&content))
             .unwrap_or_default();
 
