@@ -540,26 +540,27 @@ pub async fn find_missing(
     let mut found = Vec::new();
     let mut invalid_count = 0;
 
-    for hash in &request.hashes {
-        if !is_valid_hash(hash) {
+    for raw_hash in &request.hashes {
+        if !is_valid_hash(raw_hash) {
             invalid_count += 1;
             continue;
         }
+        let hash = normalize_hash(raw_hash);
 
         // Use Bloom filter for quick rejection
         if let Some(ref bloom) = state.bloom_filter
-            && !bloom.might_contain(hash)
+            && !bloom.might_contain(&hash)
         {
-            missing.push(hash.clone());
+            missing.push(hash);
             continue;
         }
 
         // Check disk
-        let path = state.chunk_cache.chunk_path(hash);
+        let path = state.chunk_cache.chunk_path(&hash);
         if path.exists() {
-            found.push(hash.clone());
+            found.push(hash);
         } else {
-            missing.push(hash.clone());
+            missing.push(hash);
         }
     }
 
