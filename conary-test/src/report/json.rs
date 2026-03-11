@@ -24,6 +24,13 @@ struct Summary {
 
 /// Serialize a test suite to a JSON string.
 pub fn to_json_report(suite: &TestSuite) -> Result<String> {
+    let value = to_json_value(suite)?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+/// Serialize a test suite to a [`serde_json::Value`] without the
+/// intermediate string round-trip.
+pub fn to_json_value(suite: &TestSuite) -> Result<serde_json::Value> {
     let report = JsonReport {
         suite_name: &suite.name,
         phase: suite.phase,
@@ -36,7 +43,7 @@ pub fn to_json_report(suite: &TestSuite) -> Result<String> {
         },
         results: &suite.results,
     };
-    Ok(serde_json::to_string_pretty(&report)?)
+    Ok(serde_json::to_value(report)?)
 }
 
 /// Write JSON report to a file.
