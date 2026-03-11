@@ -176,16 +176,6 @@ pub(crate) struct FileSnapshot {
     pub permissions: i32,
 }
 
-/// Parse a sandbox mode string, returning a descriptive error on failure
-pub(crate) fn parse_sandbox_mode(sandbox: &str) -> Result<SandboxMode> {
-    SandboxMode::parse(sandbox).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid sandbox mode '{}'. Use: auto, always, never",
-            sandbox
-        )
-    })
-}
-
 /// Detect package format from file path and magic bytes
 pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
     // First try file extension

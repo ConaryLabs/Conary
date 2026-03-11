@@ -25,7 +25,8 @@
 //! - `model` - System model commands
 //! - `collection` - Collection management (create, delete, etc.)
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use conary_core::scriptlet::SandboxMode;
 
 mod automation;
 mod bootstrap;
@@ -76,6 +77,31 @@ pub use state::StateCommands;
 pub use system::{SystemCommands, UpdateChannelAction};
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;
+
+/// CLI-side sandbox mode that maps to `conary_core::scriptlet::SandboxMode`.
+///
+/// We cannot derive `ValueEnum` on the core type directly (it lives in another
+/// crate), so this thin wrapper gives clap type-safe parsing while keeping the
+/// conversion trivial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliSandboxMode {
+    /// No sandboxing - direct execution
+    Never,
+    /// Automatic - sandbox based on script risk analysis
+    Auto,
+    /// Always sandbox all scripts
+    Always,
+}
+
+impl From<CliSandboxMode> for SandboxMode {
+    fn from(cli: CliSandboxMode) -> Self {
+        match cli {
+            CliSandboxMode::Never => SandboxMode::None,
+            CliSandboxMode::Auto => SandboxMode::Auto,
+            CliSandboxMode::Always => SandboxMode::Always,
+        }
+    }
+}
 
 /// Database path arguments
 #[derive(Args, Clone, Debug)]
@@ -140,8 +166,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Sandbox mode for scriptlets: auto, always, never (default: never)
-        #[arg(long, default_value = "never")]
-        sandbox: String,
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        sandbox: CliSandboxMode,
 
         /// Allow downgrading to an older version
         #[arg(long)]
@@ -171,8 +197,8 @@ pub enum Commands {
         /// satisfy:  dependencies on disk satisfy requirements without changes
         /// adopt:    auto-adopt system dependencies into Conary tracking
         /// takeover: download CCS versions from Remi and fully own dependencies
-        #[arg(long, default_value = "satisfy")]
-        dep_mode: String,
+        #[arg(long, value_enum, default_value_t = crate::commands::DepMode::Satisfy)]
+        dep_mode: crate::commands::DepMode,
 
         /// Install from a specific distro (cross-distro override)
         #[arg(long)]
@@ -200,8 +226,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Sandbox mode for scriptlets: auto, always, never (default: never)
-        #[arg(long, default_value = "never")]
-        sandbox: String,
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        sandbox: CliSandboxMode,
 
         /// Delete adopted package files from disk (default: DB-only removal)
         #[arg(long)]
@@ -221,12 +247,12 @@ pub enum Commands {
         security: bool,
 
         /// Scriptlet sandbox mode: auto, always, never
-        #[arg(long, default_value = "never")]
-        sandbox: String,
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        sandbox: CliSandboxMode,
 
         /// How to handle dependencies: satisfy (default), adopt, takeover
-        #[arg(long, default_value = "satisfy")]
-        dep_mode: String,
+        #[arg(long, value_enum, default_value_t = crate::commands::DepMode::Satisfy)]
+        dep_mode: crate::commands::DepMode,
 
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
@@ -285,8 +311,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Sandbox mode for scriptlets: auto, always, never (default: never)
-        #[arg(long, default_value = "never")]
-        sandbox: String,
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        sandbox: CliSandboxMode,
     },
 
     /// Pin a package to prevent updates and removal

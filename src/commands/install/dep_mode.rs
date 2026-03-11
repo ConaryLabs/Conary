@@ -2,35 +2,18 @@
 //! Dependency handling mode for package installation
 
 use std::fmt;
-use std::str::FromStr;
 
 /// Controls how Conary handles dependencies during install and update.
 ///
 /// - `Satisfy`: Dependencies already on the system satisfy requirements (default)
 /// - `Adopt`: Auto-adopt system dependencies as AdoptedTrack
 /// - `Takeover`: Download CCS from Remi, fully own all dependencies
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum DepMode {
     #[default]
     Satisfy,
     Adopt,
     Takeover,
-}
-
-impl FromStr for DepMode {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "satisfy" => Ok(Self::Satisfy),
-            "adopt" => Ok(Self::Adopt),
-            "takeover" => Ok(Self::Takeover),
-            _ => Err(anyhow::anyhow!(
-                "Invalid dep-mode '{}'. Valid options: satisfy, adopt, takeover",
-                s
-            )),
-        }
-    }
 }
 
 impl fmt::Display for DepMode {
@@ -46,13 +29,14 @@ impl fmt::Display for DepMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_dep_mode_from_str() {
+        // ValueEnum provides FromStr via clap
         assert_eq!(DepMode::from_str("satisfy").unwrap(), DepMode::Satisfy);
         assert_eq!(DepMode::from_str("adopt").unwrap(), DepMode::Adopt);
         assert_eq!(DepMode::from_str("takeover").unwrap(), DepMode::Takeover);
-        assert_eq!(DepMode::from_str("SATISFY").unwrap(), DepMode::Satisfy);
         assert!(DepMode::from_str("invalid").is_err());
     }
 

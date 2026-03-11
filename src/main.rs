@@ -5,7 +5,6 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use std::io;
-use std::str::FromStr;
 
 mod cli;
 mod commands;
@@ -48,8 +47,7 @@ fn main() -> Result<()> {
             from,
             yes,
         }) => {
-            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
-            let dep_mode = commands::DepMode::from_str(&dep_mode)?;
+            let sandbox_mode = sandbox.into();
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
@@ -95,14 +93,13 @@ fn main() -> Result<()> {
             sandbox,
             purge_files,
         }) => {
-            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
             commands::cmd_remove(
                 &package_name,
                 &common.db.db_path,
                 &common.root,
                 version,
                 no_scripts,
-                sandbox_mode,
+                sandbox.into(),
                 purge_files,
             )
         }
@@ -115,8 +112,7 @@ fn main() -> Result<()> {
             dep_mode,
             yes,
         }) => {
-            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
-            let dep_mode = commands::DepMode::from_str(&dep_mode)?;
+            let sandbox_mode = sandbox.into();
             // Smart dispatch: @name updates a collection/group
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
@@ -173,13 +169,12 @@ fn main() -> Result<()> {
             no_scripts,
             sandbox,
         }) => {
-            let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
             commands::cmd_autoremove(
                 &common.db.db_path,
                 &common.root,
                 dry_run,
                 no_scripts,
-                sandbox_mode,
+                sandbox.into(),
             )
         }
 
@@ -954,7 +949,6 @@ fn main() -> Result<()> {
                 sandbox,
                 no_deps,
             } => {
-                let sandbox_mode = commands::parse_sandbox_mode(&sandbox)?;
                 commands::ccs::cmd_ccs_install(
                     &package,
                     &common.db.db_path,
@@ -963,7 +957,7 @@ fn main() -> Result<()> {
                     allow_unsigned,
                     policy,
                     components,
-                    sandbox_mode,
+                    sandbox.into(),
                     no_deps,
                 )
             }
