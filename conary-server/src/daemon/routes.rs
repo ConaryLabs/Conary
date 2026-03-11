@@ -658,7 +658,7 @@ async fn list_transactions_handler(
         });
 
         match status_filter {
-            Some(status) => DaemonJob::list_by_status(conn, status),
+            Some(status) => DaemonJob::list_by_status(conn, status, limit),
             None => DaemonJob::list_all(conn, limit),
         }
     })
