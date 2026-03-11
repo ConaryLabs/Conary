@@ -14,18 +14,25 @@ CONARY_BIN="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
 publish_phase2_fixtures() {
     bash "$FIXTURE_DIR/build-all.sh"
 
+    if [ -z "$REMI_ADMIN_TOKEN" ]; then
+        echo "FATAL: REMI_ADMIN_TOKEN is required to publish Phase 2 fixtures" >&2
+        exit 1
+    fi
+
     echo ""
-    echo "Publishing Phase 2 fixtures to Remi package endpoints ($REMI_ENDPOINT)..."
+    echo "Publishing Phase 2 fixtures to Remi admin package endpoints ($REMI_ADMIN_ENDPOINT)..."
     for ver in v1 v2; do
         pkg=$(ls "$FIXTURE_DIR/$ver/output/"*.ccs 2>/dev/null | head -1)
         [ -z "$pkg" ] && { echo "FATAL: No CCS for $ver" >&2; exit 1; }
 
         for distro in fedora ubuntu arch; do
             printf "  %s -> %s... " "$ver" "$distro"
-            curl -sf -X POST "$REMI_ENDPOINT/v1/$distro/packages" \
-                -F "package=@$pkg" -F "format=ccs" \
+            curl -sf -X POST \
+                -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
+                --data-binary "@$pkg" \
+                "$REMI_ADMIN_ENDPOINT/v1/admin/packages/$distro" \
                 && echo "OK" \
-                || echo "WARN (may already exist)"
+                || echo "WARN (upload failed)"
         done
     done
 }
@@ -36,11 +43,6 @@ publish_adversarial_fixtures() {
     bash "$ADVERSARIAL_DIR/build-corrupted.sh" "$CONARY_BIN"
     bash "$ADVERSARIAL_DIR/build-malicious.sh" "$CONARY_BIN"
     bash "$ADVERSARIAL_DIR/build-deps.sh" "$CONARY_BIN"
-
-    if [ -z "$REMI_ADMIN_TOKEN" ]; then
-        echo "FATAL: REMI_ADMIN_TOKEN is required to publish adversarial fixtures" >&2
-        exit 1
-    fi
 
     echo ""
     echo "Publishing adversarial fixtures to $REMI_ADMIN_ENDPOINT/v1/admin/test-fixtures/adversarial/..."

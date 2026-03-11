@@ -654,6 +654,7 @@ pub fn create_external_admin_router(
             "/v1/admin/test-artifacts/*path",
             put(admin::upload_test_artifact),
         )
+        .route("/v1/admin/packages/:distro", post(admin::upload_package))
         // CI proxy endpoints
         .route("/v1/admin/ci/workflows", get(admin::ci_list_workflows))
         .route(

@@ -6,6 +6,7 @@ mod audit;
 mod ci;
 mod events;
 mod federation;
+mod packages;
 mod repos;
 mod tokens;
 
@@ -14,6 +15,7 @@ pub use audit::*;
 pub use ci::*;
 pub use events::*;
 pub use federation::*;
+pub use packages::*;
 pub use repos::*;
 pub use tokens::*;
 
