@@ -79,8 +79,7 @@ pub async fn start_run(
     let run_id = AppState::next_run_id();
     let suite = TestSuite::new(&req.suite, req.phase);
 
-    let mut runs = state.runs.write().await;
-    runs.insert(run_id, suite);
+    state.insert_run(run_id, suite).await;
 
     (
         StatusCode::CREATED,
