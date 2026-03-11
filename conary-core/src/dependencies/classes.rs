@@ -318,7 +318,10 @@ impl LanguageDep {
         Self::check_version_constraint(installed, constraint)
     }
 
-    /// Version constraint checker using proper numeric comparison via RpmVersion.
+    /// Version constraint checker using proper numeric comparison via `RpmVersion`.
+    ///
+    /// Returns `false` if either version string fails to parse, logging a
+    /// warning instead of silently falling back to string comparison.
     fn check_version_constraint(installed: &str, constraint: &str) -> bool {
         // Parse operator from constraint
         let (op, required) = if let Some(ver) = constraint.strip_prefix(">=") {
@@ -340,11 +343,31 @@ impl LanguageDep {
 
         use crate::version::RpmVersion;
 
-        // Use RpmVersion for proper numeric comparison; fall back to string comparison
-        let cmp = match (RpmVersion::parse(installed), RpmVersion::parse(required)) {
-            (Ok(inst), Ok(req)) => inst.compare(&req),
-            _ => installed.cmp(required),
+        let inst = match RpmVersion::parse(installed) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse installed version '{}': {}; treating constraint as unsatisfied",
+                    installed,
+                    e
+                );
+                return false;
+            }
         };
+
+        let req = match RpmVersion::parse(required) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse required version '{}': {}; treating constraint as unsatisfied",
+                    required,
+                    e
+                );
+                return false;
+            }
+        };
+
+        let cmp = inst.compare(&req);
 
         match op {
             ">=" => cmp.is_ge(),
