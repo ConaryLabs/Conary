@@ -512,6 +512,8 @@ impl RepositoryPackage {
     /// Uses a prepared statement within a transaction for much better performance
     /// than individual inserts. For 77k packages, this reduces sync time from
     /// ~5 minutes to ~10 seconds.
+    ///
+    /// Caller must wrap this in a transaction for atomicity.
     pub fn batch_insert(conn: &Connection, packages: &[Self]) -> Result<usize> {
         if packages.is_empty() {
             return Ok(0);
