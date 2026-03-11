@@ -12,6 +12,7 @@ use std::path::Path;
 pub fn load_manifest(path: &Path) -> Result<TestManifest> {
     let content = std::fs::read_to_string(path)?;
     let manifest: TestManifest = toml::from_str(&content)?;
+    manifest.validate()?;
     Ok(manifest)
 }
 
