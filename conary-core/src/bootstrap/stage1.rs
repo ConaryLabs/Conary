@@ -20,6 +20,7 @@
 //! the base system packages.
 
 use super::build_helpers;
+use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use tracing::debug;
@@ -27,9 +28,8 @@ use crate::recipe::{Recipe, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Errors that can occur during Stage 1 build
 #[derive(Debug, Error)]
@@ -57,6 +57,9 @@ pub enum Stage1Error {
 
     #[error("Missing dependency: {0} requires {1}")]
     MissingDependency(String, String),
+
+    #[error("Build runner error: {0}")]
+    Runner(#[from] super::build_runner::BuildRunnerError),
 }
 
 /// Status of a Stage 1 package build
@@ -107,9 +110,6 @@ pub struct Stage1Builder {
     /// Sysroot directory for Stage 1
     sysroot: PathBuf,
 
-    /// Source cache directory
-    sources_dir: PathBuf,
-
     /// Build logs directory
     logs_dir: PathBuf,
 
@@ -118,6 +118,9 @@ pub struct Stage1Builder {
 
     /// Environment variables for builds
     build_env: HashMap<String, String>,
+
+    /// Shared build runner for source fetching and extraction
+    runner: PackageBuildRunner,
 }
 
 impl Stage1Builder {
@@ -142,16 +145,17 @@ impl Stage1Builder {
         build_helpers::create_sysroot_dirs(&sysroot)?;
 
         let build_env = build_helpers::setup_build_env(&stage0, &sysroot);
+        let runner = PackageBuildRunner::new(&sources_dir, config);
 
         Ok(Self {
             work_dir: stage1_dir,
             config: config.clone(),
             stage0,
             sysroot,
-            sources_dir,
             logs_dir,
             packages: Vec::new(),
             build_env,
+            runner,
         })
     }
 
@@ -232,30 +236,28 @@ impl Stage1Builder {
         let pkg_name = self.packages[idx].name.clone();
 
         // Create build directory
-        let build_base = self.work_dir.join("build").join(&pkg_name);
-        let src_dir = build_base.join("src");
-        let build_dir = build_base.join("build");
-
-        // Clean previous build if exists
-        if build_base.exists() {
-            fs::remove_dir_all(&build_base)?;
-        }
-        fs::create_dir_all(&src_dir)?;
-        fs::create_dir_all(&build_dir)?;
+        let (src_dir, build_dir) = self
+            .runner
+            .prepare_build_dirs(&self.work_dir, &pkg_name)?;
 
         // Fetch source
         self.packages[idx].status = PackageBuildStatus::Fetching;
-        let archive_path = self.fetch_source(idx)?;
+        let archive_path = self
+            .runner
+            .fetch_source(&pkg_name, &self.packages[idx].recipe)
+            .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
         // Extract source
         self.packages[idx].status = PackageBuildStatus::Preparing;
-        self.extract_source(&archive_path, &src_dir)?;
+        self.runner.extract_source(&archive_path, &src_dir)?;
 
         // Find the actual source directory (archives usually have a top-level dir)
-        let actual_src_dir = self.find_source_dir(&src_dir)?;
+        let actual_src_dir = self.runner.find_source_dir(&src_dir)?;
 
         // Fetch and extract additional sources (like GMP, MPFR, MPC for GCC)
-        self.fetch_additional_sources(idx, &actual_src_dir)?;
+        self.runner
+            .fetch_additional_sources(&pkg_name, &self.packages[idx].recipe, &actual_src_dir)
+            .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
         // Determine working directory for build phases
         // If recipe has a workdir, use build_dir; otherwise use source dir
@@ -272,239 +274,6 @@ impl Stage1Builder {
         self.run_install(idx, &work_dir)?;
 
         Ok(())
-    }
-
-    /// Fetch the source archive for a package
-    fn fetch_source(&mut self, idx: usize) -> Result<PathBuf, Stage1Error> {
-        // Clone the data we need to avoid borrow conflicts
-        let pkg_name = self.packages[idx].name.clone();
-        let url = self.packages[idx].recipe.archive_url();
-        let filename = self.packages[idx].recipe.archive_filename();
-        let target_path = self.sources_dir.join(&filename);
-
-        // Check if already downloaded
-        if target_path.exists() {
-            info!("  Using cached source: {}", filename);
-            self.packages[idx]
-                .log
-                .push_str(&format!("Using cached source: {}\n", filename));
-            return Ok(target_path);
-        }
-
-        info!("  Fetching: {}", url);
-        self.packages[idx]
-            .log
-            .push_str(&format!("Fetching: {}\n", url));
-
-        let output = Command::new("curl")
-            .args([
-                "-fsSL",
-                "-o",
-                target_path.to_str().ok_or_else(|| {
-                    Stage1Error::SourceFetchFailed(
-                        pkg_name.clone(),
-                        format!("path is not valid UTF-8: {}", target_path.display()),
-                    )
-                })?,
-                &url,
-            ])
-            .output()
-            .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Stage1Error::SourceFetchFailed(pkg_name, stderr.to_string()));
-        }
-
-        // Verify checksum
-        self.verify_checksum(idx, &target_path)?;
-
-        Ok(target_path)
-    }
-
-    /// Fetch additional sources (like GMP, MPFR, MPC for GCC)
-    fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), Stage1Error> {
-        // Clone the data we need upfront to avoid borrow conflicts
-        let pkg_name = self.packages[idx].name.clone();
-        let additional_sources: Vec<_> = self.packages[idx]
-            .recipe
-            .source
-            .additional
-            .iter()
-            .map(|a| (a.url.clone(), a.checksum.clone(), a.extract_to.clone()))
-            .collect();
-
-        let sources_dir = self.sources_dir.clone();
-        let src_dir = src_dir.to_path_buf();
-
-        for (url, checksum, extract_to) in additional_sources {
-            let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
-            let target_path = sources_dir.join(filename);
-
-            // Download if not cached
-            if !target_path.exists() {
-                info!("  Fetching additional: {}", filename);
-                self.packages[idx]
-                    .log
-                    .push_str(&format!("Fetching additional: {}\n", filename));
-
-                let output = Command::new("curl")
-                    .args([
-                        "-fsSL",
-                        "-o",
-                        target_path.to_str().ok_or_else(|| {
-                            Stage1Error::SourceFetchFailed(
-                                pkg_name.clone(),
-                                format!("path is not valid UTF-8: {}", target_path.display()),
-                            )
-                        })?,
-                        &url,
-                    ])
-                    .output()
-                    .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Stage1Error::SourceFetchFailed(
-                        pkg_name.clone(),
-                        stderr.to_string(),
-                    ));
-                }
-            }
-
-            // Verify checksum of additional source
-            if checksum.contains("VERIFY_BEFORE_BUILD") || checksum.contains("FIXME") {
-                if !self.config.skip_verify {
-                    return Err(Stage1Error::SourceFetchFailed(
-                        pkg_name.clone(),
-                        format!(
-                            "Additional source has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
-                            checksum
-                        ),
-                    ));
-                }
-                warn!("  Skipping placeholder checksum for additional source (--skip-verify)");
-            } else if let Some((algo, hash)) = checksum.split_once(':') {
-                if algo == "sha256" {
-                    let output = Command::new("sha256sum")
-                        .arg(&target_path)
-                        .output()
-                        .map_err(|e| {
-                            Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string())
-                        })?;
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let computed = stdout.split_whitespace().next().unwrap_or("");
-                    if computed != hash {
-                        return Err(Stage1Error::SourceFetchFailed(
-                            pkg_name.clone(),
-                            format!(
-                                "Additional source checksum mismatch for {}: expected {}, got {}",
-                                filename, hash, computed
-                            ),
-                        ));
-                    }
-                } else {
-                    warn!(
-                        "  Unknown checksum algorithm for additional source: {}",
-                        algo
-                    );
-                }
-            }
-
-            // Extract to the specified location, stripping top-level directory
-            // This is needed because tarballs like mpfr-4.2.1.tar.xz contain
-            // mpfr-4.2.1/ as the top-level, but GCC expects gmp/, mpfr/, etc.
-            let extract_dest = if let Some(dest) = &extract_to {
-                src_dir.join(dest)
-            } else {
-                src_dir.clone()
-            };
-
-            self.extract_source_strip(&target_path, &extract_dest)?;
-        }
-
-        Ok(())
-    }
-
-    /// Verify checksum of downloaded file
-    fn verify_checksum(&self, idx: usize, path: &Path) -> Result<(), Stage1Error> {
-        let pkg_name = &self.packages[idx].name;
-        let expected = &self.packages[idx].recipe.source.checksum;
-
-        // Reject placeholder checksums unless skip_verify is enabled
-        if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
-            if self.config.skip_verify {
-                warn!(
-                    "  Skipping placeholder checksum (--skip-verify enabled): {}",
-                    expected
-                );
-                return Ok(());
-            }
-            return Err(Stage1Error::SourceFetchFailed(
-                pkg_name.clone(),
-                format!(
-                    "Recipe has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
-                    expected
-                ),
-            ));
-        }
-
-        // Extract algorithm and hash
-        let (algo, hash) = expected.split_once(':').ok_or_else(|| {
-            Stage1Error::SourceFetchFailed(pkg_name.clone(), "Invalid checksum format".to_string())
-        })?;
-
-        match algo {
-            "sha256" => {
-                let output = Command::new("sha256sum")
-                    .arg(path)
-                    .output()
-                    .map_err(|e| Stage1Error::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let computed = stdout.split_whitespace().next().unwrap_or("");
-
-                if computed != hash {
-                    return Err(Stage1Error::SourceFetchFailed(
-                        pkg_name.clone(),
-                        format!("Checksum mismatch: expected {}, got {}", hash, computed),
-                    ));
-                }
-            }
-            _ => {
-                warn!("  Unknown checksum algorithm: {}", algo);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Extract a tar archive to a destination directory
-    fn extract_tar(
-        &self,
-        archive: &Path,
-        dest: &Path,
-        strip_components: bool,
-    ) -> Result<(), Stage1Error> {
-        build_helpers::extract_tar(archive, dest, strip_components)
-            .map_err(|e| Stage1Error::BuildFailed("extract".to_string(), e))
-    }
-
-    /// Extract a source archive, stripping the top-level directory
-    ///
-    /// This is used for in-tree dependencies like GMP, MPFR, MPC for GCC builds.
-    fn extract_source_strip(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
-        self.extract_tar(archive, dest, true)
-    }
-
-    /// Extract a source archive
-    fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), Stage1Error> {
-        self.extract_tar(archive, dest, false)
-    }
-
-    /// Find the actual source directory after extraction
-    fn find_source_dir(&self, dir: &Path) -> Result<PathBuf, Stage1Error> {
-        build_helpers::find_source_dir(dir).map_err(Stage1Error::DirectoryCreation)
     }
 
     /// Run a recipe build phase (configure, make, or install)

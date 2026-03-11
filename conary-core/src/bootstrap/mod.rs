@@ -45,6 +45,7 @@
 
 mod base;
 mod build_helpers;
+mod build_runner;
 mod conary_stage;
 mod config;
 mod image;
@@ -58,6 +59,7 @@ mod toolchain;
 pub use base::{
     BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary,
 };
+pub use build_runner::{BuildRunnerError, PackageBuildRunner};
 pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};

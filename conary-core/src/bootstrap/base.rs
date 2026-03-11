@@ -17,7 +17,7 @@
 //!
 //! After completion, the target root contains a complete bootable system.
 
-use super::build_helpers;
+use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
 use crate::container::{ContainerConfig, Sandbox};
@@ -152,9 +152,6 @@ pub struct BaseBuilder {
     /// Target root filesystem
     target_root: PathBuf,
 
-    /// Source cache directory
-    sources_dir: PathBuf,
-
     /// Build logs directory
     logs_dir: PathBuf,
 
@@ -172,6 +169,9 @@ pub struct BaseBuilder {
 
     /// Current phase
     current_phase: Option<BaseBuildPhase>,
+
+    /// Shared build runner for source fetching and extraction
+    runner: PackageBuildRunner,
 }
 
 impl BaseBuilder {
@@ -370,18 +370,20 @@ impl BaseBuilder {
         // Allow configure scripts to run as root (needed for bootstrap)
         build_env.insert("FORCE_UNSAFE_CONFIGURE".to_string(), "1".to_string());
 
+        let runner = PackageBuildRunner::new(&sources_dir, config);
+
         Ok(Self {
             work_dir: base_dir,
             config: config.clone(),
             toolchain,
             target_root,
-            sources_dir,
             logs_dir,
             recipe_dir,
             packages: Vec::new(),
             recipes: Vec::new(),
             build_env,
             current_phase: None,
+            runner,
         })
     }
 
@@ -685,25 +687,34 @@ impl BaseBuilder {
         let pkg_name = self.packages[idx].name.clone();
         self.packages[idx].status = BaseBuildStatus::Building;
 
-        // Create build directory
-        let build_base = self.work_dir.join("build").join(&pkg_name);
-        let src_dir = build_base.join("src");
-        let build_dir = build_base.join("build");
+        let recipe = self.packages[idx]
+            .recipe
+            .as_ref()
+            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
 
-        // Clean previous build
-        if build_base.exists() {
-            fs::remove_dir_all(&build_base)?;
-        }
-        fs::create_dir_all(&src_dir)?;
-        fs::create_dir_all(&build_dir)?;
+        // Create build directory
+        let (src_dir, build_dir) = self
+            .runner
+            .prepare_build_dirs(&self.work_dir, &pkg_name)
+            .map_err(|e| BaseError::BuildFailed(pkg_name.clone(), e.to_string()))?;
 
         // Fetch and extract source
-        let archive_path = self.fetch_source(idx)?;
-        self.extract_source(&archive_path, &src_dir)?;
-        let actual_src_dir = self.find_source_dir(&src_dir)?;
+        let archive_path = self
+            .runner
+            .fetch_source(&pkg_name, recipe)
+            .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
+        self.runner
+            .extract_source(&archive_path, &src_dir)
+            .map_err(|e| BaseError::BuildFailed(pkg_name.clone(), e.to_string()))?;
+        let actual_src_dir = self
+            .runner
+            .find_source_dir(&src_dir)
+            .map_err(|e| BaseError::BuildFailed(pkg_name.clone(), e.to_string()))?;
 
         // Fetch additional sources
-        self.fetch_additional_sources(idx, &actual_src_dir)?;
+        self.runner
+            .fetch_additional_sources(&pkg_name, recipe, &actual_src_dir)
+            .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
 
         // Determine working directory
         let has_workdir = self.packages[idx]
@@ -724,162 +735,6 @@ impl BaseBuilder {
         self.run_install(idx, workdir)?;
 
         Ok(())
-    }
-
-    /// Fetch source archive
-    fn fetch_source(&mut self, idx: usize) -> Result<PathBuf, BaseError> {
-        let pkg_name = self.packages[idx].name.clone();
-        let recipe = self.packages[idx]
-            .recipe
-            .as_ref()
-            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
-        let url = recipe.archive_url();
-        let filename = recipe.archive_filename();
-        let target_path = self.sources_dir.join(&filename);
-
-        if target_path.exists() {
-            info!("  Using cached source: {}", filename);
-            self.packages[idx]
-                .log
-                .push_str(&format!("Using cached: {}\n", filename));
-            return Ok(target_path);
-        }
-
-        info!("  Fetching: {}", url);
-        self.packages[idx]
-            .log
-            .push_str(&format!("Fetching: {}\n", url));
-
-        let target_str = target_path
-            .to_str()
-            .ok_or_else(|| BaseError::InvalidPath(target_path.clone()))?;
-        let output = Command::new("curl")
-            .args(["-fsSL", "-o", target_str, &url])
-            .output()
-            .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(BaseError::SourceFetchFailed(pkg_name, stderr.to_string()));
-        }
-
-        // Verify checksum
-        self.verify_checksum(idx, &target_path)?;
-
-        Ok(target_path)
-    }
-
-    /// Fetch additional sources
-    fn fetch_additional_sources(&mut self, idx: usize, src_dir: &Path) -> Result<(), BaseError> {
-        let pkg_name = self.packages[idx].name.clone();
-        let recipe = self.packages[idx]
-            .recipe
-            .as_ref()
-            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
-
-        let additional: Vec<_> = recipe
-            .source
-            .additional
-            .iter()
-            .map(|a| (a.url.clone(), a.extract_to.clone()))
-            .collect();
-
-        for (url, extract_to) in additional {
-            let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
-            let target_path = self.sources_dir.join(filename);
-
-            if !target_path.exists() {
-                info!("  Fetching additional: {}", filename);
-                self.packages[idx]
-                    .log
-                    .push_str(&format!("Fetching: {}\n", filename));
-
-                let target_str = target_path
-                    .to_str()
-                    .ok_or_else(|| BaseError::InvalidPath(target_path.clone()))?;
-                let output = Command::new("curl")
-                    .args(["-fsSL", "-o", target_str, &url])
-                    .output()
-                    .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(BaseError::SourceFetchFailed(
-                        pkg_name.clone(),
-                        stderr.to_string(),
-                    ));
-                }
-            }
-
-            let extract_dest = extract_to
-                .map(|d| src_dir.join(d))
-                .unwrap_or_else(|| src_dir.to_path_buf());
-
-            self.extract_source(&target_path, &extract_dest)?;
-        }
-
-        Ok(())
-    }
-
-    /// Verify checksum
-    fn verify_checksum(&self, idx: usize, path: &Path) -> Result<(), BaseError> {
-        let pkg_name = &self.packages[idx].name;
-        let recipe = self.packages[idx]
-            .recipe
-            .as_ref()
-            .ok_or_else(|| BaseError::RecipeNotLoaded(pkg_name.clone()))?;
-        let expected = &recipe.source.checksum;
-
-        // Reject placeholder checksums unless skip_verify is enabled
-        if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
-            if self.config.skip_verify {
-                warn!(
-                    "  Skipping placeholder checksum (--skip-verify enabled): {}",
-                    expected
-                );
-                return Ok(());
-            }
-            return Err(BaseError::SourceFetchFailed(
-                pkg_name.clone(),
-                format!(
-                    "Recipe has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
-                    expected
-                ),
-            ));
-        }
-
-        let (algo, hash) = expected.split_once(':').ok_or_else(|| {
-            BaseError::SourceFetchFailed(pkg_name.clone(), "Invalid checksum format".to_string())
-        })?;
-
-        if algo == "sha256" {
-            let output = Command::new("sha256sum")
-                .arg(path)
-                .output()
-                .map_err(|e| BaseError::SourceFetchFailed(pkg_name.clone(), e.to_string()))?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let computed = stdout.split_whitespace().next().unwrap_or("");
-
-            if computed != hash {
-                return Err(BaseError::SourceFetchFailed(
-                    pkg_name.clone(),
-                    format!("Checksum mismatch: expected {}, got {}", hash, computed),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), BaseError> {
-        build_helpers::extract_tar(archive, dest, false)
-            .map_err(|e| BaseError::BuildFailed("extract".to_string(), e))
-    }
-
-    /// Find actual source directory
-    fn find_source_dir(&self, dir: &Path) -> Result<PathBuf, BaseError> {
-        build_helpers::find_source_dir(dir).map_err(BaseError::DirectoryCreation)
     }
 
     /// Run setup phase
