@@ -103,14 +103,28 @@ pub async fn audit_middleware(
         s.config.db_path.clone()
     };
 
+    // Maximum number of bytes to log from request/response bodies.
+    // Larger payloads (e.g. package uploads) are truncated to avoid
+    // excessive DB storage and memory usage in audit logs.
+    const AUDIT_BODY_MAX: usize = 4096;
+
     // For write operations, capture the request body
     let (request, request_body) = if is_write {
         let (parts, body) = request.into_parts();
         match axum::body::to_bytes(body, 64 * 1024).await {
             Ok(bytes) => {
-                let body_str = String::from_utf8_lossy(&bytes).to_string();
+                let body_str = String::from_utf8_lossy(&bytes);
+                let logged = if body_str.len() > AUDIT_BODY_MAX {
+                    format!(
+                        "{}... [truncated, {} bytes total]",
+                        &body_str[..AUDIT_BODY_MAX],
+                        bytes.len()
+                    )
+                } else {
+                    body_str.into_owned()
+                };
                 let new_body = Body::from(bytes);
-                (Request::from_parts(parts, new_body), Some(body_str))
+                (Request::from_parts(parts, new_body), Some(logged))
             }
             Err(_) => {
                 let new_body = Body::empty();
@@ -131,9 +145,18 @@ pub async fn audit_middleware(
         let (parts, body) = response.into_parts();
         match axum::body::to_bytes(body, 64 * 1024).await {
             Ok(bytes) => {
-                let body_str = String::from_utf8_lossy(&bytes).to_string();
+                let body_str = String::from_utf8_lossy(&bytes);
+                let logged = if body_str.len() > AUDIT_BODY_MAX {
+                    format!(
+                        "{}... [truncated, {} bytes total]",
+                        &body_str[..AUDIT_BODY_MAX],
+                        bytes.len()
+                    )
+                } else {
+                    body_str.into_owned()
+                };
                 let new_body = Body::from(bytes);
-                (Response::from_parts(parts, new_body), Some(body_str))
+                (Response::from_parts(parts, new_body), Some(logged))
             }
             Err(_) => {
                 let new_body = Body::empty();
