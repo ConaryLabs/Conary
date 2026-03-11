@@ -258,16 +258,11 @@ impl SyscallProfile {
     }
 
     /// Get the syscalls allowed by this profile
-    pub fn allowed_syscalls(&self) -> &'static [&'static str] {
-        match self {
-            Self::Minimal => MINIMAL_SYSCALLS,
-            Self::NetworkServer => NETWORK_SERVER_SYSCALLS,
-            Self::NetworkClient => NETWORK_CLIENT_SYSCALLS,
-            Self::GuiApp => GUI_APP_SYSCALLS,
-            Self::SystemDaemon => SYSTEM_DAEMON_SYSCALLS,
-            Self::Container => CONTAINER_SYSCALLS,
-            Self::Scriptlet => SCRIPTLET_SYSCALLS,
-        }
+    ///
+    /// Returns a composed, sorted, deduplicated list built from shared
+    /// base sets and profile-specific additions.
+    pub fn allowed_syscalls(&self) -> Vec<&'static str> {
+        self.compose_syscalls()
     }
 }
 
@@ -343,8 +338,13 @@ pub enum CapabilityValidationError {
     EmptySyscall { context: String },
 }
 
-// Predefined syscall lists for profiles
-static MINIMAL_SYSCALLS: &[&str] = &[
+// ── Predefined syscall profiles ──────────────────────────────────────
+//
+// Profiles are composed from a shared base set plus profile-specific
+// additions.  This avoids duplicating the minimal set in every profile.
+
+/// Base syscalls shared by all profiles (memory, basic I/O, threading)
+static BASE_SYSCALLS: &[&str] = &[
     "read",
     "write",
     "open",
@@ -371,38 +371,9 @@ static MINIMAL_SYSCALLS: &[&str] = &[
     "statx",
 ];
 
-static NETWORK_SERVER_SYSCALLS: &[&str] = &[
-    // Include minimal
-    "read",
-    "write",
-    "open",
-    "close",
-    "stat",
-    "fstat",
-    "lstat",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "access",
-    "exit_group",
-    "arch_prctl",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "rseq",
-    "getrandom",
-    "pread64",
-    "pwrite64",
-    "openat",
-    "newfstatat",
-    "statx",
-    // Network server specific
+/// Networking syscalls shared by server, client, daemon, and scriptlet profiles
+static NETWORK_SYSCALLS: &[&str] = &[
     "socket",
-    "bind",
-    "listen",
-    "accept",
-    "accept4",
     "connect",
     "sendto",
     "recvfrom",
@@ -413,6 +384,13 @@ static NETWORK_SERVER_SYSCALLS: &[&str] = &[
     "getsockopt",
     "getsockname",
     "getpeername",
+];
+
+/// Server-side listening syscalls (server, daemon, scriptlet)
+static SERVER_LISTEN_SYSCALLS: &[&str] = &["bind", "listen", "accept", "accept4"];
+
+/// I/O multiplexing syscalls (server, daemon, GUI, scriptlet)
+static IO_MUX_SYSCALLS: &[&str] = &[
     "epoll_create",
     "epoll_create1",
     "epoll_ctl",
@@ -421,6 +399,10 @@ static NETWORK_SERVER_SYSCALLS: &[&str] = &[
     "poll",
     "select",
     "pselect6",
+];
+
+/// Process/signal management (server, daemon, scriptlet)
+static PROCESS_SIGNAL_SYSCALLS: &[&str] = &[
     "clone",
     "clone3",
     "wait4",
@@ -432,154 +414,45 @@ static NETWORK_SERVER_SYSCALLS: &[&str] = &[
     "sigaltstack",
 ];
 
-static NETWORK_CLIENT_SYSCALLS: &[&str] = &[
-    // Include minimal
-    "read",
-    "write",
-    "open",
-    "close",
-    "stat",
-    "fstat",
-    "lstat",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "access",
-    "exit_group",
-    "arch_prctl",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "rseq",
-    "getrandom",
-    "pread64",
-    "pwrite64",
-    "openat",
-    "newfstatat",
-    "statx",
-    // Network client specific
-    "socket",
-    "connect",
-    "sendto",
-    "recvfrom",
-    "sendmsg",
-    "recvmsg",
-    "shutdown",
-    "setsockopt",
-    "getsockopt",
-    "getsockname",
-    "getpeername",
-    "poll",
-    "select",
-];
-
-static GUI_APP_SYSCALLS: &[&str] = &[
-    // Most syscalls needed for GUI apps
-    "read",
-    "write",
-    "open",
-    "close",
-    "stat",
-    "fstat",
-    "lstat",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "access",
-    "exit_group",
-    "arch_prctl",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "rseq",
-    "getrandom",
-    "pread64",
-    "pwrite64",
-    "openat",
-    "newfstatat",
-    "statx",
-    // GUI specific
-    "socket",
-    "connect",
-    "recvmsg",
-    "sendmsg",
-    "poll",
-    "ioctl",
-    "fcntl",
-    "dup",
-    "dup2",
+/// IPC and shared memory syscalls (GUI, scriptlet)
+static IPC_SYSCALLS: &[&str] = &[
     "pipe",
     "pipe2",
+    "dup",
+    "dup2",
     "eventfd",
     "eventfd2",
-    "memfd_create",
     "shmat",
     "shmdt",
     "shmget",
     "shmctl",
+    "memfd_create",
 ];
 
-static SYSTEM_DAEMON_SYSCALLS: &[&str] = &[
-    // Broad permissions for system daemons
-    "read",
-    "write",
-    "open",
-    "close",
-    "stat",
-    "fstat",
-    "lstat",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "access",
-    "exit_group",
-    "arch_prctl",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "rseq",
-    "getrandom",
-    "pread64",
-    "pwrite64",
-    "openat",
-    "newfstatat",
-    "statx",
-    // Daemon specific
-    "socket",
-    "bind",
-    "listen",
-    "accept",
-    "accept4",
-    "connect",
-    "sendto",
-    "recvfrom",
-    "sendmsg",
-    "recvmsg",
-    "shutdown",
-    "setsockopt",
-    "getsockopt",
-    "getsockname",
-    "getpeername",
-    "epoll_create",
-    "epoll_create1",
-    "epoll_ctl",
-    "epoll_wait",
-    "epoll_pwait",
-    "poll",
-    "select",
-    "pselect6",
-    "clone",
-    "clone3",
-    "wait4",
-    "waitid",
-    "prctl",
-    "sigaction",
-    "rt_sigaction",
-    "rt_sigprocmask",
-    "sigaltstack",
+/// Compose a syscall profile from base + additional slices.
+///
+/// Returns a sorted, deduplicated Vec.
+fn compose_profile(slices: &[&'static [&'static str]]) -> Vec<&'static str> {
+    let mut set = std::collections::BTreeSet::new();
+    for slice in slices {
+        for &s in *slice {
+            set.insert(s);
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Additional syscalls beyond NETWORK_SYSCALLS for network client profile
+static NETWORK_CLIENT_EXTRA: &[&str] = &["poll", "select"];
+
+/// Additional syscalls for GUI applications
+static GUI_APP_EXTRA: &[&str] = &[
+    "socket", "connect", "recvmsg", "sendmsg", "poll", "ioctl", "fcntl", "dup", "dup2", "pipe",
+    "pipe2", "eventfd", "eventfd2", "memfd_create", "shmat", "shmdt", "shmget", "shmctl",
+];
+
+/// Additional syscalls for system daemons (privilege, filesystem management)
+static DAEMON_EXTRA: &[&str] = &[
     "setuid",
     "setgid",
     "setgroups",
@@ -605,31 +478,8 @@ static SYSTEM_DAEMON_SYSCALLS: &[&str] = &[
     "getdents64",
 ];
 
-static CONTAINER_SYSCALLS: &[&str] = &[
-    // Restricted set for containers
-    "read",
-    "write",
-    "close",
-    "fstat",
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
-    "exit_group",
-    "arch_prctl",
-    "futex",
-    "set_tid_address",
-    "set_robust_list",
-    "rseq",
-    "getrandom",
-    "pread64",
-    "pwrite64",
-    "openat",
-    "newfstatat",
-    "clone",
-    "clone3",
-    "wait4",
-];
+/// Additional syscalls for containers (minimal process support)
+static CONTAINER_EXTRA: &[&str] = &["clone", "clone3", "wait4"];
 
 /// Broad allowlist for package scriptlets.
 ///
@@ -642,21 +492,7 @@ static CONTAINER_SYSCALLS: &[&str] = &[
 /// - acct, swapon, swapoff (system administration)
 /// - bpf (BPF program loading)
 /// - perf_event_open, userfaultfd (kernel interfaces)
-static SCRIPTLET_SYSCALLS: &[&str] = &[
-    // File I/O
-    "read",
-    "write",
-    "open",
-    "close",
-    "stat",
-    "fstat",
-    "lstat",
-    "openat",
-    "newfstatat",
-    "statx",
-    "access",
-    "pread64",
-    "pwrite64",
+static SCRIPTLET_EXTRA: &[&str] = &[
     "lseek",
     "getdents64",
     // File management
@@ -671,20 +507,10 @@ static SCRIPTLET_SYSCALLS: &[&str] = &[
     "fchmod",
     "chown",
     "fchown",
-    // Memory
-    "mmap",
-    "mprotect",
-    "munmap",
-    "brk",
     // Process management
-    "clone",
-    "clone3",
     "fork",
     "execve",
     "exit",
-    "exit_group",
-    "wait4",
-    "waitid",
     "getpid",
     "getuid",
     "getgid",
@@ -693,54 +519,9 @@ static SCRIPTLET_SYSCALLS: &[&str] = &[
     "setuid",
     "setgid",
     "setgroups",
-    "prctl",
-    "arch_prctl",
-    "set_tid_address",
-    "set_robust_list",
     "setsid",
     "umask",
     "kill",
-    // Signals
-    "rt_sigaction",
-    "sigaction",
-    "rt_sigprocmask",
-    "sigaltstack",
-    // I/O multiplexing
-    "poll",
-    "select",
-    "pselect6",
-    "epoll_create",
-    "epoll_create1",
-    "epoll_ctl",
-    "epoll_wait",
-    "epoll_pwait",
-    // Pipes and IPC
-    "pipe",
-    "pipe2",
-    "dup",
-    "dup2",
-    "socket",
-    "connect",
-    "bind",
-    "listen",
-    "accept",
-    "accept4",
-    "sendto",
-    "recvfrom",
-    "sendmsg",
-    "recvmsg",
-    "shutdown",
-    "setsockopt",
-    "getsockopt",
-    "getsockname",
-    "getpeername",
-    "eventfd",
-    "eventfd2",
-    "shmat",
-    "shmdt",
-    "shmget",
-    "shmctl",
-    "memfd_create",
     // Terminal and descriptor control
     "ioctl",
     "fcntl",
@@ -751,12 +532,70 @@ static SCRIPTLET_SYSCALLS: &[&str] = &[
     // chroot intentionally omitted -- it is the classic container-escape
     // primitive and scriptlets should not need it (the container already
     // handles filesystem isolation).
-    // Random
-    "getrandom",
-    // Threading
-    "futex",
-    "rseq",
 ];
+
+/// Container profile uses a restricted subset of BASE_SYSCALLS (no open/stat/lstat/access)
+static CONTAINER_BASE: &[&str] = &[
+    "read",
+    "write",
+    "close",
+    "fstat",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "brk",
+    "exit_group",
+    "arch_prctl",
+    "futex",
+    "set_tid_address",
+    "set_robust_list",
+    "rseq",
+    "getrandom",
+    "pread64",
+    "pwrite64",
+    "openat",
+    "newfstatat",
+];
+
+impl SyscallProfile {
+    /// Build the composed syscall list for this profile
+    pub fn compose_syscalls(&self) -> Vec<&'static str> {
+        match self {
+            Self::Minimal => compose_profile(&[BASE_SYSCALLS]),
+            Self::NetworkServer => compose_profile(&[
+                BASE_SYSCALLS,
+                NETWORK_SYSCALLS,
+                SERVER_LISTEN_SYSCALLS,
+                IO_MUX_SYSCALLS,
+                PROCESS_SIGNAL_SYSCALLS,
+            ]),
+            Self::NetworkClient => compose_profile(&[
+                BASE_SYSCALLS,
+                NETWORK_SYSCALLS,
+                NETWORK_CLIENT_EXTRA,
+            ]),
+            Self::GuiApp => compose_profile(&[BASE_SYSCALLS, GUI_APP_EXTRA]),
+            Self::SystemDaemon => compose_profile(&[
+                BASE_SYSCALLS,
+                NETWORK_SYSCALLS,
+                SERVER_LISTEN_SYSCALLS,
+                IO_MUX_SYSCALLS,
+                PROCESS_SIGNAL_SYSCALLS,
+                DAEMON_EXTRA,
+            ]),
+            Self::Container => compose_profile(&[CONTAINER_BASE, CONTAINER_EXTRA]),
+            Self::Scriptlet => compose_profile(&[
+                BASE_SYSCALLS,
+                NETWORK_SYSCALLS,
+                SERVER_LISTEN_SYSCALLS,
+                IO_MUX_SYSCALLS,
+                PROCESS_SIGNAL_SYSCALLS,
+                IPC_SYSCALLS,
+                SCRIPTLET_EXTRA,
+            ]),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
