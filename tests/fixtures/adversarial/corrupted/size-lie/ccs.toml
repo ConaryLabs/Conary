@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-size-lie"
+version = "1.0.0"
+description = "Base fixture for inflated-size metadata tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-size-lie"]
+binaries = ["/usr/bin/hello"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
