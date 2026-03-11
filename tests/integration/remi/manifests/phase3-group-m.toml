@@ -1,0 +1,451 @@
+# tests/integration/remi/manifests/phase3-group-m.toml
+#
+# Phase 3, Group M: Real-World Operations (T138-T149).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}
+# Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}, ${FIXTURE_ADDED_FILE},
+#                    ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS},
+#                    ${FIXTURE_V1_HELLO_SHA256}, ${FIXTURE_V2_HELLO_SHA256}
+# Manifest distro overrides: ${small_package}, ${dep_heavy_package}, ${distro_repo}
+
+[suite]
+name = "Phase 3 Group M: Real-World Operations"
+phase = 3
+
+[distro_overrides.fedora43]
+small_package = "tree"
+dep_heavy_package = "vim-enhanced"
+distro_repo = "fedora-43"
+
+[distro_overrides.ubuntu-noble]
+small_package = "tree"
+dep_heavy_package = "vim"
+distro_repo = "ubuntu-noble"
+
+[distro_overrides.arch]
+small_package = "tree"
+dep_heavy_package = "vim"
+distro_repo = "arch-extra"
+
+# --------------------------------------------------------------------------
+# T138: Install real CCS package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T138"
+name = "install_real_ccs_package"
+description = "Sync Remi, install real CCS package, and verify files deployed"
+timeout = 120
+group = "M"
+fatal = true
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "${FIXTURE_FILE}"
+
+[[test.step]]
+conary = "list ${FIXTURE_PKG_NAME} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${FIXTURE_PKG_NAME}", "Version"]
+
+# --------------------------------------------------------------------------
+# T139: Install small real distro package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T139"
+name = "install_small_real_package"
+description = "Sync distro repo, install a small real package, and verify the binary runs"
+timeout = 180
+group = "M"
+
+[[test.step]]
+conary = "repo sync ${distro_repo} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "/usr/bin/tree"
+
+[[test.step]]
+run = "/usr/bin/tree --version || /usr/bin/tree /tmp | head -1"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+# --------------------------------------------------------------------------
+# T140: Install dependency-heavy package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T140"
+name = "install_dep_heavy_package"
+description = "Install a package with transitive dependencies and verify it is tracked"
+timeout = 300
+group = "M"
+
+[[test.step]]
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "query deptree ${dep_heavy_package}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${dep_heavy_package}"
+
+[[test.step]]
+conary = "list ${dep_heavy_package} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${dep_heavy_package}", "Version"]
+
+# --------------------------------------------------------------------------
+# T141: Update to newer version
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T141"
+name = "update_to_newer_version"
+description = "Install a package, update to a newer version, and verify files changed"
+timeout = 300
+group = "M"
+fatal = true
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V2_HELLO_SHA256}" }
+
+[[test.step]]
+file_exists = "${FIXTURE_ADDED_FILE}"
+
+# --------------------------------------------------------------------------
+# T142: Shared dependency survives remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T142"
+name = "shared_dependency_survives_remove"
+description = "Install two packages, remove one, and verify the other still works"
+timeout = 300
+group = "M"
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "remove ${small_package} --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list ${dep_heavy_package} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${dep_heavy_package}"
+
+# --------------------------------------------------------------------------
+# T143: Sync all repos and update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T143"
+name = "sync_all_repos_and_update"
+description = "Sync all repos, apply updates, and verify the system remains consistent"
+timeout = 300
+group = "M"
+
+[[test.step]]
+conary = "repo sync --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "update --yes --sandbox never"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+[[test.step]]
+conary = "system verify"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T144: Pin blocks update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T144"
+name = "pin_blocks_full_update"
+description = "Pin a package, update the system, and verify the package remains pinned"
+timeout = 180
+group = "M"
+
+[[test.step]]
+conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "pin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "update --yes --sandbox never"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+[[test.step]]
+conary = "list ${FIXTURE_PKG_NAME} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Pinned      : yes"
+
+[[test.step]]
+conary = "unpin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T145: Install then remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T145"
+name = "install_then_remove"
+description = "Install a package, remove it, and verify filesystem and DB cleanup"
+timeout = 180
+group = "M"
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "remove ${small_package} --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_not_exists = "/usr/bin/tree"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "${small_package}"
+
+# --------------------------------------------------------------------------
+# T146: Adopt system package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T146"
+name = "adopt_system_package"
+description = "Adopt a system package already installed by the distro package manager"
+timeout = 120
+group = "M"
+
+[[test.step]]
+conary = "system adopt curl"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system adopt --status"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Conary Adoption Status", "Adopted"]
+
+# --------------------------------------------------------------------------
+# T147: Update then rollback
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T147"
+name = "update_then_rollback"
+description = "Install a CCS package, update it, roll back, and verify the original version returns"
+timeout = 300
+group = "M"
+fatal = true
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+
+[[test.step]]
+file_not_exists = "${FIXTURE_ADDED_FILE}"
+
+# --------------------------------------------------------------------------
+# T148: Mixed format install session
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T148"
+name = "mixed_format_install_session"
+description = "Install CCS and native packages in one session and verify they coexist"
+timeout = 300
+group = "M"
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${FIXTURE_PKG_NAME}", "${small_package}"]
+
+# --------------------------------------------------------------------------
+# T149: Full lifecycle
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T149"
+name = "full_lifecycle"
+description = "Run a full lifecycle of sync, install, use, update, pin, unpin, and remove"
+timeout = 360
+group = "M"
+fatal = true
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "${FIXTURE_FILE}"
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "pin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list ${FIXTURE_PKG_NAME} --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Pinned      : yes"
+
+[[test.step]]
+conary = "unpin ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_not_exists = "${FIXTURE_FILE}"
