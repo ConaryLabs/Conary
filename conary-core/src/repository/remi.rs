@@ -190,9 +190,13 @@ impl RemiClient {
     }
 
     /// Poll for job completion
+    ///
+    /// Retries up to 3 times on transient errors (5xx, timeout, connection
+    /// refused) with exponential backoff. 4xx errors fail immediately.
     fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
         let url = format!("{}/v1/jobs/{}", self.base_url, job_id);
         let start = std::time::Instant::now();
+        let max_transient_retries: u32 = 3;
 
         // Create a spinner for visual feedback
         let spinner = ProgressBar::new_spinner();
@@ -203,6 +207,8 @@ impl RemiClient {
         );
         spinner.set_message(format!("Converting package (job {})...", job_id));
         spinner.enable_steady_tick(Duration::from_millis(100));
+
+        let mut consecutive_transient_failures: u32 = 0;
 
         loop {
             // Check timeout
@@ -215,19 +221,66 @@ impl RemiClient {
             }
 
             // Poll job status
-            let response = self
-                .client
-                .get(&url)
-                .send()
-                .map_err(|e| Error::DownloadError(format!("Failed to poll job status: {e}")))?;
+            let response = match self.client.get(&url).send() {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Connection error or timeout -- transient, retry
+                    consecutive_transient_failures += 1;
+                    if consecutive_transient_failures > max_transient_retries {
+                        spinner.finish_with_message("Poll failed");
+                        return Err(Error::DownloadError(format!(
+                            "Failed to poll job status after {} retries: {e}",
+                            max_transient_retries
+                        )));
+                    }
+                    let backoff = Duration::from_millis(
+                        500 * u64::from(2_u32.saturating_pow(consecutive_transient_failures - 1)),
+                    );
+                    warn!(
+                        "Transient error polling job {} (attempt {}/{}): {e}, retrying in {:?}",
+                        job_id, consecutive_transient_failures, max_transient_retries, backoff
+                    );
+                    std::thread::sleep(backoff);
+                    continue;
+                }
+            };
 
+            let status_code = response.status().as_u16();
             if !response.status().is_success() {
+                if status_code >= 500 {
+                    // Server error -- transient, retry
+                    consecutive_transient_failures += 1;
+                    if consecutive_transient_failures > max_transient_retries {
+                        spinner.finish_with_message("Poll failed");
+                        return Err(Error::DownloadError(format!(
+                            "Job poll returned HTTP {} after {} retries",
+                            status_code, max_transient_retries
+                        )));
+                    }
+                    let backoff = Duration::from_millis(
+                        500 * u64::from(2_u32.saturating_pow(consecutive_transient_failures - 1)),
+                    );
+                    warn!(
+                        "Server error polling job {} (HTTP {}, attempt {}/{}), retrying in {:?}",
+                        job_id,
+                        status_code,
+                        consecutive_transient_failures,
+                        max_transient_retries,
+                        backoff
+                    );
+                    std::thread::sleep(backoff);
+                    continue;
+                }
+                // 4xx -- not transient, fail immediately
                 spinner.finish_with_message("Poll failed");
                 return Err(Error::DownloadError(format!(
                     "Job poll returned HTTP {}",
-                    response.status()
+                    status_code
                 )));
             }
+
+            // Successful response -- reset transient failure counter
+            consecutive_transient_failures = 0;
 
             let status: JobStatus = response
                 .json()
