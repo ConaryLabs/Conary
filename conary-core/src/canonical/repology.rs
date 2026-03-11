@@ -259,7 +259,10 @@ impl RepologyClient {
                 None => {
                     // Already exists — look up by name
                     match CanonicalPackage::find_by_name(&tx, &project.name)? {
-                        Some(existing) => existing.id.expect("existing row has id"),
+                        Some(existing) => match existing.id {
+                            Some(id) => id,
+                            None => continue,
+                        },
                         None => continue,
                     }
                 }
