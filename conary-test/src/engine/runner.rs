@@ -30,6 +30,47 @@ impl TestRunner {
         vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
         vars.insert("DB_PATH".to_string(), config.paths.db.clone());
         vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
+        if let Some(fixture_dir) = &config.paths.fixture_dir {
+            vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
+        }
+
+        if let Some(fixtures) = &config.fixtures {
+            if let Some(value) = &fixtures.package {
+                vars.insert("FIXTURE_PKG_NAME".to_string(), value.clone());
+            }
+            if let Some(value) = &fixtures.file {
+                vars.insert("FIXTURE_FILE".to_string(), value.clone());
+            }
+            if let Some(value) = &fixtures.added_file {
+                vars.insert("FIXTURE_ADDED_FILE".to_string(), value.clone());
+            }
+            if let Some(value) = &fixtures.marker {
+                vars.insert("FIXTURE_MARKER".to_string(), value.clone());
+            }
+            if let Some(fixture_dir) = &config.paths.fixture_dir {
+                if let Some(value) = &fixtures.v1_ccs_file {
+                    vars.insert(
+                        "FIXTURE_V1_CCS".to_string(),
+                        format!("{fixture_dir}/ccs/{value}"),
+                    );
+                }
+                if let Some(value) = &fixtures.v2_ccs_file {
+                    vars.insert(
+                        "FIXTURE_V2_CCS".to_string(),
+                        format!("{fixture_dir}/ccs/{value}"),
+                    );
+                }
+            }
+            if let Some(value) = &fixtures.v1_hello_sha256 {
+                vars.insert("FIXTURE_V1_HELLO_SHA256".to_string(), value.clone());
+            }
+            if let Some(value) = &fixtures.v2_hello_sha256 {
+                vars.insert("FIXTURE_V2_HELLO_SHA256".to_string(), value.clone());
+            }
+            if let Some(value) = &fixtures.v2_added_sha256 {
+                vars.insert("FIXTURE_V2_ADDED_SHA256".to_string(), value.clone());
+            }
+        }
 
         // Add distro-specific variables if present.
         if let Some(dc) = config.distros.get(&distro) {

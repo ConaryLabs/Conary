@@ -155,9 +155,12 @@ test_package = "tree"
 test_binary = "/usr/bin/tree"
 
 [fixtures]
-test_package_name = "conary-test-fixture"
-v1_version = "1.0.0"
-v2_version = "2.0.0"
+package = "conary-test-fixture"
+file = "/usr/share/conary-test/hello.txt"
+
+[fixtures.v1]
+version = "1.0.0"
+ccs_file = "conary-test-fixture-1.0.0.ccs"
 "#;
         let config: GlobalConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.remi.endpoint, "https://packages.conary.io");
@@ -176,11 +179,16 @@ v2_version = "2.0.0"
         );
 
         let fixtures = config.fixtures.as_ref().unwrap();
+        assert_eq!(fixtures.package.as_deref(), Some("conary-test-fixture"));
         assert_eq!(
-            fixtures.test_package_name.as_deref(),
-            Some("conary-test-fixture")
+            fixtures.file.as_deref(),
+            Some("/usr/share/conary-test/hello.txt")
         );
         assert_eq!(fixtures.v1_version.as_deref(), Some("1.0.0"));
+        assert_eq!(
+            fixtures.v1_ccs_file.as_deref(),
+            Some("conary-test-fixture-1.0.0.ccs")
+        );
     }
 
     #[test]
