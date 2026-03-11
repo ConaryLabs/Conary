@@ -30,6 +30,10 @@ pub struct TestDef {
     pub description: String,
     pub timeout: u64,
     #[serde(default)]
+    pub flaky: Option<bool>,
+    #[serde(default)]
+    pub retries: Option<u32>,
+    #[serde(default)]
     pub step: Vec<TestStep>,
     #[serde(default)]
     pub resources: Option<ResourceConstraints>,
