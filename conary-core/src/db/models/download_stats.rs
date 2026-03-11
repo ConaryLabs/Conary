@@ -35,8 +35,13 @@ impl DownloadStat {
     }
 
     /// Insert a batch of download events (for buffered writes)
+    ///
+    /// Wrapped in a transaction so that either all events are inserted or none
+    /// are, preventing partial inserts on failure.
     pub fn insert_batch(conn: &Connection, events: &[DownloadStat]) -> Result<usize> {
-        let mut stmt = conn.prepare(
+        let tx = conn.unchecked_transaction()?;
+
+        let mut stmt = tx.prepare(
             "INSERT INTO download_stats (distro, package_name, package_version, client_ip_hash, user_agent)
              VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
@@ -53,6 +58,8 @@ impl DownloadStat {
             count += 1;
         }
 
+        drop(stmt);
+        tx.commit()?;
         Ok(count)
     }
 
