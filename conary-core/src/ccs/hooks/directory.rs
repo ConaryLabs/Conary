@@ -53,6 +53,7 @@ impl HookExecutor {
             .strip_prefix("0o")
             .or_else(|| mode.strip_prefix('0'))
             .unwrap_or(mode);
+        let mode_str = if mode_str.is_empty() { "0" } else { mode_str };
         let mode_val = u32::from_str_radix(mode_str, 8)
             .with_context(|| format!("Invalid mode string: {}", mode))?;
 
@@ -107,6 +108,29 @@ impl HookExecutor {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_mode_zero_parsing() {
+        let temp_dir = TempDir::new().unwrap();
+        let executor = HookExecutor::new(temp_dir.path());
+
+        let dir_path = temp_dir.path().join("var/lib/zero_mode");
+
+        let uid = nix::unistd::getuid().as_raw().to_string();
+        let gid = nix::unistd::getgid().as_raw().to_string();
+
+        // Mode "0" should parse as octal 0 (no permissions), not fail
+        let created = executor
+            .create_directory(&dir_path, "0", &uid, &gid)
+            .unwrap();
+
+        assert!(created);
+        assert!(dir_path.exists());
+
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&dir_path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o7777, 0o000);
+    }
 
     #[test]
     fn test_directory_creation_in_target() {
