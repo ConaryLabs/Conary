@@ -8,10 +8,32 @@
 //! at read time.
 
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use thiserror::Error;
 use tracing::{debug, warn};
+
+/// Errors that can occur during fs-verity operations
+#[derive(Debug, Error)]
+pub enum FsVerityError {
+    /// Failed to open the file for fs-verity enablement
+    #[error("Failed to open {path} for fs-verity: {source}")]
+    Open {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    /// Filesystem does not support fs-verity
+    #[error("Filesystem does not support fs-verity: {0}")]
+    NotSupported(PathBuf),
+
+    /// ioctl failed with an unexpected error
+    #[error("Failed to enable fs-verity on {path}: {source}")]
+    IoctlFailed {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
 
 /// `FS_IOC_ENABLE_VERITY` ioctl number
 /// `_IOW('f', 0x85, struct fsverity_enable_arg)` = `0x40806685`
@@ -39,10 +61,12 @@ struct FsverityEnableArg {
 /// Returns `Ok(true)` if verity was newly enabled, `Ok(false)` if already
 /// enabled, or an error if the operation fails for a reason other than
 /// "already enabled".
-pub fn enable_fsverity(path: &Path) -> Result<bool> {
+pub fn enable_fsverity(path: &Path) -> Result<bool, FsVerityError> {
     // Open read-only (fs-verity requires the file not be open for writing)
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open {} for fs-verity", path.display()))?;
+    let file = std::fs::File::open(path).map_err(|e| FsVerityError::Open {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
 
     let arg = FsverityEnableArg {
         version: 1,
@@ -74,13 +98,13 @@ pub fn enable_fsverity(path: &Path) -> Result<bool> {
 
     // EOPNOTSUPP (95) = filesystem doesn't support verity
     if errno == libc::EOPNOTSUPP {
-        return Err(anyhow::anyhow!(
-            "Filesystem does not support fs-verity: {}",
-            path.display()
-        ));
+        return Err(FsVerityError::NotSupported(path.to_path_buf()));
     }
 
-    Err(err).with_context(|| format!("Failed to enable fs-verity on {}", path.display()))
+    Err(FsVerityError::IoctlFailed {
+        path: path.to_path_buf(),
+        source: err,
+    })
 }
 
 /// Enable fs-verity on all CAS objects in the given objects directory.
