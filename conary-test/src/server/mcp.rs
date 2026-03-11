@@ -204,7 +204,7 @@ impl TestMcpServer {
                     "run_id": id,
                     "suite": suite.name,
                     "phase": suite.phase,
-                    "status": serde_json::to_value(suite.status).unwrap_or_default(),
+                    "status": suite.status.as_str(),
                     "total": suite.total(),
                     "passed": suite.passed(),
                     "failed": suite.failed(),
