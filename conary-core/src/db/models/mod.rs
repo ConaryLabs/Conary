@@ -4,6 +4,22 @@
 //!
 //! This module defines Rust structs that correspond to database tables
 //! and provides methods for creating, reading, updating, and deleting records.
+//!
+//! ## Model patterns
+//!
+//! Two patterns coexist across these models:
+//!
+//! - **Struct methods** (e.g., `Trove::find_by_name`, `FileEntry::insert`): Used by most
+//!   models. CRUD operations are associated functions or methods on the model struct itself.
+//!
+//! - **Free functions** (e.g., `add_to_path`, `get_label_path`, `remove_from_path` in
+//!   `label.rs`): Used when the operation doesn't map cleanly to a single struct, or when
+//!   the function operates on a concept (like label paths) rather than a single row.
+//!
+//! Both patterns are intentional. Struct methods are preferred for standard CRUD on a
+//! single table. Free functions are used for cross-table helpers or operations that don't
+//! return the model struct. New models should prefer struct methods unless there is a
+//! clear reason to use free functions.
 
 mod canonical;
 mod changeset;
