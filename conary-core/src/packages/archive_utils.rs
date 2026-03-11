@@ -37,13 +37,13 @@ pub fn check_file_size(path: &str, size: u64) -> bool {
 
 /// Get file metadata (size and mode) from the filesystem.
 ///
-/// Returns `(size_in_bytes, raw_mode)`. Falls back to `(0, 0o644)` if
-/// the file cannot be stat'd (e.g., broken symlink, permission denied).
-pub fn get_file_metadata(path: &str) -> (i64, i32) {
+/// Returns `(size_in_bytes, raw_mode)` on success, or an error if the file
+/// cannot be stat'd (e.g., permission denied, missing file).
+pub fn get_file_metadata(path: &str) -> Result<(i64, i32)> {
     use std::os::unix::fs::MetadataExt;
 
-    match std::fs::metadata(path) {
-        Ok(meta) => (meta.len() as i64, meta.mode() as i32),
-        Err(_) => (0, 0o644),
-    }
+    let meta = std::fs::metadata(path).map_err(|e| {
+        crate::error::Error::InitError(format!("Failed to stat {}: {}", path, e))
+    })?;
+    Ok((meta.len() as i64, meta.mode() as i32))
 }
