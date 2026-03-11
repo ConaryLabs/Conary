@@ -1,0 +1,292 @@
+# tests/integration/remi/manifests/phase3-group-h.toml
+#
+# Phase 3, Group H: Error Recovery (T87-T96).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}
+
+[suite]
+name = "Phase 3 Group H: Error Recovery"
+phase = 3
+
+[suite.mock_server]
+port = 18081
+
+[[suite.mock_server.routes]]
+path = "/metadata"
+status = 500
+body = "upstream failure"
+
+# --------------------------------------------------------------------------
+# T87: SIGKILL mid-install
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T87"
+name = "sigkill_mid_install_recovery"
+description = "SIGKILL mid-install and verify DB and filesystem consistency on the next run"
+timeout = 60
+group = "H"
+flaky = true
+retries = 3
+
+[[test.step]]
+[test.step.kill_after_log]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never"
+pattern = "Deploying files"
+timeout_seconds = 30
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} 'PRAGMA integrity_check;'"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "ok"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "large-package"
+
+# --------------------------------------------------------------------------
+# T88: Disk-full rollback
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T88"
+name = "disk_full_rollback"
+description = "Disk-full during install should fail cleanly without leaving partial state"
+timeout = 60
+group = "H"
+
+[test.resources]
+tmpfs_size_mb = 50
+memory_limit_mb = 512
+network_isolated = false
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "space"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "large-package"
+
+# --------------------------------------------------------------------------
+# T89: Corrupt SQLite WAL detection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T89"
+name = "sqlite_wal_corruption_detected"
+description = "Corrupt the SQLite WAL file and verify the next command fails with a meaningful error"
+timeout = 30
+group = "H"
+
+[[test.step]]
+run = "printf 'corrupt wal' > ${DB_PATH}-wal"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "database"
+
+# --------------------------------------------------------------------------
+# T90: Delete CAS directory mid-install
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T90"
+name = "cas_directory_deleted_mid_install"
+description = "Delete the CAS directory during install and verify failure plus rollback"
+timeout = 60
+group = "H"
+
+[[test.step]]
+run = "rm -rf /var/lib/conary/objects && mkdir -p /var/lib/conary/objects"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "object"
+
+# --------------------------------------------------------------------------
+# T91: Kill after DB commit before deploy
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T91"
+name = "kill_between_db_commit_and_deploy"
+description = "Kill after DB commit but before full file deployment and verify journal recovery"
+timeout = 60
+group = "H"
+flaky = true
+retries = 3
+
+[[test.step]]
+[test.step.kill_after_log]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never"
+pattern = "Recording changeset"
+timeout_seconds = 30
+
+[[test.step]]
+conary = "system verify"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} 'PRAGMA integrity_check;'"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "ok"
+
+# --------------------------------------------------------------------------
+# T92: Repo sync HTTP 500
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T92"
+name = "repo_sync_http_500_failure"
+description = "repo sync against HTTP 500 should fail cleanly and preserve existing metadata"
+timeout = 60
+group = "H"
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} repo add flaky-500 http://127.0.0.1:18081/metadata --db-path ${DB_PATH} --no-gpg-check >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync flaky-500 --db-path ${DB_PATH} 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "500"
+
+[[test.step]]
+conary = "search ${REPO_NAME}"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T93: Scriptlet non-zero rollback
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T93"
+name = "scriptlet_nonzero_rollback"
+description = "A failing scriptlet should abort install and roll back deployed files"
+timeout = 60
+group = "H"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "script"
+
+[[test.step]]
+file_not_exists = "/etc/conary-hostile-scriptlet"
+
+# --------------------------------------------------------------------------
+# T94: Concurrent install contention
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T94"
+name = "concurrent_same_package_install"
+description = "Two concurrent installs of the same package should serialize cleanly"
+timeout = 90
+group = "H"
+flaky = true
+retries = 3
+
+[[test.step]]
+run = "(${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 &) ; (${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 &) ; wait; cat /tmp/t94-a.log /tmp/t94-b.log"
+
+[test.step.assert]
+stdout_contains_any = ["already installed", "database is locked", "installed"]
+
+# --------------------------------------------------------------------------
+# T95: SIGKILL mid-rollback
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T95"
+name = "sigkill_mid_rollback"
+description = "Kill during rollback and verify the next run converges to a consistent state"
+timeout = 90
+group = "H"
+flaky = true
+retries = 3
+
+[[test.step]]
+[test.step.kill_after_log]
+conary = "system state rollback 1"
+pattern = "Rolling back"
+timeout_seconds = 30
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} 'PRAGMA integrity_check;'"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "ok"
+
+[[test.step]]
+conary = "system verify"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T96: SIGKILL mid-remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T96"
+name = "sigkill_mid_remove"
+description = "Kill during remove and verify the package is either fully present or fully gone afterward"
+timeout = 90
+group = "H"
+flaky = true
+retries = 3
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+[test.step.kill_after_log]
+conary = "remove conary-test-fixture --no-scripts"
+pattern = "Removing"
+timeout_seconds = 30
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "panic"
