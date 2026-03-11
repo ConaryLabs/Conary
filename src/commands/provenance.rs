@@ -941,9 +941,12 @@ fn verify_fulcio_chain(cert_pem: &[u8], integrated_time: i64) -> Result<(), Sigs
         .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
 
     let verification_time = if integrated_time > 0 {
-        UnixTime::since_unix_epoch(Duration::from_secs(integrated_time as u64))
+        let secs = u64::try_from(integrated_time).unwrap_or(0);
+        UnixTime::since_unix_epoch(Duration::from_secs(secs))
     } else {
-        UnixTime::since_unix_epoch(Duration::from_secs(Utc::now().timestamp() as u64))
+        let now = Utc::now().timestamp();
+        let secs = u64::try_from(now).unwrap_or(0);
+        UnixTime::since_unix_epoch(Duration::from_secs(secs))
     };
 
     end_entity
