@@ -7,12 +7,20 @@
 //! `ForgejoError` to their own error types (axum `Response` or `McpError`).
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 
 /// Forgejo repository path used in all API calls.
 pub const FORGEJO_REPO_PATH: &str = "/repos/peter/Conary";
+
+/// Per-request timeout for Forgejo API calls (30 seconds).
+///
+/// The shared `http_client` may have a different timeout configured for
+/// upstream chunk fetches. This per-request timeout prevents a hung
+/// Forgejo server from blocking callers indefinitely.
+const FORGEJO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Error returned by Forgejo API helpers.
 ///
@@ -69,6 +77,7 @@ pub async fn get(state: &Arc<RwLock<ServerState>>, path: &str) -> Result<String,
     let resp = client
         .get(&url)
         .header("Authorization", format!("token {token}"))
+        .timeout(FORGEJO_TIMEOUT)
         .send()
         .await
         .map_err(|e| ForgejoError {
@@ -113,6 +122,7 @@ pub async fn post(
         .post(&url)
         .header("Authorization", format!("token {token}"))
         .json(payload)
+        .timeout(FORGEJO_TIMEOUT)
         .send()
         .await
         .map_err(|e| ForgejoError {
