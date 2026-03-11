@@ -159,22 +159,28 @@ impl DaemonJob {
 
     /// List all jobs (most recent first)
     pub fn list_all(conn: &Connection, limit: Option<usize>) -> Result<Vec<Self>> {
-        let sql = match limit {
-            Some(n) => format!(
-                "SELECT {} FROM daemon_jobs ORDER BY created_at DESC LIMIT {}",
+        let capped_limit = limit.map(|n| n.min(1000) as i64);
+
+        let sql = if capped_limit.is_some() {
+            format!(
+                "SELECT {} FROM daemon_jobs ORDER BY created_at DESC LIMIT ?1",
                 JOB_COLUMNS,
-                n.min(1000)
-            ),
-            None => format!(
+            )
+        } else {
+            format!(
                 "SELECT {} FROM daemon_jobs ORDER BY created_at DESC",
                 JOB_COLUMNS
-            ),
+            )
         };
 
         let mut stmt = conn.prepare(&sql)?;
-        let jobs = stmt
-            .query_map([], Self::from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let jobs = if let Some(n) = capped_limit {
+            stmt.query_map([n], Self::from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            stmt.query_map([], Self::from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
         Ok(jobs)
     }
 
