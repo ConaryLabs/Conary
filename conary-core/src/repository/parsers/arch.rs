@@ -241,10 +241,10 @@ impl RepositoryParser for ArchParser {
                     serde_json::Value::String(builddate.clone()),
                 );
             }
-            if let Some(isize_val) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
+            if let Some(installed_size_str) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
                 extra.insert(
                     "installed_size".to_string(),
-                    serde_json::Value::String(isize_val.clone()),
+                    serde_json::Value::String(installed_size_str.clone()),
                 );
             }
             extra.insert(
