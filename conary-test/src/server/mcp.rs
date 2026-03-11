@@ -14,9 +14,8 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::load_manifest;
-use crate::engine::suite::TestSuite;
 use crate::report::json::to_json_report;
+use crate::server::service;
 use crate::server::state::AppState;
 
 /// Serialize a value to pretty JSON, mapping failures to [`McpError`].
@@ -98,32 +97,9 @@ impl TestMcpServer {
         description = "List available test suite TOML manifests. Returns suite names, phases, and test counts."
     )]
     async fn list_suites(&self) -> Result<CallToolResult, McpError> {
-        let manifest_dir = std::path::Path::new(&self.state.manifest_dir);
-
-        let entries = std::fs::read_dir(manifest_dir).map_err(|e| {
+        let suites = service::list_suites(&self.state).map_err(|e| {
             McpError::internal_error(format!("Cannot read manifest dir: {e}"), None)
         })?;
-
-        let mut suites = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "toml")
-                && let Ok(manifest) = load_manifest(&path)
-            {
-                suites.push(serde_json::json!({
-                    "name": manifest.suite.name,
-                    "phase": manifest.suite.phase,
-                    "test_count": manifest.test.len(),
-                }));
-            }
-        }
-
-        suites.sort_by(|a, b| {
-            a["name"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["name"].as_str().unwrap_or(""))
-        });
 
         let text = to_json_text(&suites)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -140,26 +116,19 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<StartRunParams>,
     ) -> Result<CallToolResult, McpError> {
-        if !self.state.config.distros.contains_key(&params.distro) {
-            return Err(McpError::invalid_params(
-                format!("Unknown distro: {}", params.distro),
-                None,
-            ));
-        }
+        let result =
+            service::start_run(&self.state, &params.suite, &params.distro, params.phase)
+                .await
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
-        let run_id = AppState::next_run_id();
-        let suite = TestSuite::new(&params.suite, params.phase);
-
-        self.state.insert_run(run_id, suite).await;
-
-        let result = serde_json::json!({
-            "run_id": run_id,
+        let value = serde_json::json!({
+            "run_id": result.run_id,
             "status": "pending",
-            "suite": params.suite,
-            "distro": params.distro,
-            "phase": params.phase,
+            "suite": result.suite,
+            "distro": result.distro,
+            "phase": result.phase,
         });
-        let text = to_json_text(&result)?;
+        let text = to_json_text(&value)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -169,6 +138,8 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<GetRunParams>,
     ) -> Result<CallToolResult, McpError> {
+        // MCP get_run returns the full JSON report as text (not a Value),
+        // so we use to_json_report here for the string representation.
         let runs = self.state.runs.read().await;
         match runs.get(&params.run_id) {
             Some(suite) => {
@@ -195,31 +166,7 @@ impl TestMcpServer {
         Parameters(params): Parameters<ListRunsParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(20).min(100);
-        let runs = self.state.runs.read().await;
-
-        let mut summaries: Vec<serde_json::Value> = runs
-            .iter()
-            .map(|(&id, suite)| {
-                serde_json::json!({
-                    "run_id": id,
-                    "suite": suite.name,
-                    "phase": suite.phase,
-                    "status": suite.status.as_str(),
-                    "total": suite.total(),
-                    "passed": suite.passed(),
-                    "failed": suite.failed(),
-                    "skipped": suite.skipped(),
-                })
-            })
-            .collect();
-
-        summaries.sort_by(|a, b| {
-            b["run_id"]
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&a["run_id"].as_u64().unwrap_or(0))
-        });
-        summaries.truncate(limit);
+        let summaries = service::list_runs(&self.state, limit).await;
 
         let text = to_json_text(&summaries)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -259,27 +206,7 @@ impl TestMcpServer {
         description = "List all configured distros with name, remi_distro, and repo_name fields."
     )]
     async fn list_distros(&self) -> Result<CallToolResult, McpError> {
-        let mut distros: Vec<serde_json::Value> = self
-            .state
-            .config
-            .distros
-            .iter()
-            .map(|(name, cfg)| {
-                serde_json::json!({
-                    "name": name,
-                    "remi_distro": cfg.remi_distro,
-                    "repo_name": cfg.repo_name,
-                })
-            })
-            .collect();
-
-        distros.sort_by(|a, b| {
-            a["name"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["name"].as_str().unwrap_or(""))
-        });
-
+        let distros = service::list_distros(&self.state);
         let text = to_json_text(&distros)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }

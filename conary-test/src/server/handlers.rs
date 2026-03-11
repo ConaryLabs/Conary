@@ -1,55 +1,25 @@
 // conary-test/src/server/handlers.rs
 
-use crate::config::load_manifest;
-use crate::engine::suite::TestSuite;
-use crate::report::json::to_json_value;
+use crate::server::service;
 use crate::server::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 pub async fn health() -> &'static str {
     "ok"
 }
 
-#[derive(Serialize)]
-struct SuiteInfo {
-    name: String,
-    phase: u32,
-    test_count: usize,
-}
-
 pub async fn list_suites(State(state): State<AppState>) -> impl IntoResponse {
-    let manifest_dir = std::path::Path::new(&state.manifest_dir);
-
-    let entries = match std::fs::read_dir(manifest_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("cannot read manifest dir: {e}")})),
-            );
-        }
-    };
-
-    let mut suites = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "toml")
-            && let Ok(manifest) = load_manifest(&path)
-        {
-            suites.push(SuiteInfo {
-                name: manifest.suite.name,
-                phase: manifest.suite.phase,
-                test_count: manifest.test.len(),
-            });
-        }
+    match service::list_suites(&state) {
+        Ok(suites) => (StatusCode::OK, Json(serde_json::json!(suites))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("cannot read manifest dir: {e}")})),
+        ),
     }
-
-    suites.sort_by(|a, b| a.name.cmp(&b.name));
-    (StatusCode::OK, Json(serde_json::json!(suites)))
 }
 
 #[derive(Deserialize)]
@@ -59,65 +29,29 @@ pub struct StartRunRequest {
     pub phase: u32,
 }
 
-#[derive(Serialize)]
-struct StartRunResponse {
-    run_id: u64,
-    status: String,
-}
-
 pub async fn start_run(
     State(state): State<AppState>,
     Json(req): Json<StartRunRequest>,
 ) -> impl IntoResponse {
-    if !state.distros_contain(&req.distro) {
-        return (
+    match service::start_run(&state, &req.suite, &req.distro, req.phase).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "run_id": result.run_id,
+                "status": "pending",
+            })),
+        ),
+        Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("unknown distro: {}", req.distro)})),
-        );
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
-
-    let run_id = AppState::next_run_id();
-    let suite = TestSuite::new(&req.suite, req.phase);
-
-    state.insert_run(run_id, suite).await;
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!(StartRunResponse {
-            run_id,
-            status: "pending".to_string(),
-        })),
-    )
-}
-
-#[derive(Serialize)]
-struct RunSummary {
-    run_id: u64,
-    suite: String,
-    phase: u32,
-    status: String,
-    total: usize,
-    passed: usize,
-    failed: usize,
-    skipped: usize,
 }
 
 pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
-    let runs = state.runs.read().await;
-    let mut summaries: Vec<RunSummary> = runs
-        .iter()
-        .map(|(&id, suite)| RunSummary {
-            run_id: id,
-            suite: suite.name.clone(),
-            phase: suite.phase,
-            status: suite.status.as_str().to_string(),
-            total: suite.total(),
-            passed: suite.passed(),
-            failed: suite.failed(),
-            skipped: suite.skipped(),
-        })
-        .collect();
-
+    let summaries = service::list_runs(&state, usize::MAX).await;
+    // HTTP handler sorts ascending by run_id for backwards compatibility.
+    let mut summaries = summaries;
     summaries.sort_by_key(|s| s.run_id);
     Json(serde_json::json!(summaries))
 }
@@ -126,49 +60,28 @@ pub async fn get_run(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
-    let runs = state.runs.read().await;
-    match runs.get(&id) {
-        Some(suite) => match to_json_value(suite) {
-            Ok(value) => (StatusCode::OK, Json(value)),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("report error: {e}")})),
-            ),
-        },
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "run not found"})),
-        ),
+    match service::get_run(&state, id).await {
+        Ok(value) => (StatusCode::OK, Json(value)),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "run not found"})),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("report error: {msg}")})),
+                )
+            }
+        }
     }
-}
-
-#[derive(Serialize)]
-struct DistroInfo {
-    name: String,
-    remi_distro: String,
-    repo_name: String,
 }
 
 pub async fn list_distros(State(state): State<AppState>) -> impl IntoResponse {
-    let mut distros: Vec<DistroInfo> = state
-        .config
-        .distros
-        .iter()
-        .map(|(name, cfg)| DistroInfo {
-            name: name.clone(),
-            remi_distro: cfg.remi_distro.clone(),
-            repo_name: cfg.repo_name.clone(),
-        })
-        .collect();
-
-    distros.sort_by(|a, b| a.name.cmp(&b.name));
+    let distros = service::list_distros(&state);
     Json(serde_json::json!(distros))
-}
-
-impl AppState {
-    fn distros_contain(&self, name: &str) -> bool {
-        self.config.distros.contains_key(name)
-    }
 }
 
 #[cfg(test)]
