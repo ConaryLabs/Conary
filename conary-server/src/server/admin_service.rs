@@ -28,30 +28,21 @@ use crate::server::auth::{generate_token, hash_token, validate_scopes};
 /// Errors returned by service-layer operations.
 ///
 /// Handlers map these to HTTP status codes; MCP tools map them to tool errors.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
     /// Client sent invalid input (400).
+    #[error("bad request: {0}")]
     BadRequest(String),
     /// Requested resource does not exist (404).
+    #[error("not found: {0}")]
     NotFound(String),
     /// A uniqueness constraint was violated (409).
+    #[error("conflict: {0}")]
     Conflict(String),
     /// An internal failure -- DB error, join error, etc. (500).
+    #[error("internal error: {0}")]
     Internal(String),
 }
-
-impl std::fmt::Display for ServiceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BadRequest(msg) => write!(f, "bad request: {msg}"),
-            Self::NotFound(msg) => write!(f, "not found: {msg}"),
-            Self::Conflict(msg) => write!(f, "conflict: {msg}"),
-            Self::Internal(msg) => write!(f, "internal error: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for ServiceError {}
 
 // ---------------------------------------------------------------------------
 // Helpers
