@@ -378,9 +378,144 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
     })
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+/// Map a syscall name to its number on aarch64
+///
+/// aarch64 uses a different syscall ABI from x86_64. Many "legacy" syscalls
+/// (open, stat, lstat, access, pipe, select, dup2, fork, etc.) do not exist
+/// on aarch64 -- they are replaced by *at variants (openat, fstatat, etc.).
+/// Names that have no aarch64 equivalent return None.
+#[cfg(target_arch = "aarch64")]
+fn syscall_name_to_number(name: &str) -> Option<i64> {
+    Some(match name {
+        // Basic I/O (aarch64 lacks open/stat/lstat/access/pipe/select/dup2)
+        "read" => libc::SYS_read,
+        "write" => libc::SYS_write,
+        "close" => libc::SYS_close,
+        "fstat" => libc::SYS_fstat,
+        "poll" => libc::SYS_ppoll,   // aarch64 uses ppoll
+        "lseek" => libc::SYS_lseek,
+        "pread64" => libc::SYS_pread64,
+        "pwrite64" => libc::SYS_pwrite64,
+        "ioctl" => libc::SYS_ioctl,
+        "fcntl" => libc::SYS_fcntl,
+        "flock" => libc::SYS_flock,
+        "dup" => libc::SYS_dup,
+        "dup2" => libc::SYS_dup3,    // aarch64 has dup3, not dup2
+        "pipe" => libc::SYS_pipe2,   // aarch64 has pipe2, not pipe
+        "pipe2" => libc::SYS_pipe2,
+
+        // Memory management
+        "mmap" => libc::SYS_mmap,
+        "mprotect" => libc::SYS_mprotect,
+        "munmap" => libc::SYS_munmap,
+        "brk" => libc::SYS_brk,
+
+        // Signals
+        "rt_sigaction" | "sigaction" => libc::SYS_rt_sigaction,
+        "rt_sigprocmask" => libc::SYS_rt_sigprocmask,
+        "sigaltstack" => libc::SYS_sigaltstack,
+
+        // Process
+        "clone" => libc::SYS_clone,
+        "clone3" => libc::SYS_clone3,
+        "fork" => return None,       // aarch64 has no fork; use clone
+        "execve" => libc::SYS_execve,
+        "exit" => libc::SYS_exit,
+        "exit_group" => libc::SYS_exit_group,
+        "wait4" => libc::SYS_wait4,
+        "waitid" => libc::SYS_waitid,
+        "kill" => libc::SYS_kill,
+        "getpid" => libc::SYS_getpid,
+        "getuid" => libc::SYS_getuid,
+        "getgid" => libc::SYS_getgid,
+        "geteuid" => libc::SYS_geteuid,
+        "getegid" => libc::SYS_getegid,
+        "prctl" => libc::SYS_prctl,
+        "set_tid_address" => libc::SYS_set_tid_address,
+        "set_robust_list" => libc::SYS_set_robust_list,
+        "futex" => libc::SYS_futex,
+        "setsid" => libc::SYS_setsid,
+        "umask" => libc::SYS_umask,
+
+        // Networking
+        "socket" => libc::SYS_socket,
+        "connect" => libc::SYS_connect,
+        "accept" => libc::SYS_accept,
+        "accept4" => libc::SYS_accept4,
+        "bind" => libc::SYS_bind,
+        "listen" => libc::SYS_listen,
+        "sendto" => libc::SYS_sendto,
+        "recvfrom" => libc::SYS_recvfrom,
+        "sendmsg" => libc::SYS_sendmsg,
+        "recvmsg" => libc::SYS_recvmsg,
+        "shutdown" => libc::SYS_shutdown,
+        "setsockopt" => libc::SYS_setsockopt,
+        "getsockopt" => libc::SYS_getsockopt,
+        "getsockname" => libc::SYS_getsockname,
+        "getpeername" => libc::SYS_getpeername,
+
+        // Epoll / I/O multiplexing
+        "epoll_create1" => libc::SYS_epoll_create1,
+        "epoll_create" => libc::SYS_epoll_create1, // aarch64 only has epoll_create1
+        "epoll_ctl" => libc::SYS_epoll_ctl,
+        "epoll_pwait" => libc::SYS_epoll_pwait,
+        "epoll_wait" => libc::SYS_epoll_pwait,     // aarch64 uses epoll_pwait
+        "pselect6" => libc::SYS_pselect6,
+        "select" => libc::SYS_pselect6,            // aarch64 uses pselect6
+
+        // Filesystem (*at variants are the native aarch64 interface)
+        "openat" => libc::SYS_openat,
+        "open" => libc::SYS_openat,                // map legacy open -> openat
+        "newfstatat" => libc::SYS_newfstatat,
+        "stat" => libc::SYS_newfstatat,            // map legacy stat -> newfstatat
+        "lstat" => libc::SYS_newfstatat,           // map legacy lstat -> newfstatat
+        "statx" => libc::SYS_statx,
+        "getdents64" => libc::SYS_getdents64,
+        "access" => libc::SYS_faccessat,           // map legacy access -> faccessat
+        "mkdir" => libc::SYS_mkdirat,              // map legacy mkdir -> mkdirat
+        "unlink" => libc::SYS_unlinkat,            // map legacy unlink -> unlinkat
+        "rmdir" => libc::SYS_unlinkat,             // rmdir is unlinkat with AT_REMOVEDIR
+        "rename" => libc::SYS_renameat,            // map legacy rename -> renameat
+        "link" => libc::SYS_linkat,                // map legacy link -> linkat
+        "symlink" => libc::SYS_symlinkat,          // map legacy symlink -> symlinkat
+        "readlink" => libc::SYS_readlinkat,        // map legacy readlink -> readlinkat
+        "chmod" => libc::SYS_fchmodat,             // map legacy chmod -> fchmodat
+        "fchmod" => libc::SYS_fchmod,
+        "chown" => libc::SYS_fchownat,             // map legacy chown -> fchownat
+        "fchown" => libc::SYS_fchown,
+        "chroot" => libc::SYS_chroot,
+        "chdir" => libc::SYS_chdir,
+        "fchdir" => libc::SYS_fchdir,
+
+        // Privilege
+        "setuid" => libc::SYS_setuid,
+        "setgid" => libc::SYS_setgid,
+        "setgroups" => libc::SYS_setgroups,
+
+        // IPC / shared memory
+        "eventfd2" => libc::SYS_eventfd2,
+        "eventfd" => libc::SYS_eventfd2,           // aarch64 only has eventfd2
+        "shmat" => libc::SYS_shmat,
+        "shmdt" => libc::SYS_shmdt,
+        "shmget" => libc::SYS_shmget,
+        "shmctl" => libc::SYS_shmctl,
+        "memfd_create" => libc::SYS_memfd_create,
+
+        // Random
+        "getrandom" => libc::SYS_getrandom,
+
+        // Newer syscalls
+        "rseq" => libc::SYS_rseq,
+
+        // aarch64 has no arch_prctl (x86_64-specific)
+        "arch_prctl" => return None,
+
+        _ => return None,
+    })
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn syscall_name_to_number(_name: &str) -> Option<i64> {
-    // TODO: Add aarch64 syscall mapping
     None
 }
 
