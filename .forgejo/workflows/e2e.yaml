@@ -1,5 +1,5 @@
 # .forgejo/workflows/e2e.yaml
-# Phase 2 E2E validation -- daily + manual (~20-30 min)
+# Phase 2 + Phase 3 E2E validation -- daily + manual
 name: E2E Validation
 
 on:
@@ -8,25 +8,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  e2e:
+  e2e-phase2:
     runs-on: linux-native
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora43, ubuntu-noble, arch]
-    name: E2E (${{ matrix.distro }})
+    name: E2E Phase 2 (${{ matrix.distro }})
     steps:
       - uses: actions/checkout@v4
 
       - name: Build conary
         run: cargo build
 
-      - name: Run E2E tests (${{ matrix.distro }})
+      - name: Run Phase 2 E2E tests (${{ matrix.distro }})
         run: ./tests/integration/remi/run.sh --distro ${{ matrix.distro }} --phase2
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-results-${{ matrix.distro }}
+          name: e2e-phase2-results-${{ matrix.distro }}
           path: tests/integration/remi/results/${{ matrix.distro }}.json
+
+  e2e-phase3:
+    runs-on: linux-native
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora43, ubuntu-noble, arch]
+    name: E2E Phase 3 (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build conary-test
+        run: cargo build -p conary-test
+
+      - name: Run Phase 3 adversarial tests (${{ matrix.distro }})
+        run: cargo run -p conary-test -- run --distro ${{ matrix.distro }} --phase 3
+
+      - name: Upload Phase 3 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-phase3-results-${{ matrix.distro }}
+          path: tests/integration/remi/results/${{ matrix.distro }}.json
+
+  qemu-tests:
+    runs-on: linux-native
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: E2E QEMU Boot Tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build conary-test
+        run: cargo build -p conary-test
+
+      - name: Run Group N QEMU tests
+        run: cargo run -p conary-test -- run --distro fedora43 --suite tests/integration/remi/manifests/phase3-group-n-qemu.toml
