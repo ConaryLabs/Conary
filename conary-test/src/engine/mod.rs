@@ -2,6 +2,7 @@
 
 pub mod assertions;
 pub mod mock_server;
+pub mod qemu;
 pub mod runner;
 pub mod suite;
 
