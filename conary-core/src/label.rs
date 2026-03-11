@@ -28,6 +28,31 @@ use thiserror::Error;
 /// A Conary-style label identifying package provenance
 ///
 /// Format: `repository@namespace:tag`
+///
+/// # Wildcard Matching
+///
+/// Any component (`repository`, `namespace`, or `tag`) may be set to the
+/// literal string `"*"` to act as a wildcard that matches any value in that
+/// position. Wildcards are supported on **either** side of a [`Label::matches`]
+/// call: both `self` and `other` are checked, so a pattern label with `*` in
+/// the repository slot will match a concrete label, and vice-versa.
+///
+/// Component wildcards are independent and can be mixed freely:
+///
+/// ```text
+/// *@rpl:2          -- any repository, namespace "rpl", tag "2"
+/// conary.io@*:2    -- repository "conary.io", any namespace, tag "2"
+/// conary.io@rpl:*  -- repository "conary.io", namespace "rpl", any tag
+/// *@*:*            -- matches everything
+/// ```
+///
+/// There is no support for partial/glob wildcards within a component (e.g.
+/// `"conary.*"` is treated as the literal string `"conary.*"`, not a prefix
+/// match). Only an exact `"*"` triggers wildcard behaviour.
+///
+/// Wildcard labels cannot be round-tripped through [`Label::parse`] because
+/// `*` is not in the set of allowed characters validated by the parser. They
+/// must be constructed directly via [`Label::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
     /// Repository hostname or identifier
