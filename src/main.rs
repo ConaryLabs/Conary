@@ -427,7 +427,7 @@ fn main() -> Result<()> {
 
                 // Run the async server
                 tokio::runtime::Runtime::new()
-                    .expect("Failed to create Tokio runtime")
+                    .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
                     .block_on(run_server(config))
             }
 
@@ -1556,7 +1556,7 @@ fn main() -> Result<()> {
 
             // Run the async daemon
             tokio::runtime::Runtime::new()
-                .expect("Failed to create Tokio runtime")
+                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
                 .block_on(async {
                     run_daemon(config)
                         .await
@@ -1598,7 +1598,7 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&config.cache_dir)?;
 
             tokio::runtime::Runtime::new()
-                .expect("Failed to create Tokio runtime")
+                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
                 .block_on(run_proxy(config))
         }
 
@@ -1686,7 +1686,7 @@ fn main() -> Result<()> {
 
             // Run the async server
             tokio::runtime::Runtime::new()
-                .expect("Failed to create Tokio runtime")
+                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
                 .block_on(run_server_from_config(&remi_config))
         }
 
