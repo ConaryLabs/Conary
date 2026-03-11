@@ -39,12 +39,7 @@ pub mod test_fixtures {
                 remi_distro: "fedora43".to_string(),
                 repo_name: "conary-fedora43".to_string(),
                 containerfile: None,
-                test_package_1: None,
-                test_binary_1: None,
-                test_package_2: None,
-                test_binary_2: None,
-                test_package_3: None,
-                test_binary_3: None,
+                test_packages: Vec::new(),
             },
         );
         config
