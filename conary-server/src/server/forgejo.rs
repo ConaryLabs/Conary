@@ -19,7 +19,8 @@ pub const FORGEJO_REPO_PATH: &str = "/repos/peter/Conary";
 /// Carries an optional HTTP status code from the upstream response so that
 /// callers can choose an appropriate status for their own error response
 /// (e.g. 502 Bad Gateway when the upstream returned a non-success status).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{}", ForgejoError::format_message(*.status, message))]
 pub struct ForgejoError {
     /// HTTP status code from the Forgejo response, if one was received.
     pub status: Option<u16>,
@@ -27,12 +28,11 @@ pub struct ForgejoError {
     pub message: String,
 }
 
-impl std::fmt::Display for ForgejoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(code) = self.status {
-            write!(f, "Forgejo error (HTTP {}): {}", code, self.message)
-        } else {
-            write!(f, "Forgejo error: {}", self.message)
+impl ForgejoError {
+    fn format_message(status: Option<u16>, message: &str) -> String {
+        match status {
+            Some(code) => format!("Forgejo error (HTTP {code}): {message}"),
+            None => format!("Forgejo error: {message}"),
         }
     }
 }
