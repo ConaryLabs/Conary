@@ -44,47 +44,51 @@ pub struct PeerCredentials {
 impl PeerCredentials {
     /// Extract peer credentials from a Unix stream
     ///
-    /// Uses SO_PEERCRED socket option to get the UID/GID of the connected process.
+    /// Uses `SO_PEERCRED` socket option to get the UID/GID of the connected process.
     pub fn from_stream(stream: &UnixStream) -> io::Result<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::io::AsRawFd;
+        use std::os::unix::io::AsRawFd;
+        Self::from_raw_fd(stream.as_raw_fd())
+    }
 
-            let fd = stream.as_raw_fd();
+    /// Extract peer credentials from a raw file descriptor via `SO_PEERCRED`.
+    ///
+    /// This is the shared implementation used by both the blocking
+    /// (`std::os::unix::net::UnixStream`) and async (`tokio::net::UnixStream`)
+    /// code paths.
+    #[cfg(target_os = "linux")]
+    pub fn from_raw_fd(fd: std::os::unix::io::RawFd) -> io::Result<Self> {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
 
-            // Use getsockopt with SO_PEERCRED
-            let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let result = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
 
-            let result = unsafe {
-                libc::getsockopt(
-                    fd,
-                    libc::SOL_SOCKET,
-                    libc::SO_PEERCRED,
-                    &mut cred as *mut _ as *mut libc::c_void,
-                    &mut len,
-                )
-            };
-
-            if result == -1 {
-                return Err(io::Error::last_os_error());
-            }
-
-            #[allow(clippy::unnecessary_cast)]
-            Ok(PeerCredentials {
-                pid: cred.pid as u32,
-                uid: cred.uid as u32,
-                gid: cred.gid as u32,
-            })
+        if result == -1 {
+            return Err(io::Error::last_os_error());
         }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Peer credentials not supported on this platform",
-            ))
-        }
+        #[allow(clippy::unnecessary_cast)]
+        Ok(PeerCredentials {
+            pid: cred.pid as u32,
+            uid: cred.uid as u32,
+            gid: cred.gid as u32,
+        })
+    }
+
+    /// Extract peer credentials from a raw file descriptor (unsupported platform stub).
+    #[cfg(not(target_os = "linux"))]
+    pub fn from_raw_fd(_fd: std::os::unix::io::RawFd) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Peer credentials not supported on this platform",
+        ))
     }
 
     /// Check if the peer is running as root

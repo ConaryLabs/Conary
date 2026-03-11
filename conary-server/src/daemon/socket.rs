@@ -208,39 +208,16 @@ fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Extract peer credentials from a Unix socket connection
+/// Extract peer credentials from an async Unix socket connection.
 ///
-/// Returns `auth::PeerCredentials` directly to avoid a duplicate struct.
+/// Delegates to `PeerCredentials::from_raw_fd` to avoid duplicating the
+/// `SO_PEERCRED` getsockopt logic.
 #[cfg(unix)]
 pub fn get_peer_credentials(
     stream: &tokio::net::UnixStream,
 ) -> Option<crate::daemon::auth::PeerCredentials> {
     use std::os::unix::io::AsRawFd;
-
-    let fd = stream.as_raw_fd();
-
-    unsafe {
-        let mut cred: libc::ucred = std::mem::zeroed();
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-
-        let result = libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            &mut cred as *mut _ as *mut libc::c_void,
-            &mut len,
-        );
-
-        if result == 0 {
-            Some(crate::daemon::auth::PeerCredentials {
-                pid: cred.pid as u32,
-                uid: cred.uid,
-                gid: cred.gid,
-            })
-        } else {
-            None
-        }
-    }
+    crate::daemon::auth::PeerCredentials::from_raw_fd(stream.as_raw_fd()).ok()
 }
 
 #[cfg(not(unix))]
