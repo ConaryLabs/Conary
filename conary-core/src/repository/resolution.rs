@@ -149,7 +149,7 @@ impl PackageSource {
 }
 
 /// Context for delegate chain resolution (cycle detection)
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct DelegateContext {
     depth: usize,
     visited: std::collections::HashSet<String>,
