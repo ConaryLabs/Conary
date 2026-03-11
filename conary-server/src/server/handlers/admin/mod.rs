@@ -1,6 +1,7 @@
 // conary-server/src/server/handlers/admin/mod.rs
 //! Handlers for the external admin API
 
+mod artifacts;
 mod audit;
 mod ci;
 mod events;
@@ -8,6 +9,7 @@ mod federation;
 mod repos;
 mod tokens;
 
+pub use artifacts::*;
 pub use audit::*;
 pub use ci::*;
 pub use events::*;

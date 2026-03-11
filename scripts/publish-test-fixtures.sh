@@ -7,6 +7,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/conary-test-fixture"
 ADVERSARIAL_DIR="$PROJECT_ROOT/tests/fixtures/adversarial"
 REMI_ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+REMI_ADMIN_ENDPOINT="${REMI_ADMIN_ENDPOINT:-${REMI_ENDPOINT%/}:8082}"
+REMI_ADMIN_TOKEN="${REMI_ADMIN_TOKEN:-}"
 CONARY_BIN="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
 
 publish_phase2_fixtures() {
@@ -35,12 +37,20 @@ publish_adversarial_fixtures() {
     bash "$ADVERSARIAL_DIR/build-malicious.sh" "$CONARY_BIN"
     bash "$ADVERSARIAL_DIR/build-deps.sh" "$CONARY_BIN"
 
+    if [ -z "$REMI_ADMIN_TOKEN" ]; then
+        echo "FATAL: REMI_ADMIN_TOKEN is required to publish adversarial fixtures" >&2
+        exit 1
+    fi
+
     echo ""
-    echo "Publishing adversarial fixtures to $REMI_ENDPOINT/test-fixtures/adversarial/..."
+    echo "Publishing adversarial fixtures to $REMI_ADMIN_ENDPOINT/v1/admin/test-fixtures/adversarial/..."
     while IFS= read -r -d '' pkg; do
-        name="$(basename "$pkg")"
-        printf "  %s... " "$name"
-        curl -sf -T "$pkg" "$REMI_ENDPOINT/test-fixtures/adversarial/$name" \
+        relative_path="${pkg#"$ADVERSARIAL_DIR"/}"
+        printf "  %s... " "$relative_path"
+        curl -sf -X PUT \
+            -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
+            --data-binary "@$pkg" \
+            "$REMI_ADMIN_ENDPOINT/v1/admin/test-fixtures/$relative_path" \
             && echo "OK" \
             || echo "WARN (upload failed)"
     done < <(find \

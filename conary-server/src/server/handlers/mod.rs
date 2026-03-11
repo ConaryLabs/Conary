@@ -2,6 +2,7 @@
 //! HTTP request handlers for the Remi server
 
 pub mod admin;
+pub mod artifacts;
 pub mod canonical;
 pub mod chunks;
 pub mod detail;
