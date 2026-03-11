@@ -1,6 +1,7 @@
 // conary-test/src/engine/mod.rs
 
 pub mod assertions;
+pub mod mock_server;
 pub mod runner;
 pub mod suite;
 

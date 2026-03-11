@@ -11,6 +11,7 @@ use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{KillAfterLog, ResourceConstraints, StepType, TestManifest};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
+use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 
 /// Executes tests from a manifest against a container.
@@ -60,6 +61,10 @@ impl TestRunner {
         container_id: &ContainerId,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
+
+        if let Some(mock_server) = &manifest.suite.mock_server {
+            start_mock_server(backend, container_id, mock_server).await?;
+        }
 
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
         suite.status = crate::engine::suite::RunStatus::Running;
@@ -554,6 +559,7 @@ mod tests {
                 name: "test-suite".to_string(),
                 phase: 1,
                 setup: Vec::new(),
+                mock_server: None,
             },
             test: tests,
             distro_overrides: HashMap::new(),

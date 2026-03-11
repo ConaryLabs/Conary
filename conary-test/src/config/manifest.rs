@@ -1,7 +1,7 @@
 // conary-test/src/config/manifest.rs
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Top-level test manifest (one TOML file = one suite).
@@ -19,6 +19,8 @@ pub struct SuiteDef {
     pub phase: u32,
     #[serde(default)]
     pub setup: Vec<TestStep>,
+    #[serde(default)]
+    pub mock_server: Option<MockServerConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,6 +119,28 @@ pub struct KillAfterLog {
 
 fn default_kill_timeout() -> u64 {
     60
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MockServerConfig {
+    pub port: u16,
+    pub routes: Vec<MockRoute>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MockRoute {
+    pub path: String,
+    pub status: u16,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub body_file: Option<String>,
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub delay_ms: Option<u64>,
+    #[serde(default)]
+    pub truncate_at_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
