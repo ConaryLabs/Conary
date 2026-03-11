@@ -247,6 +247,14 @@ impl CircuitBreakerRegistry {
         self.failure_count.load(Ordering::Relaxed)
     }
 
+    /// Remove the circuit breaker for a peer, cleaning up any stale state.
+    ///
+    /// Call this whenever a peer is removed from the registry so that the
+    /// circuit breaker map does not grow unboundedly as peers come and go.
+    pub fn remove_peer(&self, peer_id: &PeerId) {
+        self.breakers.remove(peer_id);
+    }
+
     /// Reset all circuit breakers
     pub fn reset_all(&self) {
         self.breakers.clear();
@@ -341,6 +349,22 @@ mod tests {
         assert!(registry.is_open(&peer_id));
 
         assert_eq!(registry.open_count(), 1);
+    }
+
+    #[test]
+    fn test_registry_remove_peer_cleans_up() {
+        let registry = CircuitBreakerRegistry::new(2, Duration::from_secs(30), 0.0);
+        let peer_id = "peer_to_remove".to_string();
+
+        // Trip the circuit so an entry exists in the map
+        registry.record_failure(&peer_id);
+        registry.record_failure(&peer_id);
+        assert!(registry.is_open(&peer_id));
+
+        // Remove the peer: circuit should no longer be tracked
+        registry.remove_peer(&peer_id);
+        assert!(!registry.is_open(&peer_id));
+        assert_eq!(registry.open_count(), 0);
     }
 
     #[test]

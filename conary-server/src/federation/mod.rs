@@ -245,10 +245,14 @@ impl Federation {
         registry.add(peer);
     }
 
-    /// Remove a peer
+    /// Remove a peer and clean up its circuit breaker state.
+    ///
+    /// Removing the circuit breaker entry prevents the `breakers` map from
+    /// growing indefinitely as peers are added and removed over time.
     pub async fn remove_peer(&self, peer_id: &PeerId) {
         let mut registry = self.peers.write().await;
         registry.remove(peer_id);
+        self.circuits.remove_peer(peer_id);
     }
 
     /// Start mDNS discovery for cell-local peers
