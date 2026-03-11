@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-11
-revision: 1
-summary: Document current ccs.toml schema gaps found while building Phase 3 dependency fixtures
+revision: 2
+summary: Document current ccs.toml schema and fixture gaps found while building Phase 3 adversarial tests
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -94,6 +94,34 @@ that still need first-class schema support:
 If we want the Phase 3 Group J fixtures to model the resolver cases exactly as
 specified, `conary-core/src/ccs/manifest.rs` will likely need a schema extension
 for package conflicts and OR-dependency expressions.
+
+## Known Fixture And Coverage Gaps
+
+The broader Phase 3 adversarial-test pass on 2026-03-11 also exposed several
+fixture and coverage gaps that are not purely `ccs.toml` schema problems:
+
+- Missing large-package fixtures:
+  Group H crash-recovery tests assume a large install target under
+  `tests/fixtures/adversarial/large/`, but `build-large.sh` and its generated
+  CCS outputs do not exist yet.
+- Missing tampered-fixture coverage:
+  Group G includes a tampered-after-signing scenario in the design, but the
+  checked-in corrupted fixture set currently only builds bad-checksum,
+  truncated, and size-lie variants.
+- Missing malicious fixture variants:
+  Group I expects dedicated fixtures for proc-environ access, outside-root
+  writes, expired signatures, capability policy violations, decompression bombs,
+  and intentionally failing scriptlets. Those fixture packages are referenced by
+  the manifest plan but are not built yet.
+- Manifest/runtime ergonomics:
+  Adversarial manifests currently need to hard-code in-container fixture paths
+  such as `/opt/remi-tests/fixtures/...` because the Rust test engine does not
+  yet expose a dedicated adversarial fixture-root variable the way Phase 2 uses
+  named fixture variables.
+
+These should be treated as follow-up work after the Phase 3 plan lands so the
+manifest coverage can move from "planned and parseable" to fully executable
+without placeholder paths or approximated attack cases.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
