@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use conary_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Unique peer identifier (SHA-256 of endpoint URL)
 pub type PeerId = String;
@@ -127,7 +128,7 @@ impl PeerScore {
 /// Registry of known peers
 #[derive(Debug, Default)]
 pub struct PeerRegistry {
-    peers: HashMap<PeerId, Peer>,
+    peers: HashMap<PeerId, Arc<Peer>>,
 }
 
 impl PeerRegistry {
@@ -140,31 +141,36 @@ impl PeerRegistry {
 
     /// Add or update a peer
     pub fn add(&mut self, peer: Peer) {
-        self.peers.insert(peer.id.clone(), peer);
+        self.peers.insert(peer.id.clone(), Arc::new(peer));
     }
 
     /// Remove a peer by ID
-    pub fn remove(&mut self, id: &PeerId) -> Option<Peer> {
+    pub fn remove(&mut self, id: &PeerId) -> Option<Arc<Peer>> {
         self.peers.remove(id)
     }
 
     /// Get a peer by ID
-    pub fn get(&self, id: &PeerId) -> Option<&Peer> {
+    pub fn get(&self, id: &PeerId) -> Option<&Arc<Peer>> {
         self.peers.get(id)
     }
 
     /// Get a mutable reference to a peer
-    pub fn get_mut(&mut self, id: &PeerId) -> Option<&mut Peer> {
+    pub fn get_mut(&mut self, id: &PeerId) -> Option<&mut Arc<Peer>> {
         self.peers.get_mut(id)
     }
 
-    /// Get all peers as a vector
-    pub fn all(&self) -> Vec<Peer> {
+    /// Get all peers as shared references, avoiding full clones
+    pub fn all(&self) -> Vec<Arc<Peer>> {
         self.peers.values().cloned().collect()
     }
 
+    /// Get all peers as owned clones (convenience for callers that need `Vec<Peer>`)
+    pub fn all_cloned(&self) -> Vec<Peer> {
+        self.peers.values().map(|p| (**p).clone()).collect()
+    }
+
     /// Get peers filtered by tier
-    pub fn by_tier(&self, tier: PeerTier) -> Vec<Peer> {
+    pub fn by_tier(&self, tier: PeerTier) -> Vec<Arc<Peer>> {
         self.peers
             .values()
             .filter(|p| p.tier == tier)

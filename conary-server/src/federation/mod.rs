@@ -236,7 +236,7 @@ impl Federation {
     /// Get a snapshot of current peers
     pub async fn peers(&self) -> Vec<Peer> {
         let registry = self.peers.read().await;
-        registry.all()
+        registry.all_cloned()
     }
 
     /// Add a peer dynamically
@@ -391,7 +391,7 @@ impl Federation {
         // Snapshot the peer list so the read lock is not held across async fetches
         let all_peers = {
             let peers = self.peers.read().await;
-            peers.all()
+            peers.all_cloned()
         }; // guard dropped here
 
         if all_peers.is_empty() {
@@ -526,7 +526,7 @@ impl Federation {
         // mDNS discovery).
         let candidates: Vec<Peer> = {
             let peers = self.peers.read().await;
-            let all_peers = peers.all();
+            let all_peers = peers.all_cloned();
             self.router
                 .select_peers(hash, &all_peers)
                 .into_iter()
@@ -559,7 +559,7 @@ impl Federation {
     /// Get federation statistics
     pub async fn stats(&self) -> FederationStats {
         let peers = self.peers.read().await;
-        let all_peers = peers.all();
+        let all_peers = peers.all_cloned();
 
         let mut cell_hubs = 0;
         let mut region_hubs = 0;
