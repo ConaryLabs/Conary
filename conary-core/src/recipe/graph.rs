@@ -33,6 +33,17 @@ use crate::error::{Error, Result};
 use crate::recipe::format::BuildStage;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/// Controls how bootstrap edges are selected when breaking cycles
+#[derive(Debug, Clone)]
+pub enum BootstrapMode {
+    /// Use the built-in LFS/Gentoo-based heuristics (default)
+    Auto,
+    /// Use only the provided edges, ignoring built-in heuristics
+    Manual(Vec<(String, String)>),
+    /// Use the provided edges first, fall back to built-in heuristics
+    Augmented(Vec<(String, String)>),
+}
+
 /// A directed graph representing recipe dependencies
 #[derive(Debug, Default)]
 pub struct RecipeGraph {
@@ -306,44 +317,77 @@ impl RecipeGraph {
         dependents
     }
 
+    /// Built-in bootstrap edge patterns based on LFS/Gentoo experience
+    const DEFAULT_BOOTSTRAP_PATTERNS: &'static [(&'static str, &'static str)] = &[
+        // glibc normally depends on gcc, but in stage0 we use cross-gcc
+        ("glibc", "gcc"),
+        // Same pattern for musl
+        ("musl", "gcc"),
+        // libstdc++ needs glibc, but stage1 can use minimal glibc
+        ("libstdc++", "glibc"),
+        // Perl/Python have chicken-egg with system libs
+        ("perl", "glibc"),
+        ("python", "glibc"),
+    ];
+
     /// Suggest bootstrap edges to break circular dependencies
     ///
     /// This analyzes cycles in the graph and suggests which edges to break
-    /// based on common patterns (e.g., glibc -> gcc in bootstrap).
+    /// based on the provided `BootstrapMode`:
+    ///
+    /// - `Auto`: uses built-in LFS/Gentoo heuristics
+    /// - `Manual(edges)`: uses only the provided edges
+    /// - `Augmented(edges)`: tries provided edges first, then falls back to heuristics
     ///
     /// Returns a list of (from, to) edges that could be marked as bootstrap edges.
-    pub fn suggest_bootstrap_edges(&self) -> Vec<(String, String)> {
+    pub fn suggest_bootstrap_edges(&self, mode: &BootstrapMode) -> Vec<(String, String)> {
         let cycles = self.find_cycles();
         let mut suggestions = Vec::new();
 
-        // Known patterns that indicate which edge to break
-        // These are based on LFS/Gentoo bootstrap experience
-        let bootstrap_patterns = [
-            // glibc normally depends on gcc, but in stage0 we use cross-gcc
-            ("glibc", "gcc"),
-            // Same pattern for musl
-            ("musl", "gcc"),
-            // libstdc++ needs glibc, but stage1 can use minimal glibc
-            ("libstdc++", "glibc"),
-            // Perl/Python have chicken-egg with system libs
-            ("perl", "glibc"),
-            ("python", "glibc"),
-        ];
+        let (custom_patterns, use_defaults): (Vec<(&str, &str)>, bool) = match mode {
+            BootstrapMode::Auto => (Vec::new(), true),
+            BootstrapMode::Manual(edges) => {
+                let patterns: Vec<(&str, &str)> =
+                    edges.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                (patterns, false)
+            }
+            BootstrapMode::Augmented(edges) => {
+                let patterns: Vec<(&str, &str)> =
+                    edges.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                (patterns, true)
+            }
+        };
 
         for cycle in cycles {
-            // Check if any known pattern matches this cycle
-            for (from, to) in &bootstrap_patterns {
+            let mut matched = false;
+
+            // Try custom patterns first
+            for (from, to) in &custom_patterns {
                 if cycle.contains(&from.to_string()) && cycle.contains(&to.to_string()) {
                     let edge = (from.to_string(), to.to_string());
                     if !suggestions.contains(&edge) {
                         suggestions.push(edge);
                     }
+                    matched = true;
+                }
+            }
+
+            // Try built-in patterns if allowed and no custom match
+            if !matched && use_defaults {
+                for (from, to) in Self::DEFAULT_BOOTSTRAP_PATTERNS {
+                    if cycle.contains(&from.to_string()) && cycle.contains(&to.to_string()) {
+                        let edge = (from.to_string(), to.to_string());
+                        if !suggestions.contains(&edge) {
+                            suggestions.push(edge);
+                        }
+                        matched = true;
+                    }
                 }
             }
 
             // If no pattern matched, suggest breaking at the "least critical" edge
-            // Heuristic: break the edge from the recipe with most dependents
-            if suggestions.is_empty() && cycle.len() >= 2 {
+            // Heuristic: break the edge from the recipe with fewest dependents
+            if !matched && cycle.len() >= 2 {
                 let mut best_break = None;
                 let mut best_score = 0;
 
@@ -371,12 +415,22 @@ impl RecipeGraph {
 
     /// Auto-break detected cycles using suggested bootstrap edges
     ///
-    /// This is a convenience method that calls `suggest_bootstrap_edges()`
-    /// and marks all suggested edges as bootstrap edges.
+    /// Uses `BootstrapMode::Auto` (built-in heuristics). For custom control,
+    /// use `auto_break_cycles_with_mode()`.
     ///
     /// Returns the edges that were marked.
     pub fn auto_break_cycles(&mut self) -> Vec<(String, String)> {
-        let suggestions = self.suggest_bootstrap_edges();
+        self.auto_break_cycles_with_mode(&BootstrapMode::Auto)
+    }
+
+    /// Auto-break detected cycles using the specified bootstrap mode
+    ///
+    /// Returns the edges that were marked.
+    pub fn auto_break_cycles_with_mode(
+        &mut self,
+        mode: &BootstrapMode,
+    ) -> Vec<(String, String)> {
+        let suggestions = self.suggest_bootstrap_edges(mode);
 
         for (from, to) in &suggestions {
             self.mark_bootstrap_edge(from, to);
