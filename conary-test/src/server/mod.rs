@@ -3,6 +3,7 @@
 pub mod handlers;
 pub mod mcp;
 pub mod routes;
+pub mod service;
 pub mod state;
 
 pub use routes::create_router;
