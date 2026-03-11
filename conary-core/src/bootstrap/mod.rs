@@ -384,7 +384,9 @@ impl Bootstrap {
     }
 
     /// Resume bootstrap from last checkpoint
-    pub fn resume(&mut self) -> Result<BootstrapStage> {
+    ///
+    /// Returns `None` when all stages are complete.
+    pub fn resume(&mut self) -> Result<Option<BootstrapStage>> {
         self.stages.current_stage()
     }
 
