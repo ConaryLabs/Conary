@@ -13,10 +13,6 @@ pub(crate) const TROVE_COLUMNS: &str = "id, name, version, type, architecture, d
     installed_at, installed_by_changeset_id, install_source, install_reason, \
     flavor_spec, pinned, selection_reason, label_id, orphan_since";
 
-/// Same columns prefixed with `t.` for use in JOINs
-const TROVE_COLUMNS_PREFIXED: &str = "t.id, t.name, t.version, t.type, t.architecture, \
-    t.description, t.installed_at, t.installed_by_changeset_id, t.install_source, \
-    t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, t.label_id, t.orphan_since";
 
 /// Type of trove (package, component, collection, or redirect)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
@@ -525,13 +521,15 @@ impl Trove {
     /// Returns troves with install_source of 'adopted-track' or 'adopted-full'
     /// that do not have a corresponding entry in the converted_packages table.
     pub fn find_adopted_unconverted(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {TROVE_COLUMNS_PREFIXED} FROM troves t \
+        let sql = "SELECT t.id, t.name, t.version, t.type, t.architecture, \
+             t.description, t.installed_at, t.installed_by_changeset_id, t.install_source, \
+             t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, t.label_id, t.orphan_since \
+             FROM troves t \
              LEFT JOIN converted_packages cp ON cp.trove_id = t.id \
              WHERE t.install_source IN ('adopted-track', 'adopted-full') \
              AND cp.id IS NULL \
              ORDER BY t.name"
-        );
+            .to_string();
         let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([], Self::from_row)?
