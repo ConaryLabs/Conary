@@ -307,56 +307,9 @@ pub async fn sync_repo(
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    /// Helper to rebuild a fresh router against the same DB (oneshot consumes the app).
-    fn rebuild_app(db_path: &std::path::Path) -> axum::Router {
-        let config = crate::server::ServerConfig {
-            db_path: db_path.to_path_buf(),
-            chunk_dir: db_path.parent().unwrap().join("chunks"),
-            cache_dir: db_path.parent().unwrap().join("cache"),
-            ..Default::default()
-        };
-        let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
-        crate::server::routes::create_external_admin_router(state, None)
-    }
-
-    async fn test_app() -> (axum::Router, std::path::PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .unwrap();
-            conary_core::db::schema::migrate(&conn).unwrap();
-        }
-
-        let config = crate::server::ServerConfig {
-            db_path: db_path.clone(),
-            chunk_dir: tmp.path().join("chunks"),
-            cache_dir: tmp.path().join("cache"),
-            ..Default::default()
-        };
-        std::fs::create_dir_all(&config.chunk_dir).unwrap();
-        std::fs::create_dir_all(&config.cache_dir).unwrap();
-
-        let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
-        let app = crate::server::routes::create_external_admin_router(state, None);
-
-        let test_token = "test-admin-token-12345";
-        let hash = crate::server::auth::hash_token(test_token);
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conary_core::db::models::admin_token::create(&conn, "test-admin", &hash, "admin")
-                .unwrap();
-        }
-
-        std::mem::forget(tmp);
-        (app, db_path)
-    }
+    use super::super::test_helpers::{rebuild_app, test_app};
 
     #[tokio::test]
     async fn test_repo_crud_lifecycle() {

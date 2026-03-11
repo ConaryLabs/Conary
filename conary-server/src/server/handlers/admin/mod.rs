@@ -55,7 +55,7 @@ pub(crate) fn check_scope(
 }
 
 #[cfg(test)]
-pub(super) mod test_helpers {
+pub(crate) mod test_helpers {
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
