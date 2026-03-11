@@ -118,12 +118,17 @@ impl InodeInfo {
         // i_mode (u16)
         buf[off..off + 2].copy_from_slice(&self.mode.to_le_bytes());
         off += 2;
-        // i_nlink (u16) — truncated from u32
+        // i_nlink (u16) — truncated from u32.
+        // Compact inodes cap nlink at u16::MAX (65535); callers with more
+        // hard links must use the extended format where i_nlink is u32.
         #[allow(clippy::cast_possible_truncation)]
         let nlink_u16 = self.nlink as u16;
         buf[off..off + 2].copy_from_slice(&nlink_u16.to_le_bytes());
         off += 2;
-        // i_size (u32) — truncated from u64
+        // i_size (u32) — truncated from u64.
+        // Compact inodes cap file size at u32::MAX (~4 GiB); files larger
+        // than that must use the extended inode format. `needs_extended()`
+        // guards this path so truncation is intentional and safe.
         #[allow(clippy::cast_possible_truncation)]
         let size_u32 = self.size as u32;
         buf[off..off + 4].copy_from_slice(&size_u32.to_le_bytes());
@@ -141,12 +146,14 @@ impl InodeInfo {
         // i_ino (u32)
         buf[off..off + 4].copy_from_slice(&self.ino.to_le_bytes());
         off += 4;
-        // i_uid (u16) — truncated from u32
+        // i_uid (u16) — truncated from u32.
+        // Compact inodes store uid/gid as u16; IDs above 65535 require the
+        // extended format. `needs_extended()` guards this path.
         #[allow(clippy::cast_possible_truncation)]
         let uid_u16 = self.uid as u16;
         buf[off..off + 2].copy_from_slice(&uid_u16.to_le_bytes());
         off += 2;
-        // i_gid (u16) — truncated from u32
+        // i_gid (u16) — truncated from u32. Same constraint as uid above.
         #[allow(clippy::cast_possible_truncation)]
         let gid_u16 = self.gid as u16;
         buf[off..off + 2].copy_from_slice(&gid_u16.to_le_bytes());
@@ -176,7 +183,9 @@ impl InodeInfo {
         // i_mode (u16)
         buf[off..off + 2].copy_from_slice(&self.mode.to_le_bytes());
         off += 2;
-        // i_nb (u16) — nlink lower 16 bits (union erofs_inode_i_nb)
+        // i_nb (u16) — lower 16 bits of nlink stored in the union field.
+        // Extended inodes also write the full u32 nlink at offset 0x2C;
+        // this u16 slot is a kernel ABI remnant kept for compatibility.
         #[allow(clippy::cast_possible_truncation)]
         let nb_u16 = self.nlink as u16;
         buf[off..off + 2].copy_from_slice(&nb_u16.to_le_bytes());

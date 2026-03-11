@@ -102,6 +102,8 @@ pub fn pack_directory(
                 )));
             }
             let _ = cursor.write_all(&entry.nid.to_le_bytes());
+            // The bounds check above (`name_offset > u16::MAX`) guarantees this
+            // cast is safe; values exceeding 65535 are rejected before reaching here.
             #[allow(clippy::cast_possible_truncation)]
             let nameoff_u16 = name_offset as u16;
             let _ = cursor.write_all(&nameoff_u16.to_le_bytes());
