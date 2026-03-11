@@ -37,7 +37,8 @@ pub fn cmd_groups_show(db_path: &str, name: &str, distro: Option<&str>) -> Resul
     }
     println!();
 
-    let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
+    let pkg_id = pkg.id.ok_or_else(|| anyhow::anyhow!("canonical package '{}' has no id", name))?;
+    let impls = PackageImplementation::find_by_canonical(&conn, pkg_id)?;
     if let Some(distro_filter) = distro {
         let filtered: Vec<_> = impls.iter().filter(|i| i.distro == distro_filter).collect();
         if filtered.is_empty() {
