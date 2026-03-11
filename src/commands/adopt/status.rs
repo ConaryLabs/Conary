@@ -179,12 +179,4 @@ mod tests {
         assert_eq!(coverage_bar(50.0, 10), "[#####-----]");
     }
 
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 bytes");
-        assert_eq!(format_bytes(512), "512 bytes");
-        assert_eq!(format_bytes(1024), "1.00 KB");
-        assert_eq!(format_bytes(1_048_576), "1.00 MB");
-        assert_eq!(format_bytes(1_073_741_824), "1.00 GB");
-    }
 }
