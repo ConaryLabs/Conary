@@ -11,11 +11,24 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rand::Rng;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Instant;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::server::ServerState;
 use crate::server::rate_limit::AdminRateLimiters;
+
+/// Minimum interval between `touch()` DB writes for the same token (5 minutes).
+const TOUCH_DEBOUNCE_SECS: u64 = 300;
+
+/// In-memory cache of the last time each token ID was touched.
+///
+/// Shared across requests via a `lazy_static`-style global. Using a `Mutex`
+/// is fine here because the critical section is just a HashMap lookup/insert
+/// (sub-microsecond).
+static TOUCH_CACHE: std::sync::LazyLock<Mutex<HashMap<i64, Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Wrapper for token scopes stored in request extensions.
 ///
@@ -216,16 +229,32 @@ pub async fn auth_middleware(
         .extensions_mut()
         .insert(TokenName(token_record.name.clone()));
 
-    // Update last_used_at in background (fire-and-forget, reusing db_path)
+    // Update last_used_at in background, debounced to avoid excessive DB writes.
+    // Only touch if the last touch was more than TOUCH_DEBOUNCE_SECS ago.
     let bg_db_path = db_path;
     let bg_id = token_record.id;
-    tokio::task::spawn_blocking(move || {
-        if let Ok(conn) = conary_core::db::open_fast(&bg_db_path)
-            && let Err(e) = conary_core::db::models::admin_token::touch(&conn, bg_id)
-        {
-            tracing::warn!("Failed to update token last_used_at: {}", e);
+    let should_touch = {
+        let mut cache = TOUCH_CACHE.lock().await;
+        let now = Instant::now();
+        let debounce = std::time::Duration::from_secs(TOUCH_DEBOUNCE_SECS);
+        match cache.get(&bg_id) {
+            Some(last) if now.duration_since(*last) < debounce => false,
+            _ => {
+                cache.insert(bg_id, now);
+                true
+            }
         }
-    });
+    };
+
+    if should_touch {
+        tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = conary_core::db::open_fast(&bg_db_path)
+                && let Err(e) = conary_core::db::models::admin_token::touch(&conn, bg_id)
+            {
+                tracing::warn!("Failed to update token last_used_at: {}", e);
+            }
+        });
+    }
 
     next.run(request).await
 }
