@@ -19,8 +19,16 @@ use axum::{
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Instant;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::io::ReaderStream;
+
+/// TTL for the cached scan_versions result (60 seconds).
+const VERSIONS_CACHE_TTL_SECS: u64 = 60;
+
+/// Cached scan_versions result with expiry timestamp.
+static VERSIONS_CACHE: std::sync::LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
 
 /// Response for GET /v1/ccs/conary/latest
 #[derive(Serialize)]
@@ -108,6 +116,31 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
     Ok(versions)
 }
 
+/// Return cached versions or re-scan if the cache has expired.
+#[allow(clippy::result_large_err)]
+async fn scan_versions_cached(dir: &PathBuf) -> Result<Vec<String>, Response> {
+    let ttl = std::time::Duration::from_secs(VERSIONS_CACHE_TTL_SECS);
+
+    {
+        let cache = VERSIONS_CACHE.lock().await;
+        if let Some((instant, ref versions)) = *cache {
+            if instant.elapsed() < ttl {
+                return Ok(versions.clone());
+            }
+        }
+    }
+
+    // Cache miss or expired -- rescan
+    let versions = scan_versions(dir)?;
+
+    {
+        let mut cache = VERSIONS_CACHE.lock().await;
+        *cache = Some((Instant::now(), versions.clone()));
+    }
+
+    Ok(versions)
+}
+
 /// GET /v1/ccs/conary/latest
 ///
 /// Returns metadata about the latest available Conary self-update package.
@@ -116,7 +149,7 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
 
-    let versions = match scan_versions(&dir) {
+    let versions = match scan_versions_cached(&dir).await {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -160,7 +193,7 @@ pub async fn get_versions(State(state): State<Arc<RwLock<ServerState>>>) -> Resp
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
 
-    let versions = match scan_versions(&dir) {
+    let versions = match scan_versions_cached(&dir).await {
         Ok(v) => v,
         Err(e) => return e,
     };
