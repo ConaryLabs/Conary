@@ -97,6 +97,25 @@ impl FileEntry {
     ///
     /// Multiple packages may claim the same path (directories, shared files).
     /// This method updates the existing record if the path already exists.
+    ///
+    /// # Ownership semantics
+    ///
+    /// `INSERT OR REPLACE` in SQLite is equivalent to a `DELETE` followed by an
+    /// `INSERT` when a uniqueness constraint (here, the `path` column) is violated.
+    /// This means:
+    ///
+    /// - The original row's `rowid` is **not** preserved; the replaced row gets a
+    ///   new `rowid`. Any foreign keys referencing the old `rowid` will be affected
+    ///   (cascade-deleted or set to NULL depending on the schema).
+    ///
+    /// - During package upgrades, the file's `trove_id` is reassigned to the new
+    ///   package version. The old package's ownership of this path is silently lost.
+    ///   This is intentional for single-owner files but means that if two packages
+    ///   legitimately share a path, only the last writer's `trove_id` is recorded.
+    ///
+    /// - Callers performing upgrades should install the new package's files (which
+    ///   will replace ownership) and then delete the old trove. Reversing this order
+    ///   would cascade-delete the files before the new trove can claim them.
     pub fn insert_or_replace(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id)
