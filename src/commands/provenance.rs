@@ -2,7 +2,7 @@
 
 //! Command implementations for Package DNA / Provenance queries
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD_ENGINE};
 use chrono::Utc;
 use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
@@ -99,8 +99,7 @@ pub fn cmd_provenance_show(
             }
         }
         None => {
-            println!("Package '{}' not found", package);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package);
         }
     }
 
@@ -199,8 +198,7 @@ pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool)
             }
         }
         None => {
-            println!("Package '{}' not found", package);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package);
         }
     }
 
@@ -265,12 +263,10 @@ pub fn cmd_provenance_diff(
             }
         }
         (None, _) => {
-            println!("Package '{}' not found", package1);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package1);
         }
         (_, None) => {
-            println!("Package '{}' not found", package2);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package2);
         }
     }
 
@@ -383,8 +379,7 @@ pub fn cmd_provenance_export(
             }
         }
         None => {
-            println!("Package '{}' not found", package);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package);
         }
     }
 
@@ -644,8 +639,7 @@ pub fn cmd_provenance_register(
             }
         }
         None => {
-            println!("Package '{}' not found", package);
-            std::process::exit(1);
+            bail!("Package '{}' not found", package);
         }
     }
 
