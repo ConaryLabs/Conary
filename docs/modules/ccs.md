@@ -119,9 +119,49 @@ fixture and coverage gaps that are not purely `ccs.toml` schema problems:
   yet expose a dedicated adversarial fixture-root variable the way Phase 2 uses
   named fixture variables.
 
+The current mock-server support used by Phase 3 Groups G, H, and K is also
+intentionally minimal. It can serve static routes with optional headers, delay,
+and body truncation, but it cannot yet model:
+
+- Stateful retries or per-request response sequences
+- Mirror pools or first-success failover behavior
+- TLS handshakes, certificate chains, or hostname validation failures
+- Large generated bodies created during setup before the server starts
+
+The lifecycle manifests in Group L also exposed a few execution-environment
+limits that make the current tests more "robustness probes" than strict end-to-
+end assertions:
+
+- Unprivileged generation switching:
+  `system generation switch` and `rollback` often hit mount or namespace
+  permission failures inside the integration containers, so the manifests can
+  only assert meaningful output and absence of panics rather than guaranteed
+  successful generation transitions.
+- Self-update artifact modeling:
+  The current self-update tests synthesize local HTTP payloads from the running
+  binary or placeholder bytes. That is good enough for checksum/truncation
+  handling, but it is not yet a faithful signed update artifact pipeline.
+- Bootstrap artifact validation:
+  Phase 3 can currently assert that stage0 starts, produces files, and yields
+  executable-looking output, but not yet that a full stage0 artifact set is
+  complete across all distros in CI.
+- Kernel and bootloader package assumptions:
+  The container half of Group N relies on per-distro package-name overrides for
+  kernels and bootloaders (`kernel`, `linux-image-generic`, `linux`, `grub2`,
+  `grub-efi-amd64`, `grub`) and verifies deployed files plus generation/BLS
+  artifacts. Actual boot correctness, kernel activation, and reboot semantics
+  still depend on the QEMU half of Group N.
+- QEMU boot execution assumptions:
+  The first `qemu_boot` engine pass shells out to host `curl`,
+  `qemu-system-x86_64`, and `ssh`, caches qcow2 images locally, and assumes the
+  test image exposes SSH on port 22 for `root@127.0.0.1` via user-mode port
+  forwarding. That is enough for the Phase 3 manifest flow, but it is not yet a
+  repo-native orchestrator abstraction with richer auth, snapshot, or serial
+  console handling.
+
 These should be treated as follow-up work after the Phase 3 plan lands so the
 manifest coverage can move from "planned and parseable" to fully executable
-without placeholder paths or approximated attack cases.
+without placeholder paths, approximated attack cases, or mock-server workarounds.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
