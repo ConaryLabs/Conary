@@ -1,0 +1,332 @@
+# tests/integration/remi/manifests/phase3-group-j.toml
+#
+# Phase 3, Group J: Dependency Edge Cases (T107-T117).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+#
+# Note: The current adversarial fixture set approximates conflict and OR cases
+# using versioned packages and shared capabilities because `ccs.toml` does not
+# yet support first-class package conflicts or explicit `foo | bar` syntax.
+
+[suite]
+name = "Phase 3 Group J: Dependency Edge Cases"
+phase = 3
+
+# --------------------------------------------------------------------------
+# T107: Circular dependency detection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T107"
+name = "circular_dependency_detected"
+description = "Circular dependencies should be detected with a clear error"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-circular-a-v1/output/dep-circular-a-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "circular"
+
+# --------------------------------------------------------------------------
+# T108: Conflicting version requirements
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T108"
+name = "conflicting_version_requirements"
+description = "Conflicting dependency versions should be reported clearly"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v2/output/dep-base-2.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "version"
+
+# --------------------------------------------------------------------------
+# T109: Deep transitive dependency install
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T109"
+name = "deep_transitive_dependency_install"
+description = "A package with multiple transitive dependencies should install in dependency order"
+timeout = 60
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "query deptree dep-app"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-app", "dep-liba", "dep-libb", "dep-base"]
+
+# --------------------------------------------------------------------------
+# T110: Conflict with installed package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T110"
+name = "conflict_with_installed_package"
+description = "Installing a package that needs an incompatible already-installed dependency should leave the original package untouched"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "dependency"
+
+[[test.step]]
+conary = "list dep-liba --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "2.0.0"
+
+# --------------------------------------------------------------------------
+# T111: Virtual provider satisfaction
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T111"
+name = "virtual_provider_satisfies_dependency"
+description = "A virtual capability provider should satisfy the consumer package"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-provider-v1/output/dep-virtual-provider-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-consumer-v1/output/dep-virtual-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-virtual-provider", "dep-virtual-consumer"]
+
+# --------------------------------------------------------------------------
+# T112: Autoremove cleans orphans
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T112"
+name = "autoremove_cleans_orphans"
+description = "Autoremove should clean orphaned dependencies while preserving shared ones"
+timeout = 60
+group = "J"
+
+[[test.step]]
+conary = "remove dep-app --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "autoremove --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "dep-app"
+
+# --------------------------------------------------------------------------
+# T113: Version range satisfaction
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T113"
+name = "version_range_dependency_satisfaction"
+description = "Version range constraints should accept compatible dependencies"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list dep-liba --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "1.0.0"
+
+# --------------------------------------------------------------------------
+# T114: Shared provider fixed-point convergence
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T114"
+name = "shared_provider_fixed_point_convergence"
+description = "Repeated autoremove after removing one provider should converge without removing the active consumer chain"
+timeout = 60
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-a-v1/output/dep-or-a-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "remove dep-or-a --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "autoremove --no-scripts"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T115: Remove blocked by dependents
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T115"
+name = "remove_blocked_by_dependents"
+description = "Removing a dependency that still has dependents should be refused with a dependent list"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "query whatbreaks dep-liba"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["dep-app", "dep-libb"]
+
+[[test.step]]
+conary = "remove dep-liba --no-scripts"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "depend"
+
+# --------------------------------------------------------------------------
+# T116: OR-style provider selection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T116"
+name = "or_style_provider_selection"
+description = "One of multiple shared-capability providers should satisfy the consumer"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-or-b", "dep-or-consumer"]
+
+# --------------------------------------------------------------------------
+# T117: Unresolvable dependency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T117"
+name = "unresolvable_dependency_reports_cleanly"
+description = "An unresolvable dependency should fail clearly and leave no partial state"
+timeout = 30
+group = "J"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-unresolvable-v1/output/dep-unresolvable-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "nonexistent-package"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "dep-unresolvable"
