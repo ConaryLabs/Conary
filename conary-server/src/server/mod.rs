@@ -64,6 +64,27 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+async fn ensure_admin_bootstrap_token(
+    db_path: PathBuf,
+    token: &str,
+    source_name: &str,
+    source_description: &str,
+) -> Result<()> {
+    let hash = crate::server::auth::hash_token(token);
+    let source_name = source_name.to_string();
+    let source_description = source_description.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = conary_core::db::open(&db_path)?;
+        if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
+            conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
+            tracing::info!("  Admin token created from {}", source_description);
+        }
+        Ok(())
+    })
+    .await??;
+    Ok(())
+}
+
 /// Server configuration
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -517,25 +538,24 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
 
         admin_rate_limiters = Some(limiters);
 
-        // Bootstrap token from REMI_ADMIN_TOKEN env var
+        if let Some(config_token) = remi_config.admin.bootstrap_token.as_deref() {
+            ensure_admin_bootstrap_token(
+                server_config.db_path.clone(),
+                config_token,
+                "config-bootstrap",
+                "admin.bootstrap_token config",
+            )
+            .await?;
+        }
+
+        // REMI_ADMIN_TOKEN remains supported as an environment override/bootstrap path.
         if let Ok(env_token) = std::env::var("REMI_ADMIN_TOKEN") {
-            let db_path = server_config.db_path.clone();
-            let hash = crate::server::auth::hash_token(&env_token);
-            tokio::task::spawn_blocking(move || {
-                if let Ok(conn) = conary_core::db::open(&db_path)
-                    && conary_core::db::models::admin_token::find_by_hash(&conn, &hash)
-                        .unwrap_or(None)
-                        .is_none()
-                {
-                    let _ = conary_core::db::models::admin_token::create(
-                        &conn,
-                        "env-bootstrap",
-                        &hash,
-                        "admin",
-                    );
-                    tracing::info!("  Admin token created from REMI_ADMIN_TOKEN env var");
-                }
-            })
+            ensure_admin_bootstrap_token(
+                server_config.db_path.clone(),
+                &env_token,
+                "env-bootstrap",
+                "REMI_ADMIN_TOKEN env var",
+            )
             .await?;
         }
 
@@ -585,6 +605,58 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_admin_bootstrap_token;
+
+    fn test_db_path() -> std::path::PathBuf {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("conary.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            conary_core::db::schema::migrate(&conn).expect("migrate schema");
+        }
+        std::mem::forget(tmp);
+        db_path
+    }
+
+    #[tokio::test]
+    async fn ensure_admin_bootstrap_token_inserts_once() {
+        let db_path = test_db_path();
+        ensure_admin_bootstrap_token(
+            db_path.clone(),
+            "bootstrap-token",
+            "config-bootstrap",
+            "admin.bootstrap_token config",
+        )
+        .await
+        .expect("seed bootstrap token");
+        ensure_admin_bootstrap_token(
+            db_path.clone(),
+            "bootstrap-token",
+            "config-bootstrap",
+            "admin.bootstrap_token config",
+        )
+        .await
+        .expect("seed bootstrap token idempotently");
+
+        let conn = conary_core::db::open(&db_path).expect("open db");
+        let found = conary_core::db::models::admin_token::find_by_hash(
+            &conn,
+            &crate::server::auth::hash_token("bootstrap-token"),
+        )
+        .expect("query token")
+        .expect("token exists");
+        assert_eq!(found.name, "config-bootstrap");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| row.get(0))
+            .expect("count tokens");
+        assert_eq!(count, 1);
+    }
 }
 
 /// Start the Remi server (legacy single-port mode)

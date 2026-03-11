@@ -29,7 +29,8 @@ struct PublishPackageResponse {
 
 fn safe_ccs_filename(name: &str, version: &str) -> String {
     let sanitize = |value: &str| {
-        value.chars()
+        value
+            .chars()
             .map(|c| {
                 if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
                     c
@@ -81,7 +82,9 @@ pub async fn upload_package(
     scopes: Option<axum::Extension<TokenScopes>>,
     request: Request,
 ) -> Response {
-    if let Some(err) = check_scope(&scopes, Scope::Admin) {
+    if scopes.is_some()
+        && let Some(err) = check_scope(&scopes, Scope::Admin)
+    {
         return err;
     }
     if let Some(err) = validate_path_param(&distro, "distro") {
@@ -111,7 +114,11 @@ pub async fn upload_package(
     let mut file = match tokio::fs::File::create(&temp_path).await {
         Ok(file) => file,
         Err(err) => {
-            tracing::error!("Failed to create temp package {}: {}", temp_path.display(), err);
+            tracing::error!(
+                "Failed to create temp package {}: {}",
+                temp_path.display(),
+                err
+            );
             return json_error(500, "Failed to store package", "IO_ERROR");
         }
     };
@@ -148,7 +155,11 @@ pub async fn upload_package(
     }
 
     if let Err(err) = file.flush().await {
-        tracing::error!("Failed to flush temp package {}: {}", temp_path.display(), err);
+        tracing::error!(
+            "Failed to flush temp package {}: {}",
+            temp_path.display(),
+            err
+        );
         let _ = tokio::fs::remove_file(&temp_path).await;
         return json_error(500, "Failed to finalize package", "IO_ERROR");
     }
@@ -164,7 +175,11 @@ pub async fn upload_package(
         Ok(Err(err)) => {
             tracing::warn!("Uploaded package is not a valid CCS archive: {}", err);
             let _ = tokio::fs::remove_file(&temp_path).await;
-            return json_error(400, "Uploaded file is not a valid CCS package", "INVALID_CCS");
+            return json_error(
+                400,
+                "Uploaded file is not a valid CCS package",
+                "INVALID_CCS",
+            );
         }
         Err(err) => {
             tracing::error!("Failed to inspect uploaded package: {}", err);
@@ -222,11 +237,7 @@ pub async fn upload_package(
     if let Some(parent) = chunk_file_path.parent()
         && let Err(err) = tokio::fs::create_dir_all(parent).await
     {
-        tracing::error!(
-            "Failed to create chunk dir {}: {}",
-            parent.display(),
-            err
-        );
+        tracing::error!("Failed to create chunk dir {}: {}", parent.display(), err);
         return json_error(500, "Failed to create chunk storage", "IO_ERROR");
     }
     if tokio::fs::try_exists(&chunk_file_path).await.ok() != Some(true)
@@ -362,7 +373,10 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(found.original_format, "ccs");
-        assert_eq!(found.total_size, Some(minimal_ccs("fixture-demo", "1.0.0").len() as i64));
+        assert_eq!(
+            found.total_size,
+            Some(minimal_ccs("fixture-demo", "1.0.0").len() as i64)
+        );
     }
 
     #[tokio::test]
@@ -398,21 +412,25 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        assert!(conary_core::db::models::ConvertedPackage::find_by_package_identity(
-            &conn,
-            "fedora",
-            "fixture-demo",
-            Some("1.0.0"),
-        )
-        .unwrap()
-        .is_some());
-        assert!(conary_core::db::models::ConvertedPackage::find_by_package_identity(
-            &conn,
-            "ubuntu",
-            "fixture-demo",
-            Some("1.0.0"),
-        )
-        .unwrap()
-        .is_some());
+        assert!(
+            conary_core::db::models::ConvertedPackage::find_by_package_identity(
+                &conn,
+                "fedora",
+                "fixture-demo",
+                Some("1.0.0"),
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            conary_core::db::models::ConvertedPackage::find_by_package_identity(
+                &conn,
+                "ubuntu",
+                "fixture-demo",
+                Some("1.0.0"),
+            )
+            .unwrap()
+            .is_some()
+        );
     }
 }
