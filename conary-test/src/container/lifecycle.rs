@@ -123,9 +123,16 @@ impl ContainerBackend for BollardBackend {
         let host_config = HostConfig {
             binds: if binds.is_empty() { None } else { Some(binds) },
             privileged: Some(config.privileged),
-            network_mode: Some(config.network_mode.clone()),
             ..Default::default()
         };
+        let mut host_config = host_config;
+        if !config.tmpfs.is_empty() {
+            host_config.tmpfs = Some(config.tmpfs.clone());
+        }
+        if let Some(mem) = config.memory_limit {
+            host_config.memory = Some(mem);
+        }
+        host_config.network_mode = Some(config.network_mode.clone());
 
         let container_config = Config {
             image: Some(config.image.as_str()),

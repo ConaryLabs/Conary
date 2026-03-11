@@ -33,6 +33,8 @@ pub struct ContainerConfig {
     pub volumes: Vec<VolumeMount>,
     pub privileged: bool,
     pub network_mode: String,
+    pub tmpfs: HashMap<String, String>,
+    pub memory_limit: Option<i64>,
 }
 
 impl Default for ContainerConfig {
@@ -43,6 +45,8 @@ impl Default for ContainerConfig {
             volumes: Vec::new(),
             privileged: false,
             network_mode: "bridge".to_string(),
+            tmpfs: HashMap::new(),
+            memory_limit: None,
         }
     }
 }
