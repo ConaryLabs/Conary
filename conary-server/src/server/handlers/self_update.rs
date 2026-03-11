@@ -27,7 +27,8 @@ use tokio_util::io::ReaderStream;
 const VERSIONS_CACHE_TTL_SECS: u64 = 60;
 
 /// Cached scan_versions result with expiry timestamp.
-static VERSIONS_CACHE: std::sync::LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
+type VersionsCache = Option<(Instant, Vec<String>)>;
+static VERSIONS_CACHE: std::sync::LazyLock<Mutex<VersionsCache>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
 /// Response for GET /v1/ccs/conary/latest
@@ -123,10 +124,10 @@ async fn scan_versions_cached(dir: &PathBuf) -> Result<Vec<String>, Response> {
 
     {
         let cache = VERSIONS_CACHE.lock().await;
-        if let Some((instant, ref versions)) = *cache {
-            if instant.elapsed() < ttl {
-                return Ok(versions.clone());
-            }
+        if let Some((instant, ref versions)) = *cache
+            && instant.elapsed() < ttl
+        {
+            return Ok(versions.clone());
         }
     }
 
