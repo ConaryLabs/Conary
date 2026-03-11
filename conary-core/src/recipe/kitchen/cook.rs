@@ -482,8 +482,8 @@ impl<'a> Cook<'a> {
         }
 
         // Build CCS package from destdir
-        let builder = CcsBuilder::new(manifest.clone(), &self.dest_dir);
-        let build_result = builder
+        let builder = CcsBuilder::new(manifest, &self.dest_dir);
+        let mut build_result = builder
             .build()
             .map_err(|e| Error::IoError(format!("CCS build failed: {e}")))?;
 
@@ -498,15 +498,9 @@ impl<'a> Cook<'a> {
         // Convert provenance capture to manifest format
         let provenance = self.provenance.to_manifest_provenance();
 
-        // Update manifest with provenance and rebuild
-        let mut manifest_with_prov = manifest;
-        manifest_with_prov.provenance = Some(provenance.clone());
-
-        // Rebuild with provenance included in manifest
-        let builder = CcsBuilder::new(manifest_with_prov, &self.dest_dir);
-        let build_result = builder
-            .build()
-            .map_err(|e| Error::IoError(format!("CCS build failed: {e}")))?;
+        // Attach provenance to the existing build result's manifest
+        // (avoids a full rebuild just to embed provenance metadata)
+        build_result.manifest.provenance = Some(provenance.clone());
 
         // Write CCS package
         let package_name = format!(
