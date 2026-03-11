@@ -4,9 +4,6 @@
 //! Provides visual feedback during package installation, removal, and updates
 //! with overall progress bars and per-operation status displays.
 
-// Allow dead code - this is a new API module with types that will be used incrementally
-#![allow(dead_code)]
-
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::time::Duration;
 
