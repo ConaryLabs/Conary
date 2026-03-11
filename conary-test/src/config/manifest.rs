@@ -54,6 +54,8 @@ pub struct TestStep {
     #[serde(default)]
     pub kill_after_log: Option<KillAfterLog>,
     #[serde(default)]
+    pub qemu_boot: Option<QemuBoot>,
+    #[serde(default)]
     pub file_exists: Option<String>,
     #[serde(default)]
     pub file_not_exists: Option<String>,
@@ -75,6 +77,7 @@ pub enum StepType {
     Run(String),
     Conary(String),
     KillAfterLog(KillAfterLog),
+    QemuBoot(QemuBoot),
     FileExists(String),
     FileNotExists(String),
     FileExecutable(String),
@@ -91,6 +94,8 @@ impl TestStep {
             Some(StepType::Conary(cmd.clone()))
         } else if let Some(config) = &self.kill_after_log {
             Some(StepType::KillAfterLog(config.clone()))
+        } else if let Some(config) = &self.qemu_boot {
+            Some(StepType::QemuBoot(config.clone()))
         } else if let Some(path) = &self.file_exists {
             Some(StepType::FileExists(path.clone()))
         } else if let Some(path) = &self.file_not_exists {
@@ -123,6 +128,32 @@ pub struct KillAfterLog {
 
 fn default_kill_timeout() -> u64 {
     60
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QemuBoot {
+    pub image: String,
+    #[serde(default = "default_qemu_memory")]
+    pub memory_mb: u32,
+    #[serde(default = "default_qemu_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_ssh_port")]
+    pub ssh_port: u16,
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub expect_output: Vec<String>,
+}
+
+fn default_qemu_memory() -> u32 {
+    1024
+}
+
+fn default_qemu_timeout() -> u64 {
+    300
+}
+
+fn default_ssh_port() -> u16 {
+    2222
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -358,5 +389,38 @@ stdout_not_contains = "hello"
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("conflicting"));
         assert!(err.to_string().contains("T01"));
+    }
+
+    #[test]
+    fn test_qemu_boot_step_type() {
+        let toml = r#"
+[suite]
+name = "qemu"
+phase = 3
+
+[[test]]
+id = "T156"
+name = "qemu_boot"
+description = "Boot a qcow2 image"
+timeout = 30
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+commands = ["uname -r"]
+"#;
+
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        let step = &manifest.test[0].step[0];
+        match step.step_type() {
+            Some(StepType::QemuBoot(cfg)) => {
+                assert_eq!(cfg.image, "minimal-boot-v1");
+                assert_eq!(cfg.memory_mb, 1024);
+                assert_eq!(cfg.timeout_seconds, 300);
+                assert_eq!(cfg.ssh_port, 2222);
+                assert_eq!(cfg.commands, vec!["uname -r"]);
+            }
+            other => panic!("expected qemu_boot step, got {other:?}"),
+        }
     }
 }

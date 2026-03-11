@@ -8,10 +8,13 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{KillAfterLog, ResourceConstraints, StepType, TestDef, TestManifest};
+use crate::config::manifest::{
+    KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef, TestManifest,
+};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::mock_server::start_mock_server;
+use crate::engine::qemu::run_qemu_boot;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 
 /// Executes tests from a manifest against a container.
@@ -91,8 +94,9 @@ impl TestRunner {
                 continue;
             }
 
-            let (status, message, elapsed, last_exec) =
-                self.run_test_attempt(test_def, backend, container_id).await?;
+            let (status, message, elapsed, last_exec) = self
+                .run_test_attempt(test_def, backend, container_id)
+                .await?;
 
             info!(
                 "[{}] {}: {status:?} ({elapsed}ms)",
@@ -143,9 +147,8 @@ impl TestRunner {
         let mut total_elapsed = 0_u64;
 
         for _ in 0..attempts {
-            let (status, message, elapsed, exec) = self
-                .run_test_once(test_def, backend, container_id)
-                .await?;
+            let (status, message, elapsed, exec) =
+                self.run_test_once(test_def, backend, container_id).await?;
             total_elapsed += elapsed;
             last_exec = exec;
 
@@ -310,6 +313,10 @@ impl TestRunner {
                         .await?;
                     last_exec = Some(result);
                 }
+                StepType::QemuBoot(config) => {
+                    let result = run_qemu_boot(&self.expand_qemu_boot(&config)).await?;
+                    last_exec = Some(result);
+                }
             }
 
             if let Some(ref assertion) = step.assert {
@@ -367,7 +374,10 @@ impl TestRunner {
         })??;
 
         if !matched {
-            bail!("log stream ended before pattern {:?} appeared", config.pattern);
+            bail!(
+                "log stream ended before pattern {:?} appeared",
+                config.pattern
+            );
         }
 
         backend.kill_exec(&exec_id, "SIGKILL").await?;
@@ -412,6 +422,25 @@ impl TestRunner {
         }
         result
     }
+
+    fn expand_qemu_boot(&self, config: &QemuBoot) -> QemuBoot {
+        QemuBoot {
+            image: self.substitute_vars(&config.image),
+            memory_mb: config.memory_mb,
+            timeout_seconds: config.timeout_seconds,
+            ssh_port: config.ssh_port,
+            commands: config
+                .commands
+                .iter()
+                .map(|cmd| self.substitute_vars(cmd))
+                .collect(),
+            expect_output: config
+                .expect_output
+                .iter()
+                .map(|s| self.substitute_vars(s))
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -419,7 +448,8 @@ mod tests {
     use super::*;
     use crate::config::distro::{GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
     use crate::config::manifest::{
-        Assertion, KillAfterLog, ResourceConstraints, SuiteDef, TestDef, TestManifest, TestStep,
+        Assertion, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef, TestManifest,
+        TestStep,
     };
     use crate::container::backend::{ContainerConfig, ExecResult};
     use async_trait::async_trait;
@@ -450,12 +480,7 @@ mod tests {
             }
         }
 
-        fn with_detached_exec(
-            self,
-            exec_id: &str,
-            logs: Vec<&str>,
-            result: ExecResult,
-        ) -> Self {
+        fn with_detached_exec(self, exec_id: &str, logs: Vec<&str>, result: ExecResult) -> Self {
             self.log_sequences.lock().unwrap().insert(
                 exec_id.to_string(),
                 logs.into_iter().map(String::from).collect(),
@@ -611,6 +636,14 @@ mod tests {
     fn simple_step_kill_after_log(config: KillAfterLog, assertion: Option<Assertion>) -> TestStep {
         TestStep {
             kill_after_log: Some(config),
+            assert: assertion,
+            ..TestStep::default()
+        }
+    }
+
+    fn simple_step_qemu_boot(config: QemuBoot, assertion: Option<Assertion>) -> TestStep {
+        TestStep {
+            qemu_boot: Some(config),
             assert: assertion,
             ..TestStep::default()
         }
@@ -828,7 +861,11 @@ mod tests {
         );
         let detached_calls = backend.detached_calls.lock().unwrap().clone();
         assert_eq!(detached_calls.len(), 1);
-        assert!(detached_calls[0].join(" ").contains("/usr/local/bin/conary ccs install pkg.ccs"));
+        assert!(
+            detached_calls[0]
+                .join(" ")
+                .contains("/usr/local/bin/conary ccs install pkg.ccs")
+        );
     }
 
     #[tokio::test]
@@ -980,5 +1017,83 @@ mod tests {
         );
         assert_eq!(container_config.memory_limit, Some(512 * 1024 * 1024));
         assert_eq!(container_config.network_mode, "none");
+    }
+
+    #[tokio::test]
+    async fn test_runner_qemu_boot_step_skips_when_tooling_missing() {
+        let backend = MockBackend::new(Vec::new());
+        let manifest = make_manifest(vec![TestDef {
+            id: "T156".to_string(),
+            name: "qemu_boot".to_string(),
+            description: "boots a qcow2 image".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            step: vec![simple_step_qemu_boot(
+                QemuBoot {
+                    image: "https://127.0.0.1:9/minimal-boot-${PKG}.qcow2".to_string(),
+                    memory_mb: 512,
+                    timeout_seconds: 5,
+                    ssh_port: 2223,
+                    commands: vec!["echo ${PKG}".to_string()],
+                    expect_output: vec!["skipped".to_string()],
+                },
+                Some(Assertion {
+                    stdout_contains: Some("qemu boot".to_string()),
+                    ..Assertion::default()
+                }),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut overrides = HashMap::new();
+        overrides.insert("PKG".to_string(), "v1".to_string());
+        let mut manifest = manifest;
+        manifest
+            .distro_overrides
+            .insert("fedora43".to_string(), overrides);
+
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(suite.passed(), 1);
+        assert_eq!(suite.failed(), 0);
+        assert!(
+            suite.results[0]
+                .stdout
+                .as_deref()
+                .unwrap_or_default()
+                .contains("qemu boot")
+        );
+    }
+
+    #[test]
+    fn test_expand_qemu_boot_substitutes_vars() {
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut manifest = make_manifest(Vec::new());
+        manifest.distro_overrides.insert(
+            "fedora43".to_string(),
+            HashMap::from([("IMG".to_string(), "minimal-boot-v1".to_string())]),
+        );
+        runner.load_manifest_vars(&manifest);
+
+        let expanded = runner.expand_qemu_boot(&QemuBoot {
+            image: "${IMG}".to_string(),
+            memory_mb: 1024,
+            timeout_seconds: 120,
+            ssh_port: 2222,
+            commands: vec!["echo ${IMG}".to_string()],
+            expect_output: vec!["${IMG}".to_string()],
+        });
+
+        assert_eq!(expanded.image, "minimal-boot-v1");
+        assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);
+        assert_eq!(expanded.expect_output, vec!["minimal-boot-v1"]);
     }
 }
