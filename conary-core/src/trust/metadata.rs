@@ -177,6 +177,11 @@ pub struct VerifiedTufState {
     pub targets: BTreeMap<String, TargetDescription>,
 }
 
+/// Error returned when a string cannot be parsed as a [`Role`]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown TUF role: {0:?}; expected one of: root, targets, snapshot, timestamp")]
+pub struct ParseRoleError(String);
+
 /// TUF roles
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
@@ -202,7 +207,7 @@ impl fmt::Display for Role {
 }
 
 impl FromStr for Role {
-    type Err = String;
+    type Err = ParseRoleError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
@@ -210,7 +215,7 @@ impl FromStr for Role {
             "targets" => Ok(Self::Targets),
             "snapshot" => Ok(Self::Snapshot),
             "timestamp" => Ok(Self::Timestamp),
-            other => Err(format!("unknown TUF role: {other}")),
+            other => Err(ParseRoleError(other.to_string())),
         }
     }
 }

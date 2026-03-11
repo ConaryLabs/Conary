@@ -26,7 +26,7 @@ fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i
 /// Generate a new Ed25519 key pair for a TUF role
 pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     // Validate role name
-    let _: Role = role.parse().map_err(|e: String| anyhow::anyhow!("{}", e))?;
+    let _: Role = role.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let output_dir = Path::new(output);
     if !output_dir.exists() {
