@@ -233,6 +233,22 @@ impl DaemonJob {
         Ok(rows > 0)
     }
 
+    /// Atomically cancel a job if it is still in a cancellable state.
+    ///
+    /// Uses a single UPDATE with a WHERE clause that checks the current
+    /// status, avoiding the TOCTOU race of a separate SELECT + UPDATE.
+    /// Returns `true` if the job was cancelled, `false` if it was already
+    /// in a terminal state (completed, failed, or already cancelled).
+    pub fn cancel(conn: &Connection, id: &str) -> Result<bool> {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "UPDATE daemon_jobs SET status = 'cancelled', completed_at = ?1
+             WHERE id = ?2 AND status IN ('queued', 'running')",
+            params![&timestamp, id],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Delete old completed jobs (cleanup)
     pub fn cleanup_old(conn: &Connection, days: i64) -> Result<usize> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
