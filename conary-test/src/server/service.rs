@@ -4,7 +4,7 @@
 //! Handlers and MCP tools are thin wrappers that delegate to these
 //! functions, converting the results into their respective response types.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::config::load_manifest;

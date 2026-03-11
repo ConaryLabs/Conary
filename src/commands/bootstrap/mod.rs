@@ -591,9 +591,15 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         }
         BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose, false),
         BootstrapStage::Stage2 => cmd_bootstrap_stage2(work_dir, None, None, verbose, false),
-        BootstrapStage::BaseSystem => {
-            cmd_bootstrap_base(work_dir, "/conary/sysroot", None, verbose, false, None, None)
-        }
+        BootstrapStage::BaseSystem => cmd_bootstrap_base(
+            work_dir,
+            "/conary/sysroot",
+            None,
+            verbose,
+            false,
+            None,
+            None,
+        ),
         BootstrapStage::Boot => {
             // Boot is a checkpoint within the base system build (grub, dracut, etc.)
             // These packages are built as part of the base stage, so advance to the next stage.

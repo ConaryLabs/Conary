@@ -190,12 +190,7 @@ impl ErofsBuilder {
     /// # Errors
     ///
     /// Returns [`ErofsError::PathTraversal`] if the path contains `..` components.
-    pub fn add_symlink(
-        &mut self,
-        path: &str,
-        target: &str,
-        mode: u32,
-    ) -> Result<(), ErofsError> {
+    pub fn add_symlink(&mut self, path: &str, target: &str, mode: u32) -> Result<(), ErofsError> {
         self.entries.push(FsEntry::Symlink {
             path: normalize_path(path)?,
             target: target.to_string(),
@@ -510,9 +505,8 @@ impl ErofsBuilder {
         let root_offset = inode_offsets[&root_idx];
         let root_nid = nid_from_offset(root_offset, meta_blkaddr, bs);
 
-        let mut sb = Superblock::new(bs).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
-        })?;
+        let mut sb = Superblock::new(bs)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
         sb.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
         sb.feature_incompat =
             EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | EROFS_FEATURE_INCOMPAT_DEVICE_TABLE;
@@ -777,7 +771,9 @@ mod tests {
     fn single_file_image() {
         let mut builder = ErofsBuilder::new();
         let digest = [0xAB; 32];
-        builder.add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000).unwrap();
+        builder
+            .add_file("/hello.txt", &digest, 1024, 0o644, 1000, 1000)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -797,8 +793,12 @@ mod tests {
         let mut builder = ErofsBuilder::new();
         let d1 = [0x01; 32];
         let d2 = [0x02; 32];
-        builder.add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0).unwrap();
-        builder.add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0).unwrap();
+        builder
+            .add_file("/usr/bin/foo", &d1, 4096, 0o755, 0, 0)
+            .unwrap();
+        builder
+            .add_file("/usr/lib/bar", &d2, 8192, 0o644, 0, 0)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -816,7 +816,9 @@ mod tests {
     #[test]
     fn symlinks_are_flat_inline() {
         let mut builder = ErofsBuilder::new();
-        builder.add_symlink("/usr/bin/python", "python3", 0o777).unwrap();
+        builder
+            .add_symlink("/usr/bin/python", "python3", 0o777)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -853,8 +855,12 @@ mod tests {
     fn build_stats_reports_correct_counts() {
         let mut builder = ErofsBuilder::new();
         builder.add_directory("/etc", 0o755, 0, 0).unwrap();
-        builder.add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0).unwrap();
-        builder.add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777).unwrap();
+        builder
+            .add_file("/etc/hosts", &[0x11; 32], 256, 0o644, 0, 0)
+            .unwrap();
+        builder
+            .add_symlink("/etc/localtime", "/usr/share/zoneinfo/UTC", 0o777)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -870,8 +876,12 @@ mod tests {
     fn deterministic_output() {
         let build_image = || {
             let mut builder = ErofsBuilder::new();
-            builder.add_file("/a", &[0x01; 32], 100, 0o644, 0, 0).unwrap();
-            builder.add_file("/b", &[0x02; 32], 200, 0o644, 0, 0).unwrap();
+            builder
+                .add_file("/a", &[0x01; 32], 100, 0o644, 0, 0)
+                .unwrap();
+            builder
+                .add_file("/b", &[0x02; 32], 200, 0o644, 0, 0)
+                .unwrap();
             builder.add_directory("/d", 0o755, 0, 0).unwrap();
             builder.add_symlink("/d/link", "target", 0o777).unwrap();
 
@@ -889,7 +899,9 @@ mod tests {
     fn implicit_parent_directories() {
         let mut builder = ErofsBuilder::new();
         // Never explicitly add /usr or /usr/bin
-        builder.add_file("/usr/bin/nginx", &[0xAA; 32], 2048, 0o755, 0, 0).unwrap();
+        builder
+            .add_file("/usr/bin/nginx", &[0xAA; 32], 2048, 0o755, 0, 0)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -903,7 +915,9 @@ mod tests {
     #[test]
     fn image_is_block_aligned() {
         let mut builder = ErofsBuilder::new();
-        builder.add_file("/test", &[0xFF; 32], 512, 0o644, 0, 0).unwrap();
+        builder
+            .add_file("/test", &[0xFF; 32], 512, 0o644, 0, 0)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let stats = builder.build(&mut buf).unwrap();
@@ -918,7 +932,9 @@ mod tests {
     #[test]
     fn root_nid_is_zero() {
         let mut builder = ErofsBuilder::new();
-        builder.add_file("/x", &[0x42; 32], 64, 0o644, 0, 0).unwrap();
+        builder
+            .add_file("/x", &[0x42; 32], 64, 0o644, 0, 0)
+            .unwrap();
 
         let mut buf = Cursor::new(Vec::new());
         let _ = builder.build(&mut buf).unwrap();
@@ -962,7 +978,11 @@ mod tests {
     #[test]
     fn path_traversal_rejected() {
         let mut builder = ErofsBuilder::new();
-        assert!(builder.add_file("/../etc/passwd", &[0; 32], 0, 0o644, 0, 0).is_err());
+        assert!(
+            builder
+                .add_file("/../etc/passwd", &[0; 32], 0, 0o644, 0, 0)
+                .is_err()
+        );
         assert!(builder.add_symlink("/foo/../bar", "target", 0o777).is_err());
         assert!(builder.add_directory("/a/b/../c", 0o755, 0, 0).is_err());
     }

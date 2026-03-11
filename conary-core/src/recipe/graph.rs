@@ -347,13 +347,17 @@ impl RecipeGraph {
         let (custom_patterns, use_defaults): (Vec<(&str, &str)>, bool) = match mode {
             BootstrapMode::Auto => (Vec::new(), true),
             BootstrapMode::Manual(edges) => {
-                let patterns: Vec<(&str, &str)> =
-                    edges.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                let patterns: Vec<(&str, &str)> = edges
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
                 (patterns, false)
             }
             BootstrapMode::Augmented(edges) => {
-                let patterns: Vec<(&str, &str)> =
-                    edges.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                let patterns: Vec<(&str, &str)> = edges
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
                 (patterns, true)
             }
         };
@@ -426,10 +430,7 @@ impl RecipeGraph {
     /// Auto-break detected cycles using the specified bootstrap mode
     ///
     /// Returns the edges that were marked.
-    pub fn auto_break_cycles_with_mode(
-        &mut self,
-        mode: &BootstrapMode,
-    ) -> Vec<(String, String)> {
+    pub fn auto_break_cycles_with_mode(&mut self, mode: &BootstrapMode) -> Vec<(String, String)> {
         let suggestions = self.suggest_bootstrap_edges(mode);
 
         for (from, to) in &suggestions {

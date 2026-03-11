@@ -508,8 +508,7 @@ mod tests {
     #[test]
     fn test_detect_soname_no_false_positive() {
         // "reason.socket" contains ".so" as a substring but is not a shared library
-        let provides =
-            LanguageDepDetector::detect_provides("/usr/lib64/reason.socket");
+        let provides = LanguageDepDetector::detect_provides("/usr/lib64/reason.socket");
         assert!(
             !provides.iter().any(|d| d.class == DependencyClass::Soname),
             "reason.socket should not be detected as a soname: {:?}",
@@ -517,8 +516,7 @@ mod tests {
         );
 
         // "also_not_a_lib.sorted" contains ".so" as a substring
-        let provides =
-            LanguageDepDetector::detect_provides("/usr/lib/also_not_a_lib.sorted");
+        let provides = LanguageDepDetector::detect_provides("/usr/lib/also_not_a_lib.sorted");
         assert!(
             !provides.iter().any(|d| d.class == DependencyClass::Soname),
             "also_not_a_lib.sorted should not be detected as a soname: {:?}",

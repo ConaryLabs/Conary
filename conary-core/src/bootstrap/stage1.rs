@@ -23,12 +23,12 @@ use super::build_helpers;
 use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
-use tracing::debug;
 use crate::recipe::{Recipe, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use tracing::debug;
 use tracing::info;
 
 /// Errors that can occur during Stage 1 build
@@ -236,9 +236,7 @@ impl Stage1Builder {
         let pkg_name = self.packages[idx].name.clone();
 
         // Create build directory
-        let (src_dir, build_dir) = self
-            .runner
-            .prepare_build_dirs(&self.work_dir, &pkg_name)?;
+        let (src_dir, build_dir) = self.runner.prepare_build_dirs(&self.work_dir, &pkg_name)?;
 
         // Fetch source
         self.packages[idx].status = PackageBuildStatus::Fetching;

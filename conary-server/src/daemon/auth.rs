@@ -562,10 +562,7 @@ mod tests {
 
     #[test]
     fn test_action_enhance_polkit_action() {
-        assert_eq!(
-            Action::Enhance.polkit_action(),
-            "com.conary.daemon.enhance"
-        );
+        assert_eq!(Action::Enhance.polkit_action(), "com.conary.daemon.enhance");
     }
 
     #[test]

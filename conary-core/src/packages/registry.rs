@@ -40,8 +40,13 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
     let path = path.as_ref();
 
     // Try magic bytes first
-    let mut file = File::open(path)
-        .map_err(|e| Error::InitError(format!("Failed to open package file {}: {}", path.display(), e)))?;
+    let mut file = File::open(path).map_err(|e| {
+        Error::InitError(format!(
+            "Failed to open package file {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
 
     let mut magic = [0u8; 8];
     if let Ok(n) = file.read(&mut magic) {
@@ -58,9 +63,7 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
             return Ok(PackageFormatType::Arch);
         }
         // XZ: fd 37 7a 58 5a 00
-        if n >= 6
-            && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
-            && is_arch_extension(path)
+        if n >= 6 && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] && is_arch_extension(path)
         {
             return Ok(PackageFormatType::Arch);
         }

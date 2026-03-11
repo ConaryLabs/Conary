@@ -222,11 +222,7 @@ fn main() -> Result<()> {
 
             let mut entries: Vec<_> = std::fs::read_dir(dir_path)?
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "toml")
-                })
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
                 .collect();
             entries.sort_by_key(|e| e.file_name());
 
@@ -265,10 +261,9 @@ fn main() -> Result<()> {
                     let backend = conary_test::container::BollardBackend::new()?;
                     let cf_path = containerfile_path(&config, &distro)?;
                     tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
-                    let tag = conary_test::container::build_distro_image(
-                        &backend, &cf_path, &distro,
-                    )
-                    .await?;
+                    let tag =
+                        conary_test::container::build_distro_image(&backend, &cf_path, &distro)
+                            .await?;
                     tracing::info!(%distro, image = %tag, "Image built successfully");
                     Ok(())
                 })

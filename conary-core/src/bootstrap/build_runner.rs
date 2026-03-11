@@ -69,9 +69,9 @@ impl PackageBuildRunner {
 
         info!("  Fetching: {}", url);
 
-        let target_str = target_path.to_str().ok_or_else(|| {
-            BuildRunnerError::InvalidPath(target_path.clone())
-        })?;
+        let target_str = target_path
+            .to_str()
+            .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
 
         let output = Command::new("curl")
             .args(["-fsSL", "-o", target_str, &url])
@@ -119,21 +119,21 @@ impl PackageBuildRunner {
             });
         }
 
-        let (algo, hash) = expected
-            .split_once(':')
-            .ok_or_else(|| BuildRunnerError::SourceFetchFailed {
-                package: pkg_name.to_string(),
-                reason: "Invalid checksum format".to_string(),
-            })?;
+        let (algo, hash) =
+            expected
+                .split_once(':')
+                .ok_or_else(|| BuildRunnerError::SourceFetchFailed {
+                    package: pkg_name.to_string(),
+                    reason: "Invalid checksum format".to_string(),
+                })?;
 
         if algo == "sha256" {
-            let output = Command::new("sha256sum")
-                .arg(path)
-                .output()
-                .map_err(|e| BuildRunnerError::SourceFetchFailed {
+            let output = Command::new("sha256sum").arg(path).output().map_err(|e| {
+                BuildRunnerError::SourceFetchFailed {
                     package: pkg_name.to_string(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
             let stdout = String::from_utf8_lossy(&output.stdout);
             let computed = stdout.split_whitespace().next().unwrap_or("");
             if computed != hash {
@@ -170,9 +170,9 @@ impl PackageBuildRunner {
             // Download if not cached
             if !target_path.exists() {
                 info!("  Fetching additional: {}", filename);
-                let target_str = target_path.to_str().ok_or_else(|| {
-                    BuildRunnerError::InvalidPath(target_path.clone())
-                })?;
+                let target_str = target_path
+                    .to_str()
+                    .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
 
                 let output = Command::new("curl")
                     .args(["-fsSL", "-o", target_str, &url])
@@ -208,11 +208,7 @@ impl PackageBuildRunner {
     }
 
     /// Extract a tar archive
-    pub fn extract_source(
-        &self,
-        archive: &Path,
-        dest: &Path,
-    ) -> Result<(), BuildRunnerError> {
+    pub fn extract_source(&self, archive: &Path, dest: &Path) -> Result<(), BuildRunnerError> {
         build_helpers::extract_tar(archive, dest, false).map_err(|e| {
             BuildRunnerError::BuildFailed {
                 package: "extract".to_string(),
@@ -227,11 +223,9 @@ impl PackageBuildRunner {
         archive: &Path,
         dest: &Path,
     ) -> Result<(), BuildRunnerError> {
-        build_helpers::extract_tar(archive, dest, true).map_err(|e| {
-            BuildRunnerError::BuildFailed {
-                package: "extract".to_string(),
-                reason: e,
-            }
+        build_helpers::extract_tar(archive, dest, true).map_err(|e| BuildRunnerError::BuildFailed {
+            package: "extract".to_string(),
+            reason: e,
         })
     }
 

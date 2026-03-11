@@ -47,6 +47,9 @@ pub mod test_fixtures {
 
     /// AppState with fedora43 distro and a temp manifest dir.
     pub fn test_app_state() -> AppState {
-        AppState::new(test_global_config_with_fedora(), "/tmp/manifests".to_string())
+        AppState::new(
+            test_global_config_with_fedora(),
+            "/tmp/manifests".to_string(),
+        )
     }
 }

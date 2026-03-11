@@ -252,9 +252,8 @@ impl ConaryStageBuilder {
         // Install binary to sysroot
         let binary = src_dir.join("target/release/conary");
         let dest = self.sysroot.join("usr/bin/conary");
-        std::fs::copy(&binary, &dest).map_err(|e| {
-            ConaryStageError::ConaryBuildFailed(format!("install failed: {e}"))
-        })?;
+        std::fs::copy(&binary, &dest)
+            .map_err(|e| ConaryStageError::ConaryBuildFailed(format!("install failed: {e}")))?;
 
         info!("[COMPLETE] Conary installed to {}", dest.display());
         Ok(dest)

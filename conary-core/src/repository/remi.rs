@@ -437,8 +437,7 @@ impl RemiClient {
                             "Error reading chunk {} (attempt {}/{}): {e}",
                             chunk.hash, attempt, max_attempts
                         );
-                        last_err =
-                            Some(format!("Failed to read chunk {}: {e}", chunk.hash));
+                        last_err = Some(format!("Failed to read chunk {}: {e}", chunk.hash));
                         if attempt < max_attempts {
                             let backoff =
                                 Duration::from_millis(500 * u64::from(2_u32.pow(attempt - 1)));
@@ -451,11 +450,12 @@ impl RemiClient {
             let data = match data_result {
                 Some(d) => d,
                 None => {
-                    return Err(Error::DownloadError(
-                        last_err.unwrap_or_else(|| {
-                            format!("Failed to download chunk {} after {} attempts", chunk.hash, max_attempts)
-                        }),
-                    ));
+                    return Err(Error::DownloadError(last_err.unwrap_or_else(|| {
+                        format!(
+                            "Failed to download chunk {} after {} attempts",
+                            chunk.hash, max_attempts
+                        )
+                    })));
                 }
             };
 

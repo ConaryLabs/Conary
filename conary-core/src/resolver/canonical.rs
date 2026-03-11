@@ -171,9 +171,9 @@ impl<'db> CanonicalResolver<'db> {
         let Some(canonical) = canonical else {
             return Ok(vec![]);
         };
-        let canonical_id = canonical.id.ok_or_else(|| {
-            Error::MissingId("resolved canonical package has no id".to_string())
-        })?;
+        let canonical_id = canonical
+            .id
+            .ok_or_else(|| Error::MissingId("resolved canonical package has no id".to_string()))?;
 
         let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
 

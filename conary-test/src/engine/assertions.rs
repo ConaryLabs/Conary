@@ -1,7 +1,7 @@
 // conary-test/src/engine/assertions.rs
 
 use crate::config::manifest::Assertion;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub fn evaluate_assertion(
     assertion: &Assertion,
@@ -123,16 +123,14 @@ mod tests {
     #[test]
     fn test_stdout_contains_any_if_success_skipped_on_failure() {
         let mut a = base_assertion();
-        a.stdout_contains_any_if_success =
-            Some(vec!["composefs".into(), "EROFS".into()]);
+        a.stdout_contains_any_if_success = Some(vec!["composefs".into(), "EROFS".into()]);
         assert!(evaluate_assertion(&a, 1, "no match", "").is_ok());
     }
 
     #[test]
     fn test_stdout_contains_any_if_success_checked_on_zero() {
         let mut a = base_assertion();
-        a.stdout_contains_any_if_success =
-            Some(vec!["composefs".into(), "EROFS".into()]);
+        a.stdout_contains_any_if_success = Some(vec!["composefs".into(), "EROFS".into()]);
         assert!(evaluate_assertion(&a, 0, "using EROFS", "").is_ok());
         assert!(evaluate_assertion(&a, 0, "no match", "").is_err());
     }

@@ -34,7 +34,9 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
             let canonical_id = match id {
                 Some(cid) => cid,
                 None => match CanonicalPackage::find_by_name(&tx, &rule.setname)? {
-                    Some(existing) => existing.id.ok_or_else(|| anyhow::anyhow!("existing canonical package row has no id"))?,
+                    Some(existing) => existing.id.ok_or_else(|| {
+                        anyhow::anyhow!("existing canonical package row has no id")
+                    })?,
                     None => continue,
                 },
             };

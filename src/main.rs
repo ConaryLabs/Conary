@@ -92,17 +92,15 @@ fn main() -> Result<()> {
             no_scripts,
             sandbox,
             purge_files,
-        }) => {
-            commands::cmd_remove(
-                &package_name,
-                &common.db.db_path,
-                &common.root,
-                version,
-                no_scripts,
-                sandbox.into(),
-                purge_files,
-            )
-        }
+        }) => commands::cmd_remove(
+            &package_name,
+            &common.db.db_path,
+            &common.root,
+            version,
+            no_scripts,
+            sandbox.into(),
+            purge_files,
+        ),
 
         Some(Commands::Update {
             package,
@@ -168,15 +166,13 @@ fn main() -> Result<()> {
             dry_run,
             no_scripts,
             sandbox,
-        }) => {
-            commands::cmd_autoremove(
-                &common.db.db_path,
-                &common.root,
-                dry_run,
-                no_scripts,
-                sandbox.into(),
-            )
-        }
+        }) => commands::cmd_autoremove(
+            &common.db.db_path,
+            &common.root,
+            dry_run,
+            no_scripts,
+            sandbox.into(),
+        ),
 
         Some(Commands::Pin { package_name, db }) => commands::cmd_pin(&package_name, &db.db_path),
 
@@ -946,19 +942,17 @@ fn main() -> Result<()> {
                 components,
                 sandbox,
                 no_deps,
-            } => {
-                commands::ccs::cmd_ccs_install(
-                    &package,
-                    &common.db.db_path,
-                    &common.root,
-                    dry_run,
-                    allow_unsigned,
-                    policy,
-                    components,
-                    sandbox.into(),
-                    no_deps,
-                )
-            }
+            } => commands::ccs::cmd_ccs_install(
+                &package,
+                &common.db.db_path,
+                &common.root,
+                dry_run,
+                allow_unsigned,
+                policy,
+                components,
+                sandbox.into(),
+                no_deps,
+            ),
 
             cli::CcsCommands::Export {
                 packages,
@@ -1649,7 +1643,9 @@ fn main() -> Result<()> {
             }
 
             // Validate configuration
-            remi_config.validate().map_err(|e| anyhow::anyhow!("Configuration error: {}", e))?;
+            remi_config
+                .validate()
+                .map_err(|e| anyhow::anyhow!("Configuration error: {}", e))?;
 
             if validate {
                 println!("Configuration is valid.");

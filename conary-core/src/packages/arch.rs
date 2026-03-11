@@ -300,17 +300,16 @@ impl PackageFormat for ArchPackage {
                 _ => {
                     // Collect file list entry (skip directories)
                     if !entry.header().entry_type().is_dir() {
-                        let size = entry
-                            .header()
-                            .size()
-                            .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
-                        let mode = entry
-                            .header()
-                            .mode()
-                            .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
+                        let size = entry.header().size().map_err(|e| {
+                            Error::InitError(format!("Failed to get file size: {}", e))
+                        })?;
+                        let mode = entry.header().mode().map_err(|e| {
+                            Error::InitError(format!("Failed to get file mode: {}", e))
+                        })?;
                         files.push(PackageFile {
-                            path: normalize_path(&entry_path)
-                                .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
+                            path: normalize_path(&entry_path).map_err(|e| {
+                                Error::InitError(format!("Path normalization failed: {}", e))
+                            })?,
                             size: i64::try_from(size).unwrap_or(i64::MAX),
                             mode: mode as i32,
                             sha256: None,

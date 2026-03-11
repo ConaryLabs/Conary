@@ -88,10 +88,7 @@ impl ModelLock {
     }
 
     /// Shared construction logic for lockfile builders.
-    fn build_locked(
-        collections: &[(String, String, &CollectionData)],
-        model_hash: String,
-    ) -> Self {
+    fn build_locked(collections: &[(String, String, &CollectionData)], model_hash: String) -> Self {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
         let locked: Vec<LockedCollection> = collections

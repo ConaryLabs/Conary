@@ -862,8 +862,7 @@ async fn cancel_transaction_handler(
     } else {
         // Job either doesn't exist or is already in a terminal state
         let find_id = id.clone();
-        let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
-            .await?;
+        let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id)).await?;
 
         match job {
             Some(j) => Err(ApiError(Box::new(DaemonError::conflict(&format!(

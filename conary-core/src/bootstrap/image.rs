@@ -1346,9 +1346,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
             "cd {} && find . | cpio -o -H newc 2>/dev/null | gzip > {}",
             initramfs_str, output_str
         );
-        let status = Command::new("sh")
-            .args(["-c", &cpio_cmd])
-            .status()?;
+        let status = Command::new("sh").args(["-c", &cpio_cmd]).status()?;
         if !status.success() {
             return Err(ImageError::CommandFailed("cpio/gzip failed".into()));
         }
