@@ -34,36 +34,39 @@ impl PackageFormatType {
 /// Detect the format of a package file
 ///
 /// Uses magic bytes for reliable detection, falling back to file extensions.
+/// Returns an error if the file cannot be opened (e.g., permission denied,
+/// missing file with no recognizable extension).
 pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
     let path = path.as_ref();
 
     // Try magic bytes first
-    if let Ok(mut file) = File::open(path) {
-        let mut magic = [0u8; 8];
-        if let Ok(n) = file.read(&mut magic) {
-            if n >= 4 && magic[0..4] == [0xED, 0xAB, 0xEE, 0xDB] {
-                return Ok(PackageFormatType::Rpm);
-            }
-            if n >= 7 && magic[0..7] == *b"!<arch>" {
-                return Ok(PackageFormatType::Deb);
-            }
+    let mut file = File::open(path)
+        .map_err(|e| Error::InitError(format!("Failed to open package file {}: {}", path.display(), e)))?;
 
-            // Arch packages are tarballs, check for common compression magic
-            // Zstd: 28 b5 2f fd
-            if n >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] && is_arch_extension(path) {
-                return Ok(PackageFormatType::Arch);
-            }
-            // XZ: fd 37 7a 58 5a 00
-            if n >= 6
-                && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
-                && is_arch_extension(path)
-            {
-                return Ok(PackageFormatType::Arch);
-            }
-            // Gzip: 1f 8b
-            if n >= 2 && magic[0..2] == [0x1F, 0x8B] && is_arch_extension(path) {
-                return Ok(PackageFormatType::Arch);
-            }
+    let mut magic = [0u8; 8];
+    if let Ok(n) = file.read(&mut magic) {
+        if n >= 4 && magic[0..4] == [0xED, 0xAB, 0xEE, 0xDB] {
+            return Ok(PackageFormatType::Rpm);
+        }
+        if n >= 7 && magic[0..7] == *b"!<arch>" {
+            return Ok(PackageFormatType::Deb);
+        }
+
+        // Arch packages are tarballs, check for common compression magic
+        // Zstd: 28 b5 2f fd
+        if n >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] && is_arch_extension(path) {
+            return Ok(PackageFormatType::Arch);
+        }
+        // XZ: fd 37 7a 58 5a 00
+        if n >= 6
+            && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
+            && is_arch_extension(path)
+        {
+            return Ok(PackageFormatType::Arch);
+        }
+        // Gzip: 1f 8b
+        if n >= 2 && magic[0..2] == [0x1F, 0x8B] && is_arch_extension(path) {
+            return Ok(PackageFormatType::Arch);
         }
     }
 
