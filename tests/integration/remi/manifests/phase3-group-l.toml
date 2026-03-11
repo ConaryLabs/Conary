@@ -1,0 +1,283 @@
+# tests/integration/remi/manifests/phase3-group-l.toml
+#
+# Phase 3, Group L: Lifecycle Robustness (T128-T137).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+#
+# NOTE: Generation commands do not accept --db-path, so this manifest uses
+# `run` steps for those operations. Several tests are environment-sensitive
+# and therefore assert "no panic / meaningful output" rather than strict
+# success in unprivileged containers.
+
+[suite]
+name = "Phase 3 Group L: Lifecycle Robustness"
+phase = 3
+
+[[suite.setup]]
+run = "mkdir -p /tmp/conary-lifecycle-bootstrap /tmp/conary-lifecycle-recipes /tmp/conary-self-update"
+
+# --------------------------------------------------------------------------
+# T128: Self-update bad checksum download
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T128"
+name = "self_update_bad_checksum_rejected"
+description = "Self-update should reject a download whose checksum does not match metadata"
+timeout = 60
+group = "L"
+
+[[test.step]]
+run = """MOCK_DIR=/tmp/conary-self-update/t128 && \
+mkdir -p "$MOCK_DIR" && \
+printf 'not-a-real-binary' > "$MOCK_DIR/conary-99.0.0.ccs" && \
+printf '{"version":"99.0.0","download_url":"http://127.0.0.1:19877/conary-99.0.0.ccs","sha256":"%064d","size":16}' 0 > "$MOCK_DIR/latest" && \
+python3 -m http.server 19877 --directory "$MOCK_DIR" >/tmp/t128-server.log 2>&1 & \
+SERVER_PID=$! && \
+sleep 1 && \
+${CONARY_BIN} system update-channel set http://127.0.0.1:19877 --db-path ${DB_PATH} >/dev/null && \
+OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
+kill $SERVER_PID 2>/dev/null || true && \
+${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_any = ["checksum", "sha256", "failed"]
+stdout_not_contains = "Updated successfully"
+
+# --------------------------------------------------------------------------
+# T129: Self-update older version no downgrade
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T129"
+name = "self_update_older_version_no_downgrade"
+description = "An update server advertising an older version should not downgrade the current binary"
+timeout = 60
+group = "L"
+
+[[test.step]]
+run = """MOCK_DIR=/tmp/conary-self-update/t129 && \
+mkdir -p "$MOCK_DIR" && \
+cp ${CONARY_BIN} "$MOCK_DIR/conary-0.0.1.ccs" && \
+CCS_SHA=$(sha256sum "$MOCK_DIR/conary-0.0.1.ccs" | cut -d' ' -f1) && \
+CCS_SIZE=$(stat -c%s "$MOCK_DIR/conary-0.0.1.ccs") && \
+printf '{"version":"0.0.1","download_url":"http://127.0.0.1:19878/conary-0.0.1.ccs","sha256":"%s","size":%s}' "$CCS_SHA" "$CCS_SIZE" > "$MOCK_DIR/latest" && \
+python3 -m http.server 19878 --directory "$MOCK_DIR" >/tmp/t129-server.log 2>&1 & \
+SERVER_PID=$! && \
+sleep 1 && \
+${CONARY_BIN} system update-channel set http://127.0.0.1:19878 --db-path ${DB_PATH} >/dev/null && \
+OUTPUT=$(${CONARY_BIN} self-update --check --db-path ${DB_PATH} 2>&1 || true) && \
+kill $SERVER_PID 2>/dev/null || true && \
+${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_any = ["Current version:", "up to date", "No update available"]
+stdout_not_contains = "Update available"
+
+# --------------------------------------------------------------------------
+# T130: Truncated self-update download
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T130"
+name = "self_update_truncated_download_failure"
+description = "A truncated self-update download should fail cleanly and leave the current binary untouched"
+timeout = 60
+group = "L"
+
+[[test.step]]
+run = """MOCK_DIR=/tmp/conary-self-update/t130 && \
+mkdir -p "$MOCK_DIR" && \
+head -c 8 ${CONARY_BIN} > "$MOCK_DIR/conary-99.0.1.ccs" && \
+CCS_SHA=$(sha256sum "$MOCK_DIR/conary-99.0.1.ccs" | cut -d' ' -f1) && \
+printf '{"version":"99.0.1","download_url":"http://127.0.0.1:19879/conary-99.0.1.ccs","sha256":"%s","size":999999}' "$CCS_SHA" > "$MOCK_DIR/latest" && \
+python3 -m http.server 19879 --directory "$MOCK_DIR" >/tmp/t130-server.log 2>&1 & \
+SERVER_PID=$! && \
+sleep 1 && \
+${CONARY_BIN} system update-channel set http://127.0.0.1:19879 --db-path ${DB_PATH} >/dev/null && \
+OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
+kill $SERVER_PID 2>/dev/null || true && \
+${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_any = ["trunc", "size", "failed"]
+stdout_not_contains = "Updated successfully"
+
+# --------------------------------------------------------------------------
+# T131: Build and switch among generations
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T131"
+name = "build_and_switch_three_generations"
+description = "Build multiple generations and switch among them without panicking"
+timeout = 300
+group = "L"
+fatal = true
+
+[[test.step]]
+run = "${CONARY_BIN} system generation build"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system generation build"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system generation build"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "GENS=$(${CONARY_BIN} system generation list | grep -oP '^\\s*\\K\\d+' | tail -3 | tr '\n' ' '); for g in $GENS; do ${CONARY_BIN} system generation info $g; ${CONARY_BIN} system generation switch $g || true; done"
+
+[test.step.assert]
+stdout_contains = "Packages"
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T132: Generation GC keep=2
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T132"
+name = "generation_gc_keep_two"
+description = "Build five generations, garbage-collect with keep=2, and preserve the active set"
+timeout = 300
+group = "L"
+
+[[test.step]]
+run = "for _ in 1 2 3 4 5; do ${CONARY_BIN} system generation build >/tmp/t132-build.log 2>&1 || exit 1; done"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system generation gc --keep 2"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system generation list | grep -oP '^\\s*\\K\\d+' | wc -l"
+
+[test.step.assert]
+stdout_contains_any = ["1", "2"]
+
+# --------------------------------------------------------------------------
+# T133: Rollback to previous generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T133"
+name = "rollback_to_previous_generation"
+description = "Rolling back to the previous generation should restore the prior snapshot or fail cleanly"
+timeout = 120
+group = "L"
+
+[[test.step]]
+run = "${CONARY_BIN} system generation rollback 2>&1 || true"
+
+[test.step.assert]
+stdout_contains_any = ["Generation", "rollback", "permission", "Operation not permitted"]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T134: Corrupt generation metadata
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T134"
+name = "corrupt_generation_metadata_refused"
+description = "Corrupt generation metadata should be detected before switch"
+timeout = 60
+group = "L"
+
+[[test.step]]
+run = "META=$(find /var/lib/conary -path '*/generations/*/metadata*' -type f 2>/dev/null | head -1); [ -n \"$META\" ] && printf 'corrupt' > \"$META\" || true"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | tail -1); ${CONARY_BIN} system generation switch ${GEN:-0} 2>&1 || true"
+
+[test.step.assert]
+stdout_contains_any = ["metadata", "corrupt", "invalid", "permission"]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T135: Generation build vs DB modification
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T135"
+name = "generation_build_db_locking"
+description = "Building a generation while another process touches the DB should avoid corruption"
+timeout = 120
+group = "L"
+
+[[test.step]]
+run = "(sqlite3 ${DB_PATH} 'BEGIN EXCLUSIVE; SELECT 1; .timeout 5000' >/tmp/t135-db.log 2>&1 &) ; LOCK_PID=$!; sleep 1; OUTPUT=$(${CONARY_BIN} system generation build 2>&1 || true); kill $LOCK_PID 2>/dev/null || true; echo \"$OUTPUT\""
+
+[test.step.assert]
+stdout_contains_any = ["locked", "database", "built", "Generation"]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T136: Bootstrap dry-run plan validity
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T136"
+name = "bootstrap_dry_run_plan_valid"
+description = "Bootstrap dry-run should produce a valid plan without modifying the filesystem"
+timeout = 120
+group = "L"
+
+[[test.step]]
+conary = "bootstrap dry-run --work-dir /tmp/conary-lifecycle-bootstrap --recipe-dir /tmp/conary-lifecycle-recipes --verbose"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+stdout_contains_any_if_success = ["Graph resolved", "Bootstrap plan", "dry-run"]
+
+# --------------------------------------------------------------------------
+# T137: Bootstrap stage0 artifacts
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T137"
+name = "bootstrap_stage0_artifacts_valid"
+description = "Bootstrap stage0 should produce output artifacts and valid ELF binaries when it succeeds"
+timeout = 300
+group = "L"
+
+[[test.step]]
+conary = "bootstrap stage0 --work-dir /tmp/conary-lifecycle-bootstrap"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+[[test.step]]
+run = "find /tmp/conary-lifecycle-bootstrap/stage0 -type f | head -5 || true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+[[test.step]]
+run = "find /tmp/conary-lifecycle-bootstrap/stage0 -type f -executable | head -1 | xargs -r file"
+
+[test.step.assert]
+stdout_contains_any_if_success = ["ELF", "executable"]
