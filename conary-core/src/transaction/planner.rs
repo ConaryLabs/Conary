@@ -192,6 +192,9 @@ pub struct TransactionPlanner<'a> {
     root: &'a Path,
     cas: &'a CasStore,
     vfs: VfsTree,
+    /// Cache for computed file hashes, keyed by file path. Avoids recomputing
+    /// the same hash multiple times during planning (operation, staging, VFS).
+    hash_cache: HashMap<String, String>,
 }
 
 impl<'a> TransactionPlanner<'a> {
@@ -202,30 +205,41 @@ impl<'a> TransactionPlanner<'a> {
             root,
             cas,
             vfs: VfsTree::new(),
+            hash_cache: HashMap::new(),
         }
     }
 
-    /// Compute hash for a file (handles symlinks specially)
-    fn compute_file_hash(&self, file: &ExtractedFile) -> Option<String> {
+    /// Compute hash for a file, using the cache to avoid redundant computation.
+    fn compute_file_hash(&mut self, file: &ExtractedFile) -> Option<String> {
         if file.is_symlink {
             file.symlink_target
                 .as_ref()
                 .map(|t| CasStore::compute_symlink_hash(t))
         } else {
-            Some(self.cas.compute_hash(&file.content))
+            Some(self.get_or_compute_hash(file))
         }
     }
 
-    /// Compute hash for staging (returns empty string for symlinks without target)
-    fn compute_stage_hash(&self, file: &ExtractedFile) -> String {
+    /// Compute hash for staging (returns empty string for symlinks without target).
+    fn compute_stage_hash(&mut self, file: &ExtractedFile) -> String {
         if file.is_symlink {
             file.symlink_target
                 .as_ref()
                 .map(|t| CasStore::compute_symlink_hash(t))
                 .unwrap_or_default()
         } else {
-            self.cas.compute_hash(&file.content)
+            self.get_or_compute_hash(file)
         }
+    }
+
+    /// Return the cached hash for a regular (non-symlink) file, computing it if absent.
+    fn get_or_compute_hash(&mut self, file: &ExtractedFile) -> String {
+        if let Some(cached) = self.hash_cache.get(&file.path) {
+            return cached.clone();
+        }
+        let hash = self.cas.compute_hash(&file.content);
+        self.hash_cache.insert(file.path.clone(), hash.clone());
+        hash
     }
 
     /// Plan an install/upgrade operation
@@ -370,7 +384,7 @@ impl<'a> TransactionPlanner<'a> {
                 let target = file.symlink_target.as_deref().unwrap_or("");
                 let _ = self.vfs.add_symlink(&file.path, target);
             } else {
-                let hash = self.cas.compute_hash(&file.content);
+                let hash = self.get_or_compute_hash(file);
                 let _ = self
                     .vfs
                     .add_file(&file.path, &hash, file.content.len() as u64, file.mode);
