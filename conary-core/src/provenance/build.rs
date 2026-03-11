@@ -200,13 +200,16 @@ impl HostAttestation {
     }
 }
 
-/// Get hostname from /etc/hostname or via gethostname syscall
+/// Get hostname from /etc/hostname (Linux) or the HOSTNAME environment variable
 fn get_hostname() -> Option<String> {
-    // Try /etc/hostname first
-    if let Ok(hostname) = std::fs::read_to_string("/etc/hostname") {
-        let hostname = hostname.trim();
-        if !hostname.is_empty() {
-            return Some(hostname.to_string());
+    #[cfg(target_os = "linux")]
+    {
+        // Try /etc/hostname first (Linux convention)
+        if let Ok(hostname) = std::fs::read_to_string("/etc/hostname") {
+            let hostname = hostname.trim();
+            if !hostname.is_empty() {
+                return Some(hostname.to_string());
+            }
         }
     }
 
@@ -214,19 +217,29 @@ fn get_hostname() -> Option<String> {
     std::env::var("HOSTNAME").ok()
 }
 
-/// Get kernel version from uname
+/// Get kernel version string
+///
+/// On Linux this is read from `/proc/version`. On other platforms returns "unknown".
 fn get_kernel_version() -> String {
-    // Try to read from /proc/version
-    std::fs::read_to_string("/proc/version")
-        .ok()
-        .and_then(|v| v.split_whitespace().nth(2).map(|s| s.to_string()))
-        .unwrap_or_else(|| "unknown".to_string())
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/version is a Linux-only virtual file
+        if let Some(ver) = std::fs::read_to_string("/proc/version")
+            .ok()
+            .and_then(|v| v.split_whitespace().nth(2).map(|s| s.to_string()))
+        {
+            return ver;
+        }
+    }
+    "unknown".to_string()
 }
 
-/// Get distro information
+/// Get distro information from `/etc/os-release`
+///
+/// This file is a Linux standard (freedesktop.org). Returns `None` on other platforms.
 fn get_distro_info() -> Option<String> {
-    // Try /etc/os-release
-    std::fs::read_to_string("/etc/os-release")
+    #[cfg(target_os = "linux")]
+    return std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|content| {
             for line in content.lines() {
@@ -239,15 +252,24 @@ fn get_distro_info() -> Option<String> {
                 }
             }
             None
-        })
+        });
+    #[cfg(not(target_os = "linux"))]
+    None
 }
 
-/// Check if secure boot is enabled
+/// Check if UEFI Secure Boot is enabled via the Linux EFI variable sysfs interface
+///
+/// Only meaningful on Linux; returns `None` on other platforms.
 fn check_secure_boot() -> Option<bool> {
-    // Check EFI variable
-    std::fs::read("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c")
-        .ok()
-        .map(|data| data.last().map(|&b| b == 1).unwrap_or(false))
+    #[cfg(target_os = "linux")]
+    // The SecureBoot EFI variable is exposed under /sys/firmware/efi/efivars on Linux
+    return std::fs::read(
+        "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+    )
+    .ok()
+    .map(|data| data.last().map(|&b| b == 1).unwrap_or(false));
+    #[cfg(not(target_os = "linux"))]
+    None
 }
 
 /// Reproducibility verification information
