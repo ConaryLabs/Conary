@@ -13,6 +13,7 @@
 //! If entries plus names exceed one block, they are split across multiple
 //! independent blocks.
 
+use crate::error::ErofsError;
 use std::io::{Cursor, Write};
 
 /// On-disk dirent size in bytes.
@@ -42,9 +43,16 @@ pub struct DirEntry {
 ///
 /// Entries are sorted alphabetically by name. Returns a `Vec` of
 /// block-sized byte buffers, each zero-padded to `block_size`.
-pub fn pack_directory(entries: &mut [DirEntry], block_size: u32) -> Vec<Vec<u8>> {
+///
+/// # Errors
+///
+/// Returns `ErofsError::OutOfRange` if a name offset exceeds `u16::MAX`.
+pub fn pack_directory(
+    entries: &mut [DirEntry],
+    block_size: u32,
+) -> Result<Vec<Vec<u8>>, ErofsError> {
     if entries.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -88,8 +96,15 @@ pub fn pack_directory(entries: &mut [DirEntry], block_size: u32) -> Vec<Vec<u8>>
 
         // Write dirent headers.
         for entry in batch {
+            if name_offset > u16::MAX as usize {
+                return Err(ErofsError::OutOfRange(format!(
+                    "dirent name offset {name_offset} exceeds u16::MAX (65535)"
+                )));
+            }
             let _ = cursor.write_all(&entry.nid.to_le_bytes());
-            let _ = cursor.write_all(&(name_offset as u16).to_le_bytes());
+            #[allow(clippy::cast_possible_truncation)]
+            let nameoff_u16 = name_offset as u16;
+            let _ = cursor.write_all(&nameoff_u16.to_le_bytes());
             let _ = cursor.write_all(&[entry.file_type]);
             let _ = cursor.write_all(&[0u8]); // reserved
             name_offset += entry.name.len();
@@ -104,7 +119,7 @@ pub fn pack_directory(entries: &mut [DirEntry], block_size: u32) -> Vec<Vec<u8>>
         blocks.push(buf);
     }
 
-    blocks
+    Ok(blocks)
 }
 
 #[cfg(test)]
@@ -114,7 +129,7 @@ mod tests {
     #[test]
     fn empty_entries_returns_empty() {
         let mut entries: Vec<DirEntry> = Vec::new();
-        let blocks = pack_directory(&mut entries, 4096);
+        let blocks = pack_directory(&mut entries, 4096).unwrap();
         assert!(blocks.is_empty());
     }
 
@@ -126,7 +141,7 @@ mod tests {
             file_type: EROFS_FT_REG_FILE,
         }];
 
-        let blocks = pack_directory(&mut entries, 4096);
+        let blocks = pack_directory(&mut entries, 4096).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].len(), 4096);
 
@@ -173,7 +188,7 @@ mod tests {
             },
         ];
 
-        let blocks = pack_directory(&mut entries, 4096);
+        let blocks = pack_directory(&mut entries, 4096).unwrap();
         assert_eq!(blocks.len(), 1);
 
         let blk = &blocks[0];
@@ -223,7 +238,7 @@ mod tests {
             },
         ];
 
-        let blocks = pack_directory(&mut entries, 4096);
+        let blocks = pack_directory(&mut entries, 4096).unwrap();
         let blk = &blocks[0];
 
         // 2 dirents = 24 bytes header. Names start at 24.
@@ -258,7 +273,7 @@ mod tests {
             },
         ];
 
-        let blocks = pack_directory(&mut entries, 4096);
+        let blocks = pack_directory(&mut entries, 4096).unwrap();
         let blk = &blocks[0];
 
         // Sorted: dir, file, link.
@@ -291,7 +306,7 @@ mod tests {
         ];
 
         // 12 + 3 = 15 bytes per entry. block_size=16 fits exactly one.
-        let blocks = pack_directory(&mut entries, 16);
+        let blocks = pack_directory(&mut entries, 16).unwrap();
         assert_eq!(blocks.len(), 3);
 
         for (i, blk) in blocks.iter().enumerate() {
@@ -321,7 +336,7 @@ mod tests {
             },
         ];
 
-        let blocks = pack_directory(&mut entries, 64);
+        let blocks = pack_directory(&mut entries, 64).unwrap();
         assert_eq!(blocks.len(), 2);
 
         // First block: entry "a".
@@ -337,5 +352,32 @@ mod tests {
         let nid1 = u64::from_le_bytes(blk1[0..8].try_into().unwrap());
         assert_eq!(nid1, 2);
         assert_eq!(&blk1[12..62], long_name.as_bytes());
+    }
+
+    #[test]
+    fn nameoff_overflow_returns_error() {
+        // Use a block size larger than u16::MAX to trigger the overflow check.
+        // We need name_offset > 65535. With a 128KB block, we can pack enough
+        // entries with long names to push the offset past the limit.
+        let block_size: u32 = 128 * 1024; // 128 KiB
+        let _name = "a".repeat(1000);
+        // 66 entries * 12 bytes header = 792 bytes. names_base = 792.
+        // 66 entries * 1000 bytes name = 66000. Last offset = 792 + 65000 = 65792.
+        // We need more: 67 entries -> names_base = 804, offset at entry 66 = 804 + 66000 = 66804 > 65535.
+        let mut entries: Vec<DirEntry> = (0..67)
+            .map(|i| DirEntry {
+                name: format!("{}{}", "a".repeat(999), format!("{i:01}")),
+                nid: i,
+                file_type: EROFS_FT_REG_FILE,
+            })
+            .collect();
+
+        let result = pack_directory(&mut entries, block_size);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("u16::MAX"),
+            "expected u16::MAX mention, got: {err}"
+        );
     }
 }
