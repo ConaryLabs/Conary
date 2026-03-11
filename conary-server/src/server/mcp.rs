@@ -57,11 +57,15 @@ fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
 }
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
+///
+/// Each variant maps to a distinct JSON-RPC error code so that callers
+/// can distinguish between bad input, missing resources, conflicts, and
+/// internal failures.
 fn service_err_to_mcp(e: ServiceError) -> McpError {
     match e {
-        ServiceError::BadRequest(msg)
-        | ServiceError::NotFound(msg)
-        | ServiceError::Conflict(msg) => McpError::invalid_params(msg, None),
+        ServiceError::BadRequest(msg) => McpError::invalid_params(msg, None),
+        ServiceError::NotFound(msg) => McpError::resource_not_found(msg, None),
+        ServiceError::Conflict(msg) => McpError::invalid_request(msg, None),
         ServiceError::Internal(msg) => McpError::internal_error(msg, None),
     }
 }
