@@ -10,13 +10,37 @@ use crate::ccs::manifest::CcsManifest;
 use crate::ccs::policy::{PolicyAction, PolicyChain};
 use crate::components::ComponentClassifier;
 use crate::hash;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// Typed errors for the CCS builder pipeline
+#[derive(Debug, thiserror::Error)]
+pub enum BuilderError {
+    /// File is not under the expected source directory
+    #[error("file not under source directory: {0}")]
+    FileNotUnderSource(PathBuf),
+
+    /// A build policy rejected a file
+    #[error("policy rejected file {path}: {reason}")]
+    PolicyRejected { path: String, reason: String },
+
+    /// Chunker was expected but not initialized
+    #[error("chunker not initialized even though chunking is enabled")]
+    ChunkerNotInitialized,
+
+    /// CBOR encoding of the binary manifest failed
+    #[error("failed to encode binary manifest as CBOR: {0}")]
+    ManifestEncoding(String),
+
+    /// I/O error during build (file read/write, directory creation)
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
 
 /// A file entry in a CCS package
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,8 +213,11 @@ impl CcsBuilder {
                         continue;
                     }
                     PolicyAction::Reject(msg) => {
-                        // This shouldn't happen as the chain already returns an error
-                        anyhow::bail!("Policy rejected file {}: {}", entry.path, msg);
+                        return Err(BuilderError::PolicyRejected {
+                            path: entry.path.clone(),
+                            reason: msg,
+                        }
+                        .into());
                     }
                     PolicyAction::Keep => {
                         // Content unchanged by policy, no rehash needed
@@ -216,7 +243,7 @@ impl CcsBuilder {
                 let chunker = self
                     .chunker
                     .as_ref()
-                    .context("Chunker not initialized even though chunking is enabled")?;
+                    .ok_or(BuilderError::ChunkerNotInitialized)?;
                 let chunks = chunker.chunk_bytes(&final_content);
 
                 let mut chunk_hashes = Vec::with_capacity(chunks.len());
@@ -309,7 +336,7 @@ impl CcsBuilder {
         // Calculate install path
         let relative = source_path
             .strip_prefix(&self.source_dir)
-            .context("File not under source directory")?;
+            .map_err(|_| BuilderError::FileNotUnderSource(source_path.to_path_buf()))?;
         let install_path = self.install_prefix.join(relative);
         let install_path_str = install_path.to_string_lossy().to_string();
 
@@ -506,7 +533,7 @@ fn write_ccs_package_internal(
     // Write MANIFEST (CBOR-encoded binary manifest)
     let manifest_cbor = binary_manifest
         .to_cbor()
-        .context("Failed to encode binary manifest as CBOR")?;
+        .map_err(|e| BuilderError::ManifestEncoding(e.to_string()))?;
     fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
 
     // Write MANIFEST.toml (human-readable, for debugging)
