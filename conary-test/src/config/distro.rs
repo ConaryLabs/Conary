@@ -141,16 +141,90 @@ impl<'de> Deserialize<'de> for DistroConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FixtureConfig {
-    #[serde(default)]
-    pub test_package_name: Option<String>,
-    #[serde(default)]
-    pub marker_file_v1: Option<String>,
-    #[serde(default)]
-    pub marker_file_v2: Option<String>,
-    #[serde(default)]
+    pub package: Option<String>,
+    pub file: Option<String>,
+    pub added_file: Option<String>,
+    pub marker: Option<String>,
     pub v1_version: Option<String>,
-    #[serde(default)]
+    pub v1_ccs_file: Option<String>,
+    pub v1_hello_sha256: Option<String>,
     pub v2_version: Option<String>,
+    pub v2_ccs_file: Option<String>,
+    pub v2_hello_sha256: Option<String>,
+    pub v2_added_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureVersionRaw {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    ccs_file: Option<String>,
+    #[serde(default)]
+    hello_sha256: Option<String>,
+    #[serde(default)]
+    added_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureConfigRaw {
+    #[serde(default, alias = "test_package_name")]
+    package: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    added_file: Option<String>,
+    #[serde(default, alias = "marker_file_v1", alias = "marker_file_v2")]
+    marker: Option<String>,
+    #[serde(default)]
+    v1: Option<FixtureVersionRaw>,
+    #[serde(default)]
+    v2: Option<FixtureVersionRaw>,
+    #[serde(default)]
+    v1_version: Option<String>,
+    #[serde(default)]
+    v2_version: Option<String>,
+}
+
+impl From<FixtureConfigRaw> for FixtureConfig {
+    fn from(raw: FixtureConfigRaw) -> Self {
+        let v1 = raw.v1.unwrap_or(FixtureVersionRaw {
+            version: None,
+            ccs_file: None,
+            hello_sha256: None,
+            added_sha256: None,
+        });
+        let v2 = raw.v2.unwrap_or(FixtureVersionRaw {
+            version: None,
+            ccs_file: None,
+            hello_sha256: None,
+            added_sha256: None,
+        });
+
+        Self {
+            package: raw.package,
+            file: raw.file,
+            added_file: raw.added_file,
+            marker: raw.marker,
+            v1_version: raw.v1_version.or(v1.version),
+            v1_ccs_file: v1.ccs_file,
+            v1_hello_sha256: v1.hello_sha256,
+            v2_version: raw.v2_version.or(v2.version),
+            v2_ccs_file: v2.ccs_file,
+            v2_hello_sha256: v2.hello_sha256,
+            v2_added_sha256: v2.added_sha256,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FixtureConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = FixtureConfigRaw::deserialize(deserializer)?;
+        Ok(Self::from(raw))
+    }
 }
