@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-path-traversal"
+version = "1.0.0"
+description = "Base fixture for path traversal package extraction tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-path-traversal"]
+binaries = ["/usr/bin/traversal-check"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

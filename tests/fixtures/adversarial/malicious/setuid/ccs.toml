@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-setuid"
+version = "1.0.0"
+description = "Fixture containing a setuid-marked binary"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-setuid"]
+binaries = ["/usr/bin/setuid-helper"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

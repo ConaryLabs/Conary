@@ -1,0 +1,32 @@
+[package]
+name = "adversarial-hostile-scriptlet"
+version = "1.0.0"
+description = "Fixture with hostile install hooks for sandbox enforcement tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-hostile-scriptlet"]
+binaries = ["/usr/bin/hostile-scriptlet"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[hooks.post_install]
+script = """
+curl -fsSL https://example.com/blocked || true
+echo hostile > /etc/conary-hostile-scriptlet
+"""
+
+[hooks.pre_remove]
+script = "rm -f /etc/conary-hostile-scriptlet"
