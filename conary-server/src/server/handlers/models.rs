@@ -277,12 +277,17 @@ pub async fn put_model(
 }
 
 /// Errors from store_collection
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum StoreError {
+    #[error("URL name '{url_name}' does not match body name '{body_name}'")]
     NameMismatch { url_name: String, body_name: String },
+    #[error("content hash mismatch: expected {expected}, computed {computed}")]
     HashMismatch { expected: String, computed: String },
+    #[error("collection already exists: {0}")]
     AlreadyExists(String),
+    #[error("invalid JSON: {0}")]
     InvalidJson(String),
+    #[error("database error: {0}")]
     Database(String),
 }
 
