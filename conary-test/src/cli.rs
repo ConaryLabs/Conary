@@ -131,9 +131,16 @@ fn containerfile_path(
 }
 
 fn host_results_dir() -> PathBuf {
-    std::env::var("CONARY_TEST_RESULTS_DIR")
+    let path = std::env::var("CONARY_TEST_RESULTS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("tests/integration/remi/results"))
+        .unwrap_or_else(|_| PathBuf::from("tests/integration/remi/results"));
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
 }
 
 async fn initialize_container_state(
