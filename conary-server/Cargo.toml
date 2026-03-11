@@ -86,6 +86,10 @@ hex.workspace = true
 default = []
 polkit = ["dep:zbus"]
 
+[dev-dependencies]
+flate2.workspace = true
+tar.workspace = true
+
 [[bin]]
 name = "remi"
 path = "src/bin/remi.rs"
