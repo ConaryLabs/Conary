@@ -849,46 +849,33 @@ async fn cancel_transaction_handler(
 
     let job_id = id.clone();
 
-    // First check if the job exists
-    let find_id = job_id.clone();
-    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
-        .await?
-        .ok_or_else(|| not_found_error("transaction", &id))?;
+    // Try to cancel in the in-memory queue (for running jobs, sets cancel token)
+    let queue_cancelled = state.cancel_job(&job_id).await;
 
-    // Check if already completed/cancelled/failed
-    match job.status {
-        JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => {
-            return Err(ApiError(Box::new(DaemonError::conflict(&format!(
+    // Atomically update DB status -- the WHERE clause ensures we only cancel
+    // jobs that are still in a cancellable state (queued or running),
+    // eliminating the TOCTOU race of a separate check-then-update.
+    let update_id = job_id.clone();
+    let db_cancelled =
+        run_db_query(&state, move |conn| DaemonJob::cancel(conn, &update_id)).await?;
+
+    if db_cancelled || queue_cancelled {
+        state.emit(DaemonEvent::JobCancelled { job_id });
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        // Job either doesn't exist or is already in a terminal state
+        let find_id = id.clone();
+        let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &find_id))
+            .await?;
+
+        match job {
+            Some(j) => Err(ApiError(Box::new(DaemonError::conflict(&format!(
                 "Transaction '{}' is already {}",
                 id,
-                job.status.as_str()
-            )))));
+                j.status.as_str()
+            ))))),
+            None => Err(not_found_error("transaction", &id)),
         }
-        _ => {}
-    }
-
-    // Try to cancel
-    let cancelled = state.cancel_job(&job_id).await;
-
-    if cancelled || job.status == JobStatus::Queued {
-        // Update database
-        let update_id = job_id.clone();
-        let updated = run_db_query(&state, move |conn| {
-            DaemonJob::update_status(conn, &update_id, JobStatus::Cancelled)
-        })
-        .await?;
-
-        if updated {
-            state.emit(DaemonEvent::JobCancelled { job_id });
-            Ok(StatusCode::NO_CONTENT)
-        } else {
-            Err(not_found_error("transaction", &id))
-        }
-    } else {
-        Err(ApiError(Box::new(DaemonError::conflict(&format!(
-            "Cannot cancel transaction '{}' - it may already be completing",
-            id
-        )))))
     }
 }
 
