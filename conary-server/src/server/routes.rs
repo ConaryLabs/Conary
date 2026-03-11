@@ -725,29 +725,38 @@ async fn health_check() -> &'static str {
 }
 
 /// Readiness check - verifies DB and storage are accessible
+///
+/// The filesystem checks (`exists()`, `is_dir()`, `statvfs`) are blocking IO,
+/// so we run them on the Tokio blocking pool to avoid stalling the async runtime.
 async fn readiness_check(
     axum::extract::State(state): axum::extract::State<Arc<RwLock<ServerState>>>,
 ) -> Response {
-    let state_guard = state.read().await;
-    let config = &state_guard.config;
+    let (db_path, chunk_dir, cache_dir) = {
+        let state_guard = state.read().await;
+        let config = &state_guard.config;
+        (
+            config.db_path.clone(),
+            config.chunk_dir.clone(),
+            config.cache_dir.clone(),
+        )
+    };
 
-    // Check database is accessible
-    let db_ok = config.db_path.exists()
-        || config
-            .db_path
-            .parent()
-            .is_some_and(|p| p.exists() && p.is_dir());
+    let result = tokio::task::spawn_blocking(move || {
+        let db_ok =
+            db_path.exists() || db_path.parent().is_some_and(|p| p.exists() && p.is_dir());
+        let chunk_dir_ok = chunk_dir.exists() && chunk_dir.is_dir();
+        let cache_dir_ok = cache_dir.exists() && cache_dir.is_dir();
+        let disk_ok = check_disk_space(&chunk_dir, 10 * 1024 * 1024 * 1024);
+        (db_ok, chunk_dir_ok, cache_dir_ok, disk_ok)
+    })
+    .await;
 
-    // Check chunk directory is writable
-    let chunk_dir_ok = config.chunk_dir.exists() && config.chunk_dir.is_dir();
-
-    // Check cache directory is writable
-    let cache_dir_ok = config.cache_dir.exists() && config.cache_dir.is_dir();
-
-    // Check disk space (warn if < 10GB free)
-    let disk_ok = check_disk_space(&config.chunk_dir, 10 * 1024 * 1024 * 1024);
-
-    drop(state_guard);
+    let (db_ok, chunk_dir_ok, cache_dir_ok, disk_ok) = match result {
+        Ok(checks) => checks,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Readiness check failed").into_response();
+        }
+    };
 
     if db_ok && chunk_dir_ok && cache_dir_ok && disk_ok {
         (StatusCode::OK, "READY").into_response()
