@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-11
+revision: 1
+summary: Document current ccs.toml schema gaps found while building Phase 3 dependency fixtures
+---
+
 # CCS Module (conary-core/src/ccs/)
 
 Conary's native package format. Handles building, signing, policy enforcement,
@@ -68,6 +74,26 @@ CCS sits at the center of Conary's format pipeline. All package formats
 (RPM, DEB, Arch) convert to CCS before installation. The builder produces
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
+
+## Known Schema Gaps
+
+The current `ccs.toml` manifest schema was sufficient for the initial Phase 3
+fixture work, but the dependency-fixture pass on 2026-03-11 exposed two areas
+that still need first-class schema support:
+
+- Package-level conflicts:
+  There is no clear manifest field for declaring that one CCS package conflicts
+  with another package by name/version, which limits direct coverage for tests
+  like "install B that conflicts with installed A".
+- Explicit OR dependencies:
+  The manifest supports package dependencies and provided capabilities, but not
+  a first-class `foo | bar` dependency expression. Current fixtures approximate
+  this with shared capabilities, which is useful but not a full substitute for
+  package-level preference ordering semantics.
+
+If we want the Phase 3 Group J fixtures to model the resolver cases exactly as
+specified, `conary-core/src/ccs/manifest.rs` will likely need a schema extension
+for package conflicts and OR-dependency expressions.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
