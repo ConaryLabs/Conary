@@ -29,15 +29,14 @@ impl fmt::Display for DepMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
+    use clap::ValueEnum;
 
     #[test]
     fn test_dep_mode_from_str() {
-        // ValueEnum provides FromStr via clap
-        assert_eq!(DepMode::from_str("satisfy").unwrap(), DepMode::Satisfy);
-        assert_eq!(DepMode::from_str("adopt").unwrap(), DepMode::Adopt);
-        assert_eq!(DepMode::from_str("takeover").unwrap(), DepMode::Takeover);
-        assert!(DepMode::from_str("invalid").is_err());
+        assert_eq!(DepMode::from_str("satisfy", false).unwrap(), DepMode::Satisfy);
+        assert_eq!(DepMode::from_str("adopt", false).unwrap(), DepMode::Adopt);
+        assert_eq!(DepMode::from_str("takeover", false).unwrap(), DepMode::Takeover);
+        assert!(DepMode::from_str("invalid", false).is_err());
     }
 
     #[test]

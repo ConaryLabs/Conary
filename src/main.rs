@@ -412,9 +412,7 @@ fn main() -> Result<()> {
                     chunk_dir: PathBuf::from(chunk_dir),
                     cache_dir: PathBuf::from(cache_dir),
                     max_concurrent_conversions: max_concurrent,
-                    cache_max_bytes: max_cache_gb
-                        .checked_mul(1024 * 1024 * 1024)
-                        .unwrap_or(u64::MAX),
+                    cache_max_bytes: max_cache_gb.saturating_mul(1024 * 1024 * 1024),
                     chunk_ttl_days,
                     // Use defaults for Phase 0 features
                     ..Default::default()

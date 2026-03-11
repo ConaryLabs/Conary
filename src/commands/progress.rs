@@ -3,6 +3,9 @@
 //!
 //! Provides visual feedback during package installation, removal, and updates
 //! with overall progress bars and per-operation status displays.
+//!
+//! These types are public API, used by command modules as they are integrated.
+#![allow(dead_code)]
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::time::Duration;

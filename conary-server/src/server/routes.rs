@@ -292,7 +292,7 @@ async fn ban_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let path = request.uri().path().to_string();
+    let _path = request.uri().path().to_string();
     let headers = request.headers().clone();
 
     // Get ban list from state
