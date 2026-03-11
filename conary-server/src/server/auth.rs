@@ -137,7 +137,7 @@ pub fn hash_token(raw: &str) -> String {
 /// Generate a cryptographically random token (32 bytes, 64 hex chars).
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::rng().fill(&mut bytes);
+    rand::rngs::OsRng.fill(&mut bytes);
     hex::encode(bytes)
 }
 
