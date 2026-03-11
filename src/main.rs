@@ -1657,10 +1657,7 @@ fn main() -> Result<()> {
             }
 
             // Validate configuration
-            if let Err(e) = remi_config.validate() {
-                eprintln!("Configuration error: {}", e);
-                std::process::exit(1);
-            }
+            remi_config.validate().map_err(|e| anyhow::anyhow!("Configuration error: {}", e))?;
 
             if validate {
                 println!("Configuration is valid.");

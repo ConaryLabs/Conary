@@ -138,7 +138,7 @@ pub fn cmd_automation_check(
 
     if quiet {
         if results.total() > 0 {
-            std::process::exit(1);
+            anyhow::bail!("found {} actionable item(s)", results.total());
         }
         return Ok(());
     }

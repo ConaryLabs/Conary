@@ -285,6 +285,9 @@ pub fn cmd_ccs_run(
     if status.success() {
         Ok(())
     } else {
-        std::process::exit(status.code().unwrap_or(1));
+        Err(anyhow::anyhow!(
+            "command exited with status {}",
+            status.code().unwrap_or(1)
+        ))
     }
 }
