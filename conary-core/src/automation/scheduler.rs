@@ -11,6 +11,8 @@ use crate::error::Result;
 use crate::model::AutomationConfig;
 #[allow(unused_imports)]
 use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// State of the automation scheduler
@@ -197,7 +199,7 @@ fn format_duration(duration: chrono::Duration) -> String {
 /// Daemon mode runner for automation
 pub struct AutomationDaemon {
     scheduler: AutomationScheduler,
-    running: bool,
+    running: Arc<AtomicBool>,
 }
 
 impl AutomationDaemon {
@@ -205,21 +207,21 @@ impl AutomationDaemon {
     pub fn new(config: AutomationConfig) -> Self {
         Self {
             scheduler: AutomationScheduler::new(config),
-            running: false,
+            running: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// Get a clone of the running flag for use in signal handlers
+    pub fn running_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.running)
+    }
+
     /// Start the daemon (blocking)
-    ///
-    /// WARNING: `run()` and `stop()` both require `&mut self`, making it
-    /// impossible to call `stop()` from another thread while `run()` is active.
-    /// TODO: Replace `running: bool` with `Arc<AtomicBool>` and change `stop()`
-    /// to take `&self` so it can be called from a signal handler or other thread.
     pub fn run(&mut self) -> Result<()> {
-        self.running = true;
+        self.running.store(true, AtomicOrdering::SeqCst);
         tracing::info!("Automation daemon started");
 
-        while self.running {
+        while self.running.load(AtomicOrdering::SeqCst) {
             if self.scheduler.should_run() && self.scheduler.within_window() {
                 tracing::info!("Running scheduled automation check");
                 // Would call AutomationChecker here
@@ -239,9 +241,12 @@ impl AutomationDaemon {
         Ok(())
     }
 
-    /// Signal the daemon to stop
-    pub fn stop(&mut self) {
-        self.running = false;
+    /// Signal the daemon to stop.
+    ///
+    /// Takes `&self` so it can be called from signal handlers or other threads
+    /// holding an `Arc<Self>` or `&Self` reference.
+    pub fn stop(&self) {
+        self.running.store(false, AtomicOrdering::SeqCst);
         tracing::info!("Automation daemon stopping");
     }
 
