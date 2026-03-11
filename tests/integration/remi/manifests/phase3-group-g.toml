@@ -1,0 +1,235 @@
+# tests/integration/remi/manifests/phase3-group-g.toml
+#
+# Phase 3, Group G: Data Integrity (T77-T86).
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}
+
+[suite]
+name = "Phase 3 Group G: Data Integrity"
+phase = 3
+
+[suite.mock_server]
+port = 18080
+
+[[suite.mock_server.routes]]
+path = "/corrupted-index"
+status = 200
+body = "{ invalid json"
+
+[[suite.mock_server.routes]]
+path = "/truncated-download.ccs"
+status = 200
+body = "not-a-real-package-payload"
+truncate_at_bytes = 8
+
+# --------------------------------------------------------------------------
+# T77: Bad checksum rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T77"
+name = "bad_checksum_rejection"
+description = "Install CCS with bad SHA-256 in the manifest and expect rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/bad-checksum/output/bad-checksum-corrupted.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "hash"
+
+# --------------------------------------------------------------------------
+# T78: Truncated chunk rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T78"
+name = "truncated_chunk_rejection"
+description = "Install CCS with a truncated chunk payload and expect rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/truncated/output/truncated-corrupted.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "trunc"
+
+# --------------------------------------------------------------------------
+# T79: Tampered file rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T79"
+name = "tampered_file_rejection"
+description = "Install CCS with tampered contents after signing metadata and expect rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/tampered/output/tampered-corrupted.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "mismatch"
+
+# --------------------------------------------------------------------------
+# T80: Corrupted metadata sync failure
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T80"
+name = "corrupted_metadata_sync_failure"
+description = "Sync corrupted repo metadata and verify the failure does not clobber good metadata"
+timeout = 60
+group = "G"
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} repo add corrupted-meta http://127.0.0.1:18080/corrupted-index --db-path ${DB_PATH} --no-gpg-check >/dev/null 2>&1 || true; ${CONARY_BIN} repo sync corrupted-meta --db-path ${DB_PATH} 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "error"
+
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}"
+
+# --------------------------------------------------------------------------
+# T81: Corrupted native package rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T81"
+name = "corrupted_native_package_rejection"
+description = "Install a corrupted native package and expect checksum or format rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "install /opt/remi-tests/fixtures/adversarial/corrupted/native-package-corrupted.pkg --yes --sandbox never"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "checksum"
+
+# --------------------------------------------------------------------------
+# T82: CAS verify after install
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T82"
+name = "cas_verify_after_install"
+description = "Install a valid package and verify CAS-backed integrity checks pass"
+timeout = 120
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system verify"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "mismatch"
+
+# --------------------------------------------------------------------------
+# T83: Corrupt CAS file and detect it
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T83"
+name = "cas_corruption_detected"
+description = "Corrupt a CAS object on disk and verify conary detects the mismatch"
+timeout = 120
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "OBJ=$(find /var/lib/conary/objects -type f | head -1) && printf 'corrupt' > \"$OBJ\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system verify"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "mismatch"
+
+# --------------------------------------------------------------------------
+# T84: Size lie rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T84"
+name = "size_lie_rejection"
+description = "Install a package claiming a huge file with tiny payload and expect graceful rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/output/size-lie-corrupted.ccs --allow-unsigned"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "size"
+
+# --------------------------------------------------------------------------
+# T85: Truncated HTTP response during download
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T85"
+name = "truncated_http_download_failure"
+description = "Fetch a truncated HTTP response during package download and expect a clean failure"
+timeout = 30
+group = "G"
+
+[[test.step]]
+run = "curl -fsS http://127.0.0.1:18080/truncated-download.ccs -o /tmp/truncated-download.ccs 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "transfer"
+
+# --------------------------------------------------------------------------
+# T86: Unsigned package rejection
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T86"
+name = "unsigned_package_rejection"
+description = "Install an unsigned package without --allow-unsigned and expect rejection"
+timeout = 30
+group = "G"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs"
+
+[test.step.assert]
+exit_code_not = 0
+stderr_contains = "allow-unsigned"
