@@ -137,6 +137,8 @@ pub async fn audit_middleware(
 
     // Run the actual handler
     let response = next.run(request).await;
+    // SAFETY: as_millis() returns u128 but i64 can hold ~292 million years of
+    // milliseconds, so this cast is lossless for any real request duration.
     let duration_ms = start.elapsed().as_millis() as i64;
     let status_code = response.status().as_u16() as i32;
 

@@ -254,6 +254,8 @@ async fn audit_log_middleware(
             status = status.as_u16(),
             client_ip = %client_ip,
             conn_ip = %addr.ip(),
+            // SAFETY: as_millis() returns u128 but u64 can hold ~585 million
+            // years of milliseconds, so this cast is lossless in practice.
             latency_ms = elapsed.as_millis() as u64,
             "request"
         );
