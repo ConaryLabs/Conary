@@ -82,12 +82,21 @@ impl ProvenanceCapture {
         Self::default()
     }
 
-    /// Initialize with recipe file hash
+    /// Initialize with recipe file hash (streams the file instead of reading all into memory)
     #[allow(dead_code)]
     pub fn with_recipe_hash(mut self, recipe_path: &Path) -> Self {
-        if let Ok(content) = fs::read(recipe_path) {
-            let hash = Sha256::digest(&content);
-            self.recipe_hash = Some(format!("sha256:{}", hex::encode(hash)));
+        if let Ok(file) = fs::File::open(recipe_path) {
+            let mut reader = std::io::BufReader::new(file);
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => hasher.update(&buf[..n]),
+                    Err(_) => return self,
+                }
+            }
+            self.recipe_hash = Some(format!("sha256:{}", hex::encode(hasher.finalize())));
         }
         self
     }
