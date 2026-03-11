@@ -379,8 +379,9 @@ pub async fn update_repo(
     let db = db_path(state).await;
     let name_owned = name.to_string();
     blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
-        let repo = Repository::find_by_name(&conn, &name_owned)?;
+        let mut conn = conary_core::db::open_fast(&db)?;
+        let tx = conn.transaction()?;
+        let repo = Repository::find_by_name(&tx, &name_owned)?;
         let mut repo = match repo {
             Some(r) => r,
             None => return Ok(None),
@@ -399,7 +400,8 @@ pub async fn update_repo(
         if let Some(metadata_expire) = input.metadata_expire {
             repo.metadata_expire = metadata_expire;
         }
-        repo.update(&conn)?;
+        repo.update(&tx)?;
+        tx.commit()?;
         Ok(Some(repo))
     })
     .await
