@@ -54,7 +54,9 @@ impl TestEvent {
             Self::TestSkipped { .. } => "test_skipped",
             Self::RunComplete { .. } => "run_complete",
         };
-        let data = serde_json::to_string(self).unwrap();
+        let data = serde_json::to_string(self).unwrap_or_else(|e| {
+            format!("{{\"error\":\"serialization failed: {e}\"}}")
+        });
         format!("event: {event_name}\ndata: {data}\n\n")
     }
 }
