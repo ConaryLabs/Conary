@@ -32,7 +32,6 @@ pub struct SubstituterChain {
 }
 
 /// Result of resolving through the chain
-#[derive(Debug)]
 pub struct SubstituterResult {
     /// Which source provided the data
     pub source_name: String,
