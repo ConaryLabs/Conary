@@ -112,9 +112,10 @@ fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
             extract_domain(endpoint),
             extract_domain(&pattern_without_wildcard),
         ) {
-            // Check if endpoint's domain ends with pattern's domain
-            if endpoint_domain == pattern_domain
-                || endpoint_domain.ends_with(&format!(".{}", pattern_domain))
+            // Check if endpoint's domain has at least one subdomain level
+            // beyond the pattern's base domain. A bare domain (e.g. "conary.io")
+            // must NOT match "*.conary.io" -- the wildcard requires a subdomain.
+            if endpoint_domain.ends_with(&format!(".{}", pattern_domain))
             {
                 // Also verify scheme matches
                 let endpoint_scheme = endpoint.split("://").next().unwrap_or("");
@@ -455,7 +456,8 @@ mod tests {
             "https://region.west.conary.io:7891",
             "https://*.conary.io:7891"
         ));
-        assert!(endpoint_matches(
+        // Bare domain must NOT match wildcard -- wildcard requires a subdomain
+        assert!(!endpoint_matches(
             "https://conary.io:7891",
             "https://*.conary.io:7891"
         ));
