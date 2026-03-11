@@ -16,13 +16,15 @@ use std::path::Path;
 /// Generate a new Ed25519 key pair for a TUF role
 ///
 /// Saves the private and public keys to the specified directory.
-pub fn generate_role_key(role: &str, output_dir: &Path) -> anyhow::Result<SigningKeyPair> {
+pub fn generate_role_key(role: &str, output_dir: &Path) -> TrustResult<SigningKeyPair> {
     let keypair = SigningKeyPair::generate().with_key_id(role);
 
     let private_path = output_dir.join(format!("{role}.private"));
     let public_path = output_dir.join(format!("{role}.public"));
 
-    keypair.save_to_files(&private_path, &public_path)?;
+    keypair
+        .save_to_files(&private_path, &public_path)
+        .map_err(|e| TrustError::KeyError(format!("failed to save {role} keys: {e}")))?;
 
     Ok(keypair)
 }
