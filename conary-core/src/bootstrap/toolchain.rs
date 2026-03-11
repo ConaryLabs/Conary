@@ -293,17 +293,30 @@ impl Toolchain {
         self.tool("strip")
     }
 
+    /// Minimal safe PATH for bootstrap builds.
+    ///
+    /// Deliberately excludes the host's PATH to prevent accidental use of host
+    /// tools that could silently contaminate the hermetic build environment.
+    /// Only standard system directories known to be safe are included.
+    pub const BOOTSTRAP_PATH_FALLBACK: &'static str =
+        "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin";
+
     /// Get environment variables for using this toolchain
     pub fn env(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
-        // Add bin to PATH
+        // Sanitize PATH: do NOT inherit the host PATH blindly.
+        // Prepend the toolchain bin dir to a minimal, fixed fallback so that
+        // host-only tools (e.g. a user-installed rustup shim or custom gcc
+        // wrapper) cannot leak into bootstrap builds and produce unreproducible
+        // results.  Callers that genuinely need the host PATH (e.g. Toolchain::host()
+        // for development use) can override this after calling env().
         env.insert(
             "PATH".to_string(),
             format!(
                 "{}:{}",
                 self.bin_dir().display(),
-                std::env::var("PATH").unwrap_or_default()
+                Self::BOOTSTRAP_PATH_FALLBACK,
             ),
         );
 

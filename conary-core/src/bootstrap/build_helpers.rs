@@ -276,12 +276,14 @@ pub fn setup_build_env(
     let sysroot_str = sysroot.to_string_lossy().to_string();
     build_env.insert("SYSROOT".to_string(), sysroot_str.clone());
 
-    let path = format!(
-        "{}:{}/usr/bin:{}",
-        toolchain.bin_dir().display(),
-        sysroot_str,
-        std::env::var("PATH").unwrap_or_default()
-    );
+    // Sanitize PATH: build on top of the toolchain's already-sanitized PATH
+    // (which uses a fixed fallback rather than the host PATH) and prepend the
+    // sysroot's usr/bin so that freshly-built Stage 1 tools take precedence.
+    let base_path = build_env
+        .get("PATH")
+        .cloned()
+        .unwrap_or_else(|| super::toolchain::Toolchain::BOOTSTRAP_PATH_FALLBACK.to_string());
+    let path = format!("{}/usr/bin:{}", sysroot_str, base_path);
     build_env.insert("PATH".to_string(), path);
 
     build_env
