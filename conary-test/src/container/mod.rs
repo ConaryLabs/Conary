@@ -21,6 +21,8 @@ mod tests {
         assert!(cfg.volumes.is_empty());
         assert!(!cfg.privileged);
         assert_eq!(cfg.network_mode, "bridge");
+        assert!(cfg.tmpfs.is_empty());
+        assert_eq!(cfg.memory_limit, None);
     }
 
     #[test]
@@ -41,6 +43,8 @@ mod tests {
             }],
             privileged: true,
             network_mode: "host".to_string(),
+            tmpfs: HashMap::from([("/conary".to_string(), "size=50m".to_string())]),
+            memory_limit: Some(512 * 1024 * 1024),
         };
 
         assert_eq!(cfg.image, "alpine:latest");
@@ -49,6 +53,8 @@ mod tests {
         assert!(cfg.volumes[0].read_only);
         assert!(cfg.privileged);
         assert_eq!(cfg.network_mode, "host");
+        assert_eq!(cfg.tmpfs.get("/conary").map(String::as_str), Some("size=50m"));
+        assert_eq!(cfg.memory_limit, Some(512 * 1024 * 1024));
     }
 
     #[test]

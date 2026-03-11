@@ -27,6 +27,8 @@ pub struct TestDef {
     #[serde(default)]
     pub step: Vec<TestStep>,
     #[serde(default)]
+    pub resources: Option<ResourceConstraints>,
+    #[serde(default)]
     pub depends_on: Option<Vec<String>>,
     #[serde(default)]
     pub fatal: Option<bool>,
@@ -131,6 +133,16 @@ pub struct Assertion {
     pub file_checksum: Option<FileChecksum>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ResourceConstraints {
+    #[serde(default)]
+    pub tmpfs_size_mb: Option<u64>,
+    #[serde(default)]
+    pub memory_limit_mb: Option<u64>,
+    #[serde(default)]
+    pub network_isolated: Option<bool>,
+}
+
 impl Assertion {
     /// Validate that the assertion has no conflicting fields.
     ///
@@ -141,53 +153,51 @@ impl Assertion {
         let ctx = || format!("test {test_id}, step {step_index}");
 
         // exit_code vs exit_code_not
-        if let (Some(code), Some(not_code)) = (self.exit_code, self.exit_code_not) {
-            if code == not_code {
-                bail!(
-                    "{}: conflicting assertion: exit_code={code} and exit_code_not={not_code}",
-                    ctx()
-                );
-            }
+        if let (Some(code), Some(not_code)) = (self.exit_code, self.exit_code_not)
+            && code == not_code
+        {
+            bail!(
+                "{}: conflicting assertion: exit_code={code} and exit_code_not={not_code}",
+                ctx()
+            );
         }
 
         // stdout_contains vs stdout_not_contains
         if let (Some(contains), Some(not_contains)) =
             (&self.stdout_contains, &self.stdout_not_contains)
+            && contains == not_contains
         {
-            if contains == not_contains {
-                bail!(
-                    "{}: conflicting assertion: stdout_contains and stdout_not_contains \
-                     both set to {:?}",
-                    ctx(),
-                    contains
-                );
-            }
+            bail!(
+                "{}: conflicting assertion: stdout_contains and stdout_not_contains \
+                 both set to {:?}",
+                ctx(),
+                contains
+            );
         }
 
         // stdout_contains_all vs stdout_not_contains
         if let (Some(all), Some(not_contains)) =
             (&self.stdout_contains_all, &self.stdout_not_contains)
+            && all.iter().any(|s| s == not_contains)
         {
-            if all.iter().any(|s| s == not_contains) {
-                bail!(
-                    "{}: conflicting assertion: stdout_contains_all includes {:?} \
-                     which is also set in stdout_not_contains",
-                    ctx(),
-                    not_contains
-                );
-            }
+            bail!(
+                "{}: conflicting assertion: stdout_contains_all includes {:?} \
+                 which is also set in stdout_not_contains",
+                ctx(),
+                not_contains
+            );
         }
 
         // file_exists vs file_not_exists
-        if let (Some(exists), Some(not_exists)) = (&self.file_exists, &self.file_not_exists) {
-            if exists == not_exists {
-                bail!(
-                    "{}: conflicting assertion: file_exists and file_not_exists \
-                     both set to {:?}",
-                    ctx(),
-                    exists
-                );
-            }
+        if let (Some(exists), Some(not_exists)) = (&self.file_exists, &self.file_not_exists)
+            && exists == not_exists
+        {
+            bail!(
+                "{}: conflicting assertion: file_exists and file_not_exists \
+                 both set to {:?}",
+                ctx(),
+                exists
+            );
         }
 
         Ok(())

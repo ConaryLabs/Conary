@@ -8,8 +8,8 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{StepType, TestManifest};
-use crate::container::backend::{ContainerBackend, ContainerId, ExecResult};
+use crate::config::manifest::{ResourceConstraints, StepType, TestManifest};
+use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 
@@ -241,6 +241,32 @@ impl TestRunner {
         Ok(suite)
     }
 
+    /// Apply per-test resource constraints to a container configuration.
+    pub fn apply_resource_constraints(
+        &self,
+        container_config: &mut ContainerConfig,
+        resources: Option<&ResourceConstraints>,
+    ) {
+        let Some(resources) = resources else {
+            return;
+        };
+
+        if let Some(tmpfs_size_mb) = resources.tmpfs_size_mb {
+            container_config
+                .tmpfs
+                .insert("/conary".to_string(), format!("size={tmpfs_size_mb}m"));
+        }
+
+        if let Some(memory_limit_mb) = resources.memory_limit_mb {
+            container_config.memory_limit =
+                i64::try_from(memory_limit_mb.saturating_mul(1024 * 1024)).ok();
+        }
+
+        if resources.network_isolated.unwrap_or(false) {
+            container_config.network_mode = "none".to_string();
+        }
+    }
+
     /// Replace `${VAR}` patterns in a string with values from the variable map.
     fn expand_vars(&self, input: &str) -> String {
         if !input.contains("${") {
@@ -259,7 +285,9 @@ impl TestRunner {
 mod tests {
     use super::*;
     use crate::config::distro::{GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
-    use crate::config::manifest::{Assertion, SuiteDef, TestDef, TestManifest, TestStep};
+    use crate::config::manifest::{
+        Assertion, ResourceConstraints, SuiteDef, TestDef, TestManifest, TestStep,
+    };
     use crate::container::backend::{ContainerConfig, ExecResult};
     use async_trait::async_trait;
     use std::path::Path;
@@ -413,6 +441,7 @@ mod tests {
                 "echo ok",
                 Some(make_assertion(Some(0), Some("ok"))),
             )],
+            resources: None,
             depends_on: None,
             fatal: None,
             group: None,
@@ -446,6 +475,7 @@ mod tests {
                 "false",
                 Some(make_assertion(Some(0), None)),
             )],
+            resources: None,
             depends_on: None,
             fatal: None,
             group: None,
@@ -488,6 +518,7 @@ mod tests {
                     "false",
                     Some(make_assertion(Some(0), None)),
                 )],
+                resources: None,
                 depends_on: None,
                 fatal: None,
                 group: None,
@@ -498,6 +529,7 @@ mod tests {
                 description: "should be skipped".to_string(),
                 timeout: 30,
                 step: vec![simple_step_run("echo hello", None)],
+                resources: None,
                 depends_on: Some(vec!["T01".to_string()]),
                 fatal: None,
                 group: None,
@@ -527,5 +559,25 @@ mod tests {
             expanded2,
             "/usr/local/bin/conary --db-path /tmp/conary-test.db"
         );
+    }
+
+    #[test]
+    fn test_apply_resource_constraints() {
+        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut container_config = ContainerConfig::default();
+        let resources = ResourceConstraints {
+            tmpfs_size_mb: Some(50),
+            memory_limit_mb: Some(512),
+            network_isolated: Some(true),
+        };
+
+        runner.apply_resource_constraints(&mut container_config, Some(&resources));
+
+        assert_eq!(
+            container_config.tmpfs.get("/conary").map(String::as_str),
+            Some("size=50m")
+        );
+        assert_eq!(container_config.memory_limit, Some(512 * 1024 * 1024));
+        assert_eq!(container_config.network_mode, "none");
     }
 }
