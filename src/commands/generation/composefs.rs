@@ -18,6 +18,7 @@ pub struct ComposefsCaps {
 /// Modern composefs uses EROFS under the hood (not a separate filesystem type).
 /// Checks /proc/filesystems for "erofs" entry, which is present when the
 /// erofs kernel module is loaded or built-in (CONFIG_EROFS_FS).
+#[must_use]
 pub fn supports_composefs() -> bool {
     match std::fs::read_to_string("/proc/filesystems") {
         Ok(contents) => contents.lines().any(|line| line.trim().ends_with("erofs")),
@@ -29,6 +30,7 @@ pub fn supports_composefs() -> bool {
 ///
 /// Creates a temporary file and attempts the `FS_IOC_ENABLE_VERITY` ioctl.
 /// Returns false (without error) if unsupported.
+#[must_use]
 pub fn supports_fsverity(path: &Path) -> bool {
     use std::os::unix::io::AsRawFd;
 

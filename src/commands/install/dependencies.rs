@@ -25,6 +25,7 @@ use tempfile::TempDir;
 use tracing::{debug, info};
 
 /// Build dependency edges from a package's dependencies
+#[must_use]
 pub fn build_dependency_edges(pkg: &dyn PackageFormat) -> Vec<DependencyEdge> {
     pkg.dependencies()
         .iter()
