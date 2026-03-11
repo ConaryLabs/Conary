@@ -215,6 +215,7 @@ impl<'a> DerivedBuilder<'a> {
         // Apply file overrides
         let mut files_overridden = Vec::new();
         for (target_path, content, perms) in &self.spec.overrides {
+            validate_override_target(target_path)?;
             debug!("Overriding file: {}", target_path);
             let new_hash = hash::sha256(content);
 
@@ -529,6 +530,31 @@ pub fn store_in_cas(result: &DerivedResult, cas: &mut CasStore) -> Result<()> {
     Ok(())
 }
 
+/// Validate that an override target path is safe
+///
+/// Rejects paths that:
+/// - Start with `/` (must be relative)
+/// - Contain `..` components (path traversal)
+fn validate_override_target(path: &str) -> Result<()> {
+    if path.starts_with('/') {
+        return Err(Error::InitError(format!(
+            "Override target path must be relative, got absolute path: {}",
+            path
+        )));
+    }
+
+    for component in std::path::Path::new(path).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(Error::InitError(format!(
+                "Override target path contains '..' component (path traversal): {}",
+                path
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Split a multi-file unified diff into individual file patches
 ///
 /// Unified diff format starts each file's patch with:
@@ -709,6 +735,26 @@ index 111222..333444 100644
         assert_eq!(patches.len(), 2);
         assert!(patches[0].contains("src/main.rs"));
         assert!(patches[1].contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_validate_override_target_rejects_absolute() {
+        assert!(validate_override_target("/etc/passwd").is_err());
+        assert!(validate_override_target("/usr/bin/foo").is_err());
+    }
+
+    #[test]
+    fn test_validate_override_target_rejects_traversal() {
+        assert!(validate_override_target("../etc/passwd").is_err());
+        assert!(validate_override_target("foo/../../etc/passwd").is_err());
+        assert!(validate_override_target("..").is_err());
+    }
+
+    #[test]
+    fn test_validate_override_target_accepts_relative() {
+        assert!(validate_override_target("etc/nginx/nginx.conf").is_ok());
+        assert!(validate_override_target("usr/bin/foo").is_ok());
+        assert!(validate_override_target("config.toml").is_ok());
     }
 
     #[test]
