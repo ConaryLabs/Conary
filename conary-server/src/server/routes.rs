@@ -17,8 +17,8 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    admin, canonical, chunks, detail, federation, index, jobs, models, oci, openapi, packages,
-    recipes, search, self_update, sparse, tuf,
+    admin, artifacts, canonical, chunks, detail, federation, index, jobs, models, oci, openapi,
+    packages, recipes, search, self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -452,6 +452,15 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             "/v1/ccs/conary/:version/download",
             get(self_update::download),
         )
+        // === Public test fixture / artifact hosting ===
+        .route(
+            "/test-fixtures/*path",
+            get(artifacts::get_fixture).head(artifacts::head_fixture),
+        )
+        .route(
+            "/test-artifacts/*path",
+            get(artifacts::get_test_artifact).head(artifacts::head_test_artifact),
+        )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))
         .route("/v1/stats/recent", get(detail::get_recent))
@@ -639,6 +648,12 @@ pub fn create_external_admin_router(
         .route("/v1/admin/tokens", post(admin::create_token))
         .route("/v1/admin/tokens", get(admin::list_tokens))
         .route("/v1/admin/tokens/:id", delete(admin::delete_token))
+        // Test fixture / artifact publishing
+        .route("/v1/admin/test-fixtures/*path", put(admin::upload_fixture))
+        .route(
+            "/v1/admin/test-artifacts/*path",
+            put(admin::upload_test_artifact),
+        )
         // CI proxy endpoints
         .route("/v1/admin/ci/workflows", get(admin::ci_list_workflows))
         .route(
