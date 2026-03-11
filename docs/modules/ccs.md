@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-11
-revision: 2
+revision: 3
 summary: Document current ccs.toml schema and fixture gaps found while building Phase 3 adversarial tests
 ---
 
@@ -100,10 +100,6 @@ for package conflicts and OR-dependency expressions.
 The broader Phase 3 adversarial-test pass on 2026-03-11 also exposed several
 fixture and coverage gaps that are not purely `ccs.toml` schema problems:
 
-- Missing large-package fixtures:
-  Group H crash-recovery tests assume a large install target under
-  `tests/fixtures/adversarial/large/`, but `build-large.sh` and its generated
-  CCS outputs do not exist yet.
 - Missing tampered-fixture coverage:
   Group G includes a tampered-after-signing scenario in the design, but the
   checked-in corrupted fixture set currently only builds bad-checksum,
@@ -197,12 +193,18 @@ Phase 3 adversarial-test rollout and should be revisited after the plan lands:
   richer VM orchestration features like snapshots, serial-pattern matching, or
   guest-specific authentication flows.
 - `build-all.sh` currently skips missing or expensive fixture families:
-  Large fixtures and boot images are skipped unless their prerequisites exist or
-  explicit opt-in environment variables are provided.
+  Boot images are still skipped unless their prerequisites exist or explicit
+  opt-in environment variables are provided.
 - Task 24 could only complete locally:
   Adversarial fixtures build successfully after local script fixes, but the
   Remi publish target for `/test-fixtures/adversarial/` is not yet accepting or
   serving those artifacts as a dedicated static fixture directory.
+- Local Phase 3 smoke is still partially blocked on Podman compatibility:
+  On 2026-03-11, `conary-test` could be pointed at a live Podman API socket,
+  but the Bollard-backed image build failed because Podman rejected the
+  `X-Registry-Config` header on `/build`. A local full-phase smoke pass still
+  needs either a Podman-compatible build path in `conary-test` or a Docker
+  socket environment.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
