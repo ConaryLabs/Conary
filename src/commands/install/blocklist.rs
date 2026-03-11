@@ -64,6 +64,7 @@ const CRITICAL_PACKAGES: &[&str] = &[
 ///
 /// Blocked packages cannot be overlaid or taken over by Conary.
 /// They are always treated as satisfied by the system package manager.
+#[must_use]
 pub fn is_blocked(name: &str) -> bool {
     CRITICAL_PACKAGES
         .iter()
@@ -71,6 +72,7 @@ pub fn is_blocked(name: &str) -> bool {
 }
 
 /// Return the full blocklist for display purposes.
+#[must_use]
 #[allow(dead_code)]
 pub fn blocked_packages() -> &'static [&'static str] {
     CRITICAL_PACKAGES

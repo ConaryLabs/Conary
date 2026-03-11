@@ -59,21 +59,25 @@ impl GenerationMetadata {
 }
 
 /// Returns the base directory for all generations: `/conary/generations`
+#[must_use]
 pub fn generations_dir() -> PathBuf {
     PathBuf::from("/conary/generations")
 }
 
 /// Returns the directory for a specific generation: `/conary/generations/{number}`
+#[must_use]
 pub fn generation_path(number: i64) -> PathBuf {
     PathBuf::from(format!("/conary/generations/{number}"))
 }
 
 /// Returns the symlink pointing to the current active generation: `/conary/current`
+#[must_use]
 pub fn current_link() -> PathBuf {
     PathBuf::from("/conary/current")
 }
 
 /// Returns the directory for GC roots: `/conary/gc-roots`
+#[must_use]
 pub fn gc_roots_dir() -> PathBuf {
     PathBuf::from("/conary/gc-roots")
 }
@@ -99,6 +103,7 @@ pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
 /// Check if a path should be excluded from generation trees
 ///
 /// Strips a leading `/` before comparing against `EXCLUDED_DIRS`.
+#[must_use]
 pub fn is_excluded(path: &str) -> bool {
     let path = path.strip_prefix('/').unwrap_or(path);
     EXCLUDED_DIRS
