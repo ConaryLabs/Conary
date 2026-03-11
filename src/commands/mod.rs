@@ -147,6 +147,7 @@ pub enum PackageFormatType {
 }
 
 impl PackageFormatType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Rpm => "rpm",

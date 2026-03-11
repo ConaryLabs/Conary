@@ -21,6 +21,7 @@ pub enum BootLoader {
 }
 
 /// Detect the system boot loader by checking for BLS directory or GRUB config tools.
+#[must_use]
 pub fn detect_bootloader() -> BootLoader {
     if std::path::Path::new(BLS_DIR).exists() {
         return BootLoader::Bls;

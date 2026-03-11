@@ -18,6 +18,7 @@ use std::path::Path;
 use tracing::{info, warn};
 
 /// Determine the scriptlet package format from install format type
+#[must_use]
 pub fn to_scriptlet_format(format: PackageFormatType) -> ScriptletPackageFormat {
     match format {
         PackageFormatType::Rpm => ScriptletPackageFormat::Rpm,
@@ -27,6 +28,7 @@ pub fn to_scriptlet_format(format: PackageFormatType) -> ScriptletPackageFormat 
 }
 
 /// Build the execution mode based on upgrade status
+#[must_use]
 pub fn build_execution_mode(old_version: Option<&str>) -> ExecutionMode {
     match old_version {
         Some(ver) => ExecutionMode::Upgrade {
