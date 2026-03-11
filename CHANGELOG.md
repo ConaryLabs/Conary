@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [server-v0.3.1] - 2026-03-11
+
+### Fixed
+- resolve clippy warnings and test compilation after Phase 4
+
+### Other
+- docs(server): document DaemonEvent variants
+- refactor(server): clean up CircuitBreakerRegistry
+- feat(server): add Action::Enhance audit variant
+- docs(server): document latency duration casts
+- refactor(server): extract shared test_app helper
+- refactor(server): extract shared test_app helper for admin handler tests
+- fix(server): reject empty scope strings in token validation
+- refactor(server): convert remaining errors to thiserror
+- fix(server): only count 401/403 in ban middleware
+- fix(server): wrap readiness check in spawn_blocking
+- perf(server): cache scan_versions result with TTL
+- fix(daemon): add limit to list_transactions with status filter
+- perf(federation): parallelize local cache lookups in fetch_many
+- fix(server): replace expect in canonical_bytes with error propagation
+- fix(server): use OsRng instead of thread_rng for token generation
+- fix(server): fix wildcard matching to require subdomain
+- refactor(daemon): deduplicate SO_PEERCRED extraction
+- perf(federation): use Arc<Peer> in PeerRegistry::all
+- fix(server): replace deprecated rand::thread_rng
+- perf(server): debounce auth token touch calls
+- fix(daemon): fix TOCTOU race in job cancellation
+- fix(daemon): use parameter binding in list_all query
+- fix(server): improve MCP error code mapping
+- fix(server): add timeout to Forgejo HTTP requests
+- refactor(server): convert ForgejoError to thiserror
+- refactor(server): convert ServiceError to thiserror
+- fix(server): truncate request body in audit middleware
+- fix(server): redact filesystem paths from server_info endpoint
+- fix(server): validate date format in purge_audit
+- fix(server): wrap update_repo in database transaction
+- fix(server): normalize hashes in find_missing chunk handler
+- fix(daemon): use open_fast for WAL mode and proper pragmas
+- security(daemon): add warning when TCP listener exposes unauthenticated read endpoints
+- security(server): add localhost-only check to internal admin API
+- security(server): fix auth rate limiting to check before consuming token
+- fix(server): normalize hash in OCI blob handler to prevent cache bypass
+- fix(server): use tokio::fs::read for async CCS file serving
+- fix(server): wrap check_converted DB call in spawn_blocking
+- refactor(conary-test): simplify crate — deduplicate helpers, hoist workspace deps
+
 ## [erofs-v0.1.2] - 2026-03-11
 
 ### Fixed
