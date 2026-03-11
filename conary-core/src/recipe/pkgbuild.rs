@@ -44,7 +44,24 @@ use crate::recipe::format::{
 };
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use thiserror::Error;
+
+/// Pre-compiled regex for extracting simple variable assignments
+static VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^([a-zA-Z_][a-zA-Z0-9_]*)=["']?([^"'\n]*)["']?\s*$"#)
+        .expect("invalid variable regex")
+});
+
+/// Pre-compiled regex for extracting quoted values from arrays
+static ARRAY_VALUE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"["']([^"']+)["']"#).expect("invalid array value regex")
+});
+
+/// Pre-compiled regex for extracting function definitions
+static FN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex")
+});
 
 #[derive(Error, Debug)]
 pub enum PkgbuildError {
@@ -276,12 +293,9 @@ fn extract_variables(content: &str) -> Result<HashMap<String, String>, PkgbuildE
     let mut vars = HashMap::new();
 
     // Match: varname=value or varname="value" or varname='value'
-    let re = Regex::new(r#"^([a-zA-Z_][a-zA-Z0-9_]*)=["']?([^"'\n]*)["']?\s*$"#)
-        .map_err(|e| PkgbuildError::ParseError(e.to_string()))?;
-
     for line in content.lines() {
         let line = line.trim();
-        if let Some(caps) = re.captures(line) {
+        if let Some(caps) = VAR_RE.captures(line) {
             let name = caps
                 .get(1)
                 .expect("regex capture group must exist")
@@ -308,8 +322,7 @@ fn extract_array(content: &str, name: &str) -> Option<Vec<String>> {
     if let Some(caps) = re.captures(content) {
         let array_content = caps.get(1)?.as_str();
         // Extract quoted values
-        let value_re = Regex::new(r#"["']([^"']+)["']"#).ok()?;
-        let values: Vec<String> = value_re
+        let values: Vec<String> = ARRAY_VALUE_RE
             .captures_iter(array_content)
             .filter_map(|c| c.get(1))
             .map(|m| m.as_str().to_string())
@@ -337,9 +350,7 @@ fn extract_functions(content: &str) -> HashMap<String, String> {
     let mut functions = HashMap::new();
 
     // Simple function extraction - looks for function_name() { ... }
-    let fn_re = Regex::new(r#"(?m)^(\w+)\(\)\s*\{"#).expect("invalid function regex");
-
-    for caps in fn_re.captures_iter(content) {
+    for caps in FN_RE.captures_iter(content) {
         let fn_name = caps
             .get(1)
             .expect("regex capture group must exist")
