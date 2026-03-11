@@ -145,6 +145,8 @@ fn host_results_dir() -> PathBuf {
 
 async fn initialize_container_state(
     config: &conary_test::config::distro::GlobalConfig,
+    distro: &str,
+    phase: u32,
     backend: &conary_test::container::BollardBackend,
     container_id: &conary_test::container::ContainerId,
 ) -> Result<()> {
@@ -180,6 +182,29 @@ async fn initialize_container_state(
                 container_id,
                 &["sh", "-c", &remove_cmd],
                 Duration::from_secs(30),
+            )
+            .await?;
+    }
+
+    if phase > 1 {
+        let distro_config = config
+            .distros
+            .get(distro)
+            .with_context(|| format!("unknown distro: {distro}"))?;
+        let add_repo_cmd = format!(
+            "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
+            config.paths.conary_bin,
+            distro_config.repo_name,
+            config.remi.endpoint,
+            config.remi.endpoint,
+            distro_config.remi_distro,
+            config.paths.db
+        );
+        backend
+            .exec(
+                container_id,
+                &["sh", "-c", &add_repo_cmd],
+                Duration::from_secs(60),
             )
             .await?;
     }
@@ -224,8 +249,6 @@ fn run_single_distro(
         use conary_test::container::ContainerBackend;
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
-        initialize_container_state(config, &backend, &container_id).await?;
-
         let manifest_paths = match suite_path {
             Some(p) => vec![PathBuf::from(p)],
             None => manifests_for_phase(phase)?,
@@ -238,6 +261,8 @@ fn run_single_distro(
         for manifest_path in &manifest_paths {
             let manifest = conary_test::config::load_manifest(manifest_path)
                 .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
+            initialize_container_state(config, distro, manifest.suite.phase, &backend, &container_id)
+                .await?;
 
             let mut runner =
                 conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
