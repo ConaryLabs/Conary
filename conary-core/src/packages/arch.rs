@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use tar::Archive;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Arch Linux package representation
 pub struct ArchPackage {
