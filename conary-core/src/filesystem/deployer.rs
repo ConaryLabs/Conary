@@ -253,8 +253,12 @@ impl FileDeployer {
         // Remove existing file/symlink if present
         if link_path.exists() || link_path.symlink_metadata().is_ok() {
             if link_path.is_dir() {
-                // Don't remove directories
-                debug!("Skipping symlink deployment over directory: {}", path);
+                // Don't remove directories -- this may indicate a packaging
+                // conflict where a symlink and a directory share the same path.
+                warn!(
+                    "Skipping symlink deployment: existing directory at {} blocks symlink -> {}",
+                    path, target
+                );
                 return Ok(());
             }
             fs::remove_file(&link_path)?;
