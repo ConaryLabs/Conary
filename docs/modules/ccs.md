@@ -170,5 +170,39 @@ These should be treated as follow-up work after the Phase 3 plan lands so the
 manifest coverage can move from "planned and parseable" to fully executable
 without placeholder paths, approximated attack cases, or mock-server workarounds.
 
+## Phase 3 Workarounds Summary
+
+The following implementation-time workarounds were taken during the 2026-03-11
+Phase 3 adversarial-test rollout and should be revisited after the plan lands:
+
+- Manifests reference some future fixture paths directly:
+  Several Phase 3 manifests intentionally point at fixture names and output
+  paths that match the design, even when the corresponding fixture builders are
+  not fully implemented yet.
+- Group J dependency semantics are approximated:
+  Conflict and OR-dependency scenarios are represented with versioned packages
+  and shared capabilities rather than first-class manifest syntax.
+- Group K server-failure cases are approximated with a static mock server:
+  Retry, failover, rollback-protection, TLS, and large-metadata behaviors are
+  modeled with the nearest expressible static HTTP responses instead of a fully
+  stateful test server.
+- Group L lifecycle tests are robustness probes more than strict success tests:
+  Generation switching, rollback, self-update artifacts, and bootstrap outputs
+  are asserted conservatively because container permissions and bootstrap cost
+  make fully strict end-to-end checks impractical in the current environment.
+- Group N container tests validate file/layout state, not actual boot:
+  Real boot correctness is deferred to the QEMU manifest and image pipeline.
+- The first `qemu_boot` implementation is intentionally thin:
+  It shells out to host tools, assumes SSH availability in the guest, and lacks
+  richer VM orchestration features like snapshots, serial-pattern matching, or
+  guest-specific authentication flows.
+- `build-all.sh` currently skips missing or expensive fixture families:
+  Large fixtures and boot images are skipped unless their prerequisites exist or
+  explicit opt-in environment variables are provided.
+- Task 24 could only complete locally:
+  Adversarial fixtures build successfully after local script fixes, but the
+  Remi publish target for `/test-fixtures/adversarial/` is not yet accepting or
+  serving those artifacts as a dedicated static fixture directory.
+
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
