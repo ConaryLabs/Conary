@@ -371,6 +371,14 @@ pub struct UpdateRepoInput {
     pub metadata_expire: Option<i32>,
 }
 
+/// Result of a repository metadata refresh.
+#[derive(Debug, Clone)]
+pub struct RepoRefreshResult {
+    pub name: String,
+    pub packages_synced: usize,
+    pub skipped: bool,
+}
+
 /// Update an existing repository by name.  Returns `None` if not found.
 pub async fn update_repo(
     state: &Arc<RwLock<ServerState>>,
@@ -380,9 +388,8 @@ pub async fn update_repo(
     let db = db_path(state).await;
     let name_owned = name.to_string();
     blocking(move || {
-        let mut conn = conary_core::db::open_fast(&db)?;
-        let tx = conn.transaction()?;
-        let repo = Repository::find_by_name(&tx, &name_owned)?;
+        let conn = conary_core::db::open_fast(&db)?;
+        let repo = Repository::find_by_name(&conn, &name_owned)?;
         let mut repo = match repo {
             Some(r) => r,
             None => return Ok(None),
@@ -401,8 +408,7 @@ pub async fn update_repo(
         if let Some(metadata_expire) = input.metadata_expire {
             repo.metadata_expire = metadata_expire;
         }
-        repo.update(&tx)?;
-        tx.commit()?;
+        repo.update(&conn)?;
         Ok(Some(repo))
     })
     .await
@@ -439,4 +445,83 @@ pub async fn repo_exists(
 ) -> Result<bool, ServiceError> {
     let repo = get_repo(state, name).await?;
     Ok(repo.is_some())
+}
+
+/// Synchronize a single repository by name.
+///
+/// Returns `Ok(None)` if the repository does not exist.
+pub async fn sync_repo(
+    state: &Arc<RwLock<ServerState>>,
+    name: &str,
+    force: bool,
+) -> Result<Option<RepoRefreshResult>, ServiceError> {
+    let db = db_path(state).await;
+    let name_owned = name.to_string();
+    blocking(move || {
+        let conn = conary_core::db::open_fast(&db)?;
+        let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
+        let mut repo = match Repository::find_by_name(&conn, &name_owned)? {
+            Some(repo) => repo,
+            None => return Ok(None),
+        };
+
+        if !force && !conary_core::repository::needs_sync(&repo) {
+            return Ok(Some(RepoRefreshResult {
+                name: repo.name,
+                packages_synced: 0,
+                skipped: true,
+            }));
+        }
+
+        if repo.gpg_check {
+            let _ = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir);
+        }
+
+        let packages_synced = conary_core::repository::sync_repository(&conn, &mut repo)?;
+        Ok(Some(RepoRefreshResult {
+            name: repo.name,
+            packages_synced,
+            skipped: false,
+        }))
+    })
+    .await
+}
+
+/// Synchronize all enabled repositories.
+pub async fn refresh_repositories(
+    state: &Arc<RwLock<ServerState>>,
+    force: bool,
+) -> Result<Vec<RepoRefreshResult>, ServiceError> {
+    let db = db_path(state).await;
+    blocking(move || {
+        let conn = conary_core::db::open_fast(&db)?;
+        let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
+        let repos = Repository::list_enabled(&conn)?;
+        let mut refreshed = Vec::new();
+
+        for mut repo in repos {
+            if !force && !conary_core::repository::needs_sync(&repo) {
+                refreshed.push(RepoRefreshResult {
+                    name: repo.name,
+                    packages_synced: 0,
+                    skipped: true,
+                });
+                continue;
+            }
+
+            if repo.gpg_check {
+                let _ = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir);
+            }
+
+            let packages_synced = conary_core::repository::sync_repository(&conn, &mut repo)?;
+            refreshed.push(RepoRefreshResult {
+                name: repo.name,
+                packages_synced,
+                skipped: false,
+            });
+        }
+
+        Ok(refreshed)
+    })
+    .await
 }

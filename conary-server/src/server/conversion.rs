@@ -177,7 +177,8 @@ impl ConversionService {
         let temp_dir =
             TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
-        let pkg_path = download_package(&repo_pkg, temp_dir.path())
+        let (repo_pkg, pkg_path) = self
+            .download_package_with_refresh(&conn, distro, package_name, version, repo_pkg, temp_dir.path())
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         info!("Downloaded to: {:?}", pkg_path);
 
@@ -356,6 +357,46 @@ impl ConversionService {
             })?;
 
         Ok(pkg)
+    }
+
+    fn download_package_with_refresh(
+        &self,
+        conn: &rusqlite::Connection,
+        distro: &str,
+        package_name: &str,
+        version: Option<&str>,
+        repo_pkg: RepositoryPackage,
+        dest_dir: &Path,
+    ) -> Result<(RepositoryPackage, PathBuf)> {
+        match download_package(&repo_pkg, dest_dir) {
+            Ok(path) => return Ok((repo_pkg, path)),
+            Err(err) if !Self::is_upstream_not_found(&err) => return Err(err.into()),
+            Err(err) => {
+                info!(
+                    "Download for {}:{} hit upstream 404 ({}), refreshing repo {} once",
+                    distro, package_name, err, repo_pkg.repository_id
+                );
+            }
+        }
+
+        let mut repo = conary_core::db::models::Repository::find_by_id(conn, repo_pkg.repository_id)?
+            .ok_or_else(|| anyhow!("Repository {} not found during refresh", repo_pkg.repository_id))?;
+        conary_core::repository::sync_repository(conn, &mut repo)
+            .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo.name, e))?;
+
+        let refreshed_pkg = self.find_package(conn, distro, package_name, version)?;
+        let path = download_package(&refreshed_pkg, dest_dir)
+            .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
+        Ok((refreshed_pkg, path))
+    }
+
+    fn is_upstream_not_found(err: &conary_core::Error) -> bool {
+        match err {
+            conary_core::Error::DownloadError(message) => {
+                message.contains("HTTP 404") || message.contains("404 Not Found")
+            }
+            _ => false,
+        }
     }
 
     /// Parse a downloaded package file
@@ -1520,5 +1561,16 @@ mod tests {
         assert!(!is_critical_system_package("curl"));
         assert!(!is_critical_system_package("jq"));
         assert!(!is_critical_system_package("vim"));
+    }
+
+    #[test]
+    fn test_detects_upstream_not_found_download_error() {
+        let err = conary_core::Error::DownloadError(
+            "HTTP 404 Not Found from https://example.com/pkg.rpm".to_string(),
+        );
+        assert!(ConversionService::is_upstream_not_found(&err));
+
+        let other = conary_core::Error::DownloadError("HTTP 500".to_string());
+        assert!(!ConversionService::is_upstream_not_found(&other));
     }
 }

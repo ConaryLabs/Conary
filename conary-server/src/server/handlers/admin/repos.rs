@@ -2,7 +2,7 @@
 //! Repository management handlers
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,13 @@ pub struct RepoResponse {
     pub metadata_expire: i32,
     pub last_sync: Option<String>,
     pub created_at: Option<String>,
+}
+
+/// Query parameters for refresh endpoints.
+#[derive(Debug, Deserialize)]
+pub struct RefreshQuery {
+    #[serde(default)]
+    pub force: bool,
 }
 
 impl From<conary_core::db::models::Repository> for RepoResponse {
@@ -270,12 +277,12 @@ pub async fn delete_repo(
 
 /// POST /v1/admin/repos/:name/sync
 ///
-/// Trigger a manual sync for a repository. Currently a stub that verifies
-/// the repo exists and publishes a `repo.sync_requested` event.
+/// Trigger a manual sync for a repository.
 /// Requires the "repos:write" scope.
 pub async fn sync_repo(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
+    Query(query): Query<RefreshQuery>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
     if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
@@ -284,22 +291,84 @@ pub async fn sync_repo(
     if let Some(err) = validate_path_param(&name, "repo name") {
         return err;
     }
-
-    match admin_service::repo_exists(&state, &name).await {
-        Ok(true) => {
+    match admin_service::sync_repo(&state, &name, query.force).await {
+        Ok(Some(result)) => {
             let guard = state.read().await;
-            guard.publish_event("repo.sync_requested", serde_json::json!({"name": &name}));
+            guard.publish_event(
+                "repo.synced",
+                serde_json::json!({
+                    "name": &result.name,
+                    "packages_synced": result.packages_synced,
+                    "skipped": result.skipped,
+                    "force": query.force,
+                }),
+            );
             drop(guard);
-            (
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({"status": "sync_requested", "name": name})),
-            )
-                .into_response()
+            Json(serde_json::json!({
+                "status": if result.skipped { "up_to_date" } else { "synced" },
+                "name": result.name,
+                "packages_synced": result.packages_synced,
+                "skipped": result.skipped,
+                "force": query.force,
+            }))
+            .into_response()
         }
-        Ok(false) => json_error(404, "Repository not found", "NOT_FOUND"),
+        Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
         Err(e) => {
-            tracing::error!("Failed to find repo for sync: {e}");
+            tracing::error!("Failed to sync repo {name}: {e}");
             json_error(500, "Failed to sync repository", "INTERNAL_ERROR")
+        }
+    }
+}
+
+/// POST /v1/admin/refresh
+///
+/// Synchronize all enabled repositories, skipping fresh repos unless `force=true`.
+/// Requires the "repos:write" scope.
+pub async fn refresh_repos(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Query(query): Query<RefreshQuery>,
+    scopes: Option<axum::Extension<TokenScopes>>,
+) -> Response {
+    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
+        return err;
+    }
+
+    match admin_service::refresh_repositories(&state, query.force).await {
+        Ok(results) => {
+            let synced = results.iter().filter(|r| !r.skipped).count();
+            let skipped = results.iter().filter(|r| r.skipped).count();
+
+            let guard = state.read().await;
+            guard.publish_event(
+                "repos.refreshed",
+                serde_json::json!({
+                    "force": query.force,
+                    "synced": synced,
+                    "skipped": skipped,
+                }),
+            );
+            drop(guard);
+
+            Json(serde_json::json!({
+                "status": "ok",
+                "force": query.force,
+                "synced": synced,
+                "skipped": skipped,
+                "results": results
+                    .into_iter()
+                    .map(|r| serde_json::json!({
+                        "name": r.name,
+                        "packages_synced": r.packages_synced,
+                        "skipped": r.skipped,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to refresh repositories: {e}");
+            json_error(500, "Failed to refresh repositories", "INTERNAL_ERROR")
         }
     }
 }
@@ -459,5 +528,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_repos_empty_ok() {
+        let (app, _db_path) = test_app().await;
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/refresh")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["synced"], 0);
+        assert_eq!(body["skipped"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_sync_repo_missing_returns_not_found() {
+        let (app, _db_path) = test_app().await;
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos/missing/sync")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -473,6 +473,41 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         });
     }
 
+    // Start background upstream metadata refresh loop.
+    // This keeps repository package URLs reasonably fresh even when no one
+    // manually hits the admin sync endpoints.
+    {
+        let refresh_state = state.clone();
+        let refresh_interval =
+            crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(6 * 3600));
+        tracing::info!(
+            "  Metadata refresh: enabled every {}s",
+            refresh_interval.as_secs()
+        );
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(refresh_interval).await;
+                match crate::server::admin_service::refresh_repositories(&refresh_state, false)
+                    .await
+                {
+                    Ok(results) => {
+                        let synced = results.iter().filter(|r| !r.skipped).count();
+                        let skipped = results.iter().filter(|r| r.skipped).count();
+                        tracing::info!(
+                            "Background metadata refresh complete: {} synced, {} skipped",
+                            synced,
+                            skipped
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Background metadata refresh failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     // Start background pre-warming if enabled
     if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
         let prewarm_interval =
