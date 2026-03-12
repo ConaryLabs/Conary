@@ -15,7 +15,7 @@ phase = 3
 
 [distro_overrides.fedora43]
 small_package = "tree"
-dep_heavy_package = "vim-enhanced"
+dep_heavy_package = "jq"
 distro_repo = "fedora-remi"
 
 [distro_overrides.ubuntu-noble]
@@ -80,7 +80,7 @@ conary = "repo sync ${distro_repo} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -107,7 +107,7 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -171,13 +171,13 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -278,7 +278,7 @@ timeout = 180
 group = "M"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -377,7 +377,7 @@ conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
