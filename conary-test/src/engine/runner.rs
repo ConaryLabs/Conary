@@ -52,13 +52,13 @@ impl TestRunner {
                 if let Some(value) = &fixtures.v1_ccs_file {
                     vars.insert(
                         "FIXTURE_V1_CCS".to_string(),
-                        format!("{fixture_dir}/ccs/{value}"),
+                        format!("{fixture_dir}/conary-test-fixture/v1/output/{value}"),
                     );
                 }
                 if let Some(value) = &fixtures.v2_ccs_file {
                     vars.insert(
                         "FIXTURE_V2_CCS".to_string(),
-                        format!("{fixture_dir}/ccs/{value}"),
+                        format!("{fixture_dir}/conary-test-fixture/v2/output/{value}"),
                     );
                 }
             }
@@ -545,7 +545,9 @@ impl TestRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::distro::{GlobalConfig, PathsConfig, RemiConfig, SetupConfig};
+    use crate::config::distro::{
+        FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig,
+    };
     use crate::config::manifest::{
         Assertion, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef, TestManifest,
         TestStep,
@@ -716,11 +718,32 @@ mod tests {
                 db: "/tmp/conary-test.db".to_string(),
                 conary_bin: "/usr/local/bin/conary".to_string(),
                 results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
+                fixture_dir: Some("/opt/remi-tests/fixtures".to_string()),
             },
             setup: SetupConfig::default(),
             distros: HashMap::new(),
-            fixtures: None,
+            fixtures: Some(FixtureConfig {
+                package: Some("conary-test-fixture".to_string()),
+                file: Some("/usr/share/conary-test/hello.txt".to_string()),
+                added_file: Some("/usr/share/conary-test/added.txt".to_string()),
+                marker: Some("/var/lib/conary-test/installed".to_string()),
+                v1_version: Some("1.0.0".to_string()),
+                v1_ccs_file: Some("conary-test-fixture-1.0.0.ccs".to_string()),
+                v1_hello_sha256: Some(
+                    "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53"
+                        .to_string(),
+                ),
+                v2_version: Some("2.0.0".to_string()),
+                v2_ccs_file: Some("conary-test-fixture-2.0.0.ccs".to_string()),
+                v2_hello_sha256: Some(
+                    "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db"
+                        .to_string(),
+                ),
+                v2_added_sha256: Some(
+                    "9767b0b4d55db9aee6638c9875b5cefea50c952cc77fbc5703ebc866b0daba3c"
+                        .to_string(),
+                ),
+            }),
         }
     }
 
@@ -1096,6 +1119,12 @@ mod tests {
 
         let expanded3 = runner.substitute_vars("conary install ${PKG}");
         assert_eq!(expanded3, "conary install tree");
+
+        let fixture_v1 = runner.substitute_vars("${FIXTURE_V1_CCS}");
+        assert_eq!(
+            fixture_v1,
+            "/opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs"
+        );
     }
 
     #[test]
