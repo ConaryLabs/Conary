@@ -16,17 +16,17 @@ phase = 3
 [distro_overrides.fedora43]
 small_package = "tree"
 dep_heavy_package = "vim-enhanced"
-distro_repo = "fedora-43"
+distro_repo = "fedora-remi"
 
 [distro_overrides.ubuntu-noble]
 small_package = "tree"
 dep_heavy_package = "vim"
-distro_repo = "ubuntu-noble"
+distro_repo = "ubuntu-remi"
 
 [distro_overrides.arch]
 small_package = "tree"
 dep_heavy_package = "vim"
-distro_repo = "arch-extra"
+distro_repo = "arch-remi"
 
 # --------------------------------------------------------------------------
 # T138: Install real CCS package

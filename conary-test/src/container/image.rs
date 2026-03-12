@@ -130,7 +130,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
 
     let fixtures_src = project_root.join("tests/fixtures");
     if fixtures_src.is_dir() {
-        copy_dir_filtered(&fixtures_src, &root.join("fixtures"), &["output"])?;
+        copy_dir_filtered(&fixtures_src, &root.join("fixtures"), &[])?;
     } else {
         fs::create_dir_all(root.join("fixtures"))?;
     }
@@ -139,9 +139,8 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
     if arch_pkgbuild.is_file() {
         let pkgbuild_dir = root.join("fixtures/pkgbuild");
         fs::create_dir_all(&pkgbuild_dir)?;
-        fs::copy(&arch_pkgbuild, pkgbuild_dir.join("PKGBUILD")).with_context(|| {
-            format!("failed to copy {}", arch_pkgbuild.display())
-        })?;
+        fs::copy(&arch_pkgbuild, pkgbuild_dir.join("PKGBUILD"))
+            .with_context(|| format!("failed to copy {}", arch_pkgbuild.display()))?;
     }
 
     let binary = find_host_conary_binary(&project_root)?;
@@ -197,10 +196,15 @@ mod tests {
         fs::create_dir_all(remi_root.join("runner")).expect("create runner");
         fs::create_dir_all(project_root.join("tests/fixtures/recipes/simple-hello"))
             .expect("create fixtures");
+        fs::create_dir_all(project_root.join("tests/fixtures/conary-test-fixture/v1/output"))
+            .expect("create fixture output");
         fs::create_dir_all(project_root.join("packaging/arch")).expect("create packaging");
 
-        fs::write(project_root.join("Cargo.toml"), "[workspace]\nmembers = []\n")
-            .expect("write cargo");
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("write cargo");
         fs::write(project_root.join("conary"), "binary").expect("write binary");
         fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
         fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
@@ -210,18 +214,39 @@ mod tests {
             "name = 'simple-hello'\n",
         )
         .expect("write fixture");
-        fs::write(project_root.join("packaging/arch/PKGBUILD"), "pkgname=conary\n")
-            .expect("write pkgbuild");
+        fs::write(
+            project_root.join("tests/fixtures/conary-test-fixture/v1/output/test.ccs"),
+            "fixture-bytes",
+        )
+        .expect("write fixture output");
+        fs::write(
+            project_root.join("packaging/arch/PKGBUILD"),
+            "pkgname=conary\n",
+        )
+        .expect("write pkgbuild");
 
         let staged = stage_build_context(&containerfile, "fedora43").expect("stage build context");
 
-        assert!(staged.root.join("containers/Containerfile.fedora43").is_file());
+        assert!(
+            staged
+                .root
+                .join("containers/Containerfile.fedora43")
+                .is_file()
+        );
         assert!(staged.root.join("config.toml").is_file());
         assert!(staged.root.join("runner/test_runner.py").is_file());
-        assert!(staged
-            .root
-            .join("fixtures/recipes/simple-hello/recipe.toml")
-            .is_file());
+        assert!(
+            staged
+                .root
+                .join("fixtures/recipes/simple-hello/recipe.toml")
+                .is_file()
+        );
+        assert!(
+            staged
+                .root
+                .join("fixtures/conary-test-fixture/v1/output/test.ccs")
+                .is_file()
+        );
         assert!(staged.root.join("fixtures/pkgbuild/PKGBUILD").is_file());
         assert!(staged.root.join("conary").is_file());
         assert!(!staged.root.join("target").exists());
