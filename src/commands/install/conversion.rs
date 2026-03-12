@@ -81,28 +81,32 @@ fn promote_repo_resolvable_satisfy_deps(
         return;
     }
 
-    let mut supplemental = Vec::new();
-    let mut still_unresolvable = Vec::new();
+    let requests = dep_plan
+        .unresolvable
+        .iter()
+        .map(|dep| (dep.name.clone(), dep.constraint.clone()))
+        .collect::<Vec<_>>();
 
-    for dep in dep_plan.unresolvable.drain(..) {
-        let requests = vec![(dep.name.clone(), dep.constraint.clone())];
-        match repository::resolve_dependencies_transitive_requests(conn, &requests, 10) {
-            Ok(resolved) if !resolved.is_empty() => {
-                supplemental.push(dep_resolution::ResolvedDep {
+    match repository::resolve_dependencies_transitive_requests(conn, &requests, 10) {
+        Ok(resolved) if !resolved.is_empty() => {
+            let supplemental = dep_plan
+                .unresolvable
+                .drain(..)
+                .map(|dep| dep_resolution::ResolvedDep {
                     name: dep.name,
                     version: Some(dep.constraint.to_string()),
                     required_by: dep.required_by,
-                });
+                })
+                .collect::<Vec<_>>();
+            for dep in supplemental {
+                if dep_plan.to_install.iter().all(|existing| existing.name != dep.name) {
+                    dep_plan.to_install.push(dep);
+                }
             }
-            _ => still_unresolvable.push(dep),
         }
-    }
-
-    dep_plan.unresolvable = still_unresolvable;
-
-    for dep in supplemental {
-        if dep_plan.to_install.iter().all(|existing| existing.name != dep.name) {
-            dep_plan.to_install.push(dep);
+        _ => {
+            // Leave the original unresolvable list intact if the set can't
+            // be solved together from repositories.
         }
     }
 }
