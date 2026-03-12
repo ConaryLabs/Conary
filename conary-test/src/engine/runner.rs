@@ -321,6 +321,7 @@ impl TestRunner {
                 }
                 StepType::FileChecksum(chk) => {
                     let expanded_path = self.substitute_vars(&chk.path);
+                    let expected_hash = self.substitute_vars(&chk.sha256);
                     let cmd = format!("sha256sum {expanded_path}");
                     let result = backend
                         .exec(container_id, &["sh", "-c", &cmd], timeout)
@@ -339,10 +340,10 @@ impl TestRunner {
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    if actual_hash != chk.sha256 {
+                    if actual_hash != expected_hash {
                         failure = Some(format!(
                             "checksum mismatch for {expanded_path}: expected {}, got {actual_hash}",
-                            chk.sha256
+                            expected_hash
                         ));
                         last_exec = Some(result);
                         break;
