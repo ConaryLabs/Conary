@@ -35,6 +35,7 @@ pub mod chunk_fetcher;
 pub use client::{RepositoryClient, RetryPolicy};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
+    resolve_dependencies_transitive_requests,
 };
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,

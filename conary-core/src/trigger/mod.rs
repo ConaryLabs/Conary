@@ -184,10 +184,11 @@ impl<'a> TriggerExecutor<'a> {
 
         debug!("Executing: {} {:?}", cmd, args);
 
+        let root_string = self.root.to_string_lossy().into_owned();
         let child = Command::new(cmd)
             .args(args)
             .env("CONARY_TRIGGER_NAME", &trigger.name)
-            .env("CONARY_ROOT", self.root.to_string_lossy().as_ref())
+            .env("CONARY_ROOT", root_string)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
