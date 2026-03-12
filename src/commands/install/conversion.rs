@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary_core::ccs::CcsPackage;
+use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
@@ -25,6 +26,34 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::{info, warn};
+
+fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
+    if dep_name == ccs_pkg.name() {
+        return true;
+    }
+
+    if ccs_pkg
+        .manifest()
+        .provides
+        .capabilities
+        .iter()
+        .any(|cap| cap == dep_name)
+    {
+        return true;
+    }
+
+    let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
+        .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
+        .collect();
+
+    for variation in generate_capability_variations(dep_name) {
+        if provided.contains(&variation) {
+            return true;
+        }
+    }
+
+    false
+}
 
 /// Result of attempting CCS conversion
 pub enum ConversionResult {
@@ -231,6 +260,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
         let missing: Vec<MissingDependency> = ccs_pkg
             .dependencies()
             .iter()
+            .filter(|dep| !package_self_provides(&ccs_pkg, &dep.name))
             .filter(|dep| !dep.name.starts_with("rpmlib(") && !dep.name.starts_with('/'))
             .map(|dep| MissingDependency {
                 name: dep.name.clone(),

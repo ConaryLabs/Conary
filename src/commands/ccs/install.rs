@@ -8,9 +8,38 @@
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
 use conary_core::db::models::{Changeset, ChangesetStatus};
+use conary_core::db::models::generate_capability_variations;
 use conary_core::packages::traits::PackageFormat;
 use rusqlite::params;
 use std::path::Path;
+
+fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
+    if dep_name == ccs_pkg.name() {
+        return true;
+    }
+
+    if ccs_pkg
+        .manifest()
+        .provides
+        .capabilities
+        .iter()
+        .any(|cap| cap == dep_name)
+    {
+        return true;
+    }
+
+    let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
+        .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
+        .collect();
+
+    for variation in generate_capability_variations(dep_name) {
+        if provided.contains(&variation) {
+            return true;
+        }
+    }
+
+    false
+}
 
 /// Install a CCS package
 ///
@@ -105,6 +134,9 @@ pub fn cmd_ccs_install(
     } else {
         println!("Checking dependencies...");
         for dep in ccs_pkg.dependencies() {
+            if package_self_provides(&ccs_pkg, &dep.name) {
+                continue;
+            }
             let satisfied = conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(
                 &conn, &dep.name,
             )?;
