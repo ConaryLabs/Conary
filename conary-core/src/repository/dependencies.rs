@@ -5,7 +5,7 @@
 //! Functions for resolving package dependencies across repositories,
 //! including transitive resolution and parallel downloads.
 
-use crate::db::models::Trove;
+use crate::db::models::{Trove, generate_capability_variations};
 use crate::error::{Error, Result};
 use rayon::prelude::*;
 use rusqlite::Connection;
@@ -14,6 +14,26 @@ use tracing::{debug, info};
 
 use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+
+fn resolve_repo_dependency_name(
+    conn: &Connection,
+    dep_name: &str,
+    options: &SelectionOptions,
+) -> Result<String> {
+    if PackageSelector::find_best_package(conn, dep_name, options).is_ok() {
+        return Ok(dep_name.to_string());
+    }
+
+    for variation in generate_capability_variations(dep_name) {
+        if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
+            return Ok(variation);
+        }
+    }
+
+    Err(Error::NotFound(format!(
+        "Required dependency '{dep_name}' not found in any repository"
+    )))
+}
 
 /// Resolve dependencies and return list of packages to download
 ///
@@ -43,11 +63,15 @@ pub fn resolve_dependencies(
 
         // Search repositories for this dependency
         let options = SelectionOptions::default();
-        match PackageSelector::find_best_package(conn, dep_name, &options) {
+        let resolved_name = resolve_repo_dependency_name(conn, dep_name, &options)?;
+        match PackageSelector::find_best_package(conn, &resolved_name, &options) {
             Ok(pkg_with_repo) => {
                 info!(
-                    "Found dependency {} version {} in repository {}",
-                    dep_name, pkg_with_repo.package.version, pkg_with_repo.repository.name
+                    "Found dependency {} as package {} version {} in repository {}",
+                    dep_name,
+                    resolved_name,
+                    pkg_with_repo.package.version,
+                    pkg_with_repo.repository.name
                 );
                 to_download.push((dep_name.clone(), pkg_with_repo));
             }
@@ -79,11 +103,15 @@ pub fn resolve_dependencies_transitive(
     use crate::version::VersionConstraint;
 
     // Filter out rpmlib dependencies and file paths
+    let options = SelectionOptions::default();
     let requests: Vec<_> = initial_dependencies
         .iter()
         .filter(|d| !d.starts_with("rpmlib(") && !d.starts_with('/'))
-        .map(|d| (d.clone(), VersionConstraint::Any))
-        .collect();
+        .map(|d| {
+            resolve_repo_dependency_name(conn, d, &options)
+                .map(|resolved| (resolved, VersionConstraint::Any))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     if requests.is_empty() {
         return Ok(Vec::new());
@@ -251,4 +279,47 @@ pub fn download_dependencies(
     }
 
     Ok(succeeded_results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::{Repository, RepositoryPackage};
+    use crate::db::schema;
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn resolves_soname_dependency_to_repo_package_name() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "libjq".to_string(),
+            "1.8.1-1.fc43".to_string(),
+            "sha256:test".to_string(),
+            123,
+            "https://example.invalid/libjq.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+
+        let resolved =
+            resolve_repo_dependency_name(&conn, "libjq.so.1", &SelectionOptions::default())
+                .unwrap();
+        assert_eq!(resolved, "libjq");
+    }
 }
