@@ -25,8 +25,11 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Buffer size for streaming downloads (8 KB)
 const STREAM_BUFFER_SIZE: usize = 8192;
 
-/// Maximum response size for in-memory downloads (100 MB)
-const MAX_BYTES_RESPONSE_SIZE: u64 = 100 * 1024 * 1024;
+/// Maximum response size for in-memory downloads (256 MB)
+///
+/// Fedora metadata can exceed 100 MB once Remi includes enough native
+/// package metadata for capability-aware dependency resolution.
+const MAX_BYTES_RESPONSE_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
 ///
