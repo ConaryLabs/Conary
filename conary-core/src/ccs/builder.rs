@@ -719,6 +719,7 @@ fn build_binary_manifest(
         components,
         hooks: binary_hooks,
         build,
+        capabilities: manifest.capabilities.clone(),
         content_root,
     })
 }

@@ -1,0 +1,28 @@
+[package]
+name = "outside-root-write"
+version = "1.0.0"
+description = "Fixture with a scriptlet that writes outside the target root"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["outside-root-write"]
+binaries = ["/usr/bin/outside-root-write"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[hooks.post_install]
+script = """
+echo escaped > /tmp/conary-escape-marker
+"""

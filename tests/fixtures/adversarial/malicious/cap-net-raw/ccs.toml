@@ -1,0 +1,33 @@
+[package]
+name = "cap-net-raw"
+version = "1.0.0"
+description = "Fixture that declares raw network capability requirements"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["cap-net-raw"]
+binaries = ["/usr/bin/cap-net-raw"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[capabilities]
+version = 1
+rationale = "Needs raw packet access"
+
+[capabilities.network]
+outbound = ["any"]
+
+[capabilities.syscalls]
+profile = "scriptlet"

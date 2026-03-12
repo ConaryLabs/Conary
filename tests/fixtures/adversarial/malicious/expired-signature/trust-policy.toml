@@ -1,0 +1,4 @@
+trusted_keys = ["aPeyNbroPjh0qDWJiPmn4DHc9dAEaf/qf8lJYxwcIyU="]
+allow_unsigned = false
+require_timestamp = true
+max_signature_age = 86400

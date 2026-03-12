@@ -1,0 +1,23 @@
+[package]
+name = "decompression-bomb"
+version = "1.0.0"
+description = "Fixture that expands into an oversized archive entry"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["decompression-bomb"]
+binaries = ["/usr/bin/decompression-bomb"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

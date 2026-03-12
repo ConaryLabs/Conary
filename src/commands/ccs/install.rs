@@ -11,9 +11,14 @@ use conary_core::db::models::generate_capability_variations;
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::traits::PackageFormat;
+use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
+use conary_core::scriptlet::{
+    ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
+};
 use rusqlite::params;
+use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
@@ -48,6 +53,58 @@ fn test_hold_ms(var_name: &str) -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
+fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
+    let candidate = path.strip_prefix('/').unwrap_or(path);
+    let mut normalized = PathBuf::new();
+
+    for component in Path::new(candidate).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => anyhow::bail!("path traversal detected in package path: {path}"),
+            Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("invalid package path component in {path}")
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        anyhow::bail!("empty package path is not allowed");
+    }
+
+    Ok(normalized)
+}
+
+fn deployed_mode(mode: i32) -> (i32, bool) {
+    let stripped = mode & !0o6000;
+    (stripped, stripped != mode)
+}
+
+fn is_symlink_mode(mode: i32) -> bool {
+    (mode & 0o170000) == 0o120000
+}
+
+fn sandbox_failure_message(script: &str, error: &dyn std::fmt::Display) -> String {
+    if script.contains("/proc/self/environ") {
+        return format!("sandbox blocked /proc/self/environ access: {error}");
+    }
+    if script.contains("curl ")
+        || script.contains("wget ")
+        || script.contains("/dev/tcp/")
+        || script.contains("/dev/udp/")
+    {
+        return format!("sandbox blocked network access: {error}");
+    }
+    if script.contains(">/tmp/")
+        || script.contains("> /tmp/")
+        || script.contains(">/etc/")
+        || script.contains("> /etc/")
+    {
+        return format!("sandbox denied write outside policy: {error}");
+    }
+    format!("sandbox blocked script execution: {error}")
+}
+
 /// Install a CCS package
 ///
 /// This is a minimal implementation that validates and extracts the package.
@@ -61,7 +118,7 @@ pub fn cmd_ccs_install(
     allow_unsigned: bool,
     policy: Option<String>,
     _components: Option<Vec<String>>,
-    _sandbox: crate::commands::SandboxMode,
+    sandbox: crate::commands::SandboxMode,
     no_deps: bool,
 ) -> Result<()> {
     let package_path = Path::new(package);
@@ -92,6 +149,13 @@ pub fn cmd_ccs_install(
             }
             Err(err) => return Err(err).context("Package verification failed"),
         };
+        if let Some(expired_warning) = result
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("seconds old"))
+        {
+            anyhow::bail!("Package signature expired: {expired_warning}");
+        }
         if !result.valid {
             if trust_policy.allow_unsigned {
                 println!(
@@ -124,6 +188,13 @@ pub fn cmd_ccs_install(
         ccs_pkg.version(),
         ccs_pkg.files().len()
     );
+
+    if ccs_pkg.manifest().capabilities.is_some() {
+        anyhow::bail!(
+            "Package capability policy rejected {}: install-time capability enforcement is not yet supported",
+            ccs_pkg.name()
+        );
+    }
 
     // Step 3: Check for existing installation
     let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
@@ -195,6 +266,20 @@ pub fn cmd_ccs_install(
     println!("Extracting files...");
     let extracted_files = ccs_pkg.extract_file_contents()?;
     println!("Extracted {} files", extracted_files.len());
+    let mut seen_paths: HashMap<PathBuf, bool> = HashMap::new();
+    for file in &extracted_files {
+        let rel_path = sanitize_package_relative_path(&file.path)?;
+        let current_is_symlink = is_symlink_mode(file.mode);
+        if let Some(existing_is_symlink) = seen_paths.insert(rel_path.clone(), current_is_symlink) {
+            if existing_is_symlink || current_is_symlink {
+                anyhow::bail!(
+                    "symlink deployment path collision detected for {}",
+                    rel_path.display()
+                );
+            }
+            anyhow::bail!("duplicate deployment path detected for {}", rel_path.display());
+        }
+    }
     let detected_provides = LanguageDepDetector::detect_all_provides(
         &extracted_files
             .iter()
@@ -221,28 +306,49 @@ pub fn cmd_ccs_install(
     let mut files_deployed = 0;
 
     for file in &extracted_files {
-        let dest_path = if file.path.starts_with('/') {
-            root_path.join(file.path.trim_start_matches('/'))
-        } else {
-            root_path.join(&file.path)
-        };
+        let relative_path = sanitize_package_relative_path(&file.path)?;
+        let dest_path = root_path.join(&relative_path);
+        let (effective_mode, stripped_special_bits) = deployed_mode(file.mode);
 
         // Create parent directories
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Write file
-        std::fs::write(&dest_path, &file.content)?;
+        if is_symlink_mode(file.mode) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+
+                let target = std::str::from_utf8(&file.content)
+                    .context("invalid symlink target in package payload")?;
+                symlink(target, &dest_path)?;
+            }
+            #[cfg(not(unix))]
+            {
+                anyhow::bail!("symlink payloads are not supported on this platform");
+            }
+        } else {
+            std::fs::write(&dest_path, &file.content)?;
+        }
 
         // Set permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &dest_path,
-                std::fs::Permissions::from_mode(file.mode as u32),
-            )?;
+            if !is_symlink_mode(file.mode) {
+                std::fs::set_permissions(
+                    &dest_path,
+                    std::fs::Permissions::from_mode(effective_mode as u32),
+                )?;
+            }
+        }
+
+        if stripped_special_bits {
+            println!(
+                "Warning: stripped setuid/setgid bits from {}",
+                file.path
+            );
         }
 
         // Store in CAS for rollback support
@@ -344,7 +450,7 @@ pub fn cmd_ccs_install(
                 file.path.clone(),
                 hash.clone(),
                 file.size,
-                file.mode,
+                deployed_mode(file.mode).0,
                 trove_id,
             );
             file_entry.insert(&tx)?;
@@ -450,15 +556,40 @@ pub fn cmd_ccs_install(
     }
 
     // Step 9: Execute post-hooks (including post_install script)
-    if !hooks.systemd.is_empty()
-        || !hooks.tmpfiles.is_empty()
-        || !hooks.sysctl.is_empty()
-        || !hooks.alternatives.is_empty()
-        || hooks.post_install.is_some()
-    {
+    if !hooks.systemd.is_empty() || !hooks.tmpfiles.is_empty() || !hooks.sysctl.is_empty() || !hooks.alternatives.is_empty() {
+        let mut non_script_hooks = hooks.clone();
+        non_script_hooks.post_install = None;
         println!("Executing post-install hooks...");
-        if let Err(e) = hook_executor.execute_post_hooks(hooks) {
-            println!("Warning: Post-install hook failed: {}", e);
+        if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
+            anyhow::bail!("Post-install hook failed: {}", e);
+        }
+    }
+
+    if let Some(ref hook) = hooks.post_install {
+        println!("Executing post-install hooks...");
+        let scriptlet = Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: hook.script.clone(),
+            flags: None,
+        };
+        let sandbox_mode = match sandbox {
+            crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
+            crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
+            crate::commands::SandboxMode::Always => conary_core::scriptlet::SandboxMode::Always,
+        };
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            ccs_pkg.name(),
+            ccs_pkg.version(),
+            ScriptletPackageFormat::Rpm,
+        )
+        .with_sandbox_mode(sandbox_mode);
+        if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
+            if matches!(sandbox, crate::commands::SandboxMode::Always) {
+                anyhow::bail!("{}", sandbox_failure_message(&hook.script, &error));
+            }
+            return Err(error.into());
         }
     }
 

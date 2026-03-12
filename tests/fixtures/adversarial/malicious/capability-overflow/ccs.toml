@@ -1,0 +1,38 @@
+[package]
+name = "capability-overflow"
+version = "1.0.0"
+description = "Fixture that declares filesystem and network capabilities beyond policy"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["capability-overflow"]
+binaries = ["/usr/bin/capability-overflow"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[capabilities]
+version = 1
+rationale = "Intentionally broad capability request for policy rejection tests"
+
+[capabilities.network]
+outbound = ["1-65535"]
+listen = ["1-65535"]
+
+[capabilities.filesystem]
+read = ["/"]
+write = ["/", "/etc", "/var", "/tmp"]
+
+[capabilities.syscalls]
+profile = "scriptlet"

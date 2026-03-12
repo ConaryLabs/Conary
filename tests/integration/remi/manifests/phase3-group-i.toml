@@ -148,7 +148,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs --policy /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/trust-policy.toml"
 
 [test.step.assert]
 exit_code_not = 0
