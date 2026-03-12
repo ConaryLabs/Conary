@@ -111,6 +111,15 @@ fn build_package_url(base_url: &str, distro: &str, name: &str, version: Option<&
     }
 }
 
+fn build_download_url(base_url: &str, distro: &str, name: &str, version: Option<&str>) -> String {
+    let package_url = build_package_url(base_url, distro, name, version);
+    if let Some((path, query)) = package_url.split_once('?') {
+        format!("{path}/download?{query}")
+    } else {
+        format!("{package_url}/download")
+    }
+}
+
 /// Client for interacting with a Remi server
 pub struct RemiClient {
     client: Client,
@@ -558,7 +567,7 @@ impl RemiClient {
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Use the direct download endpoint
-        let url = format!("{}/download", self.package_url(distro, name, version));
+        let url = build_download_url(&self.base_url, distro, name, version);
 
         info!("Downloading CCS package from Remi: {}", url);
 
@@ -1068,6 +1077,15 @@ mod tests {
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx?version=1.24.0"
+        );
+    }
+
+    #[test]
+    fn test_build_download_url_with_version() {
+        let url = build_download_url("http://remi:8080", "arch", "nginx", Some("1.24.0"));
+        assert_eq!(
+            url,
+            "http://remi:8080/v1/arch/packages/nginx/download?version=1.24.0"
         );
     }
 

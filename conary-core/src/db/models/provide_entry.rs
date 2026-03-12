@@ -23,6 +23,17 @@ pub struct ProvideEntry {
 }
 
 impl ProvideEntry {
+    fn soname_base(capability: &str) -> Option<&str> {
+        if capability.contains(".so") {
+            capability
+                .split('(')
+                .next()
+                .filter(|base| *base != capability)
+        } else {
+            None
+        }
+    }
+
     /// Create a new ProvideEntry
     pub fn new(trove_id: i64, capability: String, version: Option<String>) -> Self {
         Self {
@@ -238,6 +249,15 @@ impl ProvideEntry {
 
         if result.is_some() {
             return Ok(result);
+        }
+
+        // Versioned soname requirements like "libm.so.6(GLIBC_2.0)" should
+        // still match a tracked base soname provider such as "libm.so.6".
+        if let Some(base) = Self::soname_base(capability) {
+            let result = Self::find_satisfying_provider(conn, base)?;
+            if result.is_some() {
+                return Ok(result);
+            }
         }
 
         // Try case-insensitive prefix match for cross-distro compatibility
@@ -584,5 +604,22 @@ mod tests {
         provide.insert(&conn).unwrap();
 
         assert!(ProvideEntry::is_capability_satisfied_fuzzy(&conn, "libc.so.6").unwrap());
+    }
+
+    #[test]
+    fn test_find_satisfying_provider_matches_versioned_soname_to_base_provider() {
+        let conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            [],
+        )
+        .unwrap();
+
+        let mut provide = ProvideEntry::new(2, "libm.so.6()(64bit)".to_string(), None);
+        provide.insert(&conn).unwrap();
+
+        let result = ProvideEntry::find_satisfying_provider(&conn, "libm.so.6(GLIBC_2.0)").unwrap();
+        assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
     }
 }

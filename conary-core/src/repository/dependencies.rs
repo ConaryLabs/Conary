@@ -9,6 +9,8 @@ use crate::db::models::{Trove, generate_capability_variations};
 use crate::error::{Error, Result};
 use rayon::prelude::*;
 use rusqlite::Connection;
+use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -30,9 +32,74 @@ fn resolve_repo_dependency_name(
         }
     }
 
+    if let Some(candidate) = resolve_repo_dependency_by_search(conn, dep_name, options)? {
+        return Ok(candidate);
+    }
+
     Err(Error::NotFound(format!(
         "Required dependency '{dep_name}' not found in any repository"
     )))
+}
+
+fn resolve_repo_dependency_by_search(
+    conn: &Connection,
+    dep_name: &str,
+    options: &SelectionOptions,
+) -> Result<Option<String>> {
+    if !dep_name.ends_with(".so") && !dep_name.contains(".so.") {
+        return Ok(None);
+    }
+
+    let mut search_terms = HashSet::new();
+    for variation in generate_capability_variations(dep_name) {
+        if variation.len() >= 3 {
+            search_terms.insert(variation);
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for term in search_terms {
+        let pattern = format!("%{term}%");
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT name FROM repository_packages
+             WHERE name LIKE ?1
+             ORDER BY LENGTH(name), name",
+        )?;
+
+        let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let name = row?;
+            if PackageSelector::find_best_package(conn, &name, options).is_ok() {
+                candidates.push(name);
+            }
+        }
+    }
+
+    candidates.sort_by_key(|name| {
+        let lower = name.to_lowercase();
+        let starts_with_non_dev = (!lower.ends_with("-devel")
+            && !lower.ends_with("-dev")
+            && !lower.contains('+')
+            && !lower.starts_with("rust-")
+            && !lower.starts_with("ghc-")
+            && !lower.starts_with("python")) as u8;
+        let soname_stem = dep_name
+            .split(".so")
+            .next()
+            .unwrap_or(dep_name)
+            .trim_start_matches("lib")
+            .to_lowercase();
+        let contains_stem = lower.contains(&soname_stem) as u8;
+        (
+            Reverse(starts_with_non_dev),
+            Reverse(contains_stem),
+            lower.len(),
+            lower,
+        )
+    });
+    candidates.dedup();
+
+    Ok(candidates.into_iter().next())
 }
 
 /// Resolve dependencies and return list of packages to download
@@ -321,5 +388,31 @@ mod tests {
             resolve_repo_dependency_name(&conn, "libjq.so.1", &SelectionOptions::default())
                 .unwrap();
         assert_eq!(resolved, "libjq");
+    }
+
+    #[test]
+    fn resolves_soname_dependency_to_repo_package_name_by_search_stem() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        for name in ["oniguruma", "oniguruma-devel", "rust-onig-devel"] {
+            let mut pkg = RepositoryPackage::new(
+                repo_id,
+                name.to_string(),
+                "6.9.10-3.fc43".to_string(),
+                format!("sha256:{name}"),
+                123,
+                format!("https://example.invalid/{name}.rpm"),
+            );
+            pkg.insert(&conn).unwrap();
+        }
+
+        let resolved =
+            resolve_repo_dependency_name(&conn, "libonig.so.5", &SelectionOptions::default())
+                .unwrap();
+        assert_eq!(resolved, "oniguruma");
     }
 }

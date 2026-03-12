@@ -7,30 +7,27 @@
 
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
-use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::db::models::generate_capability_variations;
+use conary_core::db::models::{Changeset, ChangesetStatus};
+use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::traits::PackageFormat;
 use rusqlite::params;
 use std::path::Path;
 
-fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
-    if dep_name == ccs_pkg.name() {
-        return true;
-    }
-
-    if ccs_pkg
-        .manifest()
-        .provides
-        .capabilities
-        .iter()
-        .any(|cap| cap == dep_name)
-    {
-        return true;
-    }
-
-    let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
+fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
+    std::iter::once(ccs_pkg.name().to_string())
         .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
-        .collect();
+        .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
+        .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
+        .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
+        .collect()
+}
+
+fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
+    let provided = package_provided_names(ccs_pkg);
+    if provided.contains(dep_name) {
+        return true;
+    }
 
     for variation in generate_capability_variations(dep_name) {
         if provided.contains(&variation) {
@@ -177,6 +174,12 @@ pub fn cmd_ccs_install(
     println!("Extracting files...");
     let extracted_files = ccs_pkg.extract_file_contents()?;
     println!("Extracted {} files", extracted_files.len());
+    let detected_provides = LanguageDepDetector::detect_all_provides(
+        &extracted_files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<Vec<_>>(),
+    );
 
     // Step 6: Execute pre-hooks
     let mut hook_executor = HookExecutor::new(Path::new(root));
@@ -347,6 +350,50 @@ pub fn cmd_ccs_install(
                     conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
                 cap_provide.insert(&tx)?;
             }
+        }
+
+        for soname in &ccs_pkg.manifest().provides.sonames {
+            let mut soname_provide = conary_core::db::models::ProvideEntry::new_typed(
+                trove_id,
+                DependencyClass::Soname.prefix(),
+                soname.clone(),
+                None,
+            );
+            soname_provide.insert_or_ignore(&tx)?;
+        }
+
+        for binary in &ccs_pkg.manifest().provides.binaries {
+            let mut binary_provide = conary_core::db::models::ProvideEntry::new_typed(
+                trove_id,
+                DependencyClass::Binary.prefix(),
+                binary.clone(),
+                None,
+            );
+            binary_provide.insert_or_ignore(&tx)?;
+        }
+
+        for module in &ccs_pkg.manifest().provides.pkgconfig {
+            let mut pkgconfig_provide = conary_core::db::models::ProvideEntry::new_typed(
+                trove_id,
+                DependencyClass::PkgConfig.prefix(),
+                module.clone(),
+                None,
+            );
+            pkgconfig_provide.insert_or_ignore(&tx)?;
+        }
+
+        for dep in &detected_provides {
+            let kind = match dep.class {
+                DependencyClass::Package => "package",
+                _ => dep.class.prefix(),
+            };
+            let mut detected_provide = conary_core::db::models::ProvideEntry::new_typed(
+                trove_id,
+                kind,
+                dep.name.clone(),
+                dep.version_constraint.clone(),
+            );
+            detected_provide.insert_or_ignore(&tx)?;
         }
 
         // Store pre_remove script as a scriptlet entry so cmd_remove can find it

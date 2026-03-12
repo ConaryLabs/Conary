@@ -19,6 +19,7 @@ use crate::ccs::manifest::{
     Redirects, Requires, Service, ServiceAction, Suggests, User,
 };
 use crate::ccs::policy::BuildPolicyConfig;
+use crate::dependencies::{DependencyClass, LanguageDepDetector};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{DependencyType, ExtractedFile, ScriptletPhase};
 use std::path::{Path, PathBuf};
@@ -198,7 +199,7 @@ impl LegacyConverter {
         }
 
         // Step 3: Build CCS manifest from metadata
-        let manifest = self.build_manifest(&final_metadata, &detected_hooks)?;
+        let manifest = self.build_manifest(&final_metadata, &final_files, &detected_hooks)?;
 
         // Step 4: Create temporary directory with file structure
         let temp_dir = TempDir::new()
@@ -332,6 +333,7 @@ impl LegacyConverter {
     fn build_manifest(
         &self,
         metadata: &PackageMetadata,
+        files: &[ExtractedFile],
         hooks: &Hooks,
     ) -> Result<CcsManifest, ConversionError> {
         // Build platform info
@@ -382,7 +384,7 @@ impl LegacyConverter {
                 platform,
                 authors: None,
             },
-            provides: Provides::default(),
+            provides: derive_provides(files),
             requires: Requires {
                 capabilities,
                 packages,
@@ -457,6 +459,63 @@ pub enum ConversionError {
 
     #[error("Fidelity too low: {0}")]
     FidelityTooLow(String),
+}
+
+fn derive_provides(files: &[ExtractedFile]) -> Provides {
+    let file_paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+    let detected = LanguageDepDetector::detect_all_provides(&file_paths);
+
+    let mut provides = Provides::default();
+    let mut sonames = std::collections::BTreeSet::new();
+    let mut binaries = std::collections::BTreeSet::new();
+    let mut pkgconfig = std::collections::BTreeSet::new();
+
+    for dep in detected {
+        if dep.class == DependencyClass::Soname {
+            sonames.insert(dep.name);
+        }
+    }
+
+    for file in files {
+        if file.mode & 0o111 != 0
+            && let Some(name) = binary_name(&file.path)
+        {
+            binaries.insert(name);
+        }
+
+        if let Some(name) = pkgconfig_name(&file.path) {
+            pkgconfig.insert(name);
+        }
+    }
+
+    provides.sonames = sonames.into_iter().collect();
+    provides.binaries = binaries.into_iter().collect();
+    provides.pkgconfig = pkgconfig.into_iter().collect();
+    provides
+}
+
+fn binary_name(path: &str) -> Option<String> {
+    let name = Path::new(path).file_name()?.to_str()?;
+    if path.starts_with("/usr/bin/")
+        || path.starts_with("/usr/sbin/")
+        || path.starts_with("/bin/")
+        || path.starts_with("/sbin/")
+    {
+        return Some(name.to_string());
+    }
+
+    None
+}
+
+fn pkgconfig_name(path: &str) -> Option<String> {
+    if !path.contains("/pkgconfig/") || !path.ends_with(".pc") {
+        return None;
+    }
+
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(std::string::ToString::to_string)
 }
 
 #[cfg(test)]
@@ -535,14 +594,47 @@ mod tests {
         let (detected, _) = converter.analyzer.analyze(&metadata.scriptlets);
         let hooks = ScriptletAnalyzer::build_hooks(&detected);
 
-        let manifest = converter.build_manifest(&metadata, &hooks).unwrap();
+        let manifest = converter
+            .build_manifest(&metadata, &make_test_files(), &hooks)
+            .unwrap();
 
         assert_eq!(manifest.package.name, "test-package");
         assert_eq!(manifest.package.version, "1.0.0");
+        assert_eq!(manifest.provides.binaries, vec!["test".to_string()]);
 
         // Should have extracted user hook
         assert!(!manifest.hooks.users.is_empty());
         assert_eq!(manifest.hooks.users[0].name, "testuser");
+    }
+
+    #[test]
+    fn test_build_manifest_derives_sonames_and_pkgconfig() {
+        let converter = LegacyConverter::with_defaults();
+        let mut metadata = make_test_metadata();
+        metadata.files = vec![];
+        let files = vec![
+            ExtractedFile {
+                path: "/usr/lib64/libjq.so.1.0.4".to_string(),
+                content: vec![],
+                size: 0,
+                mode: 0o755,
+                sha256: Some("abc".to_string()),
+            },
+            ExtractedFile {
+                path: "/usr/share/pkgconfig/jq.pc".to_string(),
+                content: vec![],
+                size: 0,
+                mode: 0o644,
+                sha256: Some("def".to_string()),
+            },
+        ];
+
+        let manifest = converter
+            .build_manifest(&metadata, &files, &Hooks::default())
+            .unwrap();
+
+        assert_eq!(manifest.provides.sonames, vec!["libjq.so.1".to_string()]);
+        assert_eq!(manifest.provides.pkgconfig, vec!["jq".to_string()]);
     }
 
     #[test]

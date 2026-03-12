@@ -26,7 +26,7 @@ use conary_core::components::{ComponentClassifier, ComponentType, should_run_scr
 use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, DependencyEntry, ProvideEntry, ScriptletEntry, Trove,
 };
-use conary_core::dependencies::{LanguageDep, LanguageDepDetector};
+use conary_core::dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 use conary_core::packages::traits::{ExtractedFile, Scriptlet};
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::{
@@ -436,9 +436,14 @@ impl<'a> BatchInstaller<'a> {
 
                 // Store provides
                 for lang_dep in &pkg.language_provides {
-                    let mut provide = ProvideEntry::new(
+                    let kind = match lang_dep.class {
+                        DependencyClass::Package => "package",
+                        _ => lang_dep.class.prefix(),
+                    };
+                    let mut provide = ProvideEntry::new_typed(
                         trove_id,
-                        lang_dep.to_dep_string(),
+                        kind,
+                        lang_dep.name.clone(),
                         lang_dep.version_constraint.clone(),
                     );
                     provide.insert_or_ignore(tx)?;

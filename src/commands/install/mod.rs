@@ -19,7 +19,9 @@ pub use dep_mode::DepMode;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
-use conversion::{ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs};
+use conversion::{
+    ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs,
+};
 use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
@@ -42,7 +44,7 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry,
 };
 use conary_core::db::paths::keyring_dir;
-use conary_core::dependencies::LanguageDepDetector;
+use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::repository;
 use conary_core::resolver::Resolver;
 use conary_core::scriptlet::SandboxMode;
@@ -1100,9 +1102,14 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
         // Store language-specific provides (python, perl, ruby, etc.)
         for lang_dep in &language_provides {
-            let mut provide = ProvideEntry::new(
+            let kind = match lang_dep.class {
+                DependencyClass::Package => "package",
+                _ => lang_dep.class.prefix(),
+            };
+            let mut provide = ProvideEntry::new_typed(
                 trove_id,
-                lang_dep.to_dep_string(),
+                kind,
+                lang_dep.name.clone(),
                 lang_dep.version_constraint.clone(),
             );
             provide.insert_or_ignore(tx)?;
