@@ -100,10 +100,11 @@ for package conflicts and OR-dependency expressions.
 The broader Phase 3 adversarial-test pass on 2026-03-11 also exposed several
 fixture and coverage gaps that are not purely `ccs.toml` schema problems:
 
-- Missing tampered-fixture coverage:
-  Group G includes a tampered-after-signing scenario in the design, but the
-  checked-in corrupted fixture set currently only builds bad-checksum,
-  truncated, and size-lie variants.
+- Native-package corruption coverage now uses per-distro format rejection:
+  Group G's T81 fixture set is built as truncated RPM/DEB/Arch packages rather
+  than checksum-mismatched native packages. This still exercises the intended
+  native-format rejection path, but the current builder produces parse/format
+  failures, not repo-style checksum diagnostics.
 - Missing malicious fixture variants:
   Group I expects dedicated fixtures for proc-environ access, outside-root
   writes, expired signatures, capability policy violations, decompression bombs,

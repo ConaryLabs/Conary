@@ -11,6 +11,7 @@ use crate::ccs::policy::BuildPolicyConfig;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
+use crate::hash;
 use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet,
@@ -226,6 +227,34 @@ pub fn convert_binary_to_ccs_manifest(
 }
 
 impl CcsPackage {
+    fn validate_file_content(file: &FileEntry, content: &[u8]) -> Result<()> {
+        let actual_size = u64::try_from(content.len()).map_err(|_| {
+            Error::IoError(format!("File content too large to validate: {}", file.path))
+        })?;
+        if actual_size != file.size {
+            if actual_size < file.size {
+                return Err(Error::IoError(format!(
+                    "File size mismatch (truncated) for {}: expected {} bytes, got {}",
+                    file.path, file.size, actual_size
+                )));
+            }
+            return Err(Error::IoError(format!(
+                "File size mismatch for {}: expected {}, got {}",
+                file.path, file.size, actual_size
+            )));
+        }
+
+        let actual_hash = hash::sha256(content);
+        if actual_hash != file.hash {
+            return Err(Error::ChecksumMismatch {
+                expected: file.hash.clone(),
+                actual: actual_hash,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Get the manifest
     pub fn manifest(&self) -> &CcsManifest {
         &self.manifest
@@ -522,10 +551,11 @@ impl PackageFormat for CcsPackage {
                     })?;
                     reassembled.extend_from_slice(chunk_data);
                 }
+                Self::validate_file_content(file, &reassembled)?;
                 reassembled
             } else {
                 // Non-chunked file - look up by file hash
-                blobs.get(&file.hash).cloned().ok_or_else(|| {
+                let content = blobs.get(&file.hash).cloned().ok_or_else(|| {
                     crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         format!(
@@ -533,7 +563,9 @@ impl PackageFormat for CcsPackage {
                             file.path, file.hash
                         ),
                     ))
-                })?
+                })?;
+                Self::validate_file_content(file, &content)?;
+                content
             };
 
             let sha256 = if file.file_type == CcsFileType::Symlink {
@@ -592,6 +624,55 @@ impl PackageFormat for CcsPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::builder::{CcsBuilder, write_ccs_package};
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::fs;
+    use tar::{Archive, Builder};
+    use tempfile::TempDir;
+
+    fn build_test_package() -> (TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("src");
+        fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
+        fs::write(source_dir.join("usr/bin/hello"), b"hello world\n").unwrap();
+
+        let manifest = CcsManifest::parse(
+            r#"
+[package]
+name = "test-package"
+version = "1.0.0"
+description = "test fixture"
+license = "MIT"
+"#,
+        )
+        .unwrap();
+
+        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let package_path = temp.path().join("test-package.ccs");
+        write_ccs_package(&result, &package_path).unwrap();
+        (temp, package_path)
+    }
+
+    fn mutate_package(
+        source_path: &Path,
+        output_path: &Path,
+        mutator: impl FnOnce(&Path),
+    ) {
+        let unpack_dir = tempfile::tempdir().unwrap();
+        let source_file = File::open(source_path).unwrap();
+        let decoder = GzDecoder::new(source_file);
+        let mut archive = Archive::new(decoder);
+        archive.unpack(unpack_dir.path()).unwrap();
+        mutator(unpack_dir.path());
+
+        let output_file = File::create(output_path).unwrap();
+        let encoder = GzEncoder::new(output_file, Compression::default());
+        let mut builder = Builder::new(encoder);
+        builder.append_dir_all(".", unpack_dir.path()).unwrap();
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap();
+    }
 
     #[test]
     fn test_symlink_hash_consistency() {
@@ -599,5 +680,61 @@ mod tests {
         let target = "/usr/lib/libfoo.so.1";
         let hash = CasStore::compute_symlink_hash(target);
         assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn test_extract_rejects_truncated_content() {
+        let (_temp, package_path) = build_test_package();
+        let corrupted_path = package_path.with_file_name("truncated.ccs");
+        mutate_package(&package_path, &corrupted_path, |root| {
+            let object = fs::read_dir(root.join("objects"))
+                .unwrap()
+                .flatten()
+                .find(|entry| entry.path().is_dir())
+                .unwrap()
+                .path();
+            let object_file = fs::read_dir(object)
+                .unwrap()
+                .flatten()
+                .find(|entry| entry.path().is_file())
+                .unwrap()
+                .path();
+            let original = fs::read(&object_file).unwrap();
+            fs::write(&object_file, &original[..original.len() / 2]).unwrap();
+        });
+
+        let package = CcsPackage::parse(corrupted_path.to_str().unwrap()).unwrap();
+        let err = package.extract_file_contents().unwrap_err().to_string();
+        assert!(
+            err.contains("Checksum mismatch")
+                || err.contains("File size mismatch")
+                || err.contains("File truncated"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_extract_rejects_declared_size_mismatch() {
+        let (_temp, package_path) = build_test_package();
+        let corrupted_path = package_path.with_file_name("size-lie.ccs");
+        mutate_package(&package_path, &corrupted_path, |root| {
+            let component_path = root.join("components/runtime.json");
+            let mut component: ComponentData =
+                serde_json::from_slice(&fs::read(&component_path).unwrap()).unwrap();
+            component.files[0].size = 1024;
+            component.size = 1024;
+            fs::write(
+                &component_path,
+                serde_json::to_vec_pretty(&component).unwrap(),
+            )
+            .unwrap();
+        });
+
+        let package = CcsPackage::parse(corrupted_path.to_str().unwrap()).unwrap();
+        let err = package.extract_file_contents().unwrap_err().to_string();
+        assert!(
+            err.contains("File size mismatch") || err.contains("File truncated"),
+            "{err}"
+        );
     }
 }

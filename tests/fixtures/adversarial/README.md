@@ -6,6 +6,8 @@ malicious payloads, adversarial dependency graphs, and large-package stress case
 Layout:
 
 - `corrupted/`: fixtures for checksum mismatch, truncation, and metadata corruption
+  Also includes per-distro native-package corruption outputs under
+  `corrupted/native/output/`.
 - `malicious/`: fixtures for traversal, symlink, setuid, and hostile scriptlets
 - `deps/`: interdependent CCS packages for resolver edge cases
 - `large/`: generated stress fixtures that are too large to check in directly

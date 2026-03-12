@@ -61,6 +61,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = body.encode("utf-8")
 
         truncate_at = route.get("truncate_at_bytes")
+        full_length = len(payload)
         if truncate_at is not None:
             payload = payload[:truncate_at]
 
@@ -69,10 +70,14 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in headers.items():
             self.send_header(key, value)
         if "Content-Length" not in headers:
-            self.send_header("Content-Length", str(len(payload)))
+            advertised_length = full_length if truncate_at is not None else len(payload)
+            self.send_header("Content-Length", str(advertised_length))
         self.end_headers()
         if payload:
             self.wfile.write(payload)
+            self.wfile.flush()
+        if truncate_at is not None:
+            self.close_connection = True
 
 
 def main():

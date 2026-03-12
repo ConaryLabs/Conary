@@ -446,6 +446,22 @@ impl FileDeployer {
         Ok(actual_hash == expected_hash)
     }
 
+    /// Verify the backing CAS object still matches its content-addressed hash.
+    pub fn verify_cas_object(&self, expected_hash: &str) -> Result<bool> {
+        match self.cas.retrieve(expected_hash) {
+            Ok(_) => Ok(true),
+            Err(crate::Error::Io(err))
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Get CAS store
     pub fn cas(&self) -> &CasStore {
         &self.cas
@@ -513,6 +529,24 @@ mod tests {
 
         // Verify should fail
         assert!(!deployer.verify_file("/test.txt", &hash).unwrap());
+    }
+
+    #[test]
+    fn test_file_deployer_detects_cas_corruption() {
+        let temp_dir = TempDir::new().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let objects_dir = temp_dir.path().join("objects");
+
+        let deployer = FileDeployer::new(&objects_dir, &install_root).unwrap();
+
+        let content = b"cas integrity";
+        let hash = deployer.cas().store(content).unwrap();
+        assert!(deployer.verify_cas_object(&hash).unwrap());
+
+        let cas_path = deployer.cas().hash_to_path(&hash).unwrap();
+        fs::write(&cas_path, b"corrupted").unwrap();
+
+        assert!(!deployer.verify_cas_object(&hash).unwrap());
     }
 
     #[test]

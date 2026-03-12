@@ -212,6 +212,8 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
         })
         .collect();
 
+    let mut failures = Vec::new();
+
     for (name, result, gpg_key) in results {
         match result {
             Ok(count) => {
@@ -223,8 +225,20 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
                     count, name, gpg_note
                 );
             }
-            Err(e) => println!("  [FAILED] Failed to sync {}: {}", name, e),
+            Err(e) => {
+                println!("  [FAILED] Failed to sync {}: {}", name, e);
+                failures.push((name, e.to_string()));
+            }
         }
+    }
+
+    if !failures.is_empty() {
+        let failed_names = failures
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("Failed to sync repository metadata for: {failed_names}");
     }
 
     Ok(())

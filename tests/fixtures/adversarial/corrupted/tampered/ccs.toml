@@ -1,0 +1,23 @@
+[package]
+name = "adversarial-tampered"
+version = "1.0.0"
+description = "Base fixture for tampered-content corruption tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["adversarial-tampered"]
+binaries = ["/usr/bin/hello"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
