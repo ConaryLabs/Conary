@@ -70,8 +70,14 @@ stdout_contains_all = ["${FIXTURE_PKG_NAME}", "Version"]
 id = "T139"
 name = "install_small_real_package"
 description = "Sync distro repo, install a small real package, and verify the binary runs"
-timeout = 180
+timeout = 900
 group = "M"
+
+[[test.step]]
+conary = "system adopt --system"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 conary = "repo sync ${distro_repo} --force"
@@ -369,6 +375,12 @@ name = "mixed_format_install_session"
 description = "Install CCS and native packages in one session and verify they coexist"
 timeout = 300
 group = "M"
+
+[[test.step]]
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
