@@ -18,13 +18,20 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
     let conn = conary_core::db::open(db_path)?;
     info!("Adding default repositories...");
 
+    let mut remi_repo = conary_core::db::models::Repository::new(
+        "remi".to_string(),
+        "https://packages.conary.io".to_string(),
+    );
+    remi_repo.priority = 110;
+    remi_repo.default_strategy = Some("remi".to_string());
+    remi_repo.default_strategy_endpoint = Some("https://packages.conary.io".to_string());
+    remi_repo.default_strategy_distro = Some("fedora".to_string());
+    match remi_repo.insert(&conn) {
+        Ok(_) => println!("  Added: remi (Conary Remi (CCS))"),
+        Err(e) => eprintln!("  Warning: Could not add remi: {}", e),
+    }
+
     let default_repos = [
-        (
-            "remi",
-            "https://packages.conary.io",
-            110,
-            "Conary Remi (CCS)",
-        ),
         (
             "arch-core",
             "https://geo.mirror.pkgbuild.com/core/os/x86_64",
@@ -915,3 +922,29 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -
 }
 
 use super::format_bytes;
+
+#[cfg(test)]
+mod tests {
+    use super::cmd_init;
+
+    #[test]
+    fn init_adds_remi_with_strategy_defaults() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        cmd_init(db_path_str).unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let repo = conary_core::db::models::Repository::find_by_name(&conn, "remi")
+            .unwrap()
+            .unwrap();
+        assert_eq!(repo.url, "https://packages.conary.io");
+        assert_eq!(repo.default_strategy.as_deref(), Some("remi"));
+        assert_eq!(
+            repo.default_strategy_endpoint.as_deref(),
+            Some("https://packages.conary.io")
+        );
+        assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora"));
+    }
+}
