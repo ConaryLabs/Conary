@@ -205,6 +205,12 @@ Phase 3 adversarial-test rollout and should be revisited after the plan lands:
   `X-Registry-Config` header on `/build`. A local full-phase smoke pass still
   needs either a Podman-compatible build path in `conary-test` or a Docker
   socket environment.
+- Real converted-package installs still need explicit base-system adoption:
+  Group M showed that syncing and installing real distro packages from Remi is
+  not enough by itself in a fresh test DB because dependency checks do not yet
+  treat already-installed host packages like `glibc` or `libc.so.6` as
+  satisfied. The current manifest workaround is to seed the DB with
+  `conary system adopt --system` before those native-package install tests.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
