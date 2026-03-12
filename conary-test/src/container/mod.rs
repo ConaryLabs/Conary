@@ -43,7 +43,7 @@ mod tests {
             }],
             privileged: true,
             network_mode: "host".to_string(),
-            tmpfs: HashMap::from([("/conary".to_string(), "size=50m".to_string())]),
+            tmpfs: HashMap::from([("/var/lib/conary".to_string(), "size=50m".to_string())]),
             memory_limit: Some(512 * 1024 * 1024),
         };
 
@@ -54,7 +54,7 @@ mod tests {
         assert!(cfg.privileged);
         assert_eq!(cfg.network_mode, "host");
         assert_eq!(
-            cfg.tmpfs.get("/conary").map(String::as_str),
+            cfg.tmpfs.get("/var/lib/conary").map(String::as_str),
             Some("size=50m")
         );
         assert_eq!(cfg.memory_limit, Some(512 * 1024 * 1024));

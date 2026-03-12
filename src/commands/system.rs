@@ -3,6 +3,8 @@
 
 use super::TroveSnapshot;
 use anyhow::Result;
+use std::io::Write;
+use std::time::Duration;
 use conary_core::db::paths::objects_dir;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -75,6 +77,14 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
 /// Rollback a changeset
 pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
+    println!("Rolling back changeset: {}", changeset_id);
+    std::io::stdout().flush()?;
+    if let Ok(delay_ms) = std::env::var("CONARY_TEST_HOLD_DURING_ROLLBACK_MS")
+        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+        && delay_ms > 0
+    {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+    }
 
     let mut conn = conary_core::db::open(db_path)?;
 

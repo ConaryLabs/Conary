@@ -9,7 +9,7 @@ FROM docker.io/library/archlinux:latest
 
 ARG INSTALL_MODE=binary
 
-RUN pacman -Syu --noconfirm ca-certificates curl python && pacman -Scc --noconfirm
+RUN pacman -Syu --noconfirm ca-certificates curl python sqlite && pacman -Scc --noconfirm
 
 # Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/

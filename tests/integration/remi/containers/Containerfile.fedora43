@@ -9,7 +9,7 @@ FROM registry.fedoraproject.org/fedora:43
 
 ARG INSTALL_MODE=binary
 
-RUN dnf install -y ca-certificates curl python3 && dnf clean all
+RUN dnf install -y ca-certificates curl python3 sqlite && dnf clean all
 
 # Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/

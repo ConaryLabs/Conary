@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -26,6 +26,37 @@ pub struct TestRunner {
 }
 
 impl TestRunner {
+    fn build_kill_after_log_command(&self, expanded: &str) -> String {
+        if let Some(rest) = expanded.strip_prefix("env ") {
+            let mut env_vars = Vec::new();
+            let mut conary_args = Vec::new();
+            let mut parsing_env = true;
+
+            for token in rest.split_whitespace() {
+                if parsing_env && token.contains('=') {
+                    env_vars.push(token);
+                } else {
+                    parsing_env = false;
+                    conary_args.push(token);
+                }
+            }
+
+            if !env_vars.is_empty() && !conary_args.is_empty() {
+                return format!(
+                    "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec env {} {} {}",
+                    env_vars.join(" "),
+                    self.config.paths.conary_bin,
+                    conary_args.join(" ")
+                );
+            }
+        }
+
+        format!(
+            "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec {} {}",
+            self.config.paths.conary_bin, expanded
+        )
+    }
+
     pub fn new(config: GlobalConfig, distro: String) -> Self {
         let mut vars = HashMap::new();
         vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
@@ -104,6 +135,7 @@ impl TestRunner {
         manifest: &TestManifest,
         backend: &dyn ContainerBackend,
         container_id: &ContainerId,
+        base_container_config: Option<&ContainerConfig>,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
 
@@ -136,9 +168,23 @@ impl TestRunner {
                 continue;
             }
 
-            let (status, message, elapsed, last_exec) = self
-                .run_test_attempt(test_def, backend, container_id)
-                .await?;
+            let (status, message, elapsed, last_exec) = if test_def.resources.is_some() {
+                let Some(base_container_config) = base_container_config else {
+                    bail!(
+                        "test {} requires resource constraints but no base container config was provided",
+                        test_def.id
+                    );
+                };
+                self.run_resource_scoped_test(
+                    manifest,
+                    test_def,
+                    backend,
+                    base_container_config,
+                )
+                .await?
+            } else {
+                self.run_test_attempt(test_def, backend, container_id).await?
+            };
 
             info!(
                 "[{}] {}: {status:?} ({elapsed}ms)",
@@ -167,6 +213,172 @@ impl TestRunner {
 
         suite.finish();
         Ok(suite)
+    }
+
+    async fn run_resource_scoped_test(
+        &self,
+        manifest: &TestManifest,
+        test_def: &TestDef,
+        backend: &dyn ContainerBackend,
+        base_container_config: &ContainerConfig,
+    ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
+        let attempts = if test_def.flaky.unwrap_or(false) {
+            test_def.retries.unwrap_or(3).max(1)
+        } else {
+            1
+        };
+        let majority = attempts / 2 + 1;
+
+        let mut pass_count = 0_u32;
+        let mut fail_count = 0_u32;
+        let mut last_failure: Option<String> = None;
+        let mut last_exec: Option<ExecResult> = None;
+        let mut total_elapsed = 0_u64;
+
+        for _ in 0..attempts {
+            let (status, message, elapsed, exec) = self
+                .run_resource_scoped_test_once(manifest, test_def, backend, base_container_config)
+                .await?;
+            total_elapsed += elapsed;
+            last_exec = exec;
+
+            if status == TestStatus::Passed {
+                pass_count += 1;
+            } else {
+                fail_count += 1;
+                last_failure = message;
+            }
+
+            let remaining = attempts.saturating_sub(pass_count + fail_count);
+            if pass_count >= majority {
+                let message = if attempts > 1 {
+                    Some(format!(
+                        "flaky test passed majority: {pass_count}/{attempts} successful attempts"
+                    ))
+                } else {
+                    None
+                };
+                return Ok((TestStatus::Passed, message, total_elapsed, last_exec));
+            }
+            if pass_count + remaining < majority {
+                break;
+            }
+        }
+
+        let message = if attempts > 1 {
+            Some(format!(
+                "flaky test failed majority: {pass_count}/{attempts} successful attempts; last failure: {}",
+                last_failure.unwrap_or_else(|| "unknown failure".to_string())
+            ))
+        } else {
+            last_failure
+        };
+
+        Ok((TestStatus::Failed, message, total_elapsed, last_exec))
+    }
+
+    async fn run_resource_scoped_test_once(
+        &self,
+        manifest: &TestManifest,
+        test_def: &TestDef,
+        backend: &dyn ContainerBackend,
+        base_container_config: &ContainerConfig,
+    ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
+        let mut container_config = base_container_config.clone();
+        self.apply_resource_constraints(&mut container_config, test_def.resources.as_ref());
+
+        let container_id = backend.create(container_config).await?;
+        backend.start(&container_id).await?;
+
+        let result = async {
+            self.initialize_container_state(backend, &container_id, manifest.suite.phase)
+                .await?;
+            if let Some(mock_server) = &manifest.suite.mock_server {
+                start_mock_server(backend, &container_id, mock_server).await?;
+            }
+            self.run_test_once(test_def, backend, &container_id).await
+        }
+        .await;
+
+        if let Err(err) = backend.stop(&container_id).await {
+            warn!(test = %test_def.id, error = %err, "failed to stop resource-scoped container");
+        }
+        if let Err(err) = backend.remove(&container_id).await {
+            warn!(test = %test_def.id, error = %err, "failed to remove resource-scoped container");
+        }
+
+        result
+    }
+
+    async fn initialize_container_state(
+        &self,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+        phase: u32,
+    ) -> Result<()> {
+        let db_parent = std::path::Path::new(&self.config.paths.db)
+            .parent()
+            .context("db path has no parent directory")?
+            .display()
+            .to_string();
+        let init_cmd = format!(
+            "mkdir -p {db_parent} && {} system init --db-path {}",
+            self.config.paths.conary_bin, self.config.paths.db
+        );
+        let init_result = backend
+            .exec(
+                container_id,
+                &["sh", "-c", &init_cmd],
+                Duration::from_secs(120),
+            )
+            .await?;
+        if init_result.exit_code != 0 {
+            bail!(
+                "failed to initialize conary database: {}{}",
+                init_result.stdout,
+                init_result.stderr
+            );
+        }
+
+        for repo in &self.config.setup.remove_default_repos {
+            let remove_cmd = format!(
+                "{} repo remove {} --db-path {} >/dev/null 2>&1 || true",
+                self.config.paths.conary_bin, repo, self.config.paths.db
+            );
+            backend
+                .exec(
+                    container_id,
+                    &["sh", "-c", &remove_cmd],
+                    Duration::from_secs(30),
+                )
+                .await?;
+        }
+
+        if phase > 1 {
+            let distro_config = self
+                .config
+                .distros
+                .get(&self.distro)
+                .with_context(|| format!("unknown distro: {}", self.distro))?;
+            let add_repo_cmd = format!(
+                "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
+                self.config.paths.conary_bin,
+                distro_config.repo_name,
+                self.config.remi.endpoint,
+                self.config.remi.endpoint,
+                distro_config.remi_distro,
+                self.config.paths.db
+            );
+            backend
+                .exec(
+                    container_id,
+                    &["sh", "-c", &add_repo_cmd],
+                    Duration::from_secs(60),
+                )
+                .await?;
+        }
+
+        Ok(())
     }
 
     async fn run_test_attempt(
@@ -390,10 +602,7 @@ impl TestRunner {
         config: &KillAfterLog,
     ) -> Result<ExecResult> {
         let expanded = self.substitute_vars(&config.conary);
-        let full_cmd = format!(
-            "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec {} {}",
-            self.config.paths.conary_bin, expanded
-        );
+        let full_cmd = self.build_kill_after_log_command(&expanded);
         let exec_id = backend
             .exec_detached(container_id, &["sh", "-lc", &full_cmd])
             .await?;
@@ -418,9 +627,12 @@ impl TestRunner {
         })??;
 
         if !matched {
+            let result = backend.exec_result(&exec_id).await?;
             bail!(
-                "log stream ended before pattern {:?} appeared",
-                config.pattern
+                "log stream ended before pattern {:?} appeared; stdout: {}; stderr: {}",
+                config.pattern,
+                result.stdout.trim(),
+                result.stderr.trim()
             );
         }
 
@@ -441,7 +653,7 @@ impl TestRunner {
         if let Some(tmpfs_size_mb) = resources.tmpfs_size_mb {
             container_config
                 .tmpfs
-                .insert("/conary".to_string(), format!("size={tmpfs_size_mb}m"));
+                .insert("/var/lib/conary".to_string(), format!("size={tmpfs_size_mb}m"));
         }
 
         if let Some(memory_limit_mb) = resources.memory_limit_mb {
@@ -547,7 +759,8 @@ impl TestRunner {
 mod tests {
     use super::*;
     use crate::config::distro::{
-        FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig,
+        DistroConfig, FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig,
+        TestPackage,
     };
     use crate::config::manifest::{
         Assertion, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef, TestManifest,
@@ -564,6 +777,7 @@ mod tests {
     struct MockBackend {
         exec_calls: Mutex<Vec<Vec<String>>>,
         exec_results: Mutex<Vec<ExecResult>>,
+        created_containers: Mutex<Vec<ContainerConfig>>,
         detached_calls: Mutex<Vec<Vec<String>>>,
         log_sequences: Mutex<HashMap<String, Vec<String>>>,
         detached_results: Mutex<HashMap<String, ExecResult>>,
@@ -575,6 +789,7 @@ mod tests {
             Self {
                 exec_calls: Mutex::new(Vec::new()),
                 exec_results: Mutex::new(results),
+                created_containers: Mutex::new(Vec::new()),
                 detached_calls: Mutex::new(Vec::new()),
                 log_sequences: Mutex::new(HashMap::new()),
                 detached_results: Mutex::new(HashMap::new()),
@@ -612,7 +827,9 @@ mod tests {
         }
 
         async fn create(&self, _config: ContainerConfig) -> Result<ContainerId> {
-            Ok("mock-container".to_string())
+            let mut created = self.created_containers.lock().unwrap();
+            created.push(_config);
+            Ok(format!("mock-container-{}", created.len()))
         }
 
         async fn start(&self, _id: &ContainerId) -> Result<()> {
@@ -711,6 +928,20 @@ mod tests {
     // -- Helpers --
 
     fn test_config() -> GlobalConfig {
+        let mut distros = HashMap::new();
+        distros.insert(
+            "fedora43".to_string(),
+            DistroConfig {
+                remi_distro: "fedora-43".to_string(),
+                repo_name: "fedora-remi".to_string(),
+                containerfile: None,
+                test_packages: vec![TestPackage {
+                    package: "conary-test-fixture".to_string(),
+                    binary: "/usr/bin/true".to_string(),
+                }],
+            },
+        );
+
         GlobalConfig {
             remi: RemiConfig {
                 endpoint: "https://packages.conary.io".to_string(),
@@ -722,7 +953,7 @@ mod tests {
                 fixture_dir: Some("/opt/remi-tests/fixtures".to_string()),
             },
             setup: SetupConfig::default(),
-            distros: HashMap::new(),
+            distros,
             fixtures: Some(FixtureConfig {
                 package: Some("conary-test-fixture".to_string()),
                 file: Some("/usr/share/conary-test/hello.txt".to_string()),
@@ -822,7 +1053,7 @@ mod tests {
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -858,7 +1089,7 @@ mod tests {
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -917,7 +1148,7 @@ mod tests {
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -972,7 +1203,7 @@ mod tests {
             .insert("fedora43".to_string(), overrides);
 
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -1030,7 +1261,7 @@ mod tests {
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -1084,7 +1315,7 @@ mod tests {
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 
@@ -1097,6 +1328,91 @@ mod tests {
                 .unwrap_or_default()
                 .contains("failed majority")
         );
+    }
+
+    #[tokio::test]
+    async fn test_resource_scoped_flaky_retries_use_fresh_container() {
+        let backend = MockBackend::new(vec![
+            ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "first attempt".to_string(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 1,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        ]);
+
+        let manifest = TestManifest {
+            suite: SuiteDef {
+                name: "resource-flaky".to_string(),
+                phase: 2,
+                setup: Vec::new(),
+                mock_server: None,
+            },
+            test: vec![TestDef {
+                id: "T-resource-flaky".to_string(),
+                name: "resource_flaky".to_string(),
+                description: "retries in fresh containers".to_string(),
+                timeout: 30,
+                flaky: Some(true),
+                retries: Some(3),
+                step: vec![simple_step_run(
+                    "echo ok",
+                    Some(make_assertion(Some(0), Some("ok"))),
+                )],
+                resources: Some(ResourceConstraints {
+                    tmpfs_size_mb: None,
+                    memory_limit_mb: Some(512),
+                    network_isolated: Some(false),
+                }),
+                depends_on: None,
+                fatal: None,
+                group: None,
+            }],
+            distro_overrides: HashMap::new(),
+        };
+
+        let config = test_config();
+        let base_container_config = ContainerConfig {
+            image: "mock-image".to_string(),
+            ..Default::default()
+        };
+        let mut runner = TestRunner::new(config, "fedora43".to_string());
+        let suite = runner
+            .run(
+                &manifest,
+                &backend,
+                &"ctr-1".to_string(),
+                Some(&base_container_config),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(suite.failed(), 1);
+        assert_eq!(backend.created_containers.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -1183,11 +1499,24 @@ mod tests {
         runner.apply_resource_constraints(&mut container_config, Some(&resources));
 
         assert_eq!(
-            container_config.tmpfs.get("/conary").map(String::as_str),
+            container_config
+                .tmpfs
+                .get("/var/lib/conary")
+                .map(String::as_str),
             Some("size=50m")
         );
         assert_eq!(container_config.memory_limit, Some(512 * 1024 * 1024));
         assert_eq!(container_config.network_mode, "none");
+    }
+
+    #[test]
+    fn test_build_kill_after_log_command_supports_env_prefix() {
+        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let cmd = runner.build_kill_after_log_command(
+            "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install fixture.ccs",
+        );
+        assert!(cmd.contains("exec env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500"));
+        assert!(cmd.contains("/usr/local/bin/conary ccs install fixture.ccs"));
     }
 
     #[tokio::test]
@@ -1229,7 +1558,7 @@ mod tests {
             .insert("fedora43".to_string(), overrides);
 
         let suite = runner
-            .run(&manifest, &backend, &"ctr-1".to_string())
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
             .unwrap();
 

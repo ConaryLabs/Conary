@@ -9,7 +9,9 @@ use conary_core::db::models::ScriptletEntry;
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
 /// Remove an installed package
@@ -23,6 +25,14 @@ pub fn cmd_remove(
     purge_files: bool,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
+    println!("Removing package: {}", package_name);
+    std::io::stdout().flush()?;
+    if let Ok(delay_ms) = std::env::var("CONARY_TEST_HOLD_DURING_REMOVE_MS")
+        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+        && delay_ms > 0
+    {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+    }
 
     // Create progress tracker for removal
     let progress = RemoveProgress::new(package_name);

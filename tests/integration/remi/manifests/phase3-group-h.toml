@@ -89,6 +89,10 @@ description = "Corrupt the SQLite WAL file and verify the next command fails wit
 timeout = 30
 group = "H"
 
+[test.resources]
+memory_limit_mb = 512
+network_isolated = false
+
 [[test.step]]
 run = "printf 'corrupt wal' > ${DB_PATH}-wal"
 
@@ -110,21 +114,20 @@ stderr_contains = "database"
 id = "T90"
 name = "cas_directory_deleted_mid_install"
 description = "Delete the CAS directory during install and verify failure plus rollback"
-timeout = 60
+timeout = 120
 group = "H"
 
 [[test.step]]
-run = "rm -rf /var/lib/conary/objects && mkdir -p /var/lib/conary/objects"
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+run = "env CONARY_TEST_HOLD_BEFORE_CAS_WRITE_MS=10 ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t90.out 2>/tmp/t90.err & PID=$!; while kill -0 $PID 2>/dev/null; do rm -rf /var/lib/conary/objects; sleep 0.01; done; wait $PID; STATUS=$?; cat /tmp/t90.out; cat /tmp/t90.err >&2; exit $STATUS"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "object"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "large-package"
 
 # --------------------------------------------------------------------------
 # T91: Kill after DB commit before deploy
@@ -141,8 +144,8 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never"
-pattern = "Recording changeset"
+conary = "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never"
+pattern = "Updating database..."
 timeout_seconds = 30
 
 [[test.step]]
@@ -223,7 +226,7 @@ flaky = true
 retries = 3
 
 [[test.step]]
-run = "(${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 &) ; (${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 &) ; wait; cat /tmp/t94-a.log /tmp/t94-b.log"
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-a.log 2>&1 & PID1=$!; ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t94-b.log 2>&1 & PID2=$!; wait $PID1 $PID2 || true; cat /tmp/t94-a.log /tmp/t94-b.log"
 
 [test.step.assert]
 stdout_contains_any = ["already installed", "database is locked", "installed"]
@@ -243,8 +246,8 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "system state rollback 1"
-pattern = "Rolling back"
+conary = "env CONARY_TEST_HOLD_DURING_ROLLBACK_MS=1500 system state rollback 1"
+pattern = "Rolling back changeset"
 timeout_seconds = 30
 
 [[test.step]]
@@ -273,6 +276,10 @@ group = "H"
 flaky = true
 retries = 3
 
+[test.resources]
+memory_limit_mb = 512
+network_isolated = false
+
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
 
@@ -281,8 +288,8 @@ exit_code = 0
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "remove conary-test-fixture --no-scripts"
-pattern = "Removing"
+conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts"
+pattern = "Removing package"
 timeout_seconds = 30
 
 [[test.step]]
