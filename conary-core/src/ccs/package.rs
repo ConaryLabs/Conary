@@ -57,7 +57,7 @@ pub struct CcsPackage {
 /// The following fields are unavailable from CBOR and will use defaults:
 /// `homepage`, `repository`, `authors`, `build.environment`, `build.commands`,
 /// `suggests`, `components`, `config`, `legacy`, `policy`, `provenance`,
-/// `capabilities`, and `redirects`.
+/// and `redirects`.
 pub fn convert_binary_to_ccs_manifest(
     bin: &crate::ccs::binary_manifest::BinaryManifest,
 ) -> CcsManifest {
@@ -221,7 +221,7 @@ pub fn convert_binary_to_ccs_manifest(
         legacy: None,
         policy: BuildPolicyConfig::default(),
         provenance: None,
-        capabilities: None,
+        capabilities: bin.capabilities.clone(),
         redirects: Redirects::default(),
     }
 }
@@ -357,13 +357,14 @@ impl CcsPackage {
                     let entry_size = entry.header().size()?;
                     if entry_size > MAX_ENTRY_SIZE {
                         return Err(Error::IoError(format!(
-                            "CCS archive entry exceeds maximum size: {entry_size} bytes"
+                            "CCS archive entry exceeds maximum size limit: {entry_size} bytes"
                         )));
                     }
                     total_bytes += entry_size;
                     if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
                         return Err(Error::IoError(
-                            "CCS archive total extraction size exceeds limit".to_string(),
+                            "CCS archive total extraction size exceeds extraction limit"
+                                .to_string(),
                         ));
                     }
 

@@ -1,0 +1,23 @@
+[package]
+name = "expired-signature"
+version = "1.0.0"
+description = "Fixture signed with an intentionally stale timestamp"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["expired-signature"]
+binaries = ["/usr/bin/expired-signature"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

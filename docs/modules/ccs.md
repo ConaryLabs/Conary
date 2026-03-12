@@ -110,6 +110,12 @@ fixture and coverage gaps that are not purely `ccs.toml` schema problems:
   writes, expired signatures, capability policy violations, decompression bombs,
   and intentionally failing scriptlets. Those fixture packages are referenced by
   the manifest plan but are not built yet.
+- Install-time capability policy currently fails closed:
+  Group I now preserves capability declarations through the CCS binary-manifest
+  round trip and rejects packages that declare Linux capabilities at install
+  time. That is safer than silently accepting them, but it is still a temporary
+  enforcement posture until Conary grows a real capability allow/deny and
+  application model for CCS installs.
 - Manifest/runtime ergonomics:
   Adversarial manifests currently need to hard-code in-container fixture paths
   such as `/opt/remi-tests/fixtures/...` because the Rust test engine does not

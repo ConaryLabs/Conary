@@ -5,6 +5,7 @@
 //! The binary manifest is CBOR-encoded for efficient storage and parsing.
 //! A human-readable MANIFEST.toml is also included in packages for debugging.
 
+use crate::capability::CapabilityDeclaration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -54,6 +55,10 @@ pub struct BinaryManifest {
     /// Build provenance
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BinaryBuildInfo>,
+
+    /// Package capability declaration for install-time enforcement
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilityDeclaration>,
 
     /// Merkle root of all content (SHA-256)
     pub content_root: Hash,
@@ -373,6 +378,7 @@ mod tests {
             components: BTreeMap::new(),
             hooks: None,
             build: None,
+            capabilities: None,
             content_root: Hash::sha256(b"empty"),
         };
 

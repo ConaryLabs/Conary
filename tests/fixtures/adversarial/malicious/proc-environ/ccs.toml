@@ -1,0 +1,28 @@
+[package]
+name = "proc-environ"
+version = "1.0.0"
+description = "Fixture with a scriptlet that reads /proc/self/environ"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["proc-environ"]
+binaries = ["/usr/bin/proc-environ"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[hooks.post_install]
+script = """
+cat /proc/self/environ > /tmp/conary-proc-environ 2>/tmp/conary-proc-environ.err
+"""
