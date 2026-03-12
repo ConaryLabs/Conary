@@ -12,7 +12,9 @@ use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::traits::PackageFormat;
 use rusqlite::params;
+use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
     std::iter::once(ccs_pkg.name().to_string())
@@ -36,6 +38,14 @@ fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     }
 
     false
+}
+
+fn test_hold_ms(var_name: &str) -> Option<Duration> {
+    std::env::var(var_name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
 }
 
 /// Install a CCS package
@@ -207,6 +217,7 @@ pub fn cmd_ccs_install(
     println!("Deploying files to filesystem...");
     let root_path = std::path::Path::new(root);
     let objects_dir = conary_core::db::paths::objects_dir(db_path);
+    std::fs::create_dir_all(&objects_dir)?;
     let mut files_deployed = 0;
 
     for file in &extracted_files {
@@ -238,6 +249,15 @@ pub fn cmd_ccs_install(
         if let Some(ref hash) = file.sha256
             && hash.len() == 64
         {
+            if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_BEFORE_CAS_WRITE_MS") {
+                std::thread::sleep(delay);
+            }
+            if !objects_dir.exists() {
+                anyhow::bail!(
+                    "CAS objects directory disappeared during install: {}",
+                    objects_dir.display()
+                );
+            }
             let cas_dir = objects_dir.join(&hash[0..2]);
             let cas_path = cas_dir.join(&hash[2..]);
             if !cas_path.exists() {
@@ -253,6 +273,10 @@ pub fn cmd_ccs_install(
 
     // Step 8: Register in database with changeset tracking
     println!("Updating database...");
+    std::io::stdout().flush()?;
+    if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS") {
+        std::thread::sleep(delay);
+    }
     let is_upgrade = !existing.is_empty();
     {
         let tx = conn.unchecked_transaction()?;

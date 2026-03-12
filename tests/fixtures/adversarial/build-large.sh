@@ -86,11 +86,22 @@ generate_large_package_stage() {
         if [ "$i" -le "$remainder_mib" ]; then
             file_mib=$(( file_mib + 1 ))
         fi
-        dd if=/dev/zero \
-            of="$stage_dir/usr/share/large-package/blob-$(printf '%03d' "$i").bin" \
-            bs=1M \
-            count="$file_mib" \
-            status=none
+        python3 - "$stage_dir/usr/share/large-package/blob-$(printf '%03d' "$i").bin" "$file_mib" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+path = Path(sys.argv[1])
+size_bytes = int(sys.argv[2]) * 1024 * 1024
+chunk_size = 1024 * 1024
+
+with path.open("wb") as fh:
+    remaining = size_bytes
+    while remaining > 0:
+        chunk = min(chunk_size, remaining)
+        fh.write(os.urandom(chunk))
+        remaining -= chunk
+PY
     done
 }
 

@@ -162,7 +162,11 @@ async fn initialize_container_state(
         config.paths.conary_bin, config.paths.db
     );
     let init_result = backend
-        .exec(container_id, &["sh", "-c", &init_cmd], Duration::from_secs(120))
+        .exec(
+            container_id,
+            &["sh", "-c", &init_cmd],
+            Duration::from_secs(120),
+        )
         .await?;
     if init_result.exit_code != 0 {
         bail!(
@@ -243,7 +247,7 @@ fn run_single_distro(
             }],
             ..Default::default()
         };
-        let container_id = backend.create(container_config).await?;
+        let container_id = backend.create(container_config.clone()).await?;
         tracing::info!(distro, id = %container_id, "Container created");
 
         use conary_test::container::ContainerBackend;
@@ -261,12 +265,20 @@ fn run_single_distro(
         for manifest_path in &manifest_paths {
             let manifest = conary_test::config::load_manifest(manifest_path)
                 .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
-            initialize_container_state(config, distro, manifest.suite.phase, &backend, &container_id)
-                .await?;
+            initialize_container_state(
+                config,
+                distro,
+                manifest.suite.phase,
+                &backend,
+                &container_id,
+            )
+            .await?;
 
             let mut runner =
                 conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-            let suite = runner.run(&manifest, &backend, &container_id).await?;
+            let suite = runner
+                .run(&manifest, &backend, &container_id, Some(&container_config))
+                .await?;
             for result in suite.results {
                 aggregate_suite.record(result);
             }

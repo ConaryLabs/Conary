@@ -37,6 +37,10 @@ pub struct BollardBackend {
 }
 
 impl BollardBackend {
+    fn normalize_signal_name(signal: &str) -> &str {
+        signal.strip_prefix("SIG").unwrap_or(signal)
+    }
+
     fn find_build_context(dockerfile: &Path) -> Result<(std::path::PathBuf, String)> {
         let dockerfile = dockerfile
             .canonicalize()
@@ -143,6 +147,13 @@ mod tests {
         );
 
         fs::remove_dir_all(&context_dir).expect("cleanup temp build context");
+    }
+
+    #[test]
+    fn normalize_signal_name_strips_sig_prefix() {
+        assert_eq!(BollardBackend::normalize_signal_name("SIGKILL"), "KILL");
+        assert_eq!(BollardBackend::normalize_signal_name("SIGTERM"), "TERM");
+        assert_eq!(BollardBackend::normalize_signal_name("KILL"), "KILL");
     }
 }
 
@@ -517,7 +528,8 @@ impl ContainerBackend for BollardBackend {
             .copied()
             .with_context(|| format!("exec pid not available for {exec_id}"))?;
 
-        let signal_cmd = format!("kill -s {signal} {target_pid}");
+        let signal_name = Self::normalize_signal_name(signal);
+        let signal_cmd = format!("kill -s {signal_name} {target_pid}");
         let result = self
             .exec(
                 &container_id,

@@ -15,6 +15,8 @@ pub mod schema;
 
 use crate::error::{Error, Result};
 use rusqlite::Connection;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -29,9 +31,47 @@ const CONNECTION_PRAGMAS: &str = "\
     PRAGMA busy_timeout = 5000;\
 ";
 
+const SQLITE_WAL_HEADER_SIZE: u64 = 32;
+const SQLITE_WAL_MAGIC_BE: [u32; 2] = [0x377f0682, 0x377f0683];
+
 /// Apply standard PRAGMAs to a connection
 fn configure(conn: &Connection) -> Result<()> {
     conn.execute_batch(CONNECTION_PRAGMAS)?;
+    Ok(())
+}
+
+fn validate_wal_file(path: &Path) -> Result<()> {
+    let wal_path = path.with_extension(format!(
+        "{}-wal",
+        path.extension().and_then(|ext| ext.to_str()).unwrap_or_default()
+    ));
+    if !wal_path.exists() {
+        return Ok(());
+    }
+
+    let metadata = std::fs::metadata(&wal_path)?;
+    if metadata.len() == 0 {
+        return Ok(());
+    }
+    if metadata.len() < SQLITE_WAL_HEADER_SIZE {
+        return Err(Error::InitError(format!(
+            "database WAL appears corrupted: {} is too small ({} bytes)",
+            wal_path.display(),
+            metadata.len()
+        )));
+    }
+
+    let mut header = [0_u8; 4];
+    let mut file = File::open(&wal_path)?;
+    file.read_exact(&mut header)?;
+    let magic = u32::from_be_bytes(header);
+    if !SQLITE_WAL_MAGIC_BE.contains(&magic) {
+        return Err(Error::InitError(format!(
+            "database WAL appears corrupted: invalid header in {}",
+            wal_path.display()
+        )));
+    }
+
     Ok(())
 }
 
@@ -80,6 +120,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
         return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
     }
 
+    validate_wal_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
     schema::migrate(&conn)?;
@@ -107,6 +148,7 @@ pub fn open_fast(path: impl AsRef<Path>) -> Result<Connection> {
         return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
     }
 
+    validate_wal_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
 
@@ -208,5 +250,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(table_count, 1, "troves table should exist");
+    }
+
+    #[test]
+    fn test_open_rejects_corrupt_wal_sidecar() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().to_path_buf();
+
+        init(&db_path).unwrap();
+        std::fs::write(db_path.with_extension("db-wal"), b"corrupt wal").unwrap();
+
+        let err = open(&db_path).unwrap_err().to_string();
+        assert!(err.contains("WAL appears corrupted") || err.contains("WAL"));
     }
 }
