@@ -15,7 +15,7 @@ use resolvo::{
     StringId, VersionSetId, VersionSetUnionId,
 };
 
-use crate::db::models::{DependencyEntry, ProvideEntry, Trove};
+use crate::db::models::{DependencyEntry, ProvideEntry, RepositoryPackage, Trove};
 use crate::error::Result;
 use crate::version::{RpmVersion, VersionConstraint};
 
@@ -28,6 +28,8 @@ pub struct ConaryPackage {
     pub trove_id: Option<i64>,
     /// `Some` when this package is from a repository.
     pub repo_package_id: Option<i64>,
+    /// Capabilities this package provides, along with optional capability versions.
+    pub provided_capabilities: Vec<(String, Option<RpmVersion>)>,
 }
 
 /// Bridge between Conary's data model and resolvo's abstract solver interface.
@@ -123,6 +125,20 @@ impl<'db> ConaryProvider<'db> {
         for trove in troves {
             let trove_id = trove.id;
             let version = RpmVersion::parse(&trove.version)?;
+            let provided_capabilities = if let Some(tid) = trove_id {
+                ProvideEntry::find_by_trove(self.conn, tid)?
+                    .into_iter()
+                    .map(|provide| {
+                        let version = provide
+                            .version
+                            .as_deref()
+                            .and_then(|value| RpmVersion::parse(value).ok());
+                        (provide.capability, version)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // Intern name for side effect (ensures this name is known to the solver)
             let _name_id = self.intern_name(&trove.name);
 
@@ -131,6 +147,7 @@ impl<'db> ConaryProvider<'db> {
                 version,
                 trove_id,
                 repo_package_id: None,
+                provided_capabilities,
             };
             let solvable_id = self.add_solvable(pkg);
 
@@ -173,30 +190,39 @@ impl<'db> ConaryProvider<'db> {
                 continue;
             }
 
+            let mut candidates = Vec::new();
             if let Ok(pkg_with_repo) = PackageSelector::find_best_package(self.conn, name, &options)
             {
+                candidates.push(pkg_with_repo);
+            } else if ProvideEntry::is_virtual_provide(name) {
+                for pkg_with_repo in self.find_repo_providers(name)? {
+                    candidates.push(pkg_with_repo);
+                }
+            }
+
+            for pkg_with_repo in candidates {
+                if self.solvables.iter().any(|s| s.repo_package_id == pkg_with_repo.package.id) {
+                    continue;
+                }
+
                 let version = match RpmVersion::parse(&pkg_with_repo.package.version) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
 
-                let _name_id = self.intern_name(name);
+                let _name_id = self.intern_name(&pkg_with_repo.package.name);
 
                 let pkg = ConaryPackage {
-                    name: name.clone(),
+                    name: pkg_with_repo.package.name.clone(),
                     version,
                     trove_id: None,
                     repo_package_id: pkg_with_repo.package.id,
+                    provided_capabilities: parse_repo_provides(&pkg_with_repo.package),
                 };
                 let solvable_id = self.add_solvable(pkg);
 
-                // Parse dependencies from repo metadata
                 if let Ok(sub_deps) = pkg_with_repo.package.parse_dependency_requests() {
-                    let dep_list: Vec<(String, VersionConstraint)> = sub_deps
-                        .into_iter()
-                        .filter(|(name, _constraint)| !ProvideEntry::is_virtual_provide(name))
-                        .collect();
-                    self.dependencies.insert(solvable_id.0, dep_list);
+                    self.dependencies.insert(solvable_id.0, sub_deps);
                 }
             }
         }
@@ -216,6 +242,34 @@ impl<'db> ConaryProvider<'db> {
         }
 
         providers
+    }
+
+    fn find_repo_providers(
+        &self,
+        capability: &str,
+    ) -> Result<Vec<crate::repository::selector::PackageWithRepo>> {
+        use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+
+        let pattern = format!("%{capability}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT name FROM repository_packages
+             WHERE metadata LIKE ?1
+             ORDER BY LENGTH(name), name",
+        )?;
+
+        let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
+        let mut providers = Vec::<PackageWithRepo>::new();
+        for row in rows {
+            let name = row?;
+            if let Ok(pkg_with_repo) =
+                PackageSelector::find_best_package(self.conn, &name, &SelectionOptions::default())
+                && repo_package_provides_capability(&pkg_with_repo.package, capability)
+            {
+                providers.push(pkg_with_repo);
+            }
+        }
+
+        Ok(providers)
     }
 
     /// Get the solvable package at a given index.
@@ -270,6 +324,20 @@ impl<'db> ConaryProvider<'db> {
             .iter()
             .enumerate()
             .filter(|(_, s)| s.name == *name)
+            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+            .collect()
+    }
+
+    fn solvables_for_provide(&self, capability: &str) -> Vec<SolvableId> {
+        self.solvables
+            .iter()
+            .enumerate()
+            .filter(|(_, solvable)| {
+                solvable
+                    .provided_capabilities
+                    .iter()
+                    .any(|(provided, _version)| provided == capability)
+            })
             .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
             .collect()
     }
@@ -374,13 +442,25 @@ impl DependencyProvider for ConaryProvider<'_> {
         version_set: VersionSetId,
         inverse: bool,
     ) -> Vec<SolvableId> {
-        let (_, ref constraint) = self.version_sets[version_set.0 as usize];
+        let (name_id, ref constraint) = self.version_sets[version_set.0 as usize];
+        let requested_name = &self.names[name_id.0 as usize];
         candidates
             .iter()
             .copied()
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.0 as usize];
-                let matches = constraint.satisfies(&pkg.version);
+                let matches = if pkg.name == *requested_name {
+                    constraint.satisfies(&pkg.version)
+                } else if let Some(provided_version) = pkg
+                    .provided_capabilities
+                    .iter()
+                    .find(|(capability, _version)| capability == requested_name)
+                    .and_then(|(_capability, version)| version.as_ref())
+                {
+                    constraint.satisfies(provided_version)
+                } else {
+                    constraint.satisfies(&pkg.version)
+                };
                 if inverse { !matches } else { matches }
             })
             .collect()
@@ -399,6 +479,7 @@ impl DependencyProvider for ConaryProvider<'_> {
                         candidates.extend(self.solvables_for_name(provider_name_id));
                     }
                 }
+                candidates.extend(self.solvables_for_provide(name_str));
             }
             if candidates.is_empty() {
                 return None;
@@ -560,18 +641,21 @@ mod tests {
             version: RpmVersion::parse("1.0.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
         let s2 = provider.add_solvable(ConaryPackage {
             name: "lib".to_string(),
             version: RpmVersion::parse("2.0.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
         let s3 = provider.add_solvable(ConaryPackage {
             name: "lib".to_string(),
             version: RpmVersion::parse("3.0.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
 
         let candidates = [s1, s2, s3];
@@ -603,6 +687,7 @@ mod tests {
             version: RpmVersion::parse("1.0.0").unwrap(),
             trove_id: Some(42),
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
 
         // Add a repo version
@@ -611,6 +696,7 @@ mod tests {
             version: RpmVersion::parse("2.0.0").unwrap(),
             trove_id: None,
             repo_package_id: Some(100),
+            provided_capabilities: Vec::new(),
         });
 
         // Test candidates lookup logic directly
@@ -631,18 +717,21 @@ mod tests {
             version: RpmVersion::parse("1.0.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
         let s2 = provider.add_solvable(ConaryPackage {
             name: "pkg".to_string(),
             version: RpmVersion::parse("3.0.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
         let s3 = provider.add_solvable(ConaryPackage {
             name: "pkg".to_string(),
             version: RpmVersion::parse("2.0.0").unwrap(),
             trove_id: Some(1), // installed
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
 
         // Test sort logic directly
@@ -678,6 +767,7 @@ mod tests {
             version: RpmVersion::parse("1.24.0").unwrap(),
             trove_id: None,
             repo_package_id: None,
+            provided_capabilities: Vec::new(),
         });
         let str_id = provider.intern_string("test string");
 
@@ -688,4 +778,86 @@ mod tests {
         assert_eq!(provider.version_set_name(vs_id), name_id);
         assert_eq!(provider.solvable_name(sid), name_id);
     }
+
+    #[test]
+    fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
+        let (_dir, conn) = setup_test_db();
+        let mut provider = ConaryProvider::new(&conn);
+
+        let capability_name = provider.intern_name("kernel-modules-core-uname-r");
+        let version_set = provider.intern_version_set(
+            capability_name,
+            VersionConstraint::parse("= 6.19.6").unwrap(),
+        );
+        let candidate = provider.add_solvable(ConaryPackage {
+            name: "kernel-modules-core".to_string(),
+            version: RpmVersion::parse("6.19.6-200.fc43").unwrap(),
+            trove_id: None,
+            repo_package_id: Some(42),
+            provided_capabilities: vec![(
+                "kernel-modules-core-uname-r".to_string(),
+                Some(RpmVersion::parse("6.19.6").unwrap()),
+            )],
+        });
+
+        let requested_name = &provider.names[capability_name.0 as usize];
+        let (_, constraint) = &provider.version_sets[version_set.0 as usize];
+        let matching: Vec<SolvableId> = [candidate]
+            .into_iter()
+            .filter(|sid| {
+                let pkg = &provider.solvables[sid.0 as usize];
+                let Some(provided_version) = pkg
+                    .provided_capabilities
+                    .iter()
+                    .find(|(capability, _version)| capability == requested_name)
+                    .and_then(|(_capability, version)| version.as_ref())
+                else {
+                    return false;
+                };
+                constraint.satisfies(provided_version)
+            })
+            .collect();
+        assert_eq!(matching, vec![candidate]);
+    }
+}
+
+fn parse_repo_provides(pkg: &RepositoryPackage) -> Vec<(String, Option<RpmVersion>)> {
+    let Some(metadata_json) = pkg.metadata.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+        return Vec::new();
+    };
+    let Some(provides) = metadata.get("rpm_provides").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    provides
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(parse_provide_entry)
+        .collect()
+}
+
+fn parse_provide_entry(entry: &str) -> (String, Option<RpmVersion>) {
+    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
+
+    for op in OPS {
+        if let Some((name, version)) = entry.split_once(op) {
+            let name = name.trim();
+            let version = version.trim();
+            if name.is_empty() || version.is_empty() {
+                continue;
+            }
+            return (name.to_string(), RpmVersion::parse(version).ok());
+        }
+    }
+
+    (entry.trim().to_string(), None)
+}
+
+fn repo_package_provides_capability(pkg: &RepositoryPackage, capability: &str) -> bool {
+    parse_repo_provides(pkg)
+        .iter()
+        .any(|(provided, _version)| provided == capability)
 }
