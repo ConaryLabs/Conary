@@ -194,7 +194,7 @@ impl<'db> ConaryProvider<'db> {
             if let Ok(pkg_with_repo) = PackageSelector::find_best_package(self.conn, name, &options)
             {
                 candidates.push(pkg_with_repo);
-            } else if ProvideEntry::is_virtual_provide(name) {
+            } else {
                 for pkg_with_repo in self.find_repo_providers(name)? {
                     candidates.push(pkg_with_repo);
                 }
@@ -470,17 +470,14 @@ impl DependencyProvider for ConaryProvider<'_> {
         let mut candidates = self.solvables_for_name(name);
 
         if candidates.is_empty() {
-            // Check if this is a virtual provide and resolve through real packages
             let name_str = &self.names[name.0 as usize];
-            if ProvideEntry::is_virtual_provide(name_str) {
-                let providers = self.resolve_virtual_provide(name_str);
-                for provider_name in &providers {
-                    if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
-                        candidates.extend(self.solvables_for_name(provider_name_id));
-                    }
+            let providers = self.resolve_virtual_provide(name_str);
+            for provider_name in &providers {
+                if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
+                    candidates.extend(self.solvables_for_name(provider_name_id));
                 }
-                candidates.extend(self.solvables_for_provide(name_str));
             }
+            candidates.extend(self.solvables_for_provide(name_str));
             if candidates.is_empty() {
                 return None;
             }
