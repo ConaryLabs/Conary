@@ -145,6 +145,10 @@ fn sync_repository_native(
             repo_pkg.architecture = pkg_meta.architecture;
             repo_pkg.description = pkg_meta.description;
             repo_pkg.dependencies = deps_json;
+            repo_pkg.metadata = match &pkg_meta.extra_metadata {
+                serde_json::Value::Null => None,
+                value => Some(value.to_string()),
+            };
             repo_pkg
         })
         .collect();

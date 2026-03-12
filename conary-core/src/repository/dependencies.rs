@@ -7,6 +7,7 @@
 
 use crate::db::models::{Trove, generate_capability_variations};
 use crate::error::{Error, Result};
+use crate::version::VersionConstraint;
 use rayon::prelude::*;
 use rusqlite::Connection;
 use std::cmp::Reverse;
@@ -17,23 +18,86 @@ use tracing::{debug, info};
 use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
-fn resolve_repo_dependency_name(
+fn resolve_repo_dependency_by_metadata(
     conn: &Connection,
     dep_name: &str,
     options: &SelectionOptions,
-) -> Result<String> {
+) -> Result<Option<(String, Option<String>)>> {
+    let pattern = format!("%{dep_name}%");
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT name FROM repository_packages
+         WHERE metadata LIKE ?1
+         ORDER BY LENGTH(name), name",
+    )?;
+
+    let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
+    let mut candidates = Vec::new();
+
+    for row in rows {
+        let name = row?;
+        for candidate in PackageSelector::search_packages(conn, &name, options)? {
+            let Some(metadata_json) = candidate.package.metadata.as_ref() else {
+                continue;
+            };
+            let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+                continue;
+            };
+            let Some(provides) = metadata.get("rpm_provides").and_then(|value| value.as_array())
+            else {
+                continue;
+            };
+            if provides.iter().any(|value| {
+                value.as_str().is_some_and(|provide| {
+                    provide == dep_name
+                        || provide.starts_with(&format!("{dep_name} "))
+                        || provide.starts_with(&format!("{dep_name}("))
+                })
+            }) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let selected = PackageSelector::select_best(candidates)?;
+    Ok(Some((
+        selected.package.name.clone(),
+        Some(selected.package.version.clone()),
+    )))
+}
+
+fn resolve_repo_dependency_request(
+    conn: &Connection,
+    dep_name: &str,
+    constraint: &VersionConstraint,
+    options: &SelectionOptions,
+) -> Result<(String, VersionConstraint)> {
     if PackageSelector::find_best_package(conn, dep_name, options).is_ok() {
-        return Ok(dep_name.to_string());
+        return Ok((dep_name.to_string(), constraint.clone()));
     }
 
     for variation in generate_capability_variations(dep_name) {
         if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
-            return Ok(variation);
+            return Ok((variation, constraint.clone()));
         }
     }
 
+    if let Some((package_name, package_version)) =
+        resolve_repo_dependency_by_metadata(conn, dep_name, options)?
+    {
+        let resolved_constraint = if let Some(version) = package_version {
+            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
+        } else {
+            constraint.clone()
+        };
+        return Ok((package_name, resolved_constraint));
+    }
+
     if let Some(candidate) = resolve_repo_dependency_by_search(conn, dep_name, options)? {
-        return Ok(candidate);
+        return Ok((candidate, constraint.clone()));
     }
 
     Err(Error::NotFound(format!(
@@ -130,7 +194,8 @@ pub fn resolve_dependencies(
 
         // Search repositories for this dependency
         let options = SelectionOptions::default();
-        let resolved_name = resolve_repo_dependency_name(conn, dep_name, &options)?;
+        let (resolved_name, _) =
+            resolve_repo_dependency_request(conn, dep_name, &VersionConstraint::Any, &options)?;
         match PackageSelector::find_best_package(conn, &resolved_name, &options) {
             Ok(pkg_with_repo) => {
                 info!(
@@ -166,18 +231,27 @@ pub fn resolve_dependencies_transitive(
     initial_dependencies: &[String],
     _max_depth: usize,
 ) -> Result<Vec<(String, PackageWithRepo)>> {
-    use crate::resolver::sat;
-    use crate::version::VersionConstraint;
-
-    // Filter out rpmlib dependencies and file paths
-    let options = SelectionOptions::default();
     let requests: Vec<_> = initial_dependencies
         .iter()
         .filter(|d| !d.starts_with("rpmlib(") && !d.starts_with('/'))
-        .map(|d| {
-            resolve_repo_dependency_name(conn, d, &options)
-                .map(|resolved| (resolved, VersionConstraint::Any))
-        })
+        .map(|d| Ok((d.clone(), VersionConstraint::Any)))
+        .collect::<Result<Vec<_>>>()?;
+
+    resolve_dependencies_transitive_requests(conn, &requests, _max_depth)
+}
+
+pub fn resolve_dependencies_transitive_requests(
+    conn: &Connection,
+    initial_requests: &[(String, VersionConstraint)],
+    _max_depth: usize,
+) -> Result<Vec<(String, PackageWithRepo)>> {
+    use crate::resolver::sat;
+
+    let options = SelectionOptions::default();
+    let requests: Vec<_> = initial_requests
+        .iter()
+        .filter(|(d, _)| !d.starts_with("rpmlib(") && !d.starts_with('/'))
+        .map(|(d, constraint)| resolve_repo_dependency_request(conn, d, constraint, &options))
         .collect::<Result<Vec<_>>>()?;
 
     if requests.is_empty() {
@@ -384,9 +458,13 @@ mod tests {
         );
         pkg.insert(&conn).unwrap();
 
-        let resolved =
-            resolve_repo_dependency_name(&conn, "libjq.so.1", &SelectionOptions::default())
-                .unwrap();
+        let (resolved, _constraint) = resolve_repo_dependency_request(
+            &conn,
+            "libjq.so.1",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
         assert_eq!(resolved, "libjq");
     }
 
@@ -410,9 +488,51 @@ mod tests {
             pkg.insert(&conn).unwrap();
         }
 
-        let resolved =
-            resolve_repo_dependency_name(&conn, "libonig.so.5", &SelectionOptions::default())
-                .unwrap();
+        let (resolved, _constraint) = resolve_repo_dependency_request(
+            &conn,
+            "libonig.so.5",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
         assert_eq!(resolved, "oniguruma");
+    }
+
+    #[test]
+    fn resolves_capability_dependency_from_repo_metadata_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "kernel-core".to_string(),
+            "6.19.6-200.fc43".to_string(),
+            "sha256:test".to_string(),
+            123,
+            "https://example.invalid/kernel-core.rpm".to_string(),
+        );
+        pkg.metadata = Some(
+            serde_json::json!({
+                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc43.x86_64"]
+            })
+            .to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+
+        let (resolved, constraint) = resolve_repo_dependency_request(
+            &conn,
+            "kernel-core-uname-r",
+            &VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "kernel-core");
+        assert_eq!(
+            constraint,
+            VersionConstraint::parse("= 6.19.6-200.fc43").unwrap()
+        );
     }
 }

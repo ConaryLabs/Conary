@@ -10,12 +10,19 @@ use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use serde_json::json;
 use tracing::{debug, info};
 
 /// Fedora/RPM repository parser
 pub struct FedoraParser {
     /// Repository architecture (e.g., "x86_64", "aarch64")
     architecture: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormatSection {
+    Requires,
+    Provides,
 }
 
 impl FedoraParser {
@@ -52,7 +59,7 @@ impl FedoraParser {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"type")
                             .unwrap_or(false)
-                    }) && attr.value.as_ref() == b"primary"
+                    }) && attr.value.as_ref() == b"primary".as_slice()
                     {
                         in_primary = true;
                     }
@@ -115,6 +122,7 @@ impl FedoraParser {
         let mut current_package: Option<PackageBuilder> = None;
         let mut current_tag = String::new();
         let mut in_format = false;
+        let mut format_section = None;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -126,8 +134,12 @@ impl FedoraParser {
                         "package" => {
                             current_package = Some(PackageBuilder::new());
                         }
-                        "format" => {
-                            in_format = true;
+                        "format" => in_format = true,
+                        _ if in_format && tag_name.ends_with("requires") => {
+                            format_section = Some(FormatSection::Requires);
+                        }
+                        _ if in_format && tag_name.ends_with("provides") => {
+                            format_section = Some(FormatSection::Provides);
                         }
                         _ => {}
                     }
@@ -155,7 +167,7 @@ impl FedoraParser {
                             if let Some(ref mut pkg) = current_package {
                                 for attr in e.attributes().filter_map(|a| a.ok()) {
                                     let key = String::from_utf8_lossy(attr.key.as_ref());
-                                    if key.as_ref() == "type" {
+                                    if key == "type" {
                                         let value = String::from_utf8_lossy(&attr.value);
                                         pkg.checksum_type = Some(value.to_string());
                                     }
@@ -166,7 +178,7 @@ impl FedoraParser {
                             if let Some(ref mut pkg) = current_package {
                                 for attr in e.attributes().filter_map(|a| a.ok()) {
                                     let key = String::from_utf8_lossy(attr.key.as_ref());
-                                    if key.as_ref() == "package" {
+                                    if key == "package" {
                                         let value = String::from_utf8_lossy(&attr.value);
                                         pkg.size = Some(value.to_string());
                                     }
@@ -177,18 +189,15 @@ impl FedoraParser {
                             if let Some(ref mut pkg) = current_package {
                                 for attr in e.attributes().filter_map(|a| a.ok()) {
                                     let key = String::from_utf8_lossy(attr.key.as_ref());
-                                    if key.as_ref() == "href" {
+                                    if key == "href" {
                                         let value = String::from_utf8_lossy(&attr.value);
                                         pkg.location = Some(value.to_string());
                                     }
                                 }
                             }
                         }
-                        "format" => {
-                            in_format = true;
-                        }
+                        "format" => in_format = true,
                         "entry" if in_format => {
-                            // This is a dependency entry within <rpm:requires>
                             if let Some(ref mut pkg) = current_package {
                                 let mut dep_name = None;
                                 let mut dep_flags = None;
@@ -205,28 +214,37 @@ impl FedoraParser {
                                     }
                                 }
 
-                                if let Some(name) = dep_name {
-                                    // Skip rpmlib and file dependencies
-                                    if !name.starts_with("rpmlib(") && !name.starts_with('/') {
-                                        let constraint = match (dep_flags, dep_ver) {
-                                            (Some(flags), Some(ver)) => {
-                                                let op = match flags.as_str() {
-                                                    "GE" => ">=",
-                                                    "LE" => "<=",
-                                                    "EQ" => "=",
-                                                    "LT" => "<",
-                                                    "GT" => ">",
-                                                    _ => "",
-                                                };
-                                                if op.is_empty() {
-                                                    String::new()
-                                                } else {
-                                                    format!("{} {}", op, ver)
-                                                }
+                                if let Some(name) = dep_name
+                                    && !name.starts_with("rpmlib(")
+                                    && !name.starts_with('/')
+                                {
+                                    let constraint = match (dep_flags, dep_ver) {
+                                        (Some(flags), Some(ver)) => {
+                                            let op = match flags.as_str() {
+                                                "GE" => ">=",
+                                                "LE" => "<=",
+                                                "EQ" => "=",
+                                                "LT" => "<",
+                                                "GT" => ">",
+                                                _ => "",
+                                            };
+                                            if op.is_empty() {
+                                                String::new()
+                                            } else {
+                                                format!("{} {}", op, ver)
                                             }
-                                            _ => String::new(),
-                                        };
-                                        pkg.dependencies.push((name, constraint));
+                                        }
+                                        _ => String::new(),
+                                    };
+
+                                    match format_section {
+                                        Some(FormatSection::Requires) => {
+                                            pkg.dependencies.push((name, constraint));
+                                        }
+                                        Some(FormatSection::Provides) => {
+                                            pkg.provides.push((name, constraint));
+                                        }
+                                        None => {}
                                     }
                                 }
                             }
@@ -257,6 +275,9 @@ impl FedoraParser {
                         packages.push(pkg);
                     } else if tag_name == "format" {
                         in_format = false;
+                        format_section = None;
+                    } else if tag_name.ends_with("requires") || tag_name.ends_with("provides") {
+                        format_section = None;
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -291,6 +312,7 @@ struct PackageBuilder {
     location: Option<String>,
     url: Option<String>,
     dependencies: Vec<(String, String)>,
+    provides: Vec<(String, String)>,
 }
 
 impl PackageBuilder {
@@ -363,6 +385,18 @@ impl PackageBuilder {
             _ => ChecksumType::Sha256, // Default
         };
 
+        let rpm_requires: Vec<String> = self
+            .dependencies
+            .iter()
+            .map(|(name, constraint)| {
+                if constraint.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} {constraint}")
+                }
+            })
+            .collect();
+
         // Convert dependencies
         let dependencies = self
             .dependencies
@@ -372,6 +406,17 @@ impl PackageBuilder {
                     Dependency::runtime(name)
                 } else {
                     Dependency::runtime_versioned(name, constraint)
+                }
+            })
+            .collect();
+        let rpm_provides: Vec<String> = self
+            .provides
+            .iter()
+            .map(|(name, constraint)| {
+                if constraint.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} {constraint}")
                 }
             })
             .collect();
@@ -389,6 +434,8 @@ impl PackageBuilder {
             serde_json::Value::String("rpm".to_string()),
         );
         extra.insert("epoch".to_string(), serde_json::Value::String(epoch));
+        extra.insert("rpm_requires".to_string(), json!(rpm_requires));
+        extra.insert("rpm_provides".to_string(), json!(rpm_provides));
 
         Ok(PackageMetadata {
             name,

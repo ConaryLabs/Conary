@@ -48,6 +48,31 @@ fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     false
 }
 
+fn is_conditional_rpm_dependency(dep_name: &str) -> bool {
+    dep_name.contains(" if ")
+        || dep_name.contains(" unless ")
+        || dep_name.contains(" with ")
+        || dep_name.contains(" without ")
+        || dep_name.starts_with("((")
+}
+
+fn build_dependency_requests(
+    missing: &[MissingDependency],
+    to_install: &[dep_resolution::ResolvedDep],
+) -> Vec<(String, VersionConstraint)> {
+    to_install
+        .iter()
+        .map(|dep| {
+            let constraint = missing
+                .iter()
+                .find(|candidate| candidate.name == dep.name)
+                .map(|candidate| candidate.constraint.clone())
+                .unwrap_or(VersionConstraint::Any);
+            (dep.name.clone(), constraint)
+        })
+        .collect()
+}
+
 /// Result of attempting CCS conversion
 pub enum ConversionResult {
     /// Package was converted, install via CCS path
@@ -256,6 +281,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
             .iter()
             .filter(|dep| !package_self_provides(&ccs_pkg, &dep.name))
             .filter(|dep| !dep.name.starts_with("rpmlib(") && !dep.name.starts_with('/'))
+            .filter(|dep| !is_conditional_rpm_dependency(&dep.name))
             .map(|dep| MissingDependency {
                 name: dep.name.clone(),
                 constraint: dep
@@ -286,11 +312,11 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
             }
 
             if !dep_plan.to_install.is_empty() {
-                let dep_names: Vec<String> =
-                    dep_plan.to_install.iter().map(|d| d.name.clone()).collect();
+                let dep_requests =
+                    build_dependency_requests(&unresolved_missing, &dep_plan.to_install);
 
                 if dry_run {
-                    repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
+                    repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10)
                         .with_context(|| {
                             format!(
                                 "Failed to resolve dependencies from repositories for '{}'",
@@ -316,8 +342,11 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                         }
                     }
 
-                    let to_download =
-                        repository::resolve_dependencies_transitive(&conn, &dep_names, 10)?;
+                    let to_download = repository::resolve_dependencies_transitive_requests(
+                        &conn,
+                        &dep_requests,
+                        10,
+                    )?;
                     if !to_download.is_empty() {
                         let temp_dir = TempDir::new()?;
                         let keyring_dir = keyring_dir(db_path);
@@ -412,4 +441,17 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
         sandbox_mode,
         no_deps,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_conditional_rpm_dependencies() {
+        assert!(is_conditional_rpm_dependency(
+            "((kernel-modules-extra-uname-r = 6.19.6-200.fc43.x86_64) if kernel-modules-extra-matched)"
+        ));
+        assert!(!is_conditional_rpm_dependency("kernel-core-uname-r"));
+    }
 }

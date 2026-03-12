@@ -808,7 +808,8 @@ impl Sandbox {
                 e
             );
             unsafe {
-                let root_cstr = std::ffi::CString::new(root.to_string_lossy().as_ref())
+                let root_string = root.to_string_lossy().into_owned();
+                let root_cstr = std::ffi::CString::new(root_string)
                     .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
                 if libc::chroot(root_cstr.as_ptr()) != 0 {
                     return Err(Error::ScriptletError("chroot failed".to_string()));
