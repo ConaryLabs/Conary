@@ -7,7 +7,6 @@
 
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, prepare_package_for_batch};
-use super::dependencies::build_dependency_edges;
 use super::dep_mode::DepMode;
 use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
@@ -19,9 +18,9 @@ use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::repository;
-use conary_core::resolver::Resolver;
+use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
-use conary_core::version::RpmVersion;
+use conary_core::version::VersionConstraint;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tempfile::TempDir;
@@ -229,131 +228,112 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
     if !no_deps {
         let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
         let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
-        let package_version = RpmVersion::parse(ccs_pkg.version()).with_context(|| {
-            format!(
-                "Failed to parse version '{}' for package '{}'",
-                ccs_pkg.version(),
-                ccs_pkg.name()
-            )
-        })?;
-        let dependency_edges = build_dependency_edges(&ccs_pkg);
+        let missing: Vec<MissingDependency> = ccs_pkg
+            .dependencies()
+            .iter()
+            .filter(|dep| !dep.name.starts_with("rpmlib(") && !dep.name.starts_with('/'))
+            .map(|dep| MissingDependency {
+                name: dep.name.clone(),
+                constraint: dep
+                    .version
+                    .as_ref()
+                    .and_then(|v| VersionConstraint::parse(v).ok())
+                    .unwrap_or(VersionConstraint::Any),
+                required_by: vec![ccs_pkg.name().to_string()],
+            })
+            .collect();
 
-        if !dependency_edges.is_empty() {
-            let mut resolver =
-                Resolver::new(&conn).context("Failed to initialize dependency resolver")?;
-            let plan = resolver
-                .resolve_install(
-                    ccs_pkg.name().to_string(),
-                    package_version,
-                    dependency_edges,
-                )
-                .with_context(|| {
-                    format!("Failed to resolve dependencies for '{}'", ccs_pkg.name())
-                })?;
+        if !missing.is_empty() {
+            let dep_plan = dep_resolution::resolve_missing_deps(&conn, &missing, dep_mode);
 
-            if !plan.conflicts.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Cannot install {}: {} dependency conflict(s) detected",
-                    ccs_pkg.name(),
-                    plan.conflicts.len()
-                ));
+            if !dep_plan.to_adopt.is_empty() && !dry_run {
+                crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)?;
             }
 
-            if !plan.missing.is_empty() {
-                let dep_plan = dep_resolution::resolve_missing_deps(&conn, &plan.missing, dep_mode);
+            if !dep_plan.to_install.is_empty() {
+                let dep_names: Vec<String> =
+                    dep_plan.to_install.iter().map(|d| d.name.clone()).collect();
 
-                if !dep_plan.to_adopt.is_empty() && !dry_run {
-                    crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)?;
-                }
+                if dry_run {
+                    repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
+                        .with_context(|| {
+                            format!(
+                                "Failed to resolve dependencies from repositories for '{}'",
+                                ccs_pkg.name()
+                            )
+                        })?;
+                } else {
+                    if !yes {
+                        println!();
+                        print!(
+                            "Proceed with {} dependency changes? [Y/n] ",
+                            dep_plan.to_install.len() + dep_plan.to_adopt.len()
+                        );
+                        use std::io::Write;
+                        std::io::stdout().flush()?;
 
-                if !dep_plan.to_install.is_empty() {
-                    let dep_names: Vec<String> =
-                        dep_plan.to_install.iter().map(|d| d.name.clone()).collect();
-
-                    if dry_run {
-                        repository::resolve_dependencies_transitive(&conn, &dep_names, 10)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to resolve dependencies from repositories for '{}'",
-                                    ccs_pkg.name()
-                                )
-                            })?;
-                    } else {
-                        if !yes {
-                            println!();
-                            print!(
-                                "Proceed with {} dependency changes? [Y/n] ",
-                                dep_plan.to_install.len() + dep_plan.to_adopt.len()
-                            );
-                            use std::io::Write;
-                            std::io::stdout().flush()?;
-
-                            let mut input = String::new();
-                            std::io::stdin().read_line(&mut input)?;
-                            let input = input.trim().to_lowercase();
-                            if input == "n" || input == "no" {
-                                println!("Cancelled.");
-                                return Ok(());
-                            }
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input)?;
+                        let input = input.trim().to_lowercase();
+                        if input == "n" || input == "no" {
+                            println!("Cancelled.");
+                            return Ok(());
                         }
+                    }
 
-                        let to_download =
-                            repository::resolve_dependencies_transitive(&conn, &dep_names, 10)?;
-                        if !to_download.is_empty() {
-                            let temp_dir = TempDir::new()?;
-                            let keyring_dir = keyring_dir(db_path);
-                            let downloaded = repository::download_dependencies(
-                                &to_download,
-                                temp_dir.path(),
-                                Some(&keyring_dir),
-                            )?;
-                            let parent_name = ccs_pkg.name().to_string();
-                            let mut prepared_packages = Vec::with_capacity(downloaded.len());
+                    let to_download =
+                        repository::resolve_dependencies_transitive(&conn, &dep_names, 10)?;
+                    if !to_download.is_empty() {
+                        let temp_dir = TempDir::new()?;
+                        let keyring_dir = keyring_dir(db_path);
+                        let downloaded = repository::download_dependencies(
+                            &to_download,
+                            temp_dir.path(),
+                            Some(&keyring_dir),
+                        )?;
+                        let parent_name = ccs_pkg.name().to_string();
+                        let mut prepared_packages = Vec::with_capacity(downloaded.len());
 
-                            for (dep_name, dep_path) in &downloaded {
-                                let reason = format!("Required by {}", parent_name);
-                                match prepare_package_for_batch(
-                                    dep_path,
-                                    db_path,
-                                    &reason,
-                                    allow_downgrade,
-                                ) {
-                                    Ok(prepared) => prepared_packages.push(prepared),
-                                    Err(e) if e.to_string().contains("already installed") => {
-                                        info!(
-                                            "Dependency {} already installed, skipping",
-                                            dep_name
-                                        );
-                                    }
-                                    Err(e) => {
-                                        return Err(anyhow::anyhow!(
-                                            "Failed to prepare dependency {}: {}",
-                                            dep_name,
-                                            e
-                                        ));
-                                    }
+                        for (dep_name, dep_path) in &downloaded {
+                            let reason = format!("Required by {}", parent_name);
+                            match prepare_package_for_batch(
+                                dep_path,
+                                db_path,
+                                &reason,
+                                allow_downgrade,
+                            ) {
+                                Ok(prepared) => prepared_packages.push(prepared),
+                                Err(e) if e.to_string().contains("already installed") => {
+                                    info!("Dependency {} already installed, skipping", dep_name);
+                                }
+                                Err(e) => {
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to prepare dependency {}: {}",
+                                        dep_name,
+                                        e
+                                    ));
                                 }
                             }
+                        }
 
-                            if !prepared_packages.is_empty() {
-                                let installer =
-                                    BatchInstaller::new(db_path, root, sandbox_mode, no_scripts);
-                                installer.install_batch(prepared_packages)?;
-                            }
+                        if !prepared_packages.is_empty() {
+                            let installer =
+                                BatchInstaller::new(db_path, root, sandbox_mode, no_scripts);
+                            installer.install_batch(prepared_packages)?;
                         }
                     }
                 }
+            }
 
-                if !dep_plan.unresolvable.is_empty() {
-                    let (_satisfied, still_missing) =
-                        check_provides_dependencies(&conn, &dep_plan.unresolvable);
-                    if !still_missing.is_empty() {
-                        return Err(anyhow::anyhow!(
-                            "Cannot install {}: {} unresolvable dependencies",
-                            ccs_pkg.name(),
-                            still_missing.len()
-                        ));
-                    }
+            if !dep_plan.unresolvable.is_empty() {
+                let (_satisfied, still_missing) =
+                    check_provides_dependencies(&conn, &dep_plan.unresolvable);
+                if !still_missing.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Cannot install {}: {} unresolvable dependencies",
+                        ccs_pkg.name(),
+                        still_missing.len()
+                    ));
                 }
             }
         }
