@@ -9,7 +9,8 @@ use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{
-    KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef, TestManifest,
+    Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef,
+    TestManifest,
 };
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
@@ -362,8 +363,9 @@ impl TestRunner {
 
             if let Some(ref assertion) = step.assert {
                 let exec = last_exec.as_ref().expect("assertion without exec result");
+                let assertion = self.expand_assertion(assertion);
                 if let Err(e) =
-                    evaluate_assertion(assertion, exec.exit_code, &exec.stdout, &exec.stderr)
+                    evaluate_assertion(&assertion, exec.exit_code, &exec.stdout, &exec.stderr)
                 {
                     failure = Some(format!("assertion failed: {e}"));
                     break;
@@ -480,6 +482,62 @@ impl TestRunner {
                 .iter()
                 .map(|s| self.substitute_vars(s))
                 .collect(),
+        }
+    }
+
+    fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
+        Assertion {
+            exit_code: assertion.exit_code,
+            exit_code_not: assertion.exit_code_not,
+            stdout_contains: assertion
+                .stdout_contains
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            stdout_not_contains: assertion
+                .stdout_not_contains
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            stdout_contains_all: assertion.stdout_contains_all.as_ref().map(|values| {
+                values
+                    .iter()
+                    .map(|value| self.substitute_vars(value))
+                    .collect()
+            }),
+            stdout_contains_any: assertion.stdout_contains_any.as_ref().map(|values| {
+                values
+                    .iter()
+                    .map(|value| self.substitute_vars(value))
+                    .collect()
+            }),
+            stdout_contains_if_success: assertion
+                .stdout_contains_if_success
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            stdout_contains_any_if_success: assertion
+                .stdout_contains_any_if_success
+                .as_ref()
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|value| self.substitute_vars(value))
+                        .collect()
+                }),
+            stderr_contains: assertion
+                .stderr_contains
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            file_exists: assertion
+                .file_exists
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            file_not_exists: assertion
+                .file_not_exists
+                .as_ref()
+                .map(|value| self.substitute_vars(value)),
+            file_checksum: assertion.file_checksum.as_ref().map(|checksum| FileChecksum {
+                path: self.substitute_vars(&checksum.path),
+                sha256: self.substitute_vars(&checksum.sha256),
+            }),
         }
     }
 }
@@ -1038,6 +1096,48 @@ mod tests {
 
         let expanded3 = runner.substitute_vars("conary install ${PKG}");
         assert_eq!(expanded3, "conary install tree");
+    }
+
+    #[test]
+    fn test_expand_assertion_substitutes_vars() {
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut manifest = make_manifest(Vec::new());
+        manifest.distro_overrides.insert(
+            "fedora43".to_string(),
+            HashMap::from([
+                ("PKG".to_string(), "conary-test-fixture".to_string()),
+                ("HELLO_SHA".to_string(), "abc123".to_string()),
+            ]),
+        );
+        runner.load_manifest_vars(&manifest);
+
+        let assertion = Assertion {
+            stdout_contains_all: Some(vec!["${PKG}".to_string(), "Version".to_string()]),
+            stderr_contains: Some("${PKG}".to_string()),
+            file_checksum: Some(FileChecksum {
+                path: "/tmp/${PKG}".to_string(),
+                sha256: "${HELLO_SHA}".to_string(),
+            }),
+            ..Assertion::default()
+        };
+
+        let expanded = runner.expand_assertion(&assertion);
+        assert_eq!(
+            expanded.stdout_contains_all,
+            Some(vec!["conary-test-fixture".to_string(), "Version".to_string()])
+        );
+        assert_eq!(
+            expanded.stderr_contains.as_deref(),
+            Some("conary-test-fixture")
+        );
+        assert_eq!(
+            expanded.file_checksum.as_ref().map(|chk| chk.path.as_str()),
+            Some("/tmp/conary-test-fixture")
+        );
+        assert_eq!(
+            expanded.file_checksum.as_ref().map(|chk| chk.sha256.as_str()),
+            Some("abc123")
+        );
     }
 
     #[test]
