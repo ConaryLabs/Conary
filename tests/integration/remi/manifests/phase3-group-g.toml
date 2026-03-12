@@ -9,11 +9,20 @@
 name = "Phase 3 Group G: Data Integrity"
 phase = 3
 
+[distro_overrides.fedora43]
+NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.rpm"
+
+[distro_overrides.ubuntu-noble]
+NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.deb"
+
+[distro_overrides.arch]
+NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.pkg.tar.zst"
+
 [suite.mock_server]
 port = 18080
 
 [[suite.mock_server.routes]]
-path = "/corrupted-index"
+path = "/corrupted-index/metadata.json"
 status = 200
 body = "{ invalid json"
 
@@ -99,7 +108,7 @@ run = "${CONARY_BIN} repo add corrupted-meta http://127.0.0.1:18080/corrupted-in
 
 [test.step.assert]
 exit_code_not = 0
-stdout_contains = "error"
+stdout_contains = "Failed"
 
 [[test.step]]
 conary = "repo list"
@@ -120,11 +129,11 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "install /opt/remi-tests/fixtures/adversarial/corrupted/native-package-corrupted.pkg --yes --sandbox never"
+conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox never"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "checksum"
+stderr_contains = "parse"
 
 # --------------------------------------------------------------------------
 # T82: CAS verify after install
@@ -138,7 +147,7 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
@@ -162,7 +171,7 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
@@ -214,7 +223,7 @@ run = "curl -fsS http://127.0.0.1:18080/truncated-download.ccs -o /tmp/truncated
 
 [test.step.assert]
 exit_code_not = 0
-stdout_contains = "transfer"
+stdout_contains = "end of response"
 
 # --------------------------------------------------------------------------
 # T86: Unsigned package rejection

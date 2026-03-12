@@ -588,8 +588,13 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
     for (path, expected_hash, pkg_name) in &files {
         match deployer.verify_file(path, expected_hash) {
             Ok(true) => {
-                ok_count += 1;
-                info!("OK: {} (from {})", path, pkg_name);
+                if deployer.verify_cas_object(expected_hash)? {
+                    ok_count += 1;
+                    info!("OK: {} (from {})", path, pkg_name);
+                } else {
+                    modified_count += 1;
+                    println!("mismatch: CAS object for {} (from {})", path, pkg_name);
+                }
             }
             Ok(false) => {
                 modified_count += 1;

@@ -70,7 +70,18 @@ pub fn cmd_ccs_install(
             TrustPolicy::default()
         };
 
-        let result = verify::verify_package(package_path, &trust_policy)?;
+        let result = match verify::verify_package(package_path, &trust_policy) {
+            Ok(result) => result,
+            Err(err)
+                if matches!(
+                    err.downcast_ref::<conary_core::ccs::verify::VerifyError>(),
+                    Some(conary_core::ccs::verify::VerifyError::NotSigned)
+                ) =>
+            {
+                anyhow::bail!("Package is not signed. Use --allow-unsigned to install anyway.");
+            }
+            Err(err) => return Err(err).context("Package verification failed"),
+        };
         if !result.valid {
             if trust_policy.allow_unsigned {
                 println!(
