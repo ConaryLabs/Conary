@@ -16,17 +16,17 @@ phase = 3
 [distro_overrides.fedora43]
 kernel_package = "kernel"
 bootloader_package = "grub2"
-distro_repo = "fedora-43"
+distro_repo = "fedora-remi"
 
 [distro_overrides.ubuntu-noble]
 kernel_package = "linux-image-generic"
 bootloader_package = "grub-efi-amd64"
-distro_repo = "ubuntu-noble"
+distro_repo = "ubuntu-remi"
 
 [distro_overrides.arch]
 kernel_package = "linux"
 bootloader_package = "grub"
-distro_repo = "arch-extra"
+distro_repo = "arch-remi"
 
 # --------------------------------------------------------------------------
 # T150: Kernel file deployment
@@ -50,6 +50,7 @@ exit_code = 0
 conary = "install ${kernel_package} --repo ${distro_repo} --yes --sandbox never"
 
 [test.step.assert]
+exit_code = 0
 stdout_not_contains = "panic"
 
 [[test.step]]
@@ -149,6 +150,7 @@ group = "N"
 conary = "install ${bootloader_package} --repo ${distro_repo} --yes --sandbox never"
 
 [test.step.assert]
+exit_code = 0
 stdout_not_contains = "panic"
 
 [[test.step]]
