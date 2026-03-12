@@ -221,6 +221,25 @@ impl ProvideEntry {
             return Ok(result);
         }
 
+        // Try prefix match for capabilities with suffix metadata in parentheses.
+        // Example: "libc.so.6" should match "libc.so.6(GLIBC_2.34)(64bit)".
+        let paren_pattern = format!("{}(%", capability);
+        let result = conn
+            .query_row(
+                "SELECT t.name, t.version
+                 FROM provides p
+                 JOIN troves t ON p.trove_id = t.id
+                 WHERE p.capability LIKE ?1
+                 LIMIT 1",
+                [&paren_pattern],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        if result.is_some() {
+            return Ok(result);
+        }
+
         // Try case-insensitive prefix match for cross-distro compatibility
         // e.g., perl(Text::Charwidth) should match perl(Text::CharWidth) = 0.04
         let lower_cap = capability.to_lowercase();
@@ -229,7 +248,9 @@ impl ProvideEntry {
                 "SELECT t.name, t.version
                  FROM provides p
                  JOIN troves t ON p.trove_id = t.id
-                 WHERE LOWER(p.capability) LIKE ?1 || ' %' OR LOWER(p.capability) = ?1
+                 WHERE LOWER(p.capability) LIKE ?1 || ' %'
+                    OR LOWER(p.capability) LIKE ?1 || '(%'
+                    OR LOWER(p.capability) = ?1
                  LIMIT 1",
                 [&lower_cap],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
@@ -542,5 +563,22 @@ mod tests {
 
         let provide = ProvideEntry::new(1, "nginx".to_string(), Some("1.24".to_string()));
         assert_eq!(provide.to_typed_string(), "nginx");
+    }
+
+    #[test]
+    fn test_find_satisfying_provider_matches_soname_suffix_metadata() {
+        let conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            [],
+        )
+        .unwrap();
+
+        let mut provide = ProvideEntry::new(2, "libc.so.6(GLIBC_2.34)(64bit)".to_string(), None);
+        provide.insert(&conn).unwrap();
+
+        let result = ProvideEntry::find_satisfying_provider(&conn, "libc.so.6").unwrap();
+        assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
     }
 }
