@@ -26,6 +26,10 @@ enum FormatSection {
 }
 
 impl FedoraParser {
+    fn local_tag_name(tag_name: &str) -> &str {
+        tag_name.rsplit(':').next().unwrap_or(tag_name)
+    }
+
     /// Create a new Fedora/RPM parser
     pub fn new(architecture: String) -> Self {
         Self { architecture }
@@ -128,17 +132,18 @@ impl FedoraParser {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    let local_tag = Self::local_tag_name(&tag_name);
                     current_tag = tag_name.clone();
 
-                    match tag_name.as_str() {
+                    match local_tag {
                         "package" => {
                             current_package = Some(PackageBuilder::new());
                         }
                         "format" => in_format = true,
-                        _ if in_format && tag_name.ends_with("requires") => {
+                        "requires" if in_format => {
                             format_section = Some(FormatSection::Requires);
                         }
-                        _ if in_format && tag_name.ends_with("provides") => {
+                        "provides" if in_format => {
                             format_section = Some(FormatSection::Provides);
                         }
                         _ => {}
@@ -146,8 +151,9 @@ impl FedoraParser {
                 }
                 Ok(Event::Empty(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    let local_tag = Self::local_tag_name(&tag_name);
 
-                    match tag_name.as_str() {
+                    match local_tag {
                         "version" => {
                             if let Some(ref mut pkg) = current_package {
                                 // Extract epoch, ver, rel attributes
@@ -268,15 +274,16 @@ impl FedoraParser {
                 }
                 Ok(Event::End(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    if tag_name == "package"
+                    let local_tag = Self::local_tag_name(&tag_name);
+                    if local_tag == "package"
                         && let Some(builder) = current_package.take()
                         && let Ok(pkg) = builder.build(base_url)
                     {
                         packages.push(pkg);
-                    } else if tag_name == "format" {
+                    } else if local_tag == "format" {
                         in_format = false;
                         format_section = None;
-                    } else if tag_name.ends_with("requires") || tag_name.ends_with("provides") {
+                    } else if local_tag == "requires" || local_tag == "provides" {
                         format_section = None;
                     }
                 }
@@ -531,5 +538,57 @@ mod tests {
         let result = builder.build("https://example.com");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_parse_primary_xml_captures_namespaced_requires_and_provides() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>kernel-core</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="6.19.6" rel="200.fc43"/>
+    <checksum type="sha256">deadbeef</checksum>
+    <summary>kernel core</summary>
+    <description>kernel core</description>
+    <size package="123"/>
+    <location href="Packages/k/kernel-core-6.19.6-200.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:provides>
+        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc43.x86_64"/>
+      </rpm:provides>
+      <rpm:requires>
+        <rpm:entry name="systemd" flags="GE" ver="255"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
+        let pkg = packages.first().unwrap();
+        let metadata = pkg.extra_metadata.as_object().unwrap();
+        let provides = metadata
+            .get("rpm_provides")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        let requires = metadata
+            .get("rpm_requires")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(provides.contains(&"kernel-core-uname-r = 6.19.6-200.fc43.x86_64"));
+        assert!(requires.contains(&"systemd >= 255"));
     }
 }
