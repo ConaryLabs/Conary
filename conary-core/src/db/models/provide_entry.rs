@@ -341,19 +341,7 @@ impl ProvideEntry {
 
     /// Check if a capability is satisfied (with fuzzy cross-distro matching)
     pub fn is_capability_satisfied_fuzzy(conn: &Connection, capability: &str) -> Result<bool> {
-        // First try exact match
-        if Self::is_capability_satisfied(conn, capability)? {
-            return Ok(true);
-        }
-
-        // Try cross-distro variations
-        for variation in generate_capability_variations(capability) {
-            if Self::is_capability_satisfied(conn, &variation)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+        Ok(Self::find_satisfying_provider_fuzzy(conn, capability)?.is_some())
     }
 
     /// Check if a name looks like a virtual provide (capability) rather than a package name
@@ -580,5 +568,21 @@ mod tests {
 
         let result = ProvideEntry::find_satisfying_provider(&conn, "libc.so.6").unwrap();
         assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
+    }
+
+    #[test]
+    fn test_is_capability_satisfied_fuzzy_matches_soname_suffix_metadata() {
+        let conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            [],
+        )
+        .unwrap();
+
+        let mut provide = ProvideEntry::new(2, "libc.so.6(GLIBC_2.34)(64bit)".to_string(), None);
+        provide.insert(&conn).unwrap();
+
+        assert!(ProvideEntry::is_capability_satisfied_fuzzy(&conn, "libc.so.6").unwrap());
     }
 }
