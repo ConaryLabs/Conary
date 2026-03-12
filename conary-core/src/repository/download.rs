@@ -25,6 +25,7 @@ use tracing::{debug, info, warn};
 use super::client::RepositoryClient;
 use super::gpg::GpgVerifier;
 use super::metadata::DeltaInfo;
+use super::remi::RemiClient;
 
 /// Options for package download with GPG verification
 #[derive(Debug, Clone)]
@@ -53,6 +54,11 @@ fn download_package_inner(
     options: Option<&DownloadOptions>,
     progress: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
+    if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
+        let client = RemiClient::new(&base_url)?;
+        return client.fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir);
+    }
+
     let client = RepositoryClient::new()?;
 
     // Construct destination path from URL filename or generate default
@@ -82,6 +88,25 @@ fn download_package_inner(
     }
 
     Ok(dest_path)
+}
+
+fn parse_remi_download_url(url: &str) -> Option<(String, String, String)> {
+    let (base_url, path) = url.split_once("/v1/")?;
+    let mut segments = path.split('/');
+    let distro = segments.next()?;
+    if segments.next()? != "packages" {
+        return None;
+    }
+    let name = segments.next()?;
+    if segments.next()? != "download" || segments.next().is_some() {
+        return None;
+    }
+
+    Some((
+        base_url.to_string(),
+        urlencoding::decode(distro).ok()?.into_owned(),
+        urlencoding::decode(name).ok()?.into_owned(),
+    ))
 }
 
 /// Extract and sanitize a filename from a URL, falling back to a default.

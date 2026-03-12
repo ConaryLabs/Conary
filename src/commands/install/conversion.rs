@@ -12,8 +12,8 @@ use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
 use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
-use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
@@ -28,23 +28,16 @@ use tempfile::TempDir;
 use tracing::{info, warn};
 
 fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
-    if dep_name == ccs_pkg.name() {
-        return true;
-    }
-
-    if ccs_pkg
-        .manifest()
-        .provides
-        .capabilities
-        .iter()
-        .any(|cap| cap == dep_name)
-    {
-        return true;
-    }
-
     let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
         .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
+        .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
+        .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
+        .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
         .collect();
+
+    if provided.contains(dep_name) {
+        return true;
+    }
 
     for variation in generate_capability_variations(dep_name) {
         if provided.contains(&variation) {
@@ -256,7 +249,8 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
 
     if !no_deps {
         let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
-        let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
+        let ccs_pkg =
+            CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
         let missing: Vec<MissingDependency> = ccs_pkg
             .dependencies()
             .iter()
@@ -274,7 +268,18 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
             .collect();
 
         if !missing.is_empty() {
-            let dep_plan = dep_resolution::resolve_missing_deps(&conn, &missing, dep_mode);
+            let (tracked_satisfied, unresolved_missing) =
+                check_provides_dependencies(&conn, &missing);
+
+            for (dep_name, provider, _version) in &tracked_satisfied {
+                info!(
+                    "Dependency {} already satisfied by tracked provider {}",
+                    dep_name, provider
+                );
+            }
+
+            let dep_plan =
+                dep_resolution::resolve_missing_deps(&conn, &unresolved_missing, dep_mode);
 
             if !dep_plan.to_adopt.is_empty() && !dry_run {
                 crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)?;
@@ -325,6 +330,32 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                         let mut prepared_packages = Vec::with_capacity(downloaded.len());
 
                         for (dep_name, dep_path) in &downloaded {
+                            if dep_path
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("ccs"))
+                            {
+                                let dep_ccs_path = dep_path.to_str().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid CCS path (non-UTF8)")
+                                })?;
+                                install_converted_ccs(ConvertedCcsInstallOptions {
+                                    ccs_path: dep_ccs_path,
+                                    db_path,
+                                    root,
+                                    dry_run,
+                                    sandbox_mode,
+                                    no_deps,
+                                    no_scripts,
+                                    allow_downgrade,
+                                    dep_mode,
+                                    yes,
+                                })
+                                .with_context(|| {
+                                    format!("Failed to install CCS dependency {}", dep_name)
+                                })?;
+                                continue;
+                            }
+
                             let reason = format!("Required by {}", parent_name);
                             match prepare_package_for_batch(
                                 dep_path,
