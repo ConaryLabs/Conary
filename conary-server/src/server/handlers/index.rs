@@ -40,6 +40,9 @@ pub struct PackageEntry {
     /// Dependency names (from native repo metadata)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<Vec<String>>,
+    /// Additional native metadata, including provides for capability resolution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// GET /v1/:distro/metadata
@@ -134,11 +137,16 @@ fn build_metadata(
                 .dependencies
                 .as_ref()
                 .and_then(|deps_json| serde_json::from_str::<Vec<String>>(deps_json).ok());
+            let metadata = pkg
+                .metadata
+                .as_ref()
+                .and_then(|metadata_json| serde_json::from_str::<serde_json::Value>(metadata_json).ok());
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
                 converted: converted_set.contains(&key),
                 dependencies,
+                metadata,
             }
         })
         .collect();
@@ -193,6 +201,7 @@ fn build_converted_packages(
             version,
             converted: true,
             dependencies: None,
+            metadata: None,
         });
     }
 

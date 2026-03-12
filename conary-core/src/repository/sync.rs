@@ -191,6 +191,7 @@ struct RemiPackageEntry {
     #[allow(dead_code)]
     converted: bool,
     dependencies: Option<Vec<String>>,
+    metadata: Option<serde_json::Value>,
 }
 
 /// Synchronize repository directly from a Remi metadata API
@@ -260,6 +261,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
             pkg.dependencies = entry
                 .dependencies
                 .map(|deps| serde_json::to_string(&deps).unwrap_or_default());
+            pkg.metadata = entry.metadata.map(|value| value.to_string());
             Some(pkg)
         })
         .collect();
