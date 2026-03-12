@@ -15,6 +15,7 @@ use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
 };
+use conary_core::version::{RpmVersion, VersionConstraint};
 use rusqlite::params;
 use std::collections::HashMap;
 use std::io::Write;
@@ -103,6 +104,110 @@ fn sandbox_failure_message(script: &str, error: &dyn std::fmt::Display) -> Strin
         return format!("sandbox denied write outside policy: {error}");
     }
     format!("sandbox blocked script execution: {error}")
+}
+
+fn installed_versions_satisfying_constraint(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+    version_constraint: Option<&str>,
+) -> Result<Vec<String>> {
+    let installed = conary_core::db::models::Trove::find_by_name(conn, package_name)?;
+    if installed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(version_constraint) = version_constraint.filter(|v| !v.trim().is_empty()) else {
+        return Ok(installed.into_iter().map(|trove| trove.version).collect());
+    };
+
+    let constraint = VersionConstraint::parse(version_constraint)
+        .with_context(|| format!("invalid version constraint: {version_constraint}"))?;
+    let matches = installed
+        .into_iter()
+        .filter_map(|trove| {
+            let version = RpmVersion::parse(&trove.version).ok()?;
+            constraint.satisfies(&version).then_some(trove.version)
+        })
+        .collect();
+
+    Ok(matches)
+}
+
+fn validate_package_dependency(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+    version_constraint: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let matching_versions =
+        installed_versions_satisfying_constraint(conn, package_name, version_constraint)?;
+    if !matching_versions.is_empty() {
+        return Ok(());
+    }
+
+    let installed_versions = conary_core::db::models::Trove::find_by_name(conn, package_name)?
+        .into_iter()
+        .map(|trove| trove.version)
+        .collect::<Vec<_>>();
+
+    if dry_run {
+        println!("  Missing dependency: {package_name} (would fail)");
+        return Ok(());
+    }
+
+    if installed_versions.is_empty() {
+        anyhow::bail!(
+            "Missing dependency: {}{}",
+            package_name,
+            version_constraint
+                .map(|v| format!(" {v}"))
+                .unwrap_or_default()
+        );
+    }
+
+    anyhow::bail!(
+        "dependency version mismatch: {} requires {} but installed versions are {}",
+        package_name,
+        version_constraint.unwrap_or("*"),
+        installed_versions.join(", ")
+    );
+}
+
+fn validate_incoming_version_against_dependents(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+    incoming_version: &str,
+) -> Result<()> {
+    let incoming = RpmVersion::parse(incoming_version)
+        .with_context(|| format!("invalid incoming package version: {incoming_version}"))?;
+    let dependents = conary_core::db::models::DependencyEntry::find_dependents(conn, package_name)?;
+    let mut violations = Vec::new();
+
+    for dep in dependents {
+        let Some(constraint_str) = dep.version_constraint.as_deref() else {
+            continue;
+        };
+        let constraint = VersionConstraint::parse(constraint_str)
+            .with_context(|| format!("invalid version constraint: {constraint_str}"))?;
+        if constraint.satisfies(&incoming) {
+            continue;
+        }
+        let dependent_name = conary_core::db::models::Trove::find_by_id(conn, dep.trove_id)?
+            .map(|trove| trove.name)
+            .unwrap_or_else(|| format!("trove-{}", dep.trove_id));
+        violations.push(format!("{dependent_name} requires {constraint_str}"));
+    }
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "dependency version mismatch: {} {} would break {}",
+        package_name,
+        incoming_version,
+        violations.join(", ")
+    );
 }
 
 /// Install a CCS package
@@ -216,34 +321,34 @@ pub fn cmd_ccs_install(
             ccs_pkg.version()
         );
     }
+    validate_incoming_version_against_dependents(&conn, ccs_pkg.name(), ccs_pkg.version())?;
 
     // Step 4: Check dependencies
     if no_deps {
         println!("Skipping dependency check (--no-deps)");
     } else {
         println!("Checking dependencies...");
-        for dep in ccs_pkg.dependencies() {
-            if package_self_provides(&ccs_pkg, &dep.name) {
+        for dep in &ccs_pkg.manifest().requires.packages {
+            validate_package_dependency(&conn, &dep.name, dep.version.as_deref(), dry_run)?;
+        }
+        for cap in &ccs_pkg.manifest().requires.capabilities {
+            let capability_name = cap.name();
+            if package_self_provides(&ccs_pkg, capability_name) {
                 continue;
             }
             let satisfied = conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(
-                &conn, &dep.name,
+                &conn,
+                capability_name,
             )?;
             if !satisfied {
-                let pkg_exists = conary_core::db::models::Trove::find_by_name(&conn, &dep.name)?;
-                if pkg_exists.is_empty() {
-                    if dry_run {
-                        println!("  Missing dependency: {} (would fail)", dep.name);
-                    } else {
-                        anyhow::bail!(
-                            "Missing dependency: {}{}",
-                            dep.name,
-                            dep.version
-                                .as_ref()
-                                .map(|v| format!(" {}", v))
-                                .unwrap_or_default()
-                        );
-                    }
+                if dry_run {
+                    println!("  Missing dependency: {capability_name} (would fail)");
+                } else {
+                    anyhow::bail!(
+                        "Missing dependency: {}{}",
+                        capability_name,
+                        cap.version().map(|v| format!(" {v}")).unwrap_or_default()
+                    );
                 }
             }
         }
@@ -537,6 +642,29 @@ pub fn cmd_ccs_install(
             detected_provide.insert_or_ignore(&tx)?;
         }
 
+        for dep in &ccs_pkg.manifest().requires.packages {
+            let mut dep_entry = conary_core::db::models::DependencyEntry::new(
+                trove_id,
+                dep.name.clone(),
+                None,
+                "runtime".to_string(),
+                dep.version.clone(),
+            );
+            dep_entry.insert(&tx)?;
+        }
+
+        for cap in &ccs_pkg.manifest().requires.capabilities {
+            let mut dep_entry = conary_core::db::models::DependencyEntry::new_typed(
+                trove_id,
+                "capability",
+                cap.name().to_string(),
+                None,
+                "runtime".to_string(),
+                cap.version().map(|v| v.to_string()),
+            );
+            dep_entry.insert(&tx)?;
+        }
+
         // Store pre_remove script as a scriptlet entry so cmd_remove can find it
         if let Some(ref hook) = hooks.pre_remove {
             let mut scriptlet = conary_core::db::models::ScriptletEntry::new(
@@ -601,4 +729,82 @@ pub fn cmd_ccs_install(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::installed_versions_satisfying_constraint;
+    use super::validate_incoming_version_against_dependents;
+
+    #[test]
+    fn installed_versions_respect_version_constraints() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut trove_v1 = conary_core::db::models::Trove::new(
+            "dep-base".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        trove_v1.insert(&conn).unwrap();
+
+        let mut trove_v2 = conary_core::db::models::Trove::new(
+            "dep-base".to_string(),
+            "2.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        trove_v2.insert(&conn).unwrap();
+
+        let matching =
+            installed_versions_satisfying_constraint(&conn, "dep-base", Some(">=1.0, <2.0"))
+                .unwrap();
+        assert_eq!(matching, vec!["1.0.0".to_string()]);
+
+        let not_matching =
+            installed_versions_satisfying_constraint(&conn, "dep-base", Some(">=3.0")).unwrap();
+        assert!(not_matching.is_empty());
+    }
+
+    #[test]
+    fn incoming_version_cannot_break_installed_dependents() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut liba = conary_core::db::models::Trove::new(
+            "dep-liba".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        liba.insert(&conn).unwrap();
+
+        let mut app = conary_core::db::models::Trove::new(
+            "dep-app".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        let app_id = app.insert(&conn).unwrap();
+
+        let mut dep = conary_core::db::models::DependencyEntry::new(
+            app_id,
+            "dep-liba".to_string(),
+            None,
+            "runtime".to_string(),
+            Some(">=1.0, <2.0".to_string()),
+        );
+        dep.insert(&conn).unwrap();
+
+        let error =
+            validate_incoming_version_against_dependents(&conn, "dep-liba", "2.0.0").unwrap_err();
+        let error_text = error.to_string();
+        assert!(error_text.contains("dependency version mismatch"));
+        assert!(error_text.contains("dep-app requires >=1.0, <2.0"));
+
+        validate_incoming_version_against_dependents(&conn, "dep-liba", "1.5.0").unwrap();
+    }
 }

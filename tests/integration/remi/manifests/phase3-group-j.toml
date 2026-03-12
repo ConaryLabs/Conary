@@ -41,6 +41,9 @@ description = "Conflicting dependency versions should be reported clearly"
 timeout = 30
 group = "J"
 
+[test.resources]
+memory_limit_mb = 512
+
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v2/output/dep-base-2.0.0.ccs --allow-unsigned --sandbox never"
 
@@ -48,7 +51,7 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v2/outp
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
 
 [test.step.assert]
 exit_code_not = 0
@@ -107,8 +110,23 @@ description = "Installing a package that needs an incompatible already-installed
 timeout = 30
 group = "J"
 
+[test.resources]
+memory_limit_mb = 512
+
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -117,15 +135,28 @@ exit_code = 0
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
 
 [test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
 exit_code_not = 0
 stderr_contains = "dependency"
+
+[[test.step]]
+conary = "list dep-app --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "1.0.0"
 
 [[test.step]]
 conary = "list dep-liba --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "2.0.0"
+stdout_contains = "1.0.0"
 
 # --------------------------------------------------------------------------
 # T111: Virtual provider satisfaction
@@ -198,6 +229,9 @@ description = "Version range constraints should accept compatible dependencies"
 timeout = 30
 group = "J"
 
+[test.resources]
+memory_limit_mb = 512
+
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
 
@@ -228,8 +262,17 @@ description = "Repeated autoremove after removing one provider should converge w
 timeout = 60
 group = "J"
 
+[test.resources]
+memory_limit_mb = 512
+
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-a-v1/output/dep-or-a-1.0.0.ccs --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -251,6 +294,13 @@ conary = "autoremove --no-scripts"
 
 [test.step.assert]
 stdout_not_contains = "panic"
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-or-b", "dep-or-consumer"]
 
 # --------------------------------------------------------------------------
 # T115: Remove blocked by dependents
@@ -287,6 +337,9 @@ name = "or_style_provider_selection"
 description = "One of multiple shared-capability providers should satisfy the consumer"
 timeout = 30
 group = "J"
+
+[test.resources]
+memory_limit_mb = 512
 
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never"
