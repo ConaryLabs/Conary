@@ -419,10 +419,16 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                 let (_satisfied, still_missing) =
                     check_provides_dependencies(&conn, &dep_plan.unresolvable);
                 if !still_missing.is_empty() {
+                    let missing_names = still_missing
+                        .iter()
+                        .map(|dep| dep.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     return Err(anyhow::anyhow!(
-                        "Cannot install {}: {} unresolvable dependencies",
+                        "Cannot install {}: {} unresolvable dependencies: {}",
                         ccs_pkg.name(),
-                        still_missing.len()
+                        still_missing.len(),
+                        missing_names
                     ));
                 }
             }
