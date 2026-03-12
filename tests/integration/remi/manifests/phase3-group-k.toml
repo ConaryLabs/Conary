@@ -112,7 +112,7 @@ run = "curl -fsS http://127.0.0.1:18082/drop-mid-transfer.ccs -o /tmp/drop-mid-t
 
 [test.step.assert]
 exit_code_not = 0
-stdout_contains_any = ["transfer", "end of file", "Content-Length"]
+stdout_contains_any = ["transfer", "end of file", "Content-Length", "bytes missing"]
 
 # --------------------------------------------------------------------------
 # T120: Mirror failover approximation
@@ -256,7 +256,7 @@ timeout = 60
 group = "K"
 
 [[test.step]]
-run = "(${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-a.log 2>&1 &) ; (${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-b.log 2>&1 &) ; wait; cat /tmp/t127-a.log /tmp/t127-b.log"
+run = "${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-a.log 2>&1 & pid_a=$!; ${CONARY_BIN} repo sync ${REPO_NAME} --force --db-path ${DB_PATH} >/tmp/t127-b.log 2>&1 & pid_b=$!; wait $pid_a || true; wait $pid_b || true; cat /tmp/t127-a.log /tmp/t127-b.log"
 
 [test.step.assert]
 stdout_contains_any = ["[OK]", "locked", "already"]

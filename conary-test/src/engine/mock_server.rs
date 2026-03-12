@@ -25,6 +25,9 @@ ROUTES = {{}}
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.handle_request(send_body=False)
+
     def do_GET(self):
         self.handle_request()
 
@@ -40,12 +43,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
-    def handle_request(self):
+    def handle_request(self, send_body=True):
         route = ROUTES.get(self.path)
         if route is None:
             self.send_response(404)
             self.end_headers()
-            self.wfile.write(b"not found")
+            if send_body:
+                self.wfile.write(b"not found")
             return
 
         delay_ms = route.get("delay_ms")
@@ -73,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             advertised_length = full_length if truncate_at is not None else len(payload)
             self.send_header("Content-Length", str(advertised_length))
         self.end_headers()
-        if payload:
+        if send_body and payload:
             self.wfile.write(payload)
             self.wfile.flush()
         if truncate_at is not None:
