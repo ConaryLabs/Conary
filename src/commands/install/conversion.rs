@@ -73,6 +73,40 @@ fn build_dependency_requests(
         .collect()
 }
 
+fn promote_repo_resolvable_satisfy_deps(
+    conn: &rusqlite::Connection,
+    dep_plan: &mut dep_resolution::DepResolutionPlan,
+) {
+    if dep_plan.unresolvable.is_empty() {
+        return;
+    }
+
+    let mut supplemental = Vec::new();
+    let mut still_unresolvable = Vec::new();
+
+    for dep in dep_plan.unresolvable.drain(..) {
+        let requests = vec![(dep.name.clone(), dep.constraint.clone())];
+        match repository::resolve_dependencies_transitive_requests(conn, &requests, 10) {
+            Ok(resolved) if !resolved.is_empty() => {
+                supplemental.push(dep_resolution::ResolvedDep {
+                    name: dep.name,
+                    version: Some(dep.constraint.to_string()),
+                    required_by: dep.required_by,
+                });
+            }
+            _ => still_unresolvable.push(dep),
+        }
+    }
+
+    dep_plan.unresolvable = still_unresolvable;
+
+    for dep in supplemental {
+        if dep_plan.to_install.iter().all(|existing| existing.name != dep.name) {
+            dep_plan.to_install.push(dep);
+        }
+    }
+}
+
 /// Result of attempting CCS conversion
 pub enum ConversionResult {
     /// Package was converted, install via CCS path
@@ -304,8 +338,11 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                 );
             }
 
-            let dep_plan =
+            let mut dep_plan =
                 dep_resolution::resolve_missing_deps(&conn, &unresolved_missing, dep_mode);
+            if matches!(dep_mode, DepMode::Satisfy) {
+                promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+            }
 
             if !dep_plan.to_adopt.is_empty() && !dry_run {
                 crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)?;
