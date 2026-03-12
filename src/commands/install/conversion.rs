@@ -89,6 +89,16 @@ fn promote_repo_resolvable_satisfy_deps(
 
     match repository::resolve_dependencies_transitive_requests(conn, &requests, 10) {
         Ok(resolved) if !resolved.is_empty() => {
+            info!(
+                "Promoting {} satisfy-mode dependencies to repository installs: {}",
+                dep_plan.unresolvable.len(),
+                dep_plan
+                    .unresolvable
+                    .iter()
+                    .map(|dep| dep.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             let supplemental = dep_plan
                 .unresolvable
                 .drain(..)
@@ -104,9 +114,14 @@ fn promote_repo_resolvable_satisfy_deps(
                 }
             }
         }
-        _ => {
-            // Leave the original unresolvable list intact if the set can't
-            // be solved together from repositories.
+        Err(err) => {
+            info!(
+                "Repository solve could not promote satisfy-mode dependencies: {}",
+                err
+            );
+        }
+        Ok(_) => {
+            info!("Repository solve returned no downloadable packages for satisfy-mode dependencies");
         }
     }
 }

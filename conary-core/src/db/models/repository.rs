@@ -3,6 +3,7 @@
 //! Repository and RepositoryPackage models - remote package sources
 
 use crate::error::{Error, Result};
+use crate::version::VersionConstraint;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Column list for Repository SELECT queries (avoids repetition across methods)
@@ -399,14 +400,27 @@ impl RepositoryPackage {
     ///
     /// Returns a list of dependency package names. Filters out rpmlib() and file path dependencies.
     pub fn parse_dependencies(&self) -> Result<Vec<String>> {
+        Ok(self
+            .parse_dependency_requests()?
+            .into_iter()
+            .map(|(name, _constraint)| name)
+            .collect())
+    }
+
+    /// Parse dependencies from JSON field, preserving version constraints.
+    ///
+    /// Returns `(dependency_name, version_constraint)` pairs suitable for SAT solving.
+    /// Filters out rpmlib() and file path dependencies.
+    pub fn parse_dependency_requests(&self) -> Result<Vec<(String, VersionConstraint)>> {
         if let Some(deps_json) = &self.dependencies {
             let deps: Vec<String> = serde_json::from_str(deps_json)
                 .map_err(|e| Error::ParseError(format!("Failed to parse dependencies: {e}")))?;
 
             // Filter out rpmlib() and file path dependencies (same as resolve_dependencies)
-            let filtered: Vec<String> = deps
+            let filtered: Vec<(String, VersionConstraint)> = deps
                 .into_iter()
                 .filter(|dep| !dep.starts_with("rpmlib(") && !dep.starts_with('/'))
+                .map(|dep| parse_dependency_request(&dep))
                 .collect();
 
             Ok(filtered)
@@ -547,5 +561,72 @@ impl RepositoryPackage {
         }
 
         Ok(packages.len())
+    }
+}
+
+fn parse_dependency_request(dep: &str) -> (String, VersionConstraint) {
+    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
+
+    for op in OPS {
+        if let Some((name, version)) = dep.split_once(op) {
+            let name = name.trim();
+            let version = version.trim();
+            if name.is_empty() || version.is_empty() {
+                continue;
+            }
+
+            let raw_constraint = format!("{op} {version}");
+            let constraint =
+                VersionConstraint::parse(&raw_constraint).unwrap_or(VersionConstraint::Any);
+            return (name.to_string(), constraint);
+        }
+    }
+
+    (dep.trim().to_string(), VersionConstraint::Any)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_dependency_requests_preserves_version_constraints() {
+        let pkg = RepositoryPackage {
+            id: None,
+            repository_id: 1,
+            name: "kernel".to_string(),
+            version: "6.19.6-200.fc43".to_string(),
+            architecture: Some("x86_64".to_string()),
+            description: None,
+            checksum: "sha256:deadbeef".to_string(),
+            size: 1,
+            download_url: "https://example.invalid/kernel.rpm".to_string(),
+            dependencies: Some(
+                serde_json::to_string(&vec![
+                    "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                    "coreutils >= 9.7".to_string(),
+                    "rpmlib(PayloadIsZstd) <= 5.4.18-1".to_string(),
+                    "/bin/sh".to_string(),
+                ])
+                .unwrap(),
+            ),
+            metadata: None,
+            synced_at: None,
+            is_security_update: false,
+            severity: None,
+            cve_ids: None,
+            advisory_id: None,
+            advisory_url: None,
+        };
+
+        let deps = pkg.parse_dependency_requests().unwrap();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].0, "kernel-core-uname-r");
+        assert_eq!(
+            deps[0].1,
+            VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap()
+        );
+        assert_eq!(deps[1].0, "coreutils");
+        assert_eq!(deps[1].1, VersionConstraint::parse(">= 9.7").unwrap());
     }
 }

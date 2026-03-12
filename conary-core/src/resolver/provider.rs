@@ -191,11 +191,10 @@ impl<'db> ConaryProvider<'db> {
                 let solvable_id = self.add_solvable(pkg);
 
                 // Parse dependencies from repo metadata
-                if let Ok(sub_deps) = pkg_with_repo.package.parse_dependencies() {
+                if let Ok(sub_deps) = pkg_with_repo.package.parse_dependency_requests() {
                     let dep_list: Vec<(String, VersionConstraint)> = sub_deps
                         .into_iter()
-                        .filter(|d| !ProvideEntry::is_virtual_provide(d))
-                        .map(|d| (d, VersionConstraint::Any))
+                        .filter(|(name, _constraint)| !ProvideEntry::is_virtual_provide(name))
                         .collect();
                     self.dependencies.insert(solvable_id.0, dep_list);
                 }
@@ -475,6 +474,7 @@ impl DependencyProvider for ConaryProvider<'_> {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::models::{Repository, RepositoryPackage};
 
     fn setup_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -482,6 +482,52 @@ mod tests {
         db::init(&db_path).unwrap();
         let conn = db::open(&db_path).unwrap();
         (temp_dir, conn)
+    }
+
+    #[test]
+    fn load_repo_packages_preserves_dependency_constraints() {
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "kernel".to_string(),
+            "6.19.6-200.fc43".to_string(),
+            "sha256:deadbeef".to_string(),
+            1,
+            "https://example.invalid/kernel.rpm".to_string(),
+        );
+        pkg.dependencies = Some(
+            serde_json::to_string(&vec![
+                "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                "coreutils >= 9.7".to_string(),
+            ])
+            .unwrap(),
+        );
+        pkg.insert(&conn).unwrap();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider
+            .load_repo_packages_for_names(&["kernel".to_string()])
+            .unwrap();
+
+        let deps = provider
+            .dependencies
+            .values()
+            .find(|deps| deps.iter().any(|(name, _)| name == "kernel-core-uname-r"))
+            .cloned()
+            .unwrap();
+
+        assert!(deps.iter().any(|(name, constraint)| {
+            name == "kernel-core-uname-r"
+                && *constraint
+                    == VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap()
+        }));
+        assert!(deps.iter().any(|(name, constraint)| {
+            name == "coreutils" && *constraint == VersionConstraint::parse(">= 9.7").unwrap()
+        }));
     }
 
     #[test]
