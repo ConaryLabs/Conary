@@ -149,6 +149,11 @@ fn validate_package_dependency(
         .into_iter()
         .map(|trove| trove.version)
         .collect::<Vec<_>>();
+    if installed_versions.is_empty()
+        && conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(conn, package_name)?
+    {
+        return Ok(());
+    }
 
     if dry_run {
         println!("  Missing dependency: {package_name} (would fail)");
@@ -329,6 +334,9 @@ pub fn cmd_ccs_install(
     } else {
         println!("Checking dependencies...");
         for dep in &ccs_pkg.manifest().requires.packages {
+            if package_self_provides(&ccs_pkg, &dep.name) {
+                continue;
+            }
             validate_package_dependency(&conn, &dep.name, dep.version.as_deref(), dry_run)?;
         }
         for cap in &ccs_pkg.manifest().requires.capabilities {
@@ -734,6 +742,7 @@ pub fn cmd_ccs_install(
 #[cfg(test)]
 mod tests {
     use super::installed_versions_satisfying_constraint;
+    use super::validate_package_dependency;
     use super::validate_incoming_version_against_dependents;
 
     #[test]
@@ -807,4 +816,59 @@ mod tests {
 
         validate_incoming_version_against_dependents(&conn, "dep-liba", "1.5.0").unwrap();
     }
+
+    #[test]
+    fn package_dependency_accepts_fuzzy_capability_when_no_exact_package_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut glibc = conary_core::db::models::Trove::new(
+            "glibc".to_string(),
+            "2.41.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        let trove_id = glibc.insert(&conn).unwrap();
+
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            "soname",
+            "libc.so.6(GLIBC_2.41)(64bit)".to_string(),
+            None,
+        );
+        provide.insert(&conn).unwrap();
+
+        validate_package_dependency(&conn, "libc.so.6", None, false).unwrap();
+    }
+
+    #[test]
+    fn package_dependency_does_not_hide_exact_package_version_mismatch() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut package = conary_core::db::models::Trove::new(
+            "dep-base".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        let trove_id = package.insert(&conn).unwrap();
+
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            "soname",
+            "dep-base.so.1".to_string(),
+            None,
+        );
+        provide.insert(&conn).unwrap();
+
+        let error =
+            validate_package_dependency(&conn, "dep-base", Some(">=2.0"), false).unwrap_err();
+        assert!(error.to_string().contains("dependency version mismatch"));
+    }
+
 }
