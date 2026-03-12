@@ -117,8 +117,13 @@ fn build_metadata(
         }
     }
 
-    // Build a set of converted package identities for fast lookup
-    let converted_set = build_converted_set(&conn, distro)?;
+    // Query converted packages once so we can both mark repo-backed entries as
+    // converted and surface packages that exist only in Remi's CCS store.
+    let converted_packages = build_converted_packages(&conn, distro)?;
+    let converted_set: HashSet<String> = converted_packages
+        .iter()
+        .map(|pkg| format!("{}:{}", pkg.name, pkg.version))
+        .collect();
 
     // Build package entries
     let mut packages: Vec<PackageEntry> = repo_packages
@@ -138,6 +143,17 @@ fn build_metadata(
         })
         .collect();
 
+    let existing_keys: HashSet<String> = packages
+        .iter()
+        .map(|pkg| format!("{}:{}", pkg.name, pkg.version))
+        .collect();
+    for converted in converted_packages {
+        let key = format!("{}:{}", converted.name, converted.version);
+        if !existing_keys.contains(&key) {
+            packages.push(converted);
+        }
+    }
+
     // Sort by name, then version
     packages.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.version.cmp(&b.version)));
 
@@ -156,24 +172,31 @@ fn build_metadata(
 /// Alias to shared implementation in handlers/mod.rs
 use super::find_repositories_for_distro;
 
-/// Build a set of "name:version" keys for converted packages
-fn build_converted_set(conn: &Connection, distro: &str) -> Result<HashSet<String>, anyhow::Error> {
-    // Query converted_packages for this distro
+/// Build converted package entries for this distro.
+fn build_converted_packages(
+    conn: &Connection,
+    distro: &str,
+) -> Result<Vec<PackageEntry>, anyhow::Error> {
     let mut stmt = conn.prepare(
         "SELECT package_name, package_version FROM converted_packages
          WHERE distro = ?1 AND package_name IS NOT NULL AND package_version IS NOT NULL",
     )?;
 
-    let mut set = HashSet::new();
+    let mut packages = Vec::new();
     let mut rows = stmt.query([distro])?;
 
     while let Some(row) = rows.next()? {
         let name: String = row.get(0)?;
         let version: String = row.get(1)?;
-        set.insert(format!("{}:{}", name, version));
+        packages.push(PackageEntry {
+            name,
+            version,
+            converted: true,
+            dependencies: None,
+        });
     }
 
-    Ok(set)
+    Ok(packages)
 }
 
 /// GET /v1/:distro/metadata.sig
@@ -387,6 +410,43 @@ mod tests {
     }
 
     #[test]
+    fn test_build_metadata_with_converted_only_package() {
+        let (temp_file, conn) = create_test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        repo.insert(&conn).unwrap();
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "conary-test-fixture".to_string(),
+            "1.0.0".to_string(),
+            "ccs".to_string(),
+            "upload:fedora:fixture".to_string(),
+            "full".to_string(),
+            &["fixture".to_string()],
+            1277,
+            "fixture-hash".to_string(),
+            "/conary/cache/packages/conary-test-fixture-1.0.0.ccs".to_string(),
+        );
+        converted.insert(&conn).unwrap();
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+
+        assert_eq!(metadata.package_count, 1);
+        assert_eq!(metadata.converted_count, 1);
+
+        let fixture = metadata
+            .packages
+            .iter()
+            .find(|p| p.name == "conary-test-fixture")
+            .unwrap();
+        assert_eq!(fixture.version, "1.0.0");
+        assert!(fixture.converted);
+        assert!(fixture.dependencies.is_none());
+    }
+
+    #[test]
     fn test_find_repository_by_strategy_distro() {
         let (_temp_file, conn) = create_test_db();
 
@@ -453,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_converted_set() {
+    fn test_build_converted_packages() {
         let (_temp_file, conn) = create_test_db();
 
         // Add converted packages for different distros
@@ -486,22 +546,25 @@ mod tests {
         arch_pkg.insert(&conn).unwrap();
 
         // Query for fedora - should only get fedora packages
-        let fedora_set = build_converted_set(&conn, "fedora").unwrap();
+        let fedora_set = build_converted_packages(&conn, "fedora").unwrap();
         assert_eq!(fedora_set.len(), 1);
-        assert!(fedora_set.contains("nginx:1.24.0"));
+        assert_eq!(fedora_set[0].name, "nginx");
+        assert_eq!(fedora_set[0].version, "1.24.0");
+        assert!(fedora_set[0].converted);
 
         // Query for arch - should only get arch packages
-        let arch_set = build_converted_set(&conn, "arch").unwrap();
+        let arch_set = build_converted_packages(&conn, "arch").unwrap();
         assert_eq!(arch_set.len(), 1);
-        assert!(arch_set.contains("nginx:1.24.0"));
+        assert_eq!(arch_set[0].name, "nginx");
+        assert_eq!(arch_set[0].version, "1.24.0");
 
         // Query for ubuntu - should be empty
-        let ubuntu_set = build_converted_set(&conn, "ubuntu").unwrap();
+        let ubuntu_set = build_converted_packages(&conn, "ubuntu").unwrap();
         assert!(ubuntu_set.is_empty());
     }
 
     #[test]
-    fn test_build_converted_set_ignores_null_fields() {
+    fn test_build_converted_packages_ignores_null_fields() {
         let (_temp_file, conn) = create_test_db();
 
         // Add a client-side converted package (no package_name/version/distro)
@@ -527,11 +590,12 @@ mod tests {
         );
         server_pkg.insert(&conn).unwrap();
 
-        let set = build_converted_set(&conn, "fedora").unwrap();
+        let set = build_converted_packages(&conn, "fedora").unwrap();
 
         // Should only include the server-side package with non-null fields
         assert_eq!(set.len(), 1);
-        assert!(set.contains("curl:8.5.0"));
+        assert_eq!(set[0].name, "curl");
+        assert_eq!(set[0].version, "8.5.0");
     }
 
     #[test]
