@@ -105,8 +105,9 @@ pub fn cmd_ccs_install(
     } else {
         println!("Checking dependencies...");
         for dep in ccs_pkg.dependencies() {
-            let satisfied =
-                conary_core::db::models::ProvideEntry::is_capability_satisfied(&conn, &dep.name)?;
+            let satisfied = conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(
+                &conn, &dep.name,
+            )?;
             if !satisfied {
                 let pkg_exists = conary_core::db::models::Trove::find_by_name(&conn, &dep.name)?;
                 if pkg_exists.is_empty() {
