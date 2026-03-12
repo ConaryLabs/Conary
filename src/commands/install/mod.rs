@@ -19,7 +19,7 @@ pub use dep_mode::DepMode;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
-use conversion::{ConversionResult, install_converted_ccs, try_convert_to_ccs};
+use conversion::{ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs};
 use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
@@ -345,7 +345,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             .path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
-        return install_converted_ccs(ccs_path, db_path, root, dry_run, sandbox_mode, no_deps);
+        return install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path,
+            db_path,
+            root,
+            dry_run,
+            sandbox_mode,
+            no_deps,
+            no_scripts,
+            allow_downgrade,
+            dep_mode,
+            yes,
+        });
     }
 
     let path_str = resolved
@@ -356,7 +367,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Check if it's a CCS package by extension (from update command or local file)
     if path_str.ends_with(".ccs") {
         info!("Detected CCS package from path extension, installing directly");
-        return install_converted_ccs(path_str, db_path, root, dry_run, sandbox_mode, no_deps);
+        return install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: path_str,
+            db_path,
+            root,
+            dry_run,
+            sandbox_mode,
+            no_deps,
+            no_scripts,
+            allow_downgrade,
+            dep_mode,
+            yes,
+        });
     }
 
     // Detect format and parse legacy packages
@@ -377,14 +399,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 temp_dir: _temp_dir,
             } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
-                return install_converted_ccs(
-                    &ccs_path,
+                return install_converted_ccs(ConvertedCcsInstallOptions {
+                    ccs_path: &ccs_path,
                     db_path,
                     root,
                     dry_run,
                     sandbox_mode,
                     no_deps,
-                );
+                    no_scripts,
+                    allow_downgrade,
+                    dep_mode,
+                    yes,
+                });
             }
             ConversionResult::Skipped => {
                 // Already converted - fall through to regular install path
