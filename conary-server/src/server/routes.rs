@@ -25,7 +25,7 @@ use crate::server::{ServerConfig, ServerState};
 use axum::{
     Json, Router,
     body::Body,
-    extract::ConnectInfo,
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -676,6 +676,7 @@ pub fn create_external_admin_router(
         .route("/v1/admin/repos/:name", put(admin::update_repo))
         .route("/v1/admin/repos/:name", delete(admin::delete_repo))
         .route("/v1/admin/repos/:name/sync", post(admin::sync_repo))
+        .route("/v1/admin/refresh", post(admin::refresh_repos))
         // Federation management
         .route("/v1/admin/federation/peers", get(admin::list_peers))
         .route("/v1/admin/federation/peers", post(admin::add_peer))
@@ -932,12 +933,55 @@ async fn server_info(
 }
 
 /// Trigger upstream metadata refresh
-async fn refresh_upstream() -> Json<serde_json::Value> {
-    // TODO: Implement actual metadata refresh
-    Json(serde_json::json!({
-        "status": "not_implemented",
-        "message": "Upstream refresh not yet implemented"
-    }))
+async fn refresh_upstream(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Query(query): Query<admin::RefreshQuery>,
+) -> Response {
+    match crate::server::admin_service::refresh_repositories(&state, query.force).await {
+        Ok(results) => {
+            let synced = results.iter().filter(|r| !r.skipped).count();
+            let skipped = results.iter().filter(|r| r.skipped).count();
+
+            {
+                let guard = state.read().await;
+                guard.publish_event(
+                    "repos.refreshed",
+                    serde_json::json!({
+                        "force": query.force,
+                        "synced": synced,
+                        "skipped": skipped,
+                    }),
+                );
+            }
+
+            Json(serde_json::json!({
+                "status": "ok",
+                "force": query.force,
+                "synced": synced,
+                "skipped": skipped,
+                "results": results
+                    .into_iter()
+                    .map(|r| serde_json::json!({
+                        "name": r.name,
+                        "packages_synced": r.packages_synced,
+                        "skipped": r.skipped,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Upstream refresh failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "message": e.to_string(),
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]
