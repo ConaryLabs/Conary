@@ -248,13 +248,13 @@ impl Repository {
 /// Column list for RepositoryPackage SELECT queries (single-table, no alias)
 const REPO_PKG_COLUMNS: &str = "id, repository_id, name, version, architecture, description, \
     checksum, size, download_url, dependencies, metadata, synced_at, \
-    is_security_update, severity, cve_ids, advisory_id, advisory_url";
+    is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme";
 
 /// Column list for RepositoryPackage SELECT queries (with rp. alias for JOIN queries)
 const REPO_PKG_COLUMNS_PREFIXED: &str = "rp.id, rp.repository_id, rp.name, rp.version, \
     rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies, \
     rp.metadata, rp.synced_at, rp.is_security_update, rp.severity, rp.cve_ids, \
-    rp.advisory_id, rp.advisory_url";
+    rp.advisory_id, rp.advisory_url, rp.distro, rp.version_scheme";
 
 /// RepositoryPackage represents a package available from a repository
 #[derive(Debug, Clone)]
@@ -281,6 +281,10 @@ pub struct RepositoryPackage {
     pub advisory_id: Option<String>,
     /// URL to the advisory
     pub advisory_url: Option<String>,
+    /// Distro identity this package came from (e.g. "fedora", "debian", "arch").
+    pub distro: Option<String>,
+    /// Native version comparison scheme (rpm, debian, arch).
+    pub version_scheme: Option<String>,
 }
 
 impl RepositoryPackage {
@@ -311,6 +315,8 @@ impl RepositoryPackage {
             cve_ids: None,
             advisory_id: None,
             advisory_url: None,
+            distro: None,
+            version_scheme: None,
         }
     }
 
@@ -497,6 +503,8 @@ impl RepositoryPackage {
             cve_ids: row.get(14)?,
             advisory_id: row.get(15)?,
             advisory_url: row.get(16)?,
+            distro: row.get(17)?,
+            version_scheme: row.get(18)?,
         })
     }
 
@@ -665,6 +673,8 @@ mod tests {
             cve_ids: None,
             advisory_id: None,
             advisory_url: None,
+            distro: None,
+            version_scheme: None,
         };
 
         let deps = pkg.parse_dependency_requests().unwrap();

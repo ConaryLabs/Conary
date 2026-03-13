@@ -13,17 +13,8 @@ pub struct RepositoryProvide {
     pub version: Option<String>,
     pub kind: String,
     pub raw: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepositoryRequirement {
-    pub id: Option<i64>,
-    pub repository_package_id: i64,
-    pub capability: String,
-    pub version_constraint: Option<String>,
-    pub kind: String,
-    pub dependency_type: String,
-    pub raw: Option<String>,
+    /// Native version comparison scheme (rpm, debian, arch) for the provide version text.
+    pub version_scheme: Option<String>,
 }
 
 impl RepositoryProvide {
@@ -41,20 +32,28 @@ impl RepositoryProvide {
             version,
             kind,
             raw,
+            version_scheme: None,
         }
+    }
+
+    /// Create a provide with an explicit version scheme.
+    pub fn with_version_scheme(mut self, scheme: String) -> Self {
+        self.version_scheme = Some(scheme);
+        self
     }
 
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO repository_provides
-             (repository_package_id, capability, version, kind, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (repository_package_id, capability, version, kind, raw, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 self.repository_package_id,
                 &self.capability,
                 &self.version,
                 &self.kind,
                 &self.raw,
+                &self.version_scheme,
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -69,8 +68,8 @@ impl RepositoryProvide {
 
         let mut stmt = conn.prepare_cached(
             "INSERT INTO repository_provides
-             (repository_package_id, capability, version, kind, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (repository_package_id, capability, version, kind, raw, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
 
         for provide in provides {
@@ -80,6 +79,7 @@ impl RepositoryProvide {
                 &provide.version,
                 &provide.kind,
                 &provide.raw,
+                &provide.version_scheme,
             ])?;
         }
 
@@ -88,7 +88,7 @@ impl RepositoryProvide {
 
     pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, repository_package_id, capability, version, kind, raw
+            "SELECT id, repository_package_id, capability, version, kind, raw, version_scheme
              FROM repository_provides
              WHERE repository_package_id = ?1
              ORDER BY capability, version",
@@ -101,7 +101,7 @@ impl RepositoryProvide {
 
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version, rp.kind, rp.raw
+            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version, rp.kind, rp.raw, rp.version_scheme
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
@@ -114,6 +114,47 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
+    /// Find provides matching both capability name and kind in enabled repositories.
+    pub fn find_by_capability_and_kind(
+        conn: &Connection,
+        capability: &str,
+        kind: &str,
+    ) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version, rp.kind, rp.raw, rp.version_scheme
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1 AND rp.capability = ?1 AND rp.kind = ?2
+             ORDER BY rp.capability, rp.version",
+        )?;
+        let rows = stmt
+            .query_map(params![capability, kind], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Delete all provides for a specific repository package.
+    pub fn delete_by_package(conn: &Connection, repository_package_id: i64) -> Result<()> {
+        conn.execute(
+            "DELETE FROM repository_provides WHERE repository_package_id = ?1",
+            [repository_package_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete all provides for packages belonging to a repository.
+    pub fn delete_by_repository(conn: &Connection, repository_id: i64) -> Result<()> {
+        conn.execute(
+            "DELETE FROM repository_provides
+             WHERE repository_package_id IN (
+                 SELECT id FROM repository_packages WHERE repository_id = ?1
+             )",
+            [repository_id],
+        )?;
+        Ok(())
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
@@ -122,96 +163,7 @@ impl RepositoryProvide {
             version: row.get(3)?,
             kind: row.get(4)?,
             raw: row.get(5)?,
-        })
-    }
-}
-
-impl RepositoryRequirement {
-    pub fn new(
-        repository_package_id: i64,
-        capability: String,
-        version_constraint: Option<String>,
-        kind: String,
-        dependency_type: String,
-        raw: Option<String>,
-    ) -> Self {
-        Self {
-            id: None,
-            repository_package_id,
-            capability,
-            version_constraint,
-            kind,
-            dependency_type,
-            raw,
-        }
-    }
-
-    pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
-        conn.execute(
-            "INSERT INTO repository_requirements
-             (repository_package_id, capability, version_constraint, kind, dependency_type, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                self.repository_package_id,
-                &self.capability,
-                &self.version_constraint,
-                &self.kind,
-                &self.dependency_type,
-                &self.raw,
-            ],
-        )?;
-        let id = conn.last_insert_rowid();
-        self.id = Some(id);
-        Ok(id)
-    }
-
-    pub fn batch_insert(conn: &Connection, requirements: &[Self]) -> Result<usize> {
-        if requirements.is_empty() {
-            return Ok(0);
-        }
-
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO repository_requirements
-             (repository_package_id, capability, version_constraint, kind, dependency_type, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )?;
-
-        for requirement in requirements {
-            stmt.execute(params![
-                requirement.repository_package_id,
-                &requirement.capability,
-                &requirement.version_constraint,
-                &requirement.kind,
-                &requirement.dependency_type,
-                &requirement.raw,
-            ])?;
-        }
-
-        Ok(requirements.len())
-    }
-
-    pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_package_id, capability, version_constraint, kind, dependency_type, raw
-             FROM repository_requirements
-             WHERE repository_package_id = ?1
-             ORDER BY capability, version_constraint",
-        )?;
-        let rows = stmt
-            .query_map([repository_package_id], Self::from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        Ok(Self {
-            id: Some(row.get(0)?),
-            repository_package_id: row.get(1)?,
-            capability: row.get(2)?,
-            version_constraint: row.get(3)?,
-            kind: row.get(4)?,
-            dependency_type: row.get(5)?,
-            raw: row.get(6)?,
+            version_scheme: row.get(6)?,
         })
     }
 }
@@ -229,9 +181,7 @@ mod tests {
         conn
     }
 
-    #[test]
-    fn repository_provide_round_trip() {
-        let conn = test_db();
+    fn seed_repo_and_package(conn: &Connection) {
         conn.execute(
             "INSERT INTO repositories (name, url) VALUES ('repo', 'https://example.test')",
             [],
@@ -243,6 +193,12 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn repository_provide_round_trip() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
 
         let mut provide = RepositoryProvide::new(
             1,
@@ -256,36 +212,67 @@ mod tests {
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].capability, "mail-transport-agent");
+        assert!(found[0].version_scheme.is_none());
     }
 
     #[test]
-    fn repository_requirement_round_trip() {
+    fn repository_provide_with_version_scheme() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO repositories (name, url) VALUES ('repo', 'https://example.test')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
-             VALUES (1, 'pkg', '1.0', 'sha256:test', 1, 'https://example.test/pkg')",
-            [],
-        )
-        .unwrap();
+        seed_repo_and_package(&conn);
 
-        let mut requirement = RepositoryRequirement::new(
+        let mut provide = RepositoryProvide::new(
             1,
-            "libmagic".to_string(),
-            Some(">= 1.0".to_string()),
-            "package".to_string(),
-            "runtime".to_string(),
-            Some("libmagic >= 1.0".to_string()),
-        );
-        requirement.insert(&conn).unwrap();
+            "libc.so.6".to_string(),
+            Some("2.34".to_string()),
+            "soname".to_string(),
+            None,
+        )
+        .with_version_scheme("rpm".to_string());
+        provide.insert(&conn).unwrap();
 
-        let found = RepositoryRequirement::find_by_repository_package(&conn, 1).unwrap();
+        let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].capability, "libmagic");
-        assert_eq!(found[0].version_constraint.as_deref(), Some(">= 1.0"));
+        assert_eq!(found[0].version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn find_by_capability_and_kind_filters_correctly() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let mut p1 = RepositoryProvide::new(1, "foo".to_string(), None, "package".to_string(), None);
+        p1.insert(&conn).unwrap();
+        let mut p2 = RepositoryProvide::new(1, "foo".to_string(), None, "virtual".to_string(), None);
+        p2.insert(&conn).unwrap();
+
+        let pkg_only = RepositoryProvide::find_by_capability_and_kind(&conn, "foo", "package").unwrap();
+        assert_eq!(pkg_only.len(), 1);
+        assert_eq!(pkg_only[0].kind, "package");
+    }
+
+    #[test]
+    fn delete_by_package_removes_provides() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let mut provide = RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        provide.insert(&conn).unwrap();
+
+        RepositoryProvide::delete_by_package(&conn, 1).unwrap();
+        let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn delete_by_repository_removes_provides() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let mut provide = RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        provide.insert(&conn).unwrap();
+
+        RepositoryProvide::delete_by_repository(&conn, 1).unwrap();
+        let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
+        assert!(found.is_empty());
     }
 }

@@ -330,6 +330,8 @@ fn build_local_sparse_entry(
                 cve_ids: row.get(14)?,
                 advisory_id: row.get(15)?,
                 advisory_url: row.get(16)?,
+                distro: None,
+                version_scheme: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
