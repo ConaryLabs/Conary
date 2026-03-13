@@ -47,7 +47,6 @@ pub struct DepResolutionPlan {
 /// - `FullOwnership` -> `Takeover`
 ///
 /// If `explicit_mode` is `Some`, it takes precedence over the policy default.
-#[allow(dead_code)] // Callers land in later tasks (Task 8+)
 pub fn resolve_missing_deps_policy_aware(
     conn: &rusqlite::Connection,
     missing: &[MissingDependency],

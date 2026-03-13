@@ -42,7 +42,10 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
         }
     }
 
-    // Check for non-CAS-backed packages that will be excluded from the generation
+    // Check for non-CAS-backed packages that will be excluded from the generation.
+    // The ownership ladder is: AdoptedTrack -> AdoptedFull -> Taken -> Repository.
+    // Only AdoptedFull, Taken, and Repository have CAS content; AdoptedTrack packages
+    // are metadata-only and will have incomplete file coverage in the generation image.
     let all_troves = Trove::list_all(conn).unwrap_or_default();
     let track_only_count = all_troves
         .iter()
@@ -51,7 +54,9 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     if track_only_count > 0 {
         warn!(
             "{track_only_count} package(s) are at AdoptedTrack (no CAS content) \
-             and may have incomplete file coverage in the generation image"
+             and may have incomplete file coverage in the generation image. \
+             Use 'conary adopt-system --full' or 'conary system adopt --takeover' \
+             to promote them along the ownership ladder."
         );
     }
 

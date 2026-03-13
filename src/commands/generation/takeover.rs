@@ -72,6 +72,15 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
 
 /// Execute a full system takeover.
 ///
+/// This orchestrates the top-level ownership ladder transition for the entire system:
+/// 1. Adopt all un-tracked packages (`AdoptedTrack`)
+/// 2. Build an initial generation (EROFS image from CAS content)
+/// 3. Write a boot entry and live-switch to the new generation
+///
+/// The convergence intent from the system model determines the default ownership
+/// target: `TrackOnly` stays at `AdoptedTrack`, `CasBacked` promotes to
+/// `AdoptedFull`, and `FullOwnership` targets `Taken`/`Repository`.
+///
 /// # Arguments
 ///
 /// * `db_path`         - Path to the Conary database

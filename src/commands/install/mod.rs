@@ -148,6 +148,26 @@ pub(super) fn run_triggers(
     }
 }
 
+/// Classify a dependency name into a human-readable type for diagnostics.
+///
+/// Returns a short label: "package", "capability", "OR group", "conditional",
+/// "file", or "rpmlib" so the user understands what kind of requirement failed.
+fn classify_dep_type(dep_name: &str) -> &'static str {
+    if dep_name.starts_with("rpmlib(") {
+        "rpmlib"
+    } else if dep_name.starts_with('/') {
+        "file"
+    } else if dep_name.contains(" if ") || dep_name.contains(" unless ") || dep_name.starts_with("((") {
+        "conditional"
+    } else if dep_name.contains(" or ") || dep_name.contains('|') {
+        "OR group"
+    } else if dep_name.contains("(") || dep_name.contains(".so") || dep_name.contains("pkgconfig(") {
+        "capability"
+    } else {
+        "package"
+    }
+}
+
 /// Check if missing dependencies can be satisfied by tracked packages.
 /// Prints status and returns error if any dependencies cannot be satisfied.
 #[allow(dead_code)]
@@ -567,8 +587,23 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         if !plan.missing.is_empty() {
             info!("Found {} missing dependencies", plan.missing.len());
 
-            // Dep-mode-aware resolution
-            let dep_plan = dep_resolution::resolve_missing_deps(&conn, &plan.missing, dep_mode);
+            // Dep-mode-aware resolution -- use policy-aware variant so the
+            // system model convergence intent provides a default when the
+            // user has not explicitly set --dep-mode.
+            let convergence_intent = if conary_core::model::model_exists(None) {
+                conary_core::model::load_model(None)
+                    .ok()
+                    .map(|m| m.system.convergence.clone())
+                    .unwrap_or_default()
+            } else {
+                conary_core::model::ConvergenceIntent::default()
+            };
+            let dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
+                &conn,
+                &plan.missing,
+                Some(dep_mode),
+                &convergence_intent,
+            );
 
             // Report blocked packages
             if !dep_plan.blocked.is_empty() {
@@ -634,18 +669,26 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
             // Handle packages that need to be installed from repos
             if !dep_plan.to_install.is_empty() {
-                let dep_names: Vec<String> =
-                    dep_plan.to_install.iter().map(|d| d.name.clone()).collect();
+                // Build full request tuples preserving version constraints from the
+                // resolution plan.  The old name-only path dropped constraints,
+                // causing the SAT solver to pick arbitrary versions.
+                let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> =
+                    dep_plan.to_install.iter().map(|d| {
+                        let constraint = d.version.as_ref()
+                            .and_then(|v| conary_core::version::VersionConstraint::parse(v).ok())
+                            .unwrap_or(conary_core::version::VersionConstraint::Any);
+                        (d.name.clone(), constraint)
+                    }).collect();
 
                 if dry_run {
                     println!(
                         "  Would install {} dependencies from Remi:",
-                        dep_names.len()
+                        dep_requests.len()
                     );
                     // Validate that deps are actually resolvable even in dry-run
-                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
+                    match repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10) {
                         Ok(to_download) => {
-                            for name in &dep_names {
+                            for (name, _) in &dep_requests {
                                 println!("    {}", name);
                             }
                             if to_download.is_empty() {
@@ -653,20 +696,20 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                             }
                         }
                         Err(e) => {
-                            for name in &dep_names {
+                            for (name, _) in &dep_requests {
                                 println!("    {} (resolution pending)", name);
                             }
                             println!("  [WARN] Dependency resolution check failed: {}", e);
                         }
                     }
                 } else {
-                    println!("  Installing {} dependencies:", dep_names.len());
-                    for name in &dep_names {
+                    println!("  Installing {} dependencies:", dep_requests.len());
+                    for (name, _) in &dep_requests {
                         println!("    {}", name);
                     }
 
-                    // Use existing transitive resolution and batch install
-                    match repository::resolve_dependencies_transitive(&conn, &dep_names, 10) {
+                    // Use transitive resolution with full version constraints
+                    match repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10) {
                         Ok(to_download) => {
                             if !to_download.is_empty() {
                                 progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
@@ -747,10 +790,26 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                     eprintln!("\nUnresolvable dependencies:");
                     for dep in &still_missing {
                         eprintln!(
-                            "  {} (required by: {})",
+                            "  {} {} (type: {}, required by: {})",
                             dep.name,
+                            dep.constraint,
+                            classify_dep_type(&dep.name),
                             dep.required_by.join(", ")
                         );
+                    }
+                    eprintln!(
+                        "\nResolution context: dep-mode={}, convergence={}",
+                        dep_mode,
+                        convergence_intent.display_name(),
+                    );
+                    // List repos that were searched
+                    if let Ok(repos) = conary_core::db::models::Repository::list_all(&conn) {
+                        let repo_names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+                        if !repo_names.is_empty() {
+                            eprintln!("Repositories searched: {}", repo_names.join(", "));
+                        } else {
+                            eprintln!("No repositories configured (run 'conary repo add' first)");
+                        }
                     }
                     return Err(anyhow::anyhow!(
                         "Cannot install {}: {} unresolvable dependencies\n\
@@ -1340,5 +1399,62 @@ fn scheme_to_string(scheme: VersionScheme) -> String {
         VersionScheme::Rpm => "rpm".to_string(),
         VersionScheme::Debian => "debian".to_string(),
         VersionScheme::Arch => "arch".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_dep_type_packages() {
+        assert_eq!(classify_dep_type("bash"), "package");
+        assert_eq!(classify_dep_type("libcurl-devel"), "package");
+    }
+
+    #[test]
+    fn classify_dep_type_capabilities() {
+        assert_eq!(classify_dep_type("libcurl.so.4()(64bit)"), "capability");
+        assert_eq!(classify_dep_type("pkgconfig(libcurl)"), "capability");
+    }
+
+    #[test]
+    fn classify_dep_type_files() {
+        assert_eq!(classify_dep_type("/usr/bin/python3"), "file");
+    }
+
+    #[test]
+    fn classify_dep_type_rpmlib() {
+        assert_eq!(classify_dep_type("rpmlib(CompressedFileNames)"), "rpmlib");
+    }
+
+    #[test]
+    fn classify_dep_type_conditional() {
+        assert_eq!(
+            classify_dep_type("(systemd if systemd-resolved)"),
+            "conditional"
+        );
+        assert_eq!(
+            classify_dep_type("((kernel-core if kernel))"),
+            "conditional"
+        );
+    }
+
+    #[test]
+    fn classify_dep_type_or_group() {
+        assert_eq!(classify_dep_type("default-mta | mail-transport-agent"), "OR group");
+    }
+
+    #[test]
+    fn distro_name_to_flavor_known() {
+        use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
+        assert_eq!(distro_name_to_flavor("fedora43"), Some(RepositoryDependencyFlavor::Rpm));
+        assert_eq!(distro_name_to_flavor("ubuntu-noble"), Some(RepositoryDependencyFlavor::Deb));
+        assert_eq!(distro_name_to_flavor("arch"), Some(RepositoryDependencyFlavor::Arch));
+    }
+
+    #[test]
+    fn distro_name_to_flavor_unknown() {
+        assert_eq!(distro_name_to_flavor("nixos"), None);
     }
 }

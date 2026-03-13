@@ -30,7 +30,6 @@ impl DepMode {
     /// - `FullOwnership` -> `Takeover` (download and fully own everything)
     ///
     /// If no convergence intent is set, the default remains `Satisfy`.
-    #[allow(dead_code)] // Wired into resolve_missing_deps_policy_aware; callers land in later tasks
     pub fn from_convergence_intent(intent: &ConvergenceIntent) -> Self {
         match intent {
             ConvergenceIntent::TrackOnly => Self::Satisfy,

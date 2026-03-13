@@ -408,14 +408,19 @@ pub fn cmd_update(
                         continue;
                     }
 
-                    // For adopted packages, behavior depends on dep-mode
+                    // For adopted packages, behavior depends on dep-mode.
+                    // The ownership ladder: AdoptedTrack -> AdoptedFull -> Taken/Repository.
+                    // In satisfy mode, adopted packages are left to the system PM.
+                    // In adopt mode, we track the new version metadata.
+                    // In takeover mode, we download the CCS from Remi and take full ownership.
                     if trove.install_source.is_adopted() {
                         match dep_mode {
                             DepMode::Satisfy => {
                                 // Report update available but don't act
                                 println!(
-                                    "  {} {} -> {} (adopted, use --dep-mode takeover to update via Conary)",
-                                    trove.name, trove.version, repo_pkg.version
+                                    "  {} {} -> {} (adopted as {}, use --dep-mode takeover to update via Conary)",
+                                    trove.name, trove.version, repo_pkg.version,
+                                    trove.install_source.as_str(),
                                 );
                                 adopted_skipped.push(trove.name.clone());
                                 break;

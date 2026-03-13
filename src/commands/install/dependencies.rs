@@ -114,7 +114,13 @@ pub fn handle_missing_dependencies(
 
     info!("Found {} missing dependencies", plan.missing.len());
 
-    // Try to find missing deps in repositories
+    // Try to find missing deps in repositories.
+    // NOTE: This legacy path drops version constraints by using name-only lookup.
+    // The main install flow in mod.rs now uses `resolve_dependencies_transitive_requests`
+    // with full (name, constraint) tuples.  This function is kept for backward
+    // compatibility with callers that go through `handle_missing_dependencies` directly.
+    // TODO: remove after full migration -- callers should use the policy-aware path
+    // in mod.rs or conversion.rs instead.
     let missing_names: Vec<String> = plan.missing.iter().map(|m| m.name.clone()).collect();
 
     match repository::resolve_dependencies_transitive(conn, &missing_names, 10) {
