@@ -282,10 +282,7 @@ fn distro_matches_flavor(
     let d = distro.to_lowercase();
     match flavor {
         RepositoryDependencyFlavor::Rpm => {
-            d.contains("fedora")
-                || d.contains("rhel")
-                || d.contains("centos")
-                || d.contains("suse")
+            d.contains("fedora") || d.contains("rhel") || d.contains("centos") || d.contains("suse")
         }
         RepositoryDependencyFlavor::Deb => {
             d.contains("ubuntu") || d.contains("debian") || d.contains("mint")
@@ -496,8 +493,8 @@ mod tests {
         let candidates = resolver.expand("curl").unwrap();
 
         // Policy scope: prefer ubuntu-noble
-        let policy = ResolutionPolicy::new()
-            .with_scope(RequestScope::Repository("ubuntu-noble".into()));
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-noble".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();

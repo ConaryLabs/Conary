@@ -43,7 +43,9 @@ fn configure(conn: &Connection) -> Result<()> {
 fn validate_wal_file(path: &Path) -> Result<()> {
     let wal_path = path.with_extension(format!(
         "{}-wal",
-        path.extension().and_then(|ext| ext.to_str()).unwrap_or_default()
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
     ));
     if !wal_path.exists() {
         return Ok(());

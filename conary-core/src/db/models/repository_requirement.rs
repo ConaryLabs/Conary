@@ -116,7 +116,10 @@ impl RepositoryRequirement {
         Ok(requirements.len())
     }
 
-    pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
+    pub fn find_by_repository_package(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, group_id, capability, version_constraint, kind, dependency_type, raw
              FROM repository_requirements
@@ -183,11 +186,7 @@ impl RepositoryRequirement {
 // ---------------------------------------------------------------------------
 
 impl RepositoryRequirementGroup {
-    pub fn new(
-        repository_package_id: i64,
-        kind: String,
-        behavior: String,
-    ) -> Self {
+    pub fn new(repository_package_id: i64, kind: String, behavior: String) -> Self {
         Self {
             id: None,
             repository_package_id,
@@ -267,7 +266,10 @@ impl RepositoryRequirementGroup {
     }
 
     /// List all requirement groups for a given repository package.
-    pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
+    pub fn find_by_repository_package(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, kind, behavior, description, native_text
              FROM repository_requirement_groups
@@ -367,7 +369,12 @@ mod tests {
         seed_repo_and_package(&conn);
 
         let mut req = RepositoryRequirement::new(
-            1, "glibc".to_string(), None, "package".to_string(), "runtime".to_string(), None,
+            1,
+            "glibc".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            None,
         );
         req.insert(&conn).unwrap();
 
@@ -382,7 +389,12 @@ mod tests {
         seed_repo_and_package(&conn);
 
         let mut req = RepositoryRequirement::new(
-            1, "glibc".to_string(), None, "package".to_string(), "runtime".to_string(), None,
+            1,
+            "glibc".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            None,
         );
         req.insert(&conn).unwrap();
 
@@ -396,11 +408,8 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut group = RepositoryRequirementGroup::new(
-            1,
-            "depends".to_string(),
-            "hard".to_string(),
-        );
+        let mut group =
+            RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
         group.native_text = Some("default-mta | mail-transport-agent".to_string());
         group.insert(&conn).unwrap();
         assert!(group.id.is_some());
@@ -420,7 +429,8 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut group = RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
+        let mut group =
+            RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
         group.insert(&conn).unwrap();
 
         RepositoryRequirementGroup::delete_by_package(&conn, 1).unwrap();
@@ -433,7 +443,8 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut group = RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
+        let mut group =
+            RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
         group.insert(&conn).unwrap();
 
         RepositoryRequirementGroup::delete_by_repository(&conn, 1).unwrap();
@@ -463,11 +474,8 @@ mod tests {
         seed_repo_and_package(&conn);
 
         // Create a group for an OR-dependency: default-mta | mail-transport-agent
-        let mut group = RepositoryRequirementGroup::new(
-            1,
-            "depends".to_string(),
-            "hard".to_string(),
-        );
+        let mut group =
+            RepositoryRequirementGroup::new(1, "depends".to_string(), "hard".to_string());
         group.native_text = Some("default-mta | mail-transport-agent".to_string());
         group.insert(&conn).unwrap();
         let group_id = group.id.unwrap();
@@ -497,7 +505,12 @@ mod tests {
 
         // Also insert a clause with no group (legacy / ungrouped)
         let mut ungrouped = RepositoryRequirement::new(
-            1, "libc".to_string(), None, "package".to_string(), "runtime".to_string(), None,
+            1,
+            "libc".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            None,
         );
         ungrouped.insert(&conn).unwrap();
 

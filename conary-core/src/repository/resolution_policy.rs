@@ -248,9 +248,7 @@ impl ResolutionPolicy {
         sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
 
         for profile in sorted {
-            if !profile.allowed_flavors.contains(&flavor)
-                && !profile.allowed_flavors.is_empty()
-            {
+            if !profile.allowed_flavors.contains(&flavor) && !profile.allowed_flavors.is_empty() {
                 continue;
             }
 
@@ -330,8 +328,8 @@ mod tests {
 
     #[test]
     fn request_scope_repo_filters_root_only() {
-        let policy = ResolutionPolicy::new()
-            .with_scope(RequestScope::Repository("fedora".to_string()));
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora".to_string()));
 
         // Root request from debian is rejected.
         assert!(!policy.accepts_candidate(&debian_origin(), "bash", true, None));

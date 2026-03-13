@@ -178,7 +178,14 @@ impl ConversionService {
             TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
         let (repo_pkg, pkg_path) = self
-            .download_package_with_refresh(&conn, distro, package_name, version, repo_pkg, temp_dir.path())
+            .download_package_with_refresh(
+                &conn,
+                distro,
+                package_name,
+                version,
+                repo_pkg,
+                temp_dir.path(),
+            )
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         info!("Downloaded to: {:?}", pkg_path);
 
@@ -381,8 +388,14 @@ impl ConversionService {
             }
         }
 
-        let mut repo = conary_core::db::models::Repository::find_by_id(conn, repo_pkg.repository_id)?
-            .ok_or_else(|| anyhow!("Repository {} not found during refresh", repo_pkg.repository_id))?;
+        let mut repo =
+            conary_core::db::models::Repository::find_by_id(conn, repo_pkg.repository_id)?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Repository {} not found during refresh",
+                        repo_pkg.repository_id
+                    )
+                })?;
         conary_core::repository::sync_repository(conn, &mut repo)
             .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo.name, e))?;
 

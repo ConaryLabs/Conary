@@ -137,10 +137,9 @@ fn build_metadata(
                 .dependencies
                 .as_ref()
                 .and_then(|deps_json| serde_json::from_str::<Vec<String>>(deps_json).ok());
-            let metadata = pkg
-                .metadata
-                .as_ref()
-                .and_then(|metadata_json| serde_json::from_str::<serde_json::Value>(metadata_json).ok());
+            let metadata = pkg.metadata.as_ref().and_then(|metadata_json| {
+                serde_json::from_str::<serde_json::Value>(metadata_json).ok()
+            });
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),

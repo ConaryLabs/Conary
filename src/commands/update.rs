@@ -36,20 +36,29 @@ fn source_policy_update_context(
             pin.distro,
             strength,
             match realignment_candidates {
-                Some(count) => format!(" Package-level realignment candidates currently visible: {}.", count),
+                Some(count) => format!(
+                    " Package-level realignment candidates currently visible: {}.",
+                    count
+                ),
                 None => String::new(),
             }
         ));
     }
 
-    let total_packages: i64 = affinities.iter().map(|affinity| affinity.package_count).sum();
+    let total_packages: i64 = affinities
+        .iter()
+        .map(|affinity| affinity.package_count)
+        .sum();
     if total_packages == 0 {
         return Some(format!(
             "Active source policy pin: {} ({}). Replatform estimate unavailable: no installed packages are represented in current affinity data.{}",
             pin.distro,
             strength,
             match realignment_candidates {
-                Some(count) => format!(" Package-level realignment candidates currently visible: {}.", count),
+                Some(count) => format!(
+                    " Package-level realignment candidates currently visible: {}.",
+                    count
+                ),
                 None => String::new(),
             }
         ));
@@ -69,7 +78,10 @@ fn source_policy_update_context(
         aligned_packages,
         packages_to_realign,
         match realignment_candidates {
-            Some(count) => format!(" Package-level realignment candidates currently visible: {}.", count),
+            Some(count) => format!(
+                " Package-level realignment candidates currently visible: {}.",
+                count
+            ),
             None => String::new(),
         }
     ))
@@ -88,11 +100,7 @@ fn render_replatform_action_preview(actions: &[DiffAction]) -> Option<String> {
         return None;
     }
 
-    let preview: Vec<String> = replatforms
-        .iter()
-        .take(3)
-        .cloned()
-        .collect();
+    let preview: Vec<String> = replatforms.iter().take(3).cloned().collect();
 
     let mut line = format!("Planned replatform replacements: {}", preview.join(", "));
     if replatforms.len() > preview.len() {
@@ -108,7 +116,10 @@ fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -> String {
     )];
 
     for transaction in &plan.transactions {
-        let current = transaction.current_distro.as_deref().unwrap_or("unknown source");
+        let current = transaction
+            .current_distro
+            .as_deref()
+            .unwrap_or("unknown source");
         let status = if transaction.executable {
             "executable"
         } else {
@@ -176,9 +187,7 @@ fn render_replatform_blocked_reason(
         conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute => {
             "missing versioned install route"
         }
-        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => {
-            "missing install route"
-        }
+        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => "missing install route",
         conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
             "unsatisfied target dependencies"
         }
@@ -419,7 +428,9 @@ pub fn cmd_update(
                                 // Report update available but don't act
                                 println!(
                                     "  {} {} -> {} (adopted as {}, use --dep-mode takeover to update via Conary)",
-                                    trove.name, trove.version, repo_pkg.version,
+                                    trove.name,
+                                    trove.version,
+                                    repo_pkg.version,
                                     trove.install_source.as_str(),
                                 );
                                 adopted_skipped.push(trove.name.clone());
@@ -1026,21 +1037,30 @@ mod tests {
     }
 
     fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
-        let mut fedora_repo =
-            Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
         fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
         let fedora_repo_id = fedora_repo.insert(conn).unwrap();
 
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(conn).unwrap();
 
-        let mut fedora_label =
-            LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
         fedora_label.insert(conn).unwrap();
-        fedora_label.set_repository(conn, Some(fedora_repo_id)).unwrap();
+        fedora_label
+            .set_repository(conn, Some(fedora_repo_id))
+            .unwrap();
 
         for (name, version) in [("vim", "9.0.1"), ("bash", "5.1.0"), ("zsh", "5.8.0")] {
             let mut trove = Trove::new_with_source(
@@ -1140,8 +1160,10 @@ mod tests {
 
     #[test]
     fn test_is_repo_version_newer_uses_debian_scheme() {
-        let mut repo =
-            Repository::new("debian-main".to_string(), "https://deb.example.test".to_string());
+        let mut repo = Repository::new(
+            "debian-main".to_string(),
+            "https://deb.example.test".to_string(),
+        );
         repo.default_strategy_distro = Some("ubuntu-24.04".to_string());
 
         let mut trove = Trove::new_with_source(
@@ -1157,8 +1179,10 @@ mod tests {
 
     #[test]
     fn test_is_repo_version_newer_uses_arch_scheme() {
-        let mut repo =
-            Repository::new("arch-core".to_string(), "https://arch.example.test".to_string());
+        let mut repo = Repository::new(
+            "arch-core".to_string(),
+            "https://arch.example.test".to_string(),
+        );
         repo.default_strategy_distro = Some("arch".to_string());
 
         let mut trove = Trove::new_with_source(
@@ -1179,7 +1203,9 @@ mod tests {
         seed_mixed_replatform_fixture(&conn);
         DistroPin::set(&conn, "arch", "strict").unwrap();
 
-        let pin = DistroPin::get_current(&conn).unwrap().expect("expected source pin");
+        let pin = DistroPin::get_current(&conn)
+            .unwrap()
+            .expect("expected source pin");
         let snapshot = source_policy_replatform_snapshot(&conn, &pin.distro).unwrap();
         let state = capture_current_state(&conn).unwrap();
         let actions = planned_replatform_actions(&snapshot, &state);
@@ -1324,7 +1350,9 @@ mod tests {
         let rendered = render_replatform_execution_plan(&plan);
 
         assert!(rendered.contains("Planned replatform transactions (2):"));
-        assert!(rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0"));
+        assert!(
+            rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0")
+        );
         assert!(rendered.contains(
             "via arch-core [repo-pkg:11] [route:default:legacy] [missing versioned install route]"
         ));
@@ -1411,7 +1439,9 @@ mod tests {
 
         let rendered = render_replatform_execution_plan(&plan);
 
-        assert!(rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0"));
+        assert!(
+            rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0")
+        );
         assert!(rendered.contains("via arch-core [repo-pkg:22] [route:resolution:binary]"));
         assert!(!rendered.contains("missing install route"));
         assert!(!rendered.contains("only any-version install route"));

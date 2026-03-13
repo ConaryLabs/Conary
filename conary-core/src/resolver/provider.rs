@@ -44,10 +44,7 @@ pub enum ConaryPackageVersion {
     /// Installed package with RPM version (legacy or actual RPM).
     Installed(RpmVersion),
     /// Installed package with a native (non-RPM) version scheme.
-    InstalledNative {
-        raw: String,
-        scheme: VersionScheme,
-    },
+    InstalledNative { raw: String, scheme: VersionScheme },
     Repository {
         raw: String,
         scheme: Option<VersionScheme>,
@@ -57,10 +54,7 @@ pub enum ConaryPackageVersion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConaryProvidedVersion {
     Installed(RpmVersion),
-    Repository {
-        raw: String,
-        scheme: VersionScheme,
-    },
+    Repository { raw: String, scheme: VersionScheme },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -254,17 +248,19 @@ impl<'db> ConaryProvider<'db> {
                 ProvideEntry::find_by_trove(self.conn, tid)?
                     .into_iter()
                     .map(|provide| {
-                        let prov_version = provide.version.as_deref().and_then(|value| {
-                            match effective_scheme {
-                                VersionScheme::Rpm => RpmVersion::parse(value)
-                                    .ok()
-                                    .map(ConaryProvidedVersion::Installed),
-                                _ => Some(ConaryProvidedVersion::Repository {
-                                    raw: value.to_string(),
-                                    scheme: effective_scheme,
-                                }),
-                            }
-                        });
+                        let prov_version =
+                            provide
+                                .version
+                                .as_deref()
+                                .and_then(|value| match effective_scheme {
+                                    VersionScheme::Rpm => RpmVersion::parse(value)
+                                        .ok()
+                                        .map(ConaryProvidedVersion::Installed),
+                                    _ => Some(ConaryProvidedVersion::Repository {
+                                        raw: value.to_string(),
+                                        scheme: effective_scheme,
+                                    }),
+                                });
                         (provide.capability, prov_version)
                     })
                     .collect()
@@ -291,11 +287,9 @@ impl<'db> ConaryProvider<'db> {
                     .filter(|d| !ProvideEntry::is_virtual_provide(&d.depends_on_name))
                     .map(|d| {
                         let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
-                            (VersionScheme::Rpm, Some(s)) => {
-                                ConaryConstraint::Legacy(
-                                    VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
-                                )
-                            }
+                            (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
+                                VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
+                            ),
                             (VersionScheme::Rpm, None) => {
                                 ConaryConstraint::Legacy(VersionConstraint::Any)
                             }
@@ -349,7 +343,11 @@ impl<'db> ConaryProvider<'db> {
             }
 
             for pkg_with_repo in candidates {
-                if self.solvables.iter().any(|s| s.repo_package_id == pkg_with_repo.package.id) {
+                if self
+                    .solvables
+                    .iter()
+                    .any(|s| s.repo_package_id == pkg_with_repo.package.id)
+                {
                     continue;
                 }
 
@@ -409,10 +407,12 @@ impl<'db> ConaryProvider<'db> {
         let normalized = RepositoryProvide::find_by_capability(self.conn, capability)?;
         if !normalized.is_empty() {
             for provide in normalized {
-                let Some(pkg) = find_repo_package_by_id(self.conn, provide.repository_package_id)? else {
+                let Some(pkg) = find_repo_package_by_id(self.conn, provide.repository_package_id)?
+                else {
                     continue;
                 };
-                let Some(repo) = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
+                let Some(repo) =
+                    crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
                 else {
                     continue;
                 };
@@ -645,8 +645,7 @@ fn row_to_constraint(
     let constraint = match (repo_scheme, raw.as_deref()) {
         (Some(scheme), Some(value)) => ConaryConstraint::Repository {
             scheme,
-            constraint: parse_repo_constraint(scheme, value)
-                .unwrap_or(RepoVersionConstraint::Any),
+            constraint: parse_repo_constraint(scheme, value).unwrap_or(RepoVersionConstraint::Any),
             raw,
         },
         (Some(scheme), None) => ConaryConstraint::Repository {
@@ -703,7 +702,8 @@ fn load_grouped_dependency_requests(
         }
 
         if clauses.len() == 1 {
-            let (name, constraint) = row_to_constraint(clauses.into_iter().next().unwrap(), repo_scheme);
+            let (name, constraint) =
+                row_to_constraint(clauses.into_iter().next().unwrap(), repo_scheme);
             deps.push(SolverDep::Single(name, constraint));
         } else {
             // Multi-clause: OR-group
@@ -737,7 +737,9 @@ fn load_repo_provided_capabilities(
         .into_iter()
         .map(|row| {
             let version = match (repo_scheme, row.version) {
-                (Some(scheme), Some(raw)) => Some(ConaryProvidedVersion::Repository { raw, scheme }),
+                (Some(scheme), Some(raw)) => {
+                    Some(ConaryProvidedVersion::Repository { raw, scheme })
+                }
                 _ => None,
             };
             (row.capability, version)
@@ -903,8 +905,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             let pkg_a = &self.solvables[a.0 as usize];
             let pkg_b = &self.solvables[b.0 as usize];
 
-            if let Some(version_cmp) =
-                compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
+            if let Some(version_cmp) = compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
                 && version_cmp != std::cmp::Ordering::Equal
             {
                 return version_cmp;
@@ -941,13 +942,11 @@ impl DependencyProvider for ConaryProvider<'_> {
                         }
                         if vs_ids.len() == 1 {
                             // Single-alternative OR group: emit as a simple requirement
-                            requirements
-                                .push(ConditionalRequirement::from(vs_ids[0]));
+                            requirements.push(ConditionalRequirement::from(vs_ids[0]));
                         } else if vs_ids.len() > 1 {
                             // Look up the union ID from our pool
                             if let Some(union_id) = self.find_union_id(&vs_ids) {
-                                requirements
-                                    .push(ConditionalRequirement::from(union_id));
+                                requirements.push(ConditionalRequirement::from(union_id));
                             }
                         }
                     }
@@ -976,7 +975,9 @@ impl fmt::Display for ConaryConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Legacy(constraint) => write!(f, "{}", constraint),
-            Self::Repository { raw, constraint, .. } => {
+            Self::Repository {
+                raw, constraint, ..
+            } => {
                 if let Some(raw) = raw {
                     write!(f, "{}", raw)
                 } else {
@@ -1030,8 +1031,7 @@ pub(crate) fn constraint_matches_package(
         // Legacy `Any` matches anything
         (
             ConaryConstraint::Legacy(VersionConstraint::Any),
-            ConaryPackageVersion::Repository { .. }
-            | ConaryPackageVersion::InstalledNative { .. },
+            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
         ) => true,
         // Legacy constraint vs RPM repo package
         (
@@ -1057,7 +1057,9 @@ pub(crate) fn constraint_matches_package(
         }
         // Native constraint vs installed native (same scheme)
         (
-            ConaryConstraint::Repository { scheme, constraint, .. },
+            ConaryConstraint::Repository {
+                scheme, constraint, ..
+            },
             ConaryPackageVersion::InstalledNative {
                 raw,
                 scheme: installed_scheme,
@@ -1065,7 +1067,9 @@ pub(crate) fn constraint_matches_package(
         ) if scheme == installed_scheme => repo_version_satisfies(*scheme, raw, constraint),
         // Native constraint vs repo package (same scheme)
         (
-            ConaryConstraint::Repository { scheme, constraint, .. },
+            ConaryConstraint::Repository {
+                scheme, constraint, ..
+            },
             ConaryPackageVersion::Repository {
                 raw,
                 scheme: Some(version_scheme),
@@ -1077,8 +1081,7 @@ pub(crate) fn constraint_matches_package(
                 constraint: RepoVersionConstraint::Any,
                 ..
             },
-            ConaryPackageVersion::Repository { .. }
-            | ConaryPackageVersion::InstalledNative { .. },
+            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
         ) => true,
         _ => false,
     }
@@ -1110,7 +1113,9 @@ fn constraint_matches_provide(
                     .unwrap_or(false);
             }
             (
-                ConaryConstraint::Repository { scheme, constraint, .. },
+                ConaryConstraint::Repository {
+                    scheme, constraint, ..
+                },
                 ConaryProvidedVersion::Repository {
                     raw,
                     scheme: provided_scheme,
@@ -1130,6 +1135,108 @@ fn constraint_matches_provide(
     }
 
     constraint_matches_package(constraint, package_version)
+}
+
+/// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM
+/// cross-format matching (repo RPM constraint vs installed RPM `RpmVersion`).
+fn repo_constraint_to_legacy(constraint: &RepoVersionConstraint) -> VersionConstraint {
+    match constraint {
+        RepoVersionConstraint::Any => VersionConstraint::Any,
+        RepoVersionConstraint::Exact(v) => {
+            VersionConstraint::parse(&format!("= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::GreaterThan(v) => {
+            VersionConstraint::parse(&format!("> {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::GreaterOrEqual(v) => {
+            VersionConstraint::parse(&format!(">= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::LessThan(v) => {
+            VersionConstraint::parse(&format!("< {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::LessOrEqual(v) => {
+            VersionConstraint::parse(&format!("<= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::NotEqual(v) => {
+            VersionConstraint::parse(&format!("!= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+    }
+}
+
+fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
+    match raw? {
+        "rpm" => Some(VersionScheme::Rpm),
+        "debian" => Some(VersionScheme::Debian),
+        "arch" => Some(VersionScheme::Arch),
+        _ => None,
+    }
+}
+
+fn parse_repo_provides(
+    pkg: &RepositoryPackage,
+    scheme: Option<VersionScheme>,
+) -> Vec<(String, Option<ConaryProvidedVersion>)> {
+    let Some(metadata_json) = pkg.metadata.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+        return Vec::new();
+    };
+    let Some(provides) = metadata
+        .get("rpm_provides")
+        .and_then(|value| value.as_array())
+    else {
+        return Vec::new();
+    };
+
+    provides
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(|entry| parse_provide_entry(entry, scheme))
+        .collect()
+}
+
+fn parse_provide_entry(
+    entry: &str,
+    scheme: Option<VersionScheme>,
+) -> (String, Option<ConaryProvidedVersion>) {
+    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
+
+    for op in OPS {
+        if let Some((name, version)) = entry.split_once(op) {
+            let name = name.trim();
+            let version = version.trim();
+            if name.is_empty() || version.is_empty() {
+                continue;
+            }
+            let parsed = match scheme {
+                Some(VersionScheme::Rpm) => RpmVersion::parse(version)
+                    .ok()
+                    .map(ConaryProvidedVersion::Installed),
+                Some(scheme) => Some(ConaryProvidedVersion::Repository {
+                    raw: version.to_string(),
+                    scheme,
+                }),
+                None => None,
+            };
+            return (name.to_string(), parsed);
+        }
+    }
+
+    (entry.trim().to_string(), None)
+}
+
+fn repo_package_provides_capability(
+    conn: &rusqlite::Connection,
+    pkg: &RepositoryPackage,
+    capability: &str,
+) -> Result<bool> {
+    let Some(repo) = crate::db::models::Repository::find_by_id(conn, pkg.repository_id)? else {
+        return Ok(false);
+    };
+    Ok(load_repo_provided_capabilities(conn, pkg, &repo)?
+        .iter()
+        .any(|(provided, _version)| provided == capability))
 }
 
 #[cfg(test)]
@@ -1188,24 +1295,20 @@ mod tests {
             .unwrap();
 
         assert!(deps.iter().any(|d| {
-            d.as_single()
-                .is_some_and(|(name, constraint)| {
-                    name == "kernel-core-uname-r"
-                        && *constraint
-                            == ConaryConstraint::Legacy(
-                                VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
-                            )
-                })
+            d.as_single().is_some_and(|(name, constraint)| {
+                name == "kernel-core-uname-r"
+                    && *constraint
+                        == ConaryConstraint::Legacy(
+                            VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+                        )
+            })
         }));
         assert!(deps.iter().any(|d| {
-            d.as_single()
-                .is_some_and(|(name, constraint)| {
-                    name == "coreutils"
-                        && *constraint
-                            == ConaryConstraint::Legacy(
-                                VersionConstraint::parse(">= 9.7").unwrap(),
-                            )
-                })
+            d.as_single().is_some_and(|(name, constraint)| {
+                name == "coreutils"
+                    && *constraint
+                        == ConaryConstraint::Legacy(VersionConstraint::parse(">= 9.7").unwrap())
+            })
         }));
     }
 
@@ -1493,9 +1596,7 @@ mod tests {
         );
         let candidate = provider.add_solvable(ConaryPackage {
             name: "kernel-modules-core".to_string(),
-            version: ConaryPackageVersion::Installed(
-                RpmVersion::parse("6.19.6-200.fc43").unwrap(),
-            ),
+            version: ConaryPackageVersion::Installed(RpmVersion::parse("6.19.6-200.fc43").unwrap()),
             trove_id: None,
             repo_package_id: Some(42),
             provided_capabilities: vec![(
@@ -1531,8 +1632,7 @@ mod tests {
         // Debian OR dependency: default-mta | mail-transport-agent
         let (_dir, conn) = setup_test_db();
 
-        let mut repo =
-            Repository::new("ubuntu-main".to_string(), "https://example.invalid".into());
+        let mut repo = Repository::new("ubuntu-main".to_string(), "https://example.invalid".into());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
@@ -1547,11 +1647,8 @@ mod tests {
         let pkg_id = pkg.id.unwrap();
 
         // Create a group for the OR dependency
-        let mut group = RepositoryRequirementGroup::new(
-            pkg_id,
-            "depends".to_string(),
-            "hard".to_string(),
-        );
+        let mut group =
+            RepositoryRequirementGroup::new(pkg_id, "depends".to_string(), "hard".to_string());
         group.native_text = Some("default-mta | mail-transport-agent".to_string());
         group.insert(&conn).unwrap();
         let group_id = group.id.unwrap();
@@ -1602,8 +1699,7 @@ mod tests {
     fn conditional_deps_skipped_with_diagnostic() {
         let (_dir, conn) = setup_test_db();
 
-        let mut repo =
-            Repository::new("fedora-main".to_string(), "https://example.invalid".into());
+        let mut repo = Repository::new("fedora-main".to_string(), "https://example.invalid".into());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
@@ -1618,11 +1714,8 @@ mod tests {
         let pkg_id = pkg.id.unwrap();
 
         // A hard dependency
-        let mut hard_group = RepositoryRequirementGroup::new(
-            pkg_id,
-            "depends".to_string(),
-            "hard".to_string(),
-        );
+        let mut hard_group =
+            RepositoryRequirementGroup::new(pkg_id, "depends".to_string(), "hard".to_string());
         hard_group.insert(&conn).unwrap();
         let hard_group_id = hard_group.id.unwrap();
 
@@ -1665,8 +1758,7 @@ mod tests {
         // attempt to parse "2.39-0ubuntu2" as RPM.
         let (_dir, conn) = setup_test_db();
 
-        let mut repo =
-            Repository::new("ubuntu-main".to_string(), "https://example.invalid".into());
+        let mut repo = Repository::new("ubuntu-main".to_string(), "https://example.invalid".into());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
@@ -1719,8 +1811,7 @@ mod tests {
     fn arch_versioned_provide_uses_native_scheme() {
         let (_dir, conn) = setup_test_db();
 
-        let mut repo =
-            Repository::new("arch-core".to_string(), "https://example.invalid".into());
+        let mut repo = Repository::new("arch-core".to_string(), "https://example.invalid".into());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
@@ -1780,8 +1871,11 @@ mod tests {
             .update_status(&conn, ChangesetStatus::Applied)
             .unwrap();
 
-        let mut trove =
-            Trove::new("libc6".to_string(), "2.39-0ubuntu2".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "libc6".to_string(),
+            "2.39-0ubuntu2".to_string(),
+            TroveType::Package,
+        );
         trove.version_scheme = Some("debian".to_string());
         trove.source_distro = Some("ubuntu".to_string());
         let trove_id = trove.insert(&conn).unwrap();
@@ -1838,8 +1932,11 @@ mod tests {
             .update_status(&conn, ChangesetStatus::Applied)
             .unwrap();
 
-        let mut trove =
-            Trove::new("glibc".to_string(), "2.39-1".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "glibc".to_string(),
+            "2.39-1".to_string(),
+            TroveType::Package,
+        );
         trove.version_scheme = Some("arch".to_string());
         trove.insert(&conn).unwrap();
 
@@ -1881,8 +1978,11 @@ mod tests {
             .unwrap();
 
         // Legacy trove: no version_scheme set
-        let mut trove =
-            Trove::new("bash".to_string(), "5.2.21-2.fc43".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "bash".to_string(),
+            "5.2.21-2.fc43".to_string(),
+            TroveType::Package,
+        );
         trove.insert(&conn).unwrap();
 
         let mut provider = ConaryProvider::new(&conn);
@@ -1901,112 +2001,7 @@ mod tests {
         ));
 
         // Legacy VersionConstraint should still work
-        let constraint = ConaryConstraint::Legacy(
-            VersionConstraint::parse(">= 5.2.0").unwrap(),
-        );
+        let constraint = ConaryConstraint::Legacy(VersionConstraint::parse(">= 5.2.0").unwrap());
         assert!(constraint_matches_package(&constraint, &solvable.version));
     }
-}
-
-/// Parse a stored `version_scheme` string to a `VersionScheme`.
-///
-/// Returns `None` for unknown or missing values, which callers treat as
-/// RPM (the legacy default).
-/// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM
-/// cross-format matching (repo RPM constraint vs installed RPM `RpmVersion`).
-fn repo_constraint_to_legacy(constraint: &RepoVersionConstraint) -> VersionConstraint {
-    match constraint {
-        RepoVersionConstraint::Any => VersionConstraint::Any,
-        RepoVersionConstraint::Exact(v) => {
-            VersionConstraint::parse(&format!("= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterThan(v) => {
-            VersionConstraint::parse(&format!("> {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterOrEqual(v) => {
-            VersionConstraint::parse(&format!(">= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessThan(v) => {
-            VersionConstraint::parse(&format!("< {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessOrEqual(v) => {
-            VersionConstraint::parse(&format!("<= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::NotEqual(v) => {
-            VersionConstraint::parse(&format!("!= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-    }
-}
-
-fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
-    match raw? {
-        "rpm" => Some(VersionScheme::Rpm),
-        "debian" => Some(VersionScheme::Debian),
-        "arch" => Some(VersionScheme::Arch),
-        _ => None,
-    }
-}
-
-fn parse_repo_provides(
-    pkg: &RepositoryPackage,
-    scheme: Option<VersionScheme>,
-) -> Vec<(String, Option<ConaryProvidedVersion>)> {
-    let Some(metadata_json) = pkg.metadata.as_deref() else {
-        return Vec::new();
-    };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
-        return Vec::new();
-    };
-    let Some(provides) = metadata.get("rpm_provides").and_then(|value| value.as_array()) else {
-        return Vec::new();
-    };
-
-    provides
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(|entry| parse_provide_entry(entry, scheme))
-        .collect()
-}
-
-fn parse_provide_entry(
-    entry: &str,
-    scheme: Option<VersionScheme>,
-) -> (String, Option<ConaryProvidedVersion>) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = entry.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-            let parsed = match scheme {
-                Some(VersionScheme::Rpm) => RpmVersion::parse(version)
-                    .ok()
-                    .map(ConaryProvidedVersion::Installed),
-                Some(scheme) => Some(ConaryProvidedVersion::Repository {
-                    raw: version.to_string(),
-                    scheme,
-                }),
-                None => None,
-            };
-            return (name.to_string(), parsed);
-        }
-    }
-
-    (entry.trim().to_string(), None)
-}
-
-fn repo_package_provides_capability(
-    conn: &rusqlite::Connection,
-    pkg: &RepositoryPackage,
-    capability: &str,
-) -> Result<bool> {
-    let Some(repo) = crate::db::models::Repository::find_by_id(conn, pkg.repository_id)? else {
-        return Ok(false);
-    };
-    Ok(load_repo_provided_capabilities(conn, pkg, &repo)?
-        .iter()
-        .any(|(provided, _version)| provided == capability))
 }

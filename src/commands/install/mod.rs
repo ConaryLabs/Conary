@@ -98,7 +98,9 @@ pub struct InstallOptions<'a> {
 /// Map a distro identifier string to its `RepositoryDependencyFlavor`.
 ///
 /// Returns `None` for unrecognised distro names.
-fn distro_name_to_flavor(distro: &str) -> Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor> {
+fn distro_name_to_flavor(
+    distro: &str,
+) -> Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor> {
     use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
     let d = distro.to_lowercase();
     if d.contains("fedora") || d.contains("rhel") || d.contains("centos") || d.contains("suse") {
@@ -157,11 +159,15 @@ fn classify_dep_type(dep_name: &str) -> &'static str {
         "rpmlib"
     } else if dep_name.starts_with('/') {
         "file"
-    } else if dep_name.contains(" if ") || dep_name.contains(" unless ") || dep_name.starts_with("((") {
+    } else if dep_name.contains(" if ")
+        || dep_name.contains(" unless ")
+        || dep_name.starts_with("((")
+    {
         "conditional"
     } else if dep_name.contains(" or ") || dep_name.contains('|') {
         "OR group"
-    } else if dep_name.contains("(") || dep_name.contains(".so") || dep_name.contains("pkgconfig(") {
+    } else if dep_name.contains("(") || dep_name.contains(".so") || dep_name.contains("pkgconfig(")
+    {
         "capability"
     } else {
         "package"
@@ -284,7 +290,9 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             }
         };
 
-        ResolutionPolicy::new().with_scope(scope).with_mixing(mixing)
+        ResolutionPolicy::new()
+            .with_scope(scope)
+            .with_mixing(mixing)
     };
 
     // If --from <distro> was specified, resolve the canonical name to that distro's package name.
@@ -324,8 +332,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         let canonical_resolver = CanonicalResolver::new(&conn);
         let candidates = canonical_resolver.expand(package)?;
         if candidates.len() > 1 {
-            let ranked = canonical_resolver
-                .rank_candidates_with_policy(&candidates, &policy)?;
+            let ranked = canonical_resolver.rank_candidates_with_policy(&candidates, &policy)?;
             info!(
                 "Canonical expansion for '{}': {} implementations, best = '{}' ({})",
                 package,
@@ -672,13 +679,18 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 // Build full request tuples preserving version constraints from the
                 // resolution plan.  The old name-only path dropped constraints,
                 // causing the SAT solver to pick arbitrary versions.
-                let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> =
-                    dep_plan.to_install.iter().map(|d| {
-                        let constraint = d.version.as_ref()
+                let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> = dep_plan
+                    .to_install
+                    .iter()
+                    .map(|d| {
+                        let constraint = d
+                            .version
+                            .as_ref()
                             .and_then(|v| conary_core::version::VersionConstraint::parse(v).ok())
                             .unwrap_or(conary_core::version::VersionConstraint::Any);
                         (d.name.clone(), constraint)
-                    }).collect();
+                    })
+                    .collect();
 
                 if dry_run {
                     println!(
@@ -686,7 +698,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                         dep_requests.len()
                     );
                     // Validate that deps are actually resolvable even in dry-run
-                    match repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10) {
+                    match repository::resolve_dependencies_transitive_requests(
+                        &conn,
+                        &dep_requests,
+                        10,
+                    ) {
                         Ok(to_download) => {
                             for (name, _) in &dep_requests {
                                 println!("    {}", name);
@@ -709,7 +725,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                     }
 
                     // Use transitive resolution with full version constraints
-                    match repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10) {
+                    match repository::resolve_dependencies_transitive_requests(
+                        &conn,
+                        &dep_requests,
+                        10,
+                    ) {
                         Ok(to_download) => {
                             if !to_download.is_empty() {
                                 progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
@@ -878,15 +898,11 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     }
 
     // Pre-transaction validation - check if already installed or needs upgrade
-    let old_trove_to_upgrade = match check_upgrade_status(
-        &conn,
-        pkg.as_ref(),
-        format,
-        allow_downgrade,
-    )? {
-        UpgradeCheck::FreshInstall => None,
-        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
-    };
+    let old_trove_to_upgrade =
+        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
+            UpgradeCheck::FreshInstall => None,
+            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
+        };
 
     // Extract and install
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
@@ -1442,15 +1458,27 @@ mod tests {
 
     #[test]
     fn classify_dep_type_or_group() {
-        assert_eq!(classify_dep_type("default-mta | mail-transport-agent"), "OR group");
+        assert_eq!(
+            classify_dep_type("default-mta | mail-transport-agent"),
+            "OR group"
+        );
     }
 
     #[test]
     fn distro_name_to_flavor_known() {
         use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-        assert_eq!(distro_name_to_flavor("fedora43"), Some(RepositoryDependencyFlavor::Rpm));
-        assert_eq!(distro_name_to_flavor("ubuntu-noble"), Some(RepositoryDependencyFlavor::Deb));
-        assert_eq!(distro_name_to_flavor("arch"), Some(RepositoryDependencyFlavor::Arch));
+        assert_eq!(
+            distro_name_to_flavor("fedora43"),
+            Some(RepositoryDependencyFlavor::Rpm)
+        );
+        assert_eq!(
+            distro_name_to_flavor("ubuntu-noble"),
+            Some(RepositoryDependencyFlavor::Deb)
+        );
+        assert_eq!(
+            distro_name_to_flavor("arch"),
+            Some(RepositoryDependencyFlavor::Arch)
+        );
     }
 
     #[test]

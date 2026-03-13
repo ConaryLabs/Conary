@@ -2484,8 +2484,11 @@ mod tests {
             .unwrap();
 
         // Verify new columns on troves
-        conn.execute("SELECT source_distro, version_scheme FROM troves LIMIT 0", [])
-            .unwrap();
+        conn.execute(
+            "SELECT source_distro, version_scheme FROM troves LIMIT 0",
+            [],
+        )
+        .unwrap();
 
         // Verify v51: repository_requirement_groups table
         conn.execute("SELECT id, repository_package_id, kind, behavior, description, native_text FROM repository_requirement_groups LIMIT 0", [])

@@ -3,10 +3,10 @@
 
 use super::TroveSnapshot;
 use anyhow::Result;
-use std::io::Write;
-use std::time::Duration;
 use conary_core::db::paths::objects_dir;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::{info, warn};
 
 /// Initialize the Conary database and add default repositories

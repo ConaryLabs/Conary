@@ -9,9 +9,8 @@ use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryDependencyFlavor,
-    RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
+    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
+    RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::versioning::VersionScheme;
 use serde::Deserialize;
@@ -189,7 +188,11 @@ impl DebianParser {
                     .or_else(|| constraint.strip_prefix('='))
                     .unwrap_or(constraint)
                     .trim();
-                let v = if ver.is_empty() { None } else { Some(ver.to_string()) };
+                let v = if ver.is_empty() {
+                    None
+                } else {
+                    Some(ver.to_string())
+                };
                 (pname, v)
             } else {
                 (provide, None)
@@ -206,7 +209,11 @@ impl DebianParser {
         result
     }
 
-    fn package_from_entry(&self, repo_url: &str, entry: DebianPackageEntry) -> Result<PackageMetadata> {
+    fn package_from_entry(
+        &self,
+        repo_url: &str,
+        entry: DebianPackageEntry,
+    ) -> Result<PackageMetadata> {
         const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
 
         let size: u64 = entry
@@ -242,9 +249,8 @@ impl DebianParser {
         // Build structured requirements
         let mut requirements = Vec::new();
         if let Some(deps) = &entry.depends {
-            requirements.extend(
-                self.parse_requirement_groups(deps, RepositoryRequirementKind::Depends),
-            );
+            requirements
+                .extend(self.parse_requirement_groups(deps, RepositoryRequirementKind::Depends));
         }
         if let Some(pre_deps) = &entry.pre_depends {
             requirements.extend(
@@ -433,7 +439,9 @@ mod tests {
 
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let package = parser.package_from_entry("https://example.test", entry).unwrap();
+        let package = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
         let metadata = package.extra_metadata.as_object().unwrap();
         let provides = metadata
             .get("deb_provides")
@@ -464,7 +472,9 @@ mod tests {
         };
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let pkg = parser.package_from_entry("https://example.test", entry).unwrap();
+        let pkg = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
         assert_eq!(pkg.source_distro, Some(RepositoryDependencyFlavor::Deb));
         assert_eq!(pkg.version_scheme, Some(VersionScheme::Debian));
     }
@@ -488,13 +498,17 @@ mod tests {
         };
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let pkg = parser.package_from_entry("https://example.test", entry).unwrap();
+        let pkg = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
 
         assert_eq!(pkg.requirements.len(), 2);
         assert_eq!(pkg.requirements[0].kind, RepositoryRequirementKind::Depends);
         assert_eq!(pkg.requirements[0].alternatives[0].name, "libc6");
         assert_eq!(
-            pkg.requirements[0].alternatives[0].version_constraint.as_deref(),
+            pkg.requirements[0].alternatives[0]
+                .version_constraint
+                .as_deref(),
             Some(">= 2.34")
         );
         assert_eq!(pkg.requirements[1].alternatives[0].name, "libssl3");
@@ -519,7 +533,9 @@ mod tests {
         };
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let pkg = parser.package_from_entry("https://example.test", entry).unwrap();
+        let pkg = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
 
         assert_eq!(pkg.requirements.len(), 2);
         // First group has alternatives
@@ -553,7 +569,9 @@ mod tests {
         };
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let pkg = parser.package_from_entry("https://example.test", entry).unwrap();
+        let pkg = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
 
         // Self-provide + 2 explicit provides
         assert!(pkg.provides.len() >= 3);
@@ -601,7 +619,9 @@ mod tests {
         };
         let parser =
             DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
-        let pkg = parser.package_from_entry("https://example.test", entry).unwrap();
+        let pkg = parser
+            .package_from_entry("https://example.test", entry)
+            .unwrap();
 
         // Should have 1 Depends + 1 PreDepends
         let depends: Vec<_> = pkg

@@ -125,7 +125,10 @@ fn detect_source_identity_from_os_release(
     let entries = parse_os_release(contents);
     let source_distro = entries.get("ID").map(|id| {
         let normalized_id = id.trim().to_ascii_lowercase();
-        match entries.get("VERSION_ID").map(|value| value.trim()).filter(|value| !value.is_empty())
+        match entries
+            .get("VERSION_ID")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
         {
             Some(version_id) if normalized_id != "arch" => format!("{normalized_id}-{version_id}"),
             _ => normalized_id,
@@ -147,7 +150,10 @@ fn parse_os_release(contents: &str) -> HashMap<String, String> {
                 return None;
             }
             let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_string(), strip_os_release_quotes(value.trim())))
+            Some((
+                key.trim().to_string(),
+                strip_os_release_quotes(value.trim()),
+            ))
         })
         .collect()
 }
@@ -156,7 +162,11 @@ fn strip_os_release_quotes(value: &str) -> String {
     value
         .strip_prefix('"')
         .and_then(|inner| inner.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|inner| inner.strip_suffix('\'')))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|inner| inner.strip_suffix('\''))
+        })
         .unwrap_or(value)
         .to_string()
 }

@@ -86,7 +86,10 @@ impl RepositoryProvide {
         Ok(provides.len())
     }
 
-    pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
+    pub fn find_by_repository_package(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, capability, version, kind, raw, version_scheme
              FROM repository_provides
@@ -240,12 +243,15 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut p1 = RepositoryProvide::new(1, "foo".to_string(), None, "package".to_string(), None);
+        let mut p1 =
+            RepositoryProvide::new(1, "foo".to_string(), None, "package".to_string(), None);
         p1.insert(&conn).unwrap();
-        let mut p2 = RepositoryProvide::new(1, "foo".to_string(), None, "virtual".to_string(), None);
+        let mut p2 =
+            RepositoryProvide::new(1, "foo".to_string(), None, "virtual".to_string(), None);
         p2.insert(&conn).unwrap();
 
-        let pkg_only = RepositoryProvide::find_by_capability_and_kind(&conn, "foo", "package").unwrap();
+        let pkg_only =
+            RepositoryProvide::find_by_capability_and_kind(&conn, "foo", "package").unwrap();
         assert_eq!(pkg_only.len(), 1);
         assert_eq!(pkg_only[0].kind, "package");
     }
@@ -255,7 +261,8 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut provide = RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        let mut provide =
+            RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
         provide.insert(&conn).unwrap();
 
         RepositoryProvide::delete_by_package(&conn, 1).unwrap();
@@ -268,7 +275,8 @@ mod tests {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
-        let mut provide = RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
+        let mut provide =
+            RepositoryProvide::new(1, "cap".to_string(), None, "virtual".to_string(), None);
         provide.insert(&conn).unwrap();
 
         RepositoryProvide::delete_by_repository(&conn, 1).unwrap();

@@ -7,7 +7,9 @@
 
 use crate::db::models::{DependencyEntry, Trove};
 use crate::error::{Error, Result};
-use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies};
+use crate::repository::versioning::{
+    RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
+};
 use crate::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -139,7 +141,9 @@ impl DependencyEdge {
             VersionScheme::Rpm => version.satisfies_legacy(&self.constraint),
             scheme => match self.repo_constraint_for(scheme) {
                 Some(RepoVersionConstraint::Any) if self.raw_constraint.is_none() => true,
-                Some(repo_constraint) => repo_version_satisfies(scheme, version.raw(), &repo_constraint),
+                Some(repo_constraint) => {
+                    repo_version_satisfies(scheme, version.raw(), &repo_constraint)
+                }
                 None => false,
             },
         }
@@ -189,7 +193,8 @@ impl DependencyGraph {
 
             // Parse the version
             let version = InstalledPackageVersion::from_trove(&trove);
-            let node = PackageNode::new_installed(trove.name.clone(), version).with_trove_id(trove_id);
+            let node =
+                PackageNode::new_installed(trove.name.clone(), version).with_trove_id(trove_id);
 
             graph.add_node(node);
 
@@ -920,13 +925,18 @@ mod tests {
 
         let graph = DependencyGraph::build_from_db(&conn).unwrap();
         let libfoo = graph.get_node("libfoo").unwrap();
-        assert!(graph
-            .check_constraints_installed("libfoo", &libfoo.version)
-            .is_ok());
+        assert!(
+            graph
+                .check_constraints_installed("libfoo", &libfoo.version)
+                .is_ok()
+        );
 
-        let prerelease = InstalledPackageVersion::new("1.0~alpha1-1".to_string(), VersionScheme::Debian);
-        assert!(graph
-            .check_constraints_installed("libfoo", &prerelease)
-            .is_err());
+        let prerelease =
+            InstalledPackageVersion::new("1.0~alpha1-1".to_string(), VersionScheme::Debian);
+        assert!(
+            graph
+                .check_constraints_installed("libfoo", &prerelease)
+                .is_err()
+        );
     }
 }

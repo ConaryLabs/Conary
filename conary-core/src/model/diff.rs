@@ -120,9 +120,7 @@ pub struct ModelDiffSummary {
 pub enum ReplatformStatus {
     PolicyOnlyPending,
     PendingWithEstimate(ReplatformEstimate),
-    PackageConvergencePlanned {
-        structural_changes: usize,
-    },
+    PackageConvergencePlanned { structural_changes: usize },
 }
 
 impl DiffAction {
@@ -148,7 +146,9 @@ impl DiffAction {
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
-            DiffAction::ReplatformReplace { .. } | DiffAction::Install { .. } | DiffAction::Remove { .. }
+            DiffAction::ReplatformReplace { .. }
+                | DiffAction::Install { .. }
+                | DiffAction::Remove { .. }
         )
     }
 
@@ -644,10 +644,12 @@ fn compute_diff_inner(
         }
     }
 
-    let has_source_policy_change = diff
-        .actions
-        .iter()
-        .any(|action| matches!(action, DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin));
+    let has_source_policy_change = diff.actions.iter().any(|action| {
+        matches!(
+            action,
+            DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+        )
+    });
     if has_source_policy_change && diff.structural_change_count() == 0 {
         diff.add_warning(
             "Source policy changed, but automatic package convergence planning is still pending. Applying this model will update preferred sources without replacing packages yet.",
@@ -944,7 +946,11 @@ mod tests {
 
         let diff = compute_diff(&model, &state);
 
-        assert!(diff.actions.iter().any(|a| matches!(a, DiffAction::ClearSourcePin)));
+        assert!(
+            diff.actions
+                .iter()
+                .any(|a| matches!(a, DiffAction::ClearSourcePin))
+        );
     }
 
     #[test]

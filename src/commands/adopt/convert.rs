@@ -109,7 +109,8 @@ pub fn cmd_adopt_convert(
     dry_run: bool,
 ) -> Result<()> {
     let mut conn = conary_core::db::open(db_path)?;
-    let source_identity = conary_core::packages::SystemPackageManager::detect().detect_source_identity();
+    let source_identity =
+        conary_core::packages::SystemPackageManager::detect().detect_source_identity();
 
     backfill_adopted_source_identity(
         &conn,

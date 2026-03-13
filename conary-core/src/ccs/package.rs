@@ -657,11 +657,7 @@ license = "MIT"
         (temp, package_path)
     }
 
-    fn mutate_package(
-        source_path: &Path,
-        output_path: &Path,
-        mutator: impl FnOnce(&Path),
-    ) {
+    fn mutate_package(source_path: &Path, output_path: &Path, mutator: impl FnOnce(&Path)) {
         let unpack_dir = tempfile::tempdir().unwrap();
         let source_file = File::open(source_path).unwrap();
         let decoder = GzDecoder::new(source_file);

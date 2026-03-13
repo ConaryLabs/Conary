@@ -116,46 +116,6 @@ impl BollardBackend {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::BollardBackend;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn build_context_prefers_workspace_root() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("conary-test-build-context-{unique}"));
-        let dockerfile = root.join("tests/integration/remi/containers/Containerfile.fedora43");
-        let dockerfile_parent = dockerfile.parent().expect("dockerfile parent");
-
-        fs::create_dir_all(dockerfile_parent).expect("create dockerfile directory");
-        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n")
-            .expect("write workspace cargo");
-        fs::write(&dockerfile, "FROM scratch\n").expect("write dockerfile");
-
-        let (context_dir, dockerfile_name) =
-            BollardBackend::find_build_context(&dockerfile).expect("resolve build context");
-
-        assert_eq!(context_dir, root);
-        assert_eq!(
-            dockerfile_name,
-            "tests/integration/remi/containers/Containerfile.fedora43"
-        );
-
-        fs::remove_dir_all(&context_dir).expect("cleanup temp build context");
-    }
-
-    #[test]
-    fn normalize_signal_name_strips_sig_prefix() {
-        assert_eq!(BollardBackend::normalize_signal_name("SIGKILL"), "KILL");
-        assert_eq!(BollardBackend::normalize_signal_name("SIGTERM"), "TERM");
-        assert_eq!(BollardBackend::normalize_signal_name("KILL"), "KILL");
-    }
-}
 
 #[async_trait]
 impl ContainerBackend for BollardBackend {
@@ -653,5 +613,46 @@ impl ContainerBackend for BollardBackend {
         }
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BollardBackend;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn build_context_prefers_workspace_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("conary-test-build-context-{unique}"));
+        let dockerfile = root.join("tests/integration/remi/containers/Containerfile.fedora43");
+        let dockerfile_parent = dockerfile.parent().expect("dockerfile parent");
+
+        fs::create_dir_all(dockerfile_parent).expect("create dockerfile directory");
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("write workspace cargo");
+        fs::write(&dockerfile, "FROM scratch\n").expect("write dockerfile");
+
+        let (context_dir, dockerfile_name) =
+            BollardBackend::find_build_context(&dockerfile).expect("resolve build context");
+
+        assert_eq!(context_dir, root);
+        assert_eq!(
+            dockerfile_name,
+            "tests/integration/remi/containers/Containerfile.fedora43"
+        );
+
+        fs::remove_dir_all(&context_dir).expect("cleanup temp build context");
+    }
+
+    #[test]
+    fn normalize_signal_name_strips_sig_prefix() {
+        assert_eq!(BollardBackend::normalize_signal_name("SIGKILL"), "KILL");
+        assert_eq!(BollardBackend::normalize_signal_name("SIGTERM"), "TERM");
+        assert_eq!(BollardBackend::normalize_signal_name("KILL"), "KILL");
     }
 }

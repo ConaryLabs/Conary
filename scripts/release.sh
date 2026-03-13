@@ -275,6 +275,12 @@ for group in "${RELEASE_GROUPS[@]}"; do
     cargo generate-lockfile --quiet
     echo "  Updated Cargo.lock"
 
+    # Format and lint to avoid CI failures from version bumps
+    cargo fmt --all --quiet
+    echo "  Ran cargo fmt"
+    cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged -- -D warnings 2>/dev/null || true
+    echo "  Ran cargo clippy --fix"
+
     changelog_entry=$(generate_changelog "$group" "$local_tag" "$new_version")
     if [[ -f CHANGELOG.md ]]; then
         tmp=$(mktemp)

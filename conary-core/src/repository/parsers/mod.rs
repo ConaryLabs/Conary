@@ -61,7 +61,6 @@ pub struct PackageMetadata {
     pub extra_metadata: serde_json::Value,
 
     // -- Normalized native semantics (Step 4) ----------------------------------
-
     /// Which distro ecosystem this metadata came from.
     ///
     /// `None` for legacy parsers that have not been updated yet.

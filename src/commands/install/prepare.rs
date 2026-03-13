@@ -11,8 +11,8 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::repository::versioning::{VersionScheme, compare_mixed_repo_versions};
 use rusqlite::Connection;
-use std::path::Path;
 use std::cmp::Ordering;
+use std::path::Path;
 use tracing::{info, warn};
 
 /// Parse a package file and return the appropriate parser
@@ -131,7 +131,8 @@ fn compare_installed_and_incoming_versions(
 }
 
 fn installed_version_scheme(trove: &Trove) -> VersionScheme {
-    trove.version_scheme
+    trove
+        .version_scheme
         .as_deref()
         .and_then(parse_version_scheme)
         .unwrap_or(VersionScheme::Rpm)

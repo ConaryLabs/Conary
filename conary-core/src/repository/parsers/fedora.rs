@@ -785,7 +785,9 @@ mod tests {
 </metadata>
 "#;
 
-        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
         let pkg = &packages[0];
 
         // Should have self-provide + kernel-core-uname-r
@@ -830,7 +832,9 @@ mod tests {
 </metadata>
 "#;
 
-        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
         let pkg = &packages[0];
 
         // Self-provide from the explicit entry should be PackageName kind
@@ -867,7 +871,9 @@ mod tests {
 </metadata>
 "#;
 
-        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
         let pkg = &packages[0];
 
         assert_eq!(pkg.requirements.len(), 2);
@@ -910,7 +916,9 @@ mod tests {
 </metadata>
 "#;
 
-        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
         let pkg = &packages[0];
 
         let soname = pkg

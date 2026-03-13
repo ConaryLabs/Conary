@@ -260,10 +260,7 @@ fn infer_repo_flavor(repo: &Repository) -> RepositoryDependencyFlavor {
                 || name.contains("suse")
             {
                 RepositoryDependencyFlavor::Rpm
-            } else if name.contains("ubuntu")
-                || name.contains("debian")
-                || name.contains("mint")
-            {
+            } else if name.contains("ubuntu") || name.contains("debian") || name.contains("mint") {
                 RepositoryDependencyFlavor::Deb
             } else if name.contains("arch") || name.contains("manjaro") {
                 RepositoryDependencyFlavor::Arch
@@ -383,8 +380,8 @@ mod tests {
         stable.architecture = Some("x86_64".to_string());
         stable.insert(&conn).unwrap();
 
-        let candidates = PackageSelector::search_packages(&conn, "demo", &SelectionOptions::default())
-            .unwrap();
+        let candidates =
+            PackageSelector::search_packages(&conn, "demo", &SelectionOptions::default()).unwrap();
         let selected = PackageSelector::select_best(candidates).unwrap();
 
         assert_eq!(selected.package.version, "1.0");
@@ -401,7 +398,9 @@ mod tests {
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43")
+            .unwrap()
+            .unwrap();
 
         let mut ubuntu_repo = Repository::new(
             "ubuntu-noble".to_string(),
@@ -409,26 +408,36 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         // Add curl to both
         let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(), "curl".into(), "8.9.1".into(),
-            "sha256:fed".into(), 1, "https://example.com/curl.rpm".into(),
+            fedora.id.unwrap(),
+            "curl".into(),
+            "8.9.1".into(),
+            "sha256:fed".into(),
+            1,
+            "https://example.com/curl.rpm".into(),
         );
         pkg_fed.architecture = Some("x86_64".into());
         pkg_fed.insert(&conn).unwrap();
 
         let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "curl".into(), "8.5.0".into(),
-            "sha256:ubu".into(), 1, "https://example.com/curl.deb".into(),
+            ubuntu.id.unwrap(),
+            "curl".into(),
+            "8.5.0".into(),
+            "sha256:ubu".into(),
+            1,
+            "https://example.com/curl.deb".into(),
         );
         pkg_ubu.architecture = Some("x86_64".into());
         pkg_ubu.insert(&conn).unwrap();
 
         // With --repo fedora-43, root request should only find fedora
-        let policy = ResolutionPolicy::new()
-            .with_scope(RequestScope::Repository("fedora-43".into()));
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-43".into()));
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -450,7 +459,9 @@ mod tests {
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43")
+            .unwrap()
+            .unwrap();
 
         let mut ubuntu_repo = Repository::new(
             "ubuntu-noble".to_string(),
@@ -458,25 +469,35 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(), "libcurl".into(), "8.9.1".into(),
-            "sha256:fed".into(), 1, "https://example.com/libcurl.rpm".into(),
+            fedora.id.unwrap(),
+            "libcurl".into(),
+            "8.9.1".into(),
+            "sha256:fed".into(),
+            1,
+            "https://example.com/libcurl.rpm".into(),
         );
         pkg_fed.architecture = Some("x86_64".into());
         pkg_fed.insert(&conn).unwrap();
 
         let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "libcurl".into(), "8.5.0".into(),
-            "sha256:ubu".into(), 1, "https://example.com/libcurl.deb".into(),
+            ubuntu.id.unwrap(),
+            "libcurl".into(),
+            "8.5.0".into(),
+            "sha256:ubu".into(),
+            1,
+            "https://example.com/libcurl.deb".into(),
         );
         pkg_ubu.architecture = Some("x86_64".into());
         pkg_ubu.insert(&conn).unwrap();
 
         // Request scope targets fedora, but is_root=false so scope is ignored
-        let policy = ResolutionPolicy::new()
-            .with_scope(RequestScope::Repository("fedora-43".into()));
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-43".into()));
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -497,18 +518,23 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
-            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+            ubuntu.id.unwrap(),
+            "libssl3".into(),
+            "3.0.13".into(),
+            "sha256:ssl".into(),
+            1,
+            "https://example.com/libssl3.deb".into(),
         );
         pkg.architecture = Some("x86_64".into());
         pkg.insert(&conn).unwrap();
 
         // Strict policy with RPM primary flavor -- debian package should be rejected
-        let policy = ResolutionPolicy::new()
-            .with_mixing(DependencyMixingPolicy::Strict);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict);
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -530,17 +556,22 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
-            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+            ubuntu.id.unwrap(),
+            "libssl3".into(),
+            "3.0.13".into(),
+            "sha256:ssl".into(),
+            1,
+            "https://example.com/libssl3.deb".into(),
         );
         pkg.architecture = Some("x86_64".into());
         pkg.insert(&conn).unwrap();
 
-        let policy = ResolutionPolicy::new()
-            .with_mixing(DependencyMixingPolicy::Permissive);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -562,18 +593,23 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
-            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+            ubuntu.id.unwrap(),
+            "libssl3".into(),
+            "3.0.13".into(),
+            "sha256:ssl".into(),
+            1,
+            "https://example.com/libssl3.deb".into(),
         );
         pkg.architecture = Some("x86_64".into());
         pkg.insert(&conn).unwrap();
 
         // Guarded policy allows cross-flavor but callers should log warnings
-        let policy = ResolutionPolicy::new()
-            .with_mixing(DependencyMixingPolicy::Guarded);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Guarded);
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -596,7 +632,9 @@ mod tests {
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43")
+            .unwrap()
+            .unwrap();
 
         let mut ubuntu_repo = Repository::new(
             "ubuntu-noble".to_string(),
@@ -604,25 +642,34 @@ mod tests {
         );
         ubuntu_repo.priority = 10;
         ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
 
         let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(), "curl".into(), "8.9.1-2.fc43".into(),
-            "sha256:fed".into(), 1, "https://example.com/curl.rpm".into(),
+            fedora.id.unwrap(),
+            "curl".into(),
+            "8.9.1-2.fc43".into(),
+            "sha256:fed".into(),
+            1,
+            "https://example.com/curl.rpm".into(),
         );
         pkg_fed.architecture = Some("x86_64".into());
         pkg_fed.insert(&conn).unwrap();
 
         let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(), "curl".into(), "8.5.0-2ubuntu1".into(),
-            "sha256:ubu".into(), 1, "https://example.com/curl.deb".into(),
+            ubuntu.id.unwrap(),
+            "curl".into(),
+            "8.5.0-2ubuntu1".into(),
+            "sha256:ubu".into(),
+            1,
+            "https://example.com/curl.deb".into(),
         );
         pkg_ubu.architecture = Some("x86_64".into());
         pkg_ubu.insert(&conn).unwrap();
 
         // With permissive policy, both candidates are present
-        let policy = ResolutionPolicy::new()
-            .with_mixing(DependencyMixingPolicy::Permissive);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
 
         let options = SelectionOptions {
             policy: Some(policy),

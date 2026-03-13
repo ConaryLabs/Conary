@@ -1551,11 +1551,7 @@ libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
         let model: SystemModel = toml::from_str(input).unwrap();
 
         // Exact match wins even though family and class are available
-        let result = model.resolve_override(
-            "kernel-core",
-            Some("kernel"),
-            Some("libs"),
-        );
+        let result = model.resolve_override("kernel-core", Some("kernel"), Some("libs"));
         assert!(result.is_some());
         let (key, config) = result.unwrap();
         assert_eq!(key, "kernel-core");
@@ -1575,11 +1571,7 @@ libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
         let model: SystemModel = toml::from_str(input).unwrap();
 
         // No exact match for "kernel-headers", family "kernel" should win over class "libs"
-        let result = model.resolve_override(
-            "kernel-headers",
-            Some("kernel"),
-            Some("libs"),
-        );
+        let result = model.resolve_override("kernel-headers", Some("kernel"), Some("libs"));
         assert!(result.is_some());
         let (key, config) = result.unwrap();
         assert_eq!(key, "kernel");
@@ -1598,11 +1590,7 @@ libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
         let model: SystemModel = toml::from_str(input).unwrap();
 
         // No exact or family match, class should match
-        let result = model.resolve_override(
-            "libssl",
-            None,
-            Some("libs"),
-        );
+        let result = model.resolve_override("libssl", None, Some("libs"));
         assert!(result.is_some());
         let (key, config) = result.unwrap();
         assert_eq!(key, "libs");
@@ -1632,22 +1620,28 @@ mesa = { from = "fedora-41" }
 
     #[test]
     fn test_source_policy_with_distro_pin_is_configured() {
-        let mut config = SystemConfig::default();
-        config.distro = Some("arch".to_string());
+        let config = SystemConfig {
+            distro: Some("arch".to_string()),
+            ..SystemConfig::default()
+        };
         assert!(config.is_source_policy_configured());
     }
 
     #[test]
     fn test_source_policy_with_convergence_is_configured() {
-        let mut config = SystemConfig::default();
-        config.convergence = ConvergenceIntent::CasBacked;
+        let config = SystemConfig {
+            convergence: ConvergenceIntent::CasBacked,
+            ..SystemConfig::default()
+        };
         assert!(config.is_source_policy_configured());
     }
 
     #[test]
     fn test_source_policy_with_allowed_distros_is_configured() {
-        let mut config = SystemConfig::default();
-        config.allowed_distros = vec!["fedora-43".to_string()];
+        let config = SystemConfig {
+            allowed_distros: vec!["fedora-43".to_string()],
+            ..SystemConfig::default()
+        };
         assert!(config.is_source_policy_configured());
     }
 }

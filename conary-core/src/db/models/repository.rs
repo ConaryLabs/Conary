@@ -663,8 +663,7 @@ mod tests {
                 serde_json::to_string(&vec![
                     "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
                     "coreutils >= 9.7".to_string(),
-                    "((linux-firmware >= 20150904-56.git6ebf5d57) if linux-firmware)"
-                        .to_string(),
+                    "((linux-firmware >= 20150904-56.git6ebf5d57) if linux-firmware)".to_string(),
                     "rpmlib(PayloadIsZstd) <= 5.4.18-1".to_string(),
                     "/bin/sh".to_string(),
                 ])
