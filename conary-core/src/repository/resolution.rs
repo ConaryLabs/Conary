@@ -178,6 +178,16 @@ impl DelegateContext {
     }
 }
 
+fn effective_remi_version<'a>(
+    pkg_with_repo: &'a PackageWithRepo,
+    options: &'a ResolutionOptions,
+) -> Option<&'a str> {
+    options
+        .version
+        .as_deref()
+        .or(Some(pkg_with_repo.package.version.as_str()))
+}
+
 /// Create a temp directory and resolve the output directory from options.
 ///
 /// Returns `(temp_dir, output_dir)` where `output_dir` is either the user-specified
@@ -395,7 +405,13 @@ impl<'a> PackageResolver<'a> {
                 let pkg_name = source_name
                     .as_deref()
                     .unwrap_or(&pkg_with_repo.package.name);
-                self.try_remi(endpoint, distro, pkg_name, options)
+                self.try_remi(
+                    endpoint,
+                    distro,
+                    pkg_name,
+                    effective_remi_version(pkg_with_repo, options),
+                    options,
+                )
             }
 
             ResolutionStrategy::Recipe {
@@ -506,12 +522,13 @@ impl<'a> PackageResolver<'a> {
         endpoint: &str,
         distro: &str,
         name: &str,
+        version: Option<&str>,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         let client = RemiClient::new(endpoint)?;
-        let path = client.fetch_package(distro, name, options.version.as_deref(), &output_dir)?;
+        let path = client.fetch_package(distro, name, version, &output_dir)?;
 
         Ok(PackageSource::Ccs {
             path,
@@ -866,6 +883,43 @@ mod tests {
 
         assert_eq!(strategies.len(), 1);
         assert!(matches!(strategies[0], ResolutionStrategy::Remi { .. }));
+    }
+
+    #[test]
+    fn test_effective_remi_version_defaults_to_selected_repo_version() {
+        let (_temp, conn) = create_test_db();
+        let repo_id = create_test_repo(&conn);
+        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
+
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
+                .unwrap();
+
+        let options = ResolutionOptions::default();
+        assert_eq!(
+            effective_remi_version(&pkg_with_repo, &options),
+            Some("1.24.0")
+        );
+    }
+
+    #[test]
+    fn test_effective_remi_version_prefers_explicit_request() {
+        let (_temp, conn) = create_test_db();
+        let repo_id = create_test_repo(&conn);
+        let _pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
+
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "nginx", &SelectionOptions::default())
+                .unwrap();
+
+        let options = ResolutionOptions {
+            version: Some("1.25.0".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_remi_version(&pkg_with_repo, &options),
+            Some("1.25.0")
+        );
     }
 
     #[test]

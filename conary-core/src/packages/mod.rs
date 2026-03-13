@@ -22,6 +22,7 @@ pub use registry::{PackageFormatType, detect_format, parse_package};
 
 use crate::error::Result;
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
@@ -35,6 +36,12 @@ pub enum SystemPackageManager {
     Dpkg,
     Pacman,
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InstalledSourceIdentity {
+    pub source_distro: Option<String>,
+    pub version_scheme: Option<String>,
 }
 
 impl SystemPackageManager {
@@ -85,6 +92,73 @@ impl SystemPackageManager {
             Self::Unknown => format!("(unknown package manager) update {}", name),
         }
     }
+
+    pub fn version_scheme_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Rpm => Some("rpm"),
+            Self::Dpkg => Some("debian"),
+            Self::Pacman => Some("arch"),
+            Self::Unknown => None,
+        }
+    }
+
+    pub fn detect_source_identity(&self) -> InstalledSourceIdentity {
+        let Some(version_scheme) = self.version_scheme_name() else {
+            return InstalledSourceIdentity::default();
+        };
+
+        let mut identity = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .map(|contents| detect_source_identity_from_os_release(*self, &contents))
+            .unwrap_or_default();
+        if identity.version_scheme.is_none() {
+            identity.version_scheme = Some(version_scheme.to_string());
+        }
+        identity
+    }
+}
+
+fn detect_source_identity_from_os_release(
+    pkg_mgr: SystemPackageManager,
+    contents: &str,
+) -> InstalledSourceIdentity {
+    let entries = parse_os_release(contents);
+    let source_distro = entries.get("ID").map(|id| {
+        let normalized_id = id.trim().to_ascii_lowercase();
+        match entries.get("VERSION_ID").map(|value| value.trim()).filter(|value| !value.is_empty())
+        {
+            Some(version_id) if normalized_id != "arch" => format!("{normalized_id}-{version_id}"),
+            _ => normalized_id,
+        }
+    });
+
+    InstalledSourceIdentity {
+        source_distro,
+        version_scheme: pkg_mgr.version_scheme_name().map(str::to_string),
+    }
+}
+
+fn parse_os_release(contents: &str) -> HashMap<String, String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            Some((key.trim().to_string(), strip_os_release_quotes(value.trim())))
+        })
+        .collect()
+}
+
+fn strip_os_release_quotes(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|inner| inner.strip_suffix('\'')))
+        .unwrap_or(value)
+        .to_string()
 }
 
 /// Result of extracting a package in parallel
@@ -151,4 +225,42 @@ pub fn extract_packages_parallel(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_source_identity_uses_real_distro_for_fedora() {
+        let identity = detect_source_identity_from_os_release(
+            SystemPackageManager::Rpm,
+            "ID=fedora\nVERSION_ID=43\nNAME=Fedora Linux\n",
+        );
+
+        assert_eq!(identity.source_distro.as_deref(), Some("fedora-43"));
+        assert_eq!(identity.version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn detect_source_identity_uses_real_distro_for_ubuntu() {
+        let identity = detect_source_identity_from_os_release(
+            SystemPackageManager::Dpkg,
+            "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n",
+        );
+
+        assert_eq!(identity.source_distro.as_deref(), Some("ubuntu-24.04"));
+        assert_eq!(identity.version_scheme.as_deref(), Some("debian"));
+    }
+
+    #[test]
+    fn detect_source_identity_handles_rolling_arch() {
+        let identity = detect_source_identity_from_os_release(
+            SystemPackageManager::Pacman,
+            "ID=arch\nPRETTY_NAME=\"Arch Linux\"\n",
+        );
+
+        assert_eq!(identity.source_distro.as_deref(), Some("arch"));
+        assert_eq!(identity.version_scheme.as_deref(), Some("arch"));
+    }
 }

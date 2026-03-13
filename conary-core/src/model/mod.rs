@@ -47,12 +47,14 @@
 mod diff;
 pub mod lockfile;
 pub mod parser;
+mod replatform;
 pub mod remote;
 pub mod signing;
 mod state;
 
 pub use diff::{
-    ApplyOptions, DiffAction, ModelDiff, compute_diff, compute_diff_from_resolved,
+    ApplyOptions, DiffAction, ModelDiff, ModelDiffSummary, ReplatformEstimate,
+    ReplatformStatus, compute_diff, compute_diff_from_resolved,
     compute_diff_with_includes, compute_diff_with_includes_offline,
 };
 pub use parser::{
@@ -64,6 +66,7 @@ pub use parser::{
     AutomationConfig,
     AutomationMode,
     ConflictStrategy,
+    ConvergenceIntent,
     DerivedPackage as ModelDerivedPackage,
     // Federation config types
     FederationConfig,
@@ -78,6 +81,16 @@ pub use parser::{
     SystemModel,
     UpdateAutomation,
     parse_model_file,
+};
+pub use replatform::{
+    ReplatformBlockedReason,
+    ReplatformExecutionPlan, ReplatformExecutionTransaction,
+    SourcePolicyReplatformSnapshot, VisibleRealignmentCandidates,
+    VisibleRealignmentProposal,
+    planned_replatform_actions, replatform_estimate_from_affinities,
+    replatform_execution_plan,
+    source_policy_replatform_snapshot,
+    visible_realignment_candidates,
 };
 pub use state::{InstalledPackage, SystemState, capture_current_state, snapshot_to_model};
 

@@ -65,6 +65,7 @@ mod tests {
             from: "package-a".to_string(),
             to: "package-b".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         };
@@ -93,6 +94,7 @@ mod tests {
             from: "A".to_string(),
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -101,6 +103,7 @@ mod tests {
             from: "B".to_string(),
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -136,6 +139,7 @@ mod tests {
             from: "A".to_string(),
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -144,6 +148,7 @@ mod tests {
             from: "A".to_string(),
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -152,6 +157,7 @@ mod tests {
             from: "B".to_string(),
             to: "D".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -160,6 +166,7 @@ mod tests {
             from: "C".to_string(),
             to: "D".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -191,6 +198,7 @@ mod tests {
             from: "A".to_string(),
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -199,6 +207,7 @@ mod tests {
             from: "B".to_string(),
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -207,6 +216,7 @@ mod tests {
             from: "C".to_string(),
             to: "A".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -232,6 +242,7 @@ mod tests {
             from: "A".to_string(),
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -240,6 +251,7 @@ mod tests {
             from: "B".to_string(),
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -259,6 +271,7 @@ mod tests {
             from: "app".to_string(),
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            raw_constraint: Some(">= 1.0.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -278,6 +291,7 @@ mod tests {
             from: "app".to_string(),
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            raw_constraint: Some(">= 1.0.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -299,6 +313,7 @@ mod tests {
             from: "app1".to_string(),
             to: "lib".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -307,6 +322,7 @@ mod tests {
             from: "app2".to_string(),
             to: "app1".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -331,6 +347,7 @@ mod tests {
             from: "A".to_string(),
             to: "B".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -339,6 +356,7 @@ mod tests {
             from: "A".to_string(),
             to: "C".to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });

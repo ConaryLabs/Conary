@@ -79,6 +79,21 @@ fn query_unconverted_adopted(conn: &rusqlite::Connection) -> Result<Vec<Trove>> 
     Ok(troves)
 }
 
+fn backfill_adopted_source_identity(
+    conn: &rusqlite::Connection,
+    source_distro: Option<&str>,
+    version_scheme: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE troves
+         SET source_distro = COALESCE(source_distro, ?1),
+             version_scheme = COALESCE(version_scheme, ?2)
+         WHERE install_source IN ('adopted-track', 'adopted-full', 'taken')",
+        rusqlite::params![source_distro, version_scheme],
+    )?;
+    Ok(())
+}
+
 /// Convert all unconverted adopted packages to CCS format.
 ///
 /// This command:
@@ -94,6 +109,13 @@ pub fn cmd_adopt_convert(
     dry_run: bool,
 ) -> Result<()> {
     let mut conn = conary_core::db::open(db_path)?;
+    let source_identity = conary_core::packages::SystemPackageManager::detect().detect_source_identity();
+
+    backfill_adopted_source_identity(
+        &conn,
+        source_identity.source_distro.as_deref(),
+        source_identity.version_scheme.as_deref(),
+    )?;
 
     // 1. Query unconverted adopted troves
     let troves = query_unconverted_adopted(&conn)?;
@@ -414,6 +436,7 @@ fn copy_files_to_temp(files: &[FileEntry], temp_dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use conary_core::db::models::{InstallSource, TroveType};
+    use rusqlite::Connection;
 
     /// Helper to create a minimal trove for testing
     fn make_test_trove(name: &str, version: &str) -> Trove {
@@ -545,5 +568,58 @@ mod tests {
             format_str2, non_adopted.name, non_adopted.version, arch2
         );
         assert_eq!(key2, "adopted:unknown:foo:1.0:noarch");
+    }
+
+    #[test]
+    fn test_backfill_adopted_source_identity_only_fills_missing_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                install_source TEXT NOT NULL,
+                source_distro TEXT,
+                version_scheme TEXT
+            );
+            INSERT INTO troves (id, install_source, source_distro, version_scheme)
+            VALUES
+                (1, 'adopted-track', NULL, NULL),
+                (2, 'adopted-full', 'ubuntu-24.04', NULL),
+                (3, 'repository', NULL, NULL);
+            ",
+        )
+        .unwrap();
+
+        backfill_adopted_source_identity(&conn, Some("fedora-43"), Some("rpm")).unwrap();
+
+        let row1: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT source_distro, version_scheme FROM troves WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row1.0.as_deref(), Some("fedora-43"));
+        assert_eq!(row1.1.as_deref(), Some("rpm"));
+
+        let row2: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT source_distro, version_scheme FROM troves WHERE id = 2",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row2.0.as_deref(), Some("ubuntu-24.04"));
+        assert_eq!(row2.1.as_deref(), Some("rpm"));
+
+        let row3: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT source_distro, version_scheme FROM troves WHERE id = 3",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row3.0, None);
+        assert_eq!(row3.1, None);
     }
 }

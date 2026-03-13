@@ -7,6 +7,7 @@
 //! computed affinity statistics showing the distribution mix.
 
 use crate::error::Result;
+use crate::model::parser::SourcePinConfig;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// System-level distro pin with mixing policy
@@ -55,6 +56,20 @@ impl DistroPin {
     pub fn set_mixing_policy(conn: &Connection, policy: &str) -> Result<()> {
         conn.execute("UPDATE distro_pin SET mixing_policy = ?1", [policy])?;
         Ok(())
+    }
+
+    /// Set the compatibility table from a richer source-pin shape.
+    pub fn set_from_source_pin(conn: &Connection, pin: &SourcePinConfig) -> Result<()> {
+        let strength = pin.strength.as_deref().unwrap_or("guarded");
+        Self::set(conn, &pin.distro, strength)
+    }
+
+    /// Convert the compatibility row into the richer source-pin shape.
+    pub fn as_source_pin(&self) -> SourcePinConfig {
+        SourcePinConfig {
+            distro: self.distro.clone(),
+            strength: Some(self.mixing_policy.clone()),
+        }
     }
 
     /// Map a database row to a `DistroPin`
@@ -274,6 +289,33 @@ mod tests {
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
         assert_eq!(pin.distro, "fedora");
         assert_eq!(pin.mixing_policy, "permissive");
+    }
+
+    #[test]
+    fn test_set_from_source_pin_uses_default_strength() {
+        let (_temp, conn) = create_test_db();
+        let pin = SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: None,
+        };
+
+        DistroPin::set_from_source_pin(&conn, &pin).unwrap();
+
+        let stored = DistroPin::get_current(&conn).unwrap().unwrap();
+        assert_eq!(stored.distro, "arch");
+        assert_eq!(stored.mixing_policy, "guarded");
+    }
+
+    #[test]
+    fn test_as_source_pin_preserves_strength() {
+        let (_temp, conn) = create_test_db();
+        DistroPin::set(&conn, "ubuntu-noble", "strict").unwrap();
+
+        let stored = DistroPin::get_current(&conn).unwrap().unwrap();
+        let pin = stored.as_source_pin();
+
+        assert_eq!(pin.distro, "ubuntu-noble");
+        assert_eq!(pin.strength.as_deref(), Some("strict"));
     }
 
     #[test]

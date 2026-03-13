@@ -170,7 +170,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
         let troves = {
             let mut stmt = tx.prepare(
-                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since
+                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, version_scheme
                  FROM troves WHERE installed_by_changeset_id = ?1",
             )?;
             let rows = stmt.query_map([changeset_id], |row| {
@@ -218,6 +218,8 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                 let selection_reason: Option<String> = row.get(12).unwrap_or(None);
                 let label_id: Option<i64> = row.get(13).unwrap_or(None);
                 let orphan_since: Option<String> = row.get(14).unwrap_or(None);
+                let source_distro: Option<String> = row.get(15).unwrap_or(None);
+                let version_scheme: Option<String> = row.get(16).unwrap_or(None);
                 Ok(conary_core::db::models::Trove {
                     id: Some(row.get(0)?),
                     name: row.get(1)?,
@@ -234,6 +236,8 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
                     selection_reason,
                     label_id,
                     orphan_since,
+                    source_distro,
+                    version_scheme,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?

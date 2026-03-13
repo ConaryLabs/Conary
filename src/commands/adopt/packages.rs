@@ -31,6 +31,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             "No supported package manager found. Conary supports RPM, dpkg, and pacman."
         ));
     }
+    let source_identity = pkg_mgr.detect_source_identity();
 
     let mut conn = conary_core::db::open(db_path)?;
 
@@ -144,6 +145,8 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
             trove.architecture = Some(pkg_arch.clone());
             trove.description = pkg_desc.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
+            trove.source_distro = source_identity.source_distro.clone();
+            trove.version_scheme = source_identity.version_scheme.clone();
 
             let trove_id = trove.insert(tx)?;
 

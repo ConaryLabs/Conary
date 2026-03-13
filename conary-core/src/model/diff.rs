@@ -10,13 +10,35 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
-use super::parser::SystemModel;
+use super::parser::{SourcePinConfig, SystemModel};
 use super::state::SystemState;
 use super::{ResolvedModel, resolve_includes, resolve_includes_with_options};
 
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffAction {
+    /// Set or update the effective source pin
+    SetSourcePin {
+        distro: String,
+        strength: Option<String>,
+    },
+
+    /// Clear the effective source pin
+    ClearSourcePin,
+
+    /// Replace an installed package with a target-distro implementation during replatforming
+    ReplatformReplace {
+        package: String,
+        current_distro: Option<String>,
+        target_distro: String,
+        current_version: String,
+        current_architecture: Option<String>,
+        target_version: String,
+        architecture: Option<String>,
+        target_repository: Option<String>,
+        target_repository_package_id: Option<i64>,
+    },
+
     /// Install a new package
     Install {
         package: String,
@@ -71,10 +93,45 @@ pub enum DiffAction {
     },
 }
 
+/// Rough replatform scope estimate derived from affinity data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplatformEstimate {
+    pub target_distro: String,
+    pub aligned_packages: i64,
+    pub packages_to_realign: i64,
+    pub total_packages: i64,
+}
+
+/// Structured summary data for command/reporting layers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelDiffSummary {
+    pub installs: usize,
+    pub removes: usize,
+    pub source_policy_changes: usize,
+    pub other_changes: usize,
+    pub warnings: usize,
+    pub replatform_pending_packages: Option<i64>,
+    pub planned_package_convergence: Option<usize>,
+    pub visible_realignment_candidates: Option<usize>,
+}
+
+/// Shared status for source-policy driven replatforming.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplatformStatus {
+    PolicyOnlyPending,
+    PendingWithEstimate(ReplatformEstimate),
+    PackageConvergencePlanned {
+        structural_changes: usize,
+    },
+}
+
 impl DiffAction {
     /// Get the package name this action affects
     pub fn package(&self) -> &str {
         match self {
+            DiffAction::SetSourcePin { distro, .. } => distro,
+            DiffAction::ClearSourcePin => "<source-policy>",
+            DiffAction::ReplatformReplace { package, .. } => package,
             DiffAction::Install { package, .. } => package,
             DiffAction::Remove { package, .. } => package,
             DiffAction::Update { package, .. } => package,
@@ -89,12 +146,50 @@ impl DiffAction {
 
     /// Check if this is a structural change (install/remove)
     pub fn is_structural(&self) -> bool {
-        matches!(self, DiffAction::Install { .. } | DiffAction::Remove { .. })
+        matches!(
+            self,
+            DiffAction::ReplatformReplace { .. } | DiffAction::Install { .. } | DiffAction::Remove { .. }
+        )
     }
 
     /// Get a human-readable description
     pub fn description(&self) -> String {
         match self {
+            DiffAction::SetSourcePin { distro, strength } => match strength {
+                Some(strength) => format!("Set source pin to {} ({})", distro, strength),
+                None => format!("Set source pin to {}", distro),
+            },
+            DiffAction::ClearSourcePin => "Clear source pin".to_string(),
+            DiffAction::ReplatformReplace {
+                package,
+                current_distro,
+                target_distro,
+                current_version,
+                current_architecture,
+                target_version,
+                architecture,
+                target_repository,
+                target_repository_package_id,
+            } => {
+                let current = current_distro.as_deref().unwrap_or("unknown source");
+                let mut desc = format!(
+                    "Replatform {} ({} -> {} {} -> {})",
+                    package, current, target_distro, current_version, target_version
+                );
+                if let Some(current_arch) = current_architecture {
+                    desc.push_str(&format!(" from [{}]", current_arch));
+                }
+                if let Some(arch) = architecture {
+                    desc.push_str(&format!(" [{}]", arch));
+                }
+                if let Some(repo) = target_repository {
+                    desc.push_str(&format!(" via {}", repo));
+                }
+                if let Some(id) = target_repository_package_id {
+                    desc.push_str(&format!(" [repo-pkg:{}]", id));
+                }
+                desc
+            }
             DiffAction::Install {
                 package,
                 pin,
@@ -175,6 +270,15 @@ pub struct ModelDiff {
 
     /// Warnings generated during diff
     pub warnings: Vec<String>,
+
+    /// Rough replatform scope estimate for source-policy transitions, when available.
+    pub replatform_estimate: Option<ReplatformEstimate>,
+
+    /// Visible package-level realignment candidates for the active target distro.
+    pub visible_realignment_candidates: Option<super::replatform::VisibleRealignmentCandidates>,
+
+    /// Concrete conservative same-name realignment proposals for the active target distro.
+    pub visible_realignment_proposals: Option<Vec<super::replatform::VisibleRealignmentProposal>>,
 }
 
 impl ModelDiff {
@@ -185,6 +289,9 @@ impl ModelDiff {
             to_remove: HashSet::new(),
             to_install: HashSet::new(),
             warnings: Vec::new(),
+            replatform_estimate: None,
+            visible_realignment_candidates: None,
+            visible_realignment_proposals: None,
         }
     }
 
@@ -232,6 +339,88 @@ impl ModelDiff {
             _ => {}
         }
         self.actions.push(action);
+    }
+
+    fn add_warning(&mut self, warning: impl Into<String>) {
+        self.warnings.push(warning.into());
+    }
+
+    pub fn has_source_policy_changes(&self) -> bool {
+        self.actions.iter().any(|action| {
+            matches!(
+                action,
+                DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+            )
+        })
+    }
+
+    pub fn replatform_status(&self) -> Option<ReplatformStatus> {
+        if !self.has_source_policy_changes() {
+            return None;
+        }
+
+        let structural_changes = self.structural_change_count();
+        if structural_changes > 0 {
+            return Some(ReplatformStatus::PackageConvergencePlanned { structural_changes });
+        }
+
+        if let Some(estimate) = &self.replatform_estimate {
+            return Some(ReplatformStatus::PendingWithEstimate(estimate.clone()));
+        }
+
+        Some(ReplatformStatus::PolicyOnlyPending)
+    }
+
+    pub fn source_policy_change_count(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|action| {
+                matches!(
+                    action,
+                    DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                )
+            })
+            .count()
+    }
+
+    pub fn other_change_count(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|action| !action.is_structural())
+            .filter(|action| {
+                !matches!(
+                    action,
+                    DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                )
+            })
+            .count()
+    }
+
+    pub fn summary(&self) -> ModelDiffSummary {
+        let replatform_status = self.replatform_status();
+        ModelDiffSummary {
+            installs: self.packages_to_install().len(),
+            removes: self.packages_to_remove().len(),
+            source_policy_changes: self.source_policy_change_count(),
+            other_changes: self.other_change_count(),
+            warnings: self.warnings.len(),
+            replatform_pending_packages: match &replatform_status {
+                Some(ReplatformStatus::PendingWithEstimate(estimate)) => {
+                    Some(estimate.packages_to_realign)
+                }
+                _ => None,
+            },
+            planned_package_convergence: match replatform_status {
+                Some(ReplatformStatus::PackageConvergencePlanned { structural_changes }) => {
+                    Some(structural_changes)
+                }
+                _ => None,
+            },
+            visible_realignment_candidates: self
+                .visible_realignment_candidates
+                .as_ref()
+                .map(|c| c.candidate_count),
+        }
     }
 }
 
@@ -283,6 +472,7 @@ pub fn compute_diff_from_resolved(
         &resolved.exclude,
         &resolved.pins,
         &original.derive,
+        original.system.effective_pin(),
         state,
     )
 }
@@ -298,6 +488,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
         &model.config.exclude,
         &model.pin,
         &model.derive,
+        model.system.effective_pin(),
         state,
     )
 }
@@ -312,6 +503,7 @@ fn compute_diff_inner(
     exclude: &[String],
     pins: &std::collections::HashMap<String, String>,
     derive: &[super::parser::DerivedPackage],
+    desired_source_pin: Option<SourcePinConfig>,
     state: &SystemState,
 ) -> ModelDiff {
     let mut diff = ModelDiff::new();
@@ -321,6 +513,26 @@ fn compute_diff_inner(
     let model_optional: HashSet<&str> = optionals.iter().map(|s| s.as_str()).collect();
 
     let model_excluded: HashSet<&str> = exclude.iter().map(|s| s.as_str()).collect();
+
+    match (&state.source_pin, desired_source_pin.as_ref()) {
+        (Some(current), Some(desired)) if current != desired => {
+            diff.add_action(DiffAction::SetSourcePin {
+                distro: desired.distro.clone(),
+                strength: desired.strength.clone(),
+            });
+        }
+        (None, Some(desired)) => {
+            diff.add_action(DiffAction::SetSourcePin {
+                distro: desired.distro.clone(),
+                strength: desired.strength.clone(),
+            });
+        }
+        (Some(_), None) => {
+            diff.add_action(DiffAction::ClearSourcePin);
+        }
+        (Some(_), Some(_)) => {}
+        (None, None) => {}
+    }
 
     // Check what needs to be installed
     for package in &model_packages {
@@ -430,6 +642,16 @@ fn compute_diff_inner(
                 });
             }
         }
+    }
+
+    let has_source_policy_change = diff
+        .actions
+        .iter()
+        .any(|action| matches!(action, DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin));
+    if has_source_policy_change && diff.structural_change_count() == 0 {
+        diff.add_warning(
+            "Source policy changed, but automatic package convergence planning is still pending. Applying this model will update preferred sources without replacing packages yet.",
+        );
     }
 
     diff
@@ -685,6 +907,251 @@ mod tests {
         assert_eq!(
             remove_count, 1,
             "Expected exactly one Remove action for excluded dependency"
+        );
+    }
+
+    #[test]
+    fn test_source_pin_change_is_diff_action() {
+        let mut model = SystemModel::new();
+        model.system.pin = Some(super::super::parser::SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let mut state = SystemState::new();
+        state.source_pin = Some(super::super::parser::SourcePinConfig {
+            distro: "fedora-43".to_string(),
+            strength: Some("guarded".to_string()),
+        });
+
+        let diff = compute_diff(&model, &state);
+
+        assert!(diff.actions.iter().any(|a| matches!(
+            a,
+            DiffAction::SetSourcePin { distro, strength }
+            if distro == "arch" && strength.as_deref() == Some("strict")
+        )));
+    }
+
+    #[test]
+    fn test_source_pin_removal_is_diff_action() {
+        let model = SystemModel::new();
+        let mut state = SystemState::new();
+        state.source_pin = Some(super::super::parser::SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let diff = compute_diff(&model, &state);
+
+        assert!(diff.actions.iter().any(|a| matches!(a, DiffAction::ClearSourcePin)));
+    }
+
+    #[test]
+    fn test_source_pin_only_transition_warns_about_pending_convergence() {
+        let mut model = SystemModel::new();
+        model.system.pin = Some(super::super::parser::SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let state = SystemState::new();
+        let diff = compute_diff(&model, &state);
+
+        assert!(diff.warnings.iter().any(|warning| {
+            warning.contains("automatic package convergence planning is still pending")
+        }));
+    }
+
+    #[test]
+    fn test_source_pin_with_package_changes_does_not_emit_pending_convergence_warning() {
+        let mut model = SystemModel::new();
+        model.system.pin = Some(super::super::parser::SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        model.config.install = vec!["kernel".to_string()];
+
+        let state = SystemState::new();
+        let diff = compute_diff(&model, &state);
+
+        assert!(!diff.warnings.iter().any(|warning| {
+            warning.contains("automatic package convergence planning is still pending")
+        }));
+    }
+
+    #[test]
+    fn test_has_source_policy_changes_detects_policy_actions() {
+        let mut diff = ModelDiff::new();
+        assert!(!diff.has_source_policy_changes());
+
+        diff.add_action(DiffAction::ClearSourcePin);
+
+        assert!(diff.has_source_policy_changes());
+    }
+
+    #[test]
+    fn test_replatform_status_policy_only_pending_without_estimate() {
+        let mut diff = ModelDiff::new();
+        diff.add_action(DiffAction::ClearSourcePin);
+
+        assert_eq!(
+            diff.replatform_status(),
+            Some(ReplatformStatus::PolicyOnlyPending)
+        );
+    }
+
+    #[test]
+    fn test_replatform_status_pending_with_estimate() {
+        let mut diff = ModelDiff::new();
+        diff.add_action(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.replatform_estimate = Some(ReplatformEstimate {
+            target_distro: "arch".to_string(),
+            aligned_packages: 10,
+            packages_to_realign: 30,
+            total_packages: 40,
+        });
+
+        assert_eq!(
+            diff.replatform_status(),
+            Some(ReplatformStatus::PendingWithEstimate(ReplatformEstimate {
+                target_distro: "arch".to_string(),
+                aligned_packages: 10,
+                packages_to_realign: 30,
+                total_packages: 40,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_replatform_status_package_convergence_planned() {
+        let mut diff = ModelDiff::new();
+        diff.add_action(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.add_action(DiffAction::Install {
+            package: "kernel".to_string(),
+            pin: None,
+            optional: false,
+        });
+
+        assert_eq!(
+            diff.replatform_status(),
+            Some(ReplatformStatus::PackageConvergencePlanned {
+                structural_changes: 1
+            })
+        );
+    }
+
+    #[test]
+    fn test_summary_reports_replatform_pending_packages() {
+        let mut diff = ModelDiff::new();
+        diff.add_action(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.replatform_estimate = Some(ReplatformEstimate {
+            target_distro: "arch".to_string(),
+            aligned_packages: 10,
+            packages_to_realign: 30,
+            total_packages: 40,
+        });
+
+        let summary = diff.summary();
+
+        assert_eq!(summary.source_policy_changes, 1);
+        assert_eq!(summary.replatform_pending_packages, Some(30));
+        assert_eq!(summary.planned_package_convergence, None);
+        assert_eq!(summary.visible_realignment_candidates, None);
+    }
+
+    #[test]
+    fn test_summary_reports_planned_package_convergence() {
+        let mut diff = ModelDiff::new();
+        diff.add_action(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.add_action(DiffAction::Install {
+            package: "kernel".to_string(),
+            pin: None,
+            optional: false,
+        });
+
+        let summary = diff.summary();
+
+        assert_eq!(summary.installs, 1);
+        assert_eq!(summary.source_policy_changes, 1);
+        assert_eq!(summary.planned_package_convergence, Some(1));
+        assert_eq!(summary.replatform_pending_packages, None);
+    }
+
+    #[test]
+    fn test_summary_reports_visible_realignment_candidates() {
+        let mut diff = ModelDiff::new();
+        diff.visible_realignment_candidates = Some(crate::model::VisibleRealignmentCandidates {
+            target_distro: "arch".to_string(),
+            candidate_count: 7,
+        });
+
+        let summary = diff.summary();
+
+        assert_eq!(summary.visible_realignment_candidates, Some(7));
+    }
+
+    #[test]
+    fn test_replatform_replace_is_structural_and_descriptive() {
+        let action = DiffAction::ReplatformReplace {
+            package: "vim".to_string(),
+            current_distro: Some("fedora-43".to_string()),
+            target_distro: "arch".to_string(),
+            current_version: "9.0.1".to_string(),
+            current_architecture: Some("x86_64".to_string()),
+            target_version: "9.1.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            target_repository: Some("arch-core".to_string()),
+            target_repository_package_id: Some(42),
+        };
+
+        assert!(action.is_structural());
+        assert_eq!(action.package(), "vim");
+
+        let description = action.description();
+        assert!(description.contains("Replatform vim"));
+        assert!(description.contains("fedora-43"));
+        assert!(description.contains("arch"));
+        assert!(description.contains("9.0.1 -> 9.1.0"));
+        assert!(description.contains("via arch-core"));
+    }
+
+    #[test]
+    fn test_replatform_replace_counts_as_planned_convergence() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.add_action(DiffAction::ReplatformReplace {
+            package: "vim".to_string(),
+            current_distro: Some("fedora-43".to_string()),
+            target_distro: "arch".to_string(),
+            current_version: "9.0.1".to_string(),
+            current_architecture: Some("x86_64".to_string()),
+            target_version: "9.1.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            target_repository: Some("arch-core".to_string()),
+            target_repository_package_id: Some(42),
+        });
+
+        assert_eq!(
+            diff.replatform_status(),
+            Some(ReplatformStatus::PackageConvergencePlanned {
+                structural_changes: 1
+            })
         );
     }
 }

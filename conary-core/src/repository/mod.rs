@@ -27,6 +27,7 @@ mod sync;
 pub mod gpg;
 pub mod parsers;
 pub mod selector;
+pub mod versioning;
 
 #[cfg(feature = "server")]
 pub mod chunk_fetcher;
@@ -35,7 +36,7 @@ pub mod chunk_fetcher;
 pub use client::{RepositoryClient, RetryPolicy};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
-    resolve_dependencies_transitive_requests,
+    resolve_dependencies_transitive_requests, resolve_dependency_requests,
 };
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,

@@ -18,7 +18,9 @@ use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
+use conary_core::db::models::{RepositoryProvide};
 use conary_core::repository;
+use conary_core::repository::selector::{PackageSelector, SelectionOptions};
 use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::version::VersionConstraint;
@@ -73,6 +75,37 @@ fn build_dependency_requests(
         .collect()
 }
 
+/// Check whether a single dependency can be found in any enabled repository,
+/// either by direct name, capability variation, or normalized provides lookup.
+///
+/// This is intentionally non-transitive: we only check existence, not whether
+/// the package's own dependencies are satisfiable.  The full transitive SAT
+/// solve happens later, during the actual download/install step.
+fn is_repo_resolvable(conn: &rusqlite::Connection, dep_name: &str) -> bool {
+    let options = SelectionOptions::default();
+
+    // 1. Direct package name lookup
+    if PackageSelector::find_best_package(conn, dep_name, &options).is_ok() {
+        return true;
+    }
+
+    // 2. Capability variations (e.g. strip arch suffix, soname stems)
+    for variation in generate_capability_variations(dep_name) {
+        if PackageSelector::find_best_package(conn, &variation, &options).is_ok() {
+            return true;
+        }
+    }
+
+    // 3. Normalized repository_provides table
+    if let Ok(provides) = RepositoryProvide::find_by_capability(conn, dep_name)
+        && !provides.is_empty()
+    {
+        return true;
+    }
+
+    false
+}
+
 fn promote_repo_resolvable_satisfy_deps(
     conn: &rusqlite::Connection,
     dep_plan: &mut dep_resolution::DepResolutionPlan,
@@ -81,49 +114,45 @@ fn promote_repo_resolvable_satisfy_deps(
         return;
     }
 
-    let requests = dep_plan
-        .unresolvable
-        .iter()
-        .map(|dep| (dep.name.clone(), dep.constraint.clone()))
-        .collect::<Vec<_>>();
+    // Partition unresolvable deps into repo-found vs still-unresolvable using
+    // lightweight per-package lookups instead of a full transitive SAT solve.
+    let mut promoted = Vec::new();
+    let mut still_unresolvable = Vec::new();
 
-    match repository::resolve_dependencies_transitive_requests(conn, &requests, 10) {
-        Ok(resolved) if !resolved.is_empty() => {
-            info!(
-                "Promoting {} satisfy-mode dependencies to repository installs: {}",
-                dep_plan.unresolvable.len(),
-                dep_plan
-                    .unresolvable
-                    .iter()
-                    .map(|dep| dep.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            let supplemental = dep_plan
-                .unresolvable
-                .drain(..)
-                .map(|dep| dep_resolution::ResolvedDep {
+    for dep in dep_plan.unresolvable.drain(..) {
+        if is_repo_resolvable(conn, &dep.name) {
+            promoted.push(dep);
+        } else {
+            still_unresolvable.push(dep);
+        }
+    }
+
+    if !promoted.is_empty() {
+        info!(
+            "Promoting {} satisfy-mode dependencies to repository installs: {}",
+            promoted.len(),
+            promoted
+                .iter()
+                .map(|dep| dep.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for dep in promoted {
+            if dep_plan
+                .to_install
+                .iter()
+                .all(|existing| existing.name != dep.name)
+            {
+                dep_plan.to_install.push(dep_resolution::ResolvedDep {
                     name: dep.name,
                     version: Some(dep.constraint.to_string()),
                     required_by: dep.required_by,
-                })
-                .collect::<Vec<_>>();
-            for dep in supplemental {
-                if dep_plan.to_install.iter().all(|existing| existing.name != dep.name) {
-                    dep_plan.to_install.push(dep);
-                }
+                });
             }
         }
-        Err(err) => {
-            info!(
-                "Repository solve could not promote satisfy-mode dependencies: {}",
-                err
-            );
-        }
-        Ok(_) => {
-            info!("Repository solve returned no downloadable packages for satisfy-mode dependencies");
-        }
     }
+
+    dep_plan.unresolvable = still_unresolvable;
 }
 
 /// Result of attempting CCS conversion
@@ -372,7 +401,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                     build_dependency_requests(&unresolved_missing, &dep_plan.to_install);
 
                 if dry_run {
-                    repository::resolve_dependencies_transitive_requests(&conn, &dep_requests, 10)
+                    repository::resolve_dependency_requests(&conn, &dep_requests)
                         .with_context(|| {
                             format!(
                                 "Failed to resolve dependencies from repositories for '{}'",
@@ -398,11 +427,8 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                         }
                     }
 
-                    let to_download = repository::resolve_dependencies_transitive_requests(
-                        &conn,
-                        &dep_requests,
-                        10,
-                    )?;
+                    let to_download =
+                        repository::resolve_dependency_requests(&conn, &dep_requests)?;
                     if !to_download.is_empty() {
                         let temp_dir = TempDir::new()?;
                         let keyring_dir = keyring_dir(db_path);
@@ -423,13 +449,18 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                                 let dep_ccs_path = dep_path.to_str().ok_or_else(|| {
                                     anyhow::anyhow!("Invalid CCS path (non-UTF8)")
                                 })?;
+                                // Break recursion: sub-deps are system packages
+                                // handled by the system PM in satisfy mode, or
+                                // already resolved at the parent level.  Allowing
+                                // unbounded recursive Remi downloads would create
+                                // an exponential chain of server-side conversions.
                                 install_converted_ccs(ConvertedCcsInstallOptions {
                                     ccs_path: dep_ccs_path,
                                     db_path,
                                     root,
                                     dry_run,
                                     sandbox_mode,
-                                    no_deps,
+                                    no_deps: true,
                                     no_scripts,
                                     allow_downgrade,
                                     dep_mode,
@@ -501,13 +532,27 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
         None, // policy
         None, // components - install all
         sandbox_mode,
-        no_deps,
+        true, // deps already handled above; skip redundant check in cmd_ccs_install
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+    use conary_core::db::schema;
+    use conary_core::version::VersionConstraint;
+
+    fn test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
 
     #[test]
     fn detects_conditional_rpm_dependencies() {
@@ -515,5 +560,99 @@ mod tests {
             "((kernel-modules-extra-uname-r = 6.19.6-200.fc43.x86_64) if kernel-modules-extra-matched)"
         ));
         assert!(!is_conditional_rpm_dependency("kernel-core-uname-r"));
+    }
+
+    #[test]
+    fn promote_only_repo_resolvable_deps() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // coreutils-common exists in the repo (direct name match)
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "coreutils-common".to_string(),
+            "9.7-8.fc43".to_string(),
+            "sha256:cc".to_string(),
+            100,
+            "https://example.invalid/coreutils-common.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+
+        // kernel-core exists and provides kernel-core-uname-r via normalized table
+        let mut kpkg = RepositoryPackage::new(
+            repo_id,
+            "kernel-core".to_string(),
+            "6.19.6-200.fc43".to_string(),
+            "sha256:kc".to_string(),
+            200,
+            "https://example.invalid/kernel-core.rpm".to_string(),
+        );
+        kpkg.insert(&conn).unwrap();
+        let kpkg_id = kpkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            kpkg_id,
+            "kernel-core-uname-r".to_string(),
+            Some("6.19.6-200.fc43.x86_64".to_string()),
+            "package".to_string(),
+            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![
+                conary_core::resolver::MissingDependency {
+                    name: "coreutils-common".to_string(),
+                    constraint: VersionConstraint::Any,
+                    required_by: vec!["kernel".to_string()],
+                },
+                conary_core::resolver::MissingDependency {
+                    name: "kernel-core-uname-r".to_string(),
+                    constraint: VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+                    required_by: vec!["kernel".to_string()],
+                },
+                conary_core::resolver::MissingDependency {
+                    name: "nonexistent-fantasy-pkg".to_string(),
+                    constraint: VersionConstraint::Any,
+                    required_by: vec!["kernel".to_string()],
+                },
+            ],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        // Two deps should have been promoted
+        assert_eq!(dep_plan.to_install.len(), 2, "expected 2 promoted deps");
+        let promoted_names: Vec<&str> = dep_plan.to_install.iter().map(|d| d.name.as_str()).collect();
+        assert!(promoted_names.contains(&"coreutils-common"));
+        assert!(promoted_names.contains(&"kernel-core-uname-r"));
+
+        // The nonexistent dep should remain unresolvable
+        assert_eq!(dep_plan.unresolvable.len(), 1, "expected 1 still-unresolvable");
+        assert_eq!(dep_plan.unresolvable[0].name, "nonexistent-fantasy-pkg");
+    }
+
+    #[test]
+    fn promote_skips_when_all_unresolvable() {
+        let conn = test_db();
+
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![conary_core::resolver::MissingDependency {
+                name: "nonexistent-pkg".to_string(),
+                constraint: VersionConstraint::Any,
+                required_by: vec!["test".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert!(dep_plan.to_install.is_empty());
+        assert_eq!(dep_plan.unresolvable.len(), 1);
+        assert_eq!(dep_plan.unresolvable[0].name, "nonexistent-pkg");
     }
 }

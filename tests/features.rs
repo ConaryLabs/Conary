@@ -315,6 +315,8 @@ fn test_install_reason_queries() {
                 flavor_spec: None,
                 label_id: None,
                 orphan_since: None,
+                source_distro: None,
+                version_scheme: None,
             })
         })
         .unwrap()

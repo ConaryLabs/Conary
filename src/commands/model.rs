@@ -9,9 +9,11 @@ use std::process;
 
 use anyhow::{Result, anyhow};
 use conary_core::db;
-use conary_core::db::models::{CollectionMember, RemoteCollection, Repository, Trove, TroveType};
 use conary_core::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy,
+    CollectionMember, RemoteCollection, Repository, SystemAffinity, Trove, TroveType,
+};
+use conary_core::db::models::{
+    DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, DistroPin, VersionPolicy,
 };
 use conary_core::derived::build_from_definition;
 use conary_core::filesystem::CasStore;
@@ -19,8 +21,12 @@ use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::remote::fetch_remote_collection;
 use conary_core::model::{
-    DiffAction, ModelDerivedPackage, ModelDiff, SystemState, capture_current_state, compute_diff,
+    DiffAction, ModelDerivedPackage, ModelDiff, ModelDiffSummary, ReplatformEstimate,
+    ReplatformExecutionPlan, ReplatformStatus, SystemState, capture_current_state, compute_diff,
     compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
+    VisibleRealignmentProposal, planned_replatform_actions, replatform_execution_plan,
+    replatform_estimate_from_affinities,
+    source_policy_replatform_snapshot,
 };
 use rusqlite::Connection;
 use tracing::{debug, info};
@@ -52,7 +58,7 @@ fn compute_model_diff(
     offline: bool,
     announce: bool,
 ) -> Result<ModelDiff> {
-    if model.has_includes() {
+    let mut diff = if model.has_includes() {
         if announce {
             let mode = if offline { " (offline mode)" } else { "" };
             println!(
@@ -61,11 +67,278 @@ fn compute_model_diff(
                 mode
             );
         }
-        Ok(compute_diff_with_includes_offline(
-            model, state, conn, offline,
-        )?)
+        compute_diff_with_includes_offline(model, state, conn, offline)?
     } else {
-        Ok(compute_diff(model, state))
+        compute_diff(model, state)
+    };
+    diff.replatform_estimate = compute_replatform_estimate(&diff, &SystemAffinity::list(conn)?);
+    if let Some(target_distro) = diff.actions.iter().find_map(|action| match action {
+        DiffAction::SetSourcePin { distro, .. } => Some(distro.as_str()),
+        _ => None,
+    }) {
+        let snapshot = source_policy_replatform_snapshot(conn, target_distro)?;
+        diff.visible_realignment_candidates = Some(
+            conary_core::model::VisibleRealignmentCandidates {
+                target_distro: snapshot.target_distro.clone(),
+                candidate_count: snapshot.visible_realignment_candidates,
+            },
+        );
+        diff.visible_realignment_proposals = Some(snapshot.visible_realignment_proposals);
+        let planned_actions = planned_replatform_actions(
+            &conary_core::model::SourcePolicyReplatformSnapshot {
+                target_distro: target_distro.to_string(),
+                estimate: diff.replatform_estimate.clone(),
+                visible_realignment_candidates: diff
+                    .visible_realignment_proposals
+                    .as_ref()
+                    .map(|items| items.len())
+                    .unwrap_or(0),
+                visible_realignment_proposals: diff
+                    .visible_realignment_proposals
+                    .clone()
+                    .unwrap_or_default(),
+            },
+            state,
+        );
+        if diff.structural_change_count() == 0 {
+            diff.actions.extend(planned_actions);
+        }
+    }
+    Ok(diff)
+}
+
+fn is_source_policy_action(action: &DiffAction) -> bool {
+    matches!(
+        action,
+        DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+    )
+}
+
+fn is_replatform_action(action: &DiffAction) -> bool {
+    matches!(action, DiffAction::ReplatformReplace { .. })
+}
+
+fn source_policy_summary(diff: &ModelDiff) -> Option<String> {
+    if !diff.has_source_policy_changes() {
+        return None;
+    }
+
+    Some(match diff.replatform_status() {
+        Some(ReplatformStatus::PackageConvergencePlanned { .. }) => {
+            "This is a source-policy transition with package convergence. Review the package plan carefully before applying."
+                .to_string()
+        }
+        Some(ReplatformStatus::PendingWithEstimate(_)) | Some(ReplatformStatus::PolicyOnlyPending) => {
+            "This is a source-policy-only transition. Applying it updates Conary's preferred package source policy without replacing packages yet."
+                .to_string()
+        }
+        None => return None,
+    })
+}
+
+fn source_policy_replatform_estimate(
+    estimate: Option<&ReplatformEstimate>,
+    has_structural_changes: bool,
+) -> Option<String> {
+    if has_structural_changes {
+        return None;
+    }
+    estimate.map(|estimate| {
+        format!(
+        "Estimated replatform scope: about {} installed package(s) already align with {}, and about {} package(s) may need source realignment.",
+        estimate.aligned_packages, estimate.target_distro, estimate.packages_to_realign
+    )
+    })
+}
+
+fn compute_replatform_estimate(
+    diff: &ModelDiff,
+    affinities: &[SystemAffinity],
+) -> Option<ReplatformEstimate> {
+    if diff.structural_change_count() > 0 {
+        return None;
+    }
+
+    let target_distro = diff.actions.iter().find_map(|action| match action {
+        DiffAction::SetSourcePin { distro, .. } => Some(distro.clone()),
+        _ => None,
+    })?;
+
+    replatform_estimate_from_affinities(affinities, &target_distro)
+}
+
+fn source_policy_replatform_note(diff: &ModelDiff) -> Option<String> {
+    match diff.replatform_status() {
+        Some(ReplatformStatus::PendingWithEstimate(estimate)) => {
+            source_policy_replatform_estimate(Some(&estimate), false)
+        }
+        Some(ReplatformStatus::PolicyOnlyPending) => Some(
+            "Replatform estimate unavailable: no source affinity data yet. Run a repo sync or refresh affinity data first."
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+fn model_check_drift_headline(diff: &ModelDiff) -> String {
+    match diff.replatform_status() {
+        Some(ReplatformStatus::PendingWithEstimate(estimate)) => format!(
+            "DRIFT: source policy pending replatform estimate for {} (about {} package(s) may need realignment)",
+            estimate.target_distro, estimate.packages_to_realign
+        ),
+        Some(ReplatformStatus::PolicyOnlyPending) => match diff.summary().visible_realignment_candidates
+        {
+            Some(candidates) => format!(
+                "DRIFT: source policy changed; replatform planning is still pending ({} visible package candidate(s))",
+                candidates
+            ),
+            None => "DRIFT: source policy changed; replatform planning is still pending"
+                .to_string(),
+        },
+        Some(ReplatformStatus::PackageConvergencePlanned { structural_changes }) => format!(
+            "DRIFT: source policy transition with {} planned package change(s)",
+            structural_changes
+        ),
+        None => format!("DRIFT: {} difference(s) from model", diff.actions.len()),
+    }
+}
+
+fn render_replatform_summary(summary: &ModelDiffSummary) -> Option<String> {
+    if let Some(packages) = summary.replatform_pending_packages {
+        return Some(format!(
+            "  Replatform pending estimate: {} package(s) may need realignment",
+            packages
+        ));
+    }
+
+    if let Some(changes) = summary.planned_package_convergence {
+        return Some(format!(
+            "  Planned package convergence changes: {}",
+            changes
+        ));
+    }
+
+    if let Some(candidates) = summary.visible_realignment_candidates {
+        return Some(format!(
+            "  Visible package-level realignment candidates: {}",
+            candidates
+        ));
+    }
+
+    None
+}
+
+fn render_realignment_proposal_preview(proposals: &[VisibleRealignmentProposal]) -> Option<String> {
+    if proposals.is_empty() {
+        return None;
+    }
+
+    let preview: Vec<String> = proposals
+        .iter()
+        .take(3)
+        .map(|proposal| {
+            let mut rendered = format!(
+                "{} -> {} {}",
+                proposal.package, proposal.target_distro, proposal.target_version
+            );
+            if let Some(arch) = &proposal.architecture {
+                rendered.push_str(&format!(" [{}]", arch));
+            }
+            rendered
+        })
+        .collect();
+
+    let mut line = format!("  Visible realignment proposals: {}", preview.join(", "));
+    if proposals.len() > preview.len() {
+        line.push_str(&format!(", +{} more", proposals.len() - preview.len()));
+    }
+    Some(line)
+}
+
+fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -> String {
+    let mut lines = vec![format!(
+        "Planned replatform transactions ({}):",
+        plan.transactions.len()
+    )];
+
+    for transaction in &plan.transactions {
+        let current = transaction.current_distro.as_deref().unwrap_or("unknown source");
+        let status = if transaction.executable {
+            "executable"
+        } else {
+            "blocked"
+        };
+        let mut line = format!(
+            "  > [{}] remove {} {} from {}, install {} {}",
+            status,
+            transaction.package,
+            transaction.current_version,
+            current,
+            transaction.target_distro,
+            transaction.target_version
+        );
+        if let Some(arch) = &transaction.architecture {
+            line.push_str(&format!(" [{}]", arch));
+        }
+        match (
+            transaction.install_repository.as_deref(),
+            transaction.install_repository_package_id,
+        ) {
+            (Some(repo), Some(pkg_id)) => {
+                line.push_str(&format!(" via {} [repo-pkg:{}]", repo, pkg_id));
+                if let Some(route) = &transaction.install_route {
+                    line.push_str(&format!(" [route:{}]", route));
+                }
+                if let Some(reason) = transaction.blocked_reason.as_ref() {
+                    line.push_str(&format!(" [{}]", render_replatform_blocked_reason(reason)));
+                }
+            }
+            _ => {
+                let reason = transaction
+                    .blocked_reason
+                    .as_ref()
+                    .map(render_replatform_blocked_reason)
+                    .unwrap_or("pending repo/package resolution");
+                line.push_str(&format!(" [{}]", reason));
+            }
+        }
+        if !transaction.unresolved_dependencies.is_empty() {
+            line.push_str(&format!(
+                " [deps:{}]",
+                transaction.unresolved_dependencies.join(", ")
+            ));
+        }
+        lines.push(line);
+    }
+
+    lines.join("\n")
+}
+
+fn render_replatform_blocked_reason(
+    reason: &conary_core::model::ReplatformBlockedReason,
+) -> &'static str {
+    match reason {
+        conary_core::model::ReplatformBlockedReason::MissingRepositoryMetadata => {
+            "missing repository metadata"
+        }
+        conary_core::model::ReplatformBlockedReason::MissingRepositoryPackageId => {
+            "missing repository package id"
+        }
+        conary_core::model::ReplatformBlockedReason::AnyVersionRouteOnly => {
+            "only any-version install route"
+        }
+        conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute => {
+            "missing versioned install route"
+        }
+        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => {
+            "missing install route"
+        }
+        conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
+            "unsatisfied target dependencies"
+        }
+        conary_core::model::ReplatformBlockedReason::ArchitectureMismatch => {
+            "architecture mismatch"
+        }
     }
 }
 
@@ -238,7 +511,8 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 /// Show what changes are needed to reach the model state
 pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     let model_path = Path::new(model_path);
-    let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
+    let (_model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
+    let summary = diff.summary();
 
     if diff.is_empty() {
         println!("System is in sync with model - no changes needed");
@@ -259,10 +533,20 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<
         .iter()
         .filter(|a| matches!(a, DiffAction::Remove { .. }))
         .collect();
+    let replatforms: Vec<_> = diff.actions.iter().filter(|a| is_replatform_action(a)).collect();
     let others: Vec<_> = diff
         .actions
         .iter()
-        .filter(|a| !matches!(a, DiffAction::Install { .. } | DiffAction::Remove { .. }))
+        .filter(|a| {
+            !matches!(a, DiffAction::Install { .. } | DiffAction::Remove { .. })
+                && !is_source_policy_action(a)
+                && !is_replatform_action(a)
+        })
+        .collect();
+    let source_policy: Vec<_> = diff
+        .actions
+        .iter()
+        .filter(|a| is_source_policy_action(a))
         .collect();
 
     if !installs.is_empty() {
@@ -277,6 +561,22 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<
         println!("To remove ({}):", removes.len());
         for action in &removes {
             println!("  - {}", action.description());
+        }
+        println!();
+    }
+
+    if !source_policy.is_empty() {
+        println!("Source policy changes ({}):", source_policy.len());
+        for action in &source_policy {
+            println!("  ~ {}", action.description());
+        }
+        println!();
+    }
+
+    if !replatforms.is_empty() {
+        println!("Replatform proposals ({}):", replatforms.len());
+        for action in &replatforms {
+            println!("  > {}", action.description());
         }
         println!();
     }
@@ -298,12 +598,30 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<
         println!();
     }
 
+    if let Some(summary) = source_policy_summary(&diff) {
+        println!("{}", summary);
+        println!();
+    }
+
+    if let Some(estimate) = source_policy_replatform_note(&diff) {
+        println!("{}", estimate);
+        println!();
+    }
+
     println!(
-        "Summary: {} install(s), {} remove(s), {} other change(s)",
-        installs.len(),
-        removes.len(),
-        others.len()
+        "Summary: {} install(s), {} remove(s), {} source policy change(s), {} other change(s)",
+        summary.installs, summary.removes, summary.source_policy_changes, summary.other_changes
     );
+    if let Some(replatform) = render_replatform_summary(&summary) {
+        println!("{}", replatform);
+    }
+    if let Some(plan) = replatform_execution_plan(&conn, &diff.actions)? {
+        println!("{}", render_replatform_execution_plan(&plan));
+    } else if let Some(proposals) = diff.visible_realignment_proposals.as_ref()
+        && let Some(preview) = render_realignment_proposal_preview(proposals)
+    {
+        println!("{}", preview);
+    }
 
     Ok(())
 }
@@ -322,6 +640,7 @@ pub fn cmd_model_apply(
 ) -> Result<()> {
     let model_path = Path::new(model_path);
     let (model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
+    let diff_summary = diff.summary();
 
     if diff.is_empty() {
         println!("System is already in sync with model - no changes needed");
@@ -358,11 +677,35 @@ pub fn cmd_model_apply(
         let prefix = match action {
             DiffAction::Install { .. } => "+",
             DiffAction::Remove { .. } => "-",
+            a if is_replatform_action(a) => ">",
+            a if is_source_policy_action(a) => "~",
             _ => "*",
         };
         println!("  {} {}", prefix, action.description());
     }
     println!();
+
+    if let Some(summary) = source_policy_summary(&diff) {
+        println!("{}", summary);
+        println!();
+    }
+
+    if let Some(estimate) = source_policy_replatform_note(&diff) {
+        println!("{}", estimate);
+        println!();
+    }
+
+    if let Some(plan) = replatform_execution_plan(
+        &conn,
+        &actions.iter().map(|action| (*action).clone()).collect::<Vec<_>>(),
+    )? {
+        println!("{}", render_replatform_execution_plan(&plan));
+        println!();
+        println!(
+            "Replatform replacement actions are planning-only in this slice. Review them here; automatic replacement execution is still pending."
+        );
+        println!();
+    }
 
     if dry_run {
         println!("[Dry run - no changes made]");
@@ -404,12 +747,26 @@ pub fn cmd_model_apply(
             _ => None,
         })
         .collect();
-
     // Process removes first (before derived packages that might depend on them)
     if !removes.is_empty() {
         println!("Packages to remove: {}", removes.join(", "));
         println!("  [NOTE: Package removal not yet implemented - run manually]");
         println!();
+    }
+
+    for action in &actions {
+        match action {
+            DiffAction::SetSourcePin { distro, strength } => {
+                let strength = strength.as_deref().unwrap_or("guarded");
+                DistroPin::set(&conn, distro, strength)?;
+                println!("Updated source policy pin: {} ({})", distro, strength);
+            }
+            DiffAction::ClearSourcePin => {
+                DistroPin::remove(&conn)?;
+                println!("Cleared source policy pin");
+            }
+            _ => {}
+        }
     }
 
     // Process regular installs (needed before derived packages)
@@ -510,6 +867,22 @@ pub fn cmd_model_apply(
     if !removes.is_empty() {
         println!("  Packages to remove (manual): {}", removes.len());
     }
+    if diff_summary.source_policy_changes > 0 {
+        println!(
+            "  Source policy changes applied: {}",
+            diff_summary.source_policy_changes
+        );
+    }
+    if let Some(replatform) = render_replatform_summary(&diff_summary) {
+        println!("{}", replatform);
+    }
+    if let Some(plan) = replatform_execution_plan(&conn, &diff.actions)? {
+        println!("{}", render_replatform_execution_plan(&plan));
+    } else if let Some(proposals) = diff.visible_realignment_proposals.as_ref()
+        && let Some(preview) = render_realignment_proposal_preview(proposals)
+    {
+        println!("{}", preview);
+    }
 
     if !errors.is_empty() {
         println!();
@@ -550,10 +923,14 @@ pub fn cmd_model_check(
         for action in &diff.actions {
             println!("  {}", action.description());
         }
+        if let Some(estimate) = source_policy_replatform_note(&diff) {
+            println!();
+            println!("  {}", estimate);
+        }
         println!();
         println!("Total: {} difference(s)", diff.actions.len());
     } else {
-        println!("DRIFT: {} difference(s) from model", diff.actions.len());
+        println!("{}", model_check_drift_headline(&diff));
         println!("Run with --verbose for details, or 'model-diff' for full output");
     }
 
@@ -1107,11 +1484,669 @@ pub fn cmd_model_publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::{
+        DistroPin, InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
+        RepositoryPackage, ResolutionStrategy, Trove,
+    };
+    use conary_core::db::schema;
+    use conary_core::model::ReplatformBlockedReason;
+    use conary_core::model::parser::SystemModel;
+    use tempfile::{NamedTempFile, tempdir};
+
+    fn create_test_db() -> (NamedTempFile, String) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().display().to_string();
+        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        drop(conn);
+        (temp_file, db_path)
+    }
+
+    fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
+        let mut fedora_repo =
+            Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        let fedora_repo_id = fedora_repo.insert(conn).unwrap();
+
+        let mut arch_repo =
+            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        arch_repo.default_strategy = Some("legacy".to_string());
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        let arch_repo_id = arch_repo.insert(conn).unwrap();
+
+        let mut fedora_label =
+            LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        fedora_label.insert(conn).unwrap();
+        fedora_label.set_repository(conn, Some(fedora_repo_id)).unwrap();
+
+        for (name, version) in [("vim", "9.0.1"), ("bash", "5.1.0"), ("zsh", "5.8.0")] {
+            let mut trove = Trove::new_with_source(
+                name.to_string(),
+                version.to_string(),
+                TroveType::Package,
+                InstallSource::Repository,
+            );
+            trove.architecture = Some("x86_64".to_string());
+            trove.label_id = fedora_label.id;
+            trove.insert(conn).unwrap();
+        }
+
+        for (name, version) in [("vim", "9.1.0"), ("bash", "5.2.0"), ("zsh", "5.9.1")] {
+            let mut pkg = RepositoryPackage::new(
+                arch_repo_id,
+                name.to_string(),
+                version.to_string(),
+                format!("sha256:{name}"),
+                123,
+                format!("https://example.test/arch/{name}.pkg.tar.zst"),
+            );
+            pkg.architecture = Some("x86_64".to_string());
+            pkg.insert(conn).unwrap();
+        }
+
+        let mut exact_resolution = PackageResolution::new(
+            arch_repo_id,
+            "vim".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
+                checksum: "sha256:vim-exact".to_string(),
+                delta_base: None,
+            }],
+        );
+        exact_resolution.primary_strategy = PrimaryStrategy::Binary;
+        exact_resolution.version = Some("9.1.0".to_string());
+        exact_resolution.insert(conn).unwrap();
+
+        let mut any_version_resolution = PackageResolution::new(
+            arch_repo_id,
+            "bash".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: "https://example.test/arch/bash-latest.ccs".to_string(),
+                checksum: "sha256:bash-any".to_string(),
+                delta_base: None,
+            }],
+        );
+        any_version_resolution.primary_strategy = PrimaryStrategy::Binary;
+        any_version_resolution.insert(conn).unwrap();
+    }
 
     #[test]
     fn test_version_matches_constraint_exact() {
         assert!(version_matches_constraint("1.24.0", "1.24.0"));
         assert!(!version_matches_constraint("1.24.1", "1.24.0"));
+    }
+
+    #[test]
+    fn test_source_policy_summary_for_policy_only_transition() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let summary = source_policy_summary(&diff).unwrap();
+
+        assert!(summary.contains("source-policy-only transition"));
+        assert!(summary.contains("without replacing packages yet"));
+    }
+
+    #[test]
+    fn test_source_policy_summary_for_transition_with_package_changes() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.actions.push(DiffAction::Install {
+            package: "kernel".to_string(),
+            pin: None,
+            optional: false,
+        });
+
+        let summary = source_policy_summary(&diff).unwrap();
+
+        assert!(summary.contains("source-policy transition with package convergence"));
+    }
+
+    #[test]
+    fn test_source_policy_summary_policy_only_stays_conservative() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::ClearSourcePin);
+
+        let summary = source_policy_summary(&diff).unwrap();
+
+        assert!(summary.contains("without replacing packages yet"));
+        assert!(!summary.contains("replaced"));
+    }
+
+    #[test]
+    fn test_source_policy_replatform_estimate_uses_affinity_counts() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        let affinities = vec![
+            SystemAffinity {
+                distro: "arch".to_string(),
+                package_count: 10,
+                percentage: 25.0,
+            },
+            SystemAffinity {
+                distro: "fedora-43".to_string(),
+                package_count: 30,
+                percentage: 75.0,
+            },
+        ];
+
+        let estimate = compute_replatform_estimate(&diff, &affinities).unwrap();
+
+        assert_eq!(estimate.target_distro, "arch");
+        assert_eq!(estimate.aligned_packages, 10);
+        assert_eq!(estimate.packages_to_realign, 30);
+        assert_eq!(estimate.total_packages, 40);
+    }
+
+    #[test]
+    fn test_source_policy_replatform_estimate_handles_missing_affinity_data() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let estimate = compute_replatform_estimate(&diff, &[]);
+
+        assert!(estimate.is_none());
+    }
+
+    #[test]
+    fn test_source_policy_replatform_note_falls_back_when_affinity_missing() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+
+        let note = source_policy_replatform_note(&diff).unwrap();
+
+        assert!(note.contains("no source affinity data yet"));
+    }
+
+    #[test]
+    fn test_model_check_drift_headline_for_pending_estimate() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.replatform_estimate = Some(ReplatformEstimate {
+            target_distro: "arch".to_string(),
+            aligned_packages: 10,
+            packages_to_realign: 30,
+            total_packages: 40,
+        });
+
+        let headline = model_check_drift_headline(&diff);
+
+        assert!(headline.contains("pending replatform estimate for arch"));
+        assert!(headline.contains("30 package(s) may need realignment"));
+    }
+
+    #[test]
+    fn test_model_check_drift_headline_for_policy_only_pending() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::ClearSourcePin);
+
+        let headline = model_check_drift_headline(&diff);
+
+        assert!(headline.contains("source policy changed"));
+        assert!(headline.contains("replatform planning is still pending"));
+    }
+
+    #[test]
+    fn test_model_check_drift_headline_mentions_visible_candidates_when_estimate_missing() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.visible_realignment_candidates =
+            Some(conary_core::model::VisibleRealignmentCandidates {
+                target_distro: "arch".to_string(),
+                candidate_count: 5,
+            });
+
+        let headline = model_check_drift_headline(&diff);
+
+        assert!(headline.contains("source policy changed"));
+        assert!(headline.contains("5 visible package candidate(s)"));
+    }
+
+    #[test]
+    fn test_model_check_drift_headline_for_package_convergence() {
+        let mut diff = ModelDiff::new();
+        diff.actions.push(DiffAction::SetSourcePin {
+            distro: "arch".to_string(),
+            strength: Some("strict".to_string()),
+        });
+        diff.actions.push(DiffAction::Install {
+            package: "kernel".to_string(),
+            pin: None,
+            optional: false,
+        });
+
+        let headline = model_check_drift_headline(&diff);
+
+        assert!(headline.contains("source policy transition"));
+        assert!(headline.contains("1 planned package change(s)"));
+    }
+
+    #[test]
+    fn test_compute_model_diff_surfaces_mixed_replatform_execution_states() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        seed_mixed_replatform_fixture(&conn);
+
+        let model: SystemModel = toml::from_str(
+            r#"
+[model]
+version = 1
+
+[system]
+profile = "balanced/latest-anywhere"
+
+[system.pin]
+distro = "arch"
+strength = "strict"
+"#,
+        )
+        .unwrap();
+
+        let state = capture_current_state(&conn).unwrap();
+        let diff = compute_model_diff(&model, &state, &conn, false, false).unwrap();
+
+        assert_eq!(
+            diff.actions
+                .iter()
+                .filter(|action| matches!(action, DiffAction::ReplatformReplace { .. }))
+                .count(),
+            3
+        );
+
+        let plan = replatform_execution_plan(&conn, &diff.actions)
+            .unwrap()
+            .expect("expected replatform execution plan");
+
+        assert_eq!(plan.transactions.len(), 3);
+
+        let bash = plan
+            .transactions
+            .iter()
+            .find(|transaction| transaction.package == "bash")
+            .expect("expected bash transaction");
+        assert!(!bash.executable);
+        assert_eq!(bash.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(
+            bash.blocked_reason,
+            Some(ReplatformBlockedReason::AnyVersionRouteOnly)
+        );
+
+        let vim = plan
+            .transactions
+            .iter()
+            .find(|transaction| transaction.package == "vim")
+            .expect("expected vim transaction");
+        assert!(vim.executable);
+        assert_eq!(vim.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(vim.blocked_reason, None);
+
+        let zsh = plan
+            .transactions
+            .iter()
+            .find(|transaction| transaction.package == "zsh")
+            .expect("expected zsh transaction");
+        assert!(!zsh.executable);
+        assert_eq!(zsh.install_route.as_deref(), Some("default:legacy"));
+        assert_eq!(
+            zsh.blocked_reason,
+            Some(ReplatformBlockedReason::MissingVersionedInstallRoute)
+        );
+    }
+
+    #[test]
+    fn test_render_replatform_summary_for_pending_estimate() {
+        let summary = ModelDiffSummary {
+            installs: 0,
+            removes: 0,
+            source_policy_changes: 1,
+            other_changes: 0,
+            warnings: 1,
+            replatform_pending_packages: Some(30),
+            planned_package_convergence: None,
+            visible_realignment_candidates: None,
+        };
+
+        let rendered = render_replatform_summary(&summary).unwrap();
+
+        assert!(rendered.contains("Replatform pending estimate"));
+        assert!(rendered.contains("30 package(s) may need realignment"));
+    }
+
+    #[test]
+    fn test_render_replatform_summary_for_visible_candidates() {
+        let summary = ModelDiffSummary {
+            installs: 0,
+            removes: 0,
+            source_policy_changes: 1,
+            other_changes: 0,
+            warnings: 0,
+            replatform_pending_packages: None,
+            planned_package_convergence: None,
+            visible_realignment_candidates: Some(5),
+        };
+
+        let rendered = render_replatform_summary(&summary).unwrap();
+
+        assert!(rendered.contains("Visible package-level realignment candidates"));
+        assert!(rendered.contains("5"));
+    }
+
+    #[test]
+    fn test_render_realignment_proposal_preview_lists_examples() {
+        let proposals = vec![
+            conary_core::model::VisibleRealignmentProposal {
+                package: "bash".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                target_version: "5.2.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                target_repository: Some("arch-core".to_string()),
+                target_repository_package_id: Some(11),
+            },
+            conary_core::model::VisibleRealignmentProposal {
+                package: "vim".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                target_version: "9.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                target_repository: Some("arch-core".to_string()),
+                target_repository_package_id: Some(22),
+            },
+            conary_core::model::VisibleRealignmentProposal {
+                package: "zsh".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                target_version: "5.9.1".to_string(),
+                architecture: Some("x86_64".to_string()),
+                target_repository: Some("arch-core".to_string()),
+                target_repository_package_id: Some(33),
+            },
+            conary_core::model::VisibleRealignmentProposal {
+                package: "curl".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                target_version: "8.8.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                target_repository: Some("arch-core".to_string()),
+                target_repository_package_id: Some(44),
+            },
+        ];
+
+        let rendered = render_realignment_proposal_preview(&proposals).unwrap();
+
+        assert!(rendered.contains("bash -> arch 5.2.0"));
+        assert!(rendered.contains("vim -> arch 9.1.0"));
+        assert!(rendered.contains("zsh -> arch 5.9.1"));
+        assert!(rendered.contains("+1 more"));
+    }
+
+    #[test]
+    fn test_render_replatform_execution_plan_lists_transactions() {
+        let plan = ReplatformExecutionPlan {
+            transactions: vec![
+                conary_core::model::ReplatformExecutionTransaction {
+                    package: "bash".to_string(),
+                    current_distro: Some("fedora-43".to_string()),
+                    target_distro: "arch".to_string(),
+                    current_version: "5.1.0".to_string(),
+                    current_architecture: Some("x86_64".to_string()),
+                    target_version: "5.2.0".to_string(),
+                    architecture: Some("x86_64".to_string()),
+                    install_repository: Some("arch-core".to_string()),
+                    install_repository_package_id: Some(11),
+                    install_route: Some("default:legacy".to_string()),
+                    unresolved_dependencies: Vec::new(),
+                    executable: false,
+                    blocked_reason: Some(
+                        conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute,
+                    ),
+                },
+                conary_core::model::ReplatformExecutionTransaction {
+                    package: "vim".to_string(),
+                    current_distro: Some("fedora-43".to_string()),
+                    target_distro: "arch".to_string(),
+                    current_version: "9.0.1".to_string(),
+                    current_architecture: Some("x86_64".to_string()),
+                    target_version: "9.1.0".to_string(),
+                    architecture: Some("x86_64".to_string()),
+                    install_repository: Some("arch-core".to_string()),
+                    install_repository_package_id: Some(22),
+                    install_route: Some("default:legacy".to_string()),
+                    unresolved_dependencies: Vec::new(),
+                    executable: false,
+                    blocked_reason: Some(
+                        conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute,
+                    ),
+                },
+            ],
+        };
+
+        let rendered = render_replatform_execution_plan(&plan);
+
+        assert!(rendered.contains("Planned replatform transactions (2):"));
+        assert!(rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0"));
+        assert!(rendered.contains(
+            "via arch-core [repo-pkg:11] [route:default:legacy] [missing versioned install route]"
+        ));
+        assert!(rendered.contains("[blocked] remove vim 9.0.1 from fedora-43, install arch 9.1.0"));
+        assert!(rendered.contains(
+            "via arch-core [repo-pkg:22] [route:default:legacy] [missing versioned install route]"
+        ));
+    }
+
+    #[test]
+    fn test_render_replatform_execution_plan_lists_block_reason() {
+        let plan = ReplatformExecutionPlan {
+            transactions: vec![conary_core::model::ReplatformExecutionTransaction {
+                package: "vim".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                current_version: "9.0.1".to_string(),
+                current_architecture: Some("x86_64".to_string()),
+                target_version: "9.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                install_repository: None,
+                install_repository_package_id: None,
+                install_route: None,
+                unresolved_dependencies: Vec::new(),
+                executable: false,
+                blocked_reason: Some(
+                    conary_core::model::ReplatformBlockedReason::MissingRepositoryMetadata,
+                ),
+            }],
+        };
+
+        let rendered = render_replatform_execution_plan(&plan);
+
+        assert!(rendered.contains("[blocked]"));
+        assert!(rendered.contains("[missing repository metadata]"));
+    }
+
+    #[test]
+    fn test_render_replatform_execution_plan_lists_any_version_reason_with_route() {
+        let plan = ReplatformExecutionPlan {
+            transactions: vec![conary_core::model::ReplatformExecutionTransaction {
+                package: "vim".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                current_version: "9.0.1".to_string(),
+                current_architecture: Some("x86_64".to_string()),
+                target_version: "9.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                install_repository: Some("arch-core".to_string()),
+                install_repository_package_id: Some(22),
+                install_route: Some("resolution:binary".to_string()),
+                unresolved_dependencies: Vec::new(),
+                executable: false,
+                blocked_reason: Some(
+                    conary_core::model::ReplatformBlockedReason::AnyVersionRouteOnly,
+                ),
+            }],
+        };
+
+        let rendered = render_replatform_execution_plan(&plan);
+
+        assert!(rendered.contains("[route:resolution:binary] [only any-version install route]"));
+    }
+
+    #[test]
+    fn test_render_replatform_execution_plan_lists_executable_transaction() {
+        let plan = ReplatformExecutionPlan {
+            transactions: vec![conary_core::model::ReplatformExecutionTransaction {
+                package: "vim".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                current_version: "9.0.1".to_string(),
+                current_architecture: Some("x86_64".to_string()),
+                target_version: "9.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                install_repository: Some("arch-core".to_string()),
+                install_repository_package_id: Some(22),
+                install_route: Some("resolution:binary".to_string()),
+                unresolved_dependencies: Vec::new(),
+                executable: true,
+                blocked_reason: None,
+            }],
+        };
+
+        let rendered = render_replatform_execution_plan(&plan);
+
+        assert!(rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0"));
+        assert!(rendered.contains("via arch-core [repo-pkg:22] [route:resolution:binary]"));
+        assert!(!rendered.contains("missing install route"));
+        assert!(!rendered.contains("only any-version install route"));
+    }
+
+    #[test]
+    fn test_render_replatform_execution_plan_lists_unresolved_dependencies() {
+        let plan = ReplatformExecutionPlan {
+            transactions: vec![conary_core::model::ReplatformExecutionTransaction {
+                package: "vim".to_string(),
+                current_distro: Some("fedora-43".to_string()),
+                target_distro: "arch".to_string(),
+                current_version: "9.0.1".to_string(),
+                current_architecture: Some("x86_64".to_string()),
+                target_version: "9.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                install_repository: Some("arch-core".to_string()),
+                install_repository_package_id: Some(22),
+                install_route: Some("resolution:binary".to_string()),
+                unresolved_dependencies: vec!["libmagic (>= 1.0)".to_string()],
+                executable: false,
+                blocked_reason: Some(
+                    conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies,
+                ),
+            }],
+        };
+
+        let rendered = render_replatform_execution_plan(&plan);
+
+        assert!(rendered.contains("[unsatisfied target dependencies]"));
+        assert!(rendered.contains("[deps:libmagic (>= 1.0)]"));
+    }
+
+    #[test]
+    fn test_planned_replatform_actions_promote_proposals_into_actions() {
+        let snapshot = conary_core::model::SourcePolicyReplatformSnapshot {
+            target_distro: "arch".to_string(),
+            estimate: Some(ReplatformEstimate {
+                target_distro: "arch".to_string(),
+                aligned_packages: 10,
+                packages_to_realign: 2,
+                total_packages: 12,
+            }),
+            visible_realignment_candidates: 2,
+            visible_realignment_proposals: vec![
+                conary_core::model::VisibleRealignmentProposal {
+                    package: "vim".to_string(),
+                    current_distro: Some("fedora-43".to_string()),
+                    target_distro: "arch".to_string(),
+                    target_version: "9.1.0".to_string(),
+                    architecture: Some("x86_64".to_string()),
+                    target_repository: Some("arch-core".to_string()),
+                    target_repository_package_id: Some(22),
+                },
+                conary_core::model::VisibleRealignmentProposal {
+                    package: "bash".to_string(),
+                    current_distro: Some("fedora-43".to_string()),
+                    target_distro: "arch".to_string(),
+                    target_version: "5.2.0".to_string(),
+                    architecture: Some("x86_64".to_string()),
+                    target_repository: Some("arch-core".to_string()),
+                    target_repository_package_id: Some(11),
+                },
+            ],
+        };
+        let mut state = SystemState::new();
+        state.installed.insert(
+            "vim".to_string(),
+            conary_core::model::InstalledPackage {
+                name: "vim".to_string(),
+                version: "9.0.1".to_string(),
+                architecture: Some("x86_64".to_string()),
+                explicit: true,
+                label: Some("fedora@f43:stable".to_string()),
+            },
+        );
+        state.installed.insert(
+            "bash".to_string(),
+            conary_core::model::InstalledPackage {
+                name: "bash".to_string(),
+                version: "5.1.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+                explicit: true,
+                label: Some("fedora@f43:stable".to_string()),
+            },
+        );
+
+        let actions = planned_replatform_actions(&snapshot, &state);
+
+        assert!(actions.iter().any(|action| {
+            matches!(
+                action,
+                DiffAction::ReplatformReplace {
+                    package,
+                    current_distro,
+                    target_distro,
+                    current_version,
+                    current_architecture,
+                    target_version,
+                    target_repository,
+                    target_repository_package_id,
+                    ..
+                } if package == "vim"
+                    && current_distro.as_deref() == Some("fedora-43")
+                    && target_distro == "arch"
+                    && current_version == "9.0.1"
+                    && current_architecture.as_deref() == Some("x86_64")
+                    && target_version == "9.1.0"
+                    && target_repository.as_deref() == Some("arch-core")
+                    && *target_repository_package_id == Some(22)
+            )
+        }));
+        assert_eq!(actions.len(), 2);
     }
 
     #[test]
@@ -1132,16 +2167,12 @@ mod tests {
     #[test]
     fn test_remote_diff_detects_missing() {
         use conary_core::db::models::RemoteCollection;
-        use conary_core::db::schema;
         use conary_core::model::SystemState;
         use std::collections::{HashMap, HashSet};
-        use tempfile::NamedTempFile;
 
         // Create test DB and populate cache
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        let (_temp_file, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
 
         // Create a cached remote collection with members
         let collection_data = serde_json::json!({
@@ -1183,6 +2214,7 @@ mod tests {
             )]),
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
+            source_pin: None,
         };
 
         // Fetch the collection from cache
@@ -1217,5 +2249,61 @@ mod tests {
 
         // nginx 1.24.2 matches constraint 1.24.* so no version drift
         assert!(version_drift.is_empty());
+    }
+
+    #[test]
+    fn test_model_snapshot_writes_effective_source_policy() {
+        let (_temp_file, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        DistroPin::set(&conn, "arch", "strict").unwrap();
+        drop(conn);
+
+        let temp_dir = tempdir().unwrap();
+        let output_path = temp_dir.path().join("system.toml");
+
+        cmd_model_snapshot(output_path.to_str().unwrap(), &db_path, Some("snapshot test")).unwrap();
+
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("[system]"));
+        assert!(content.contains("profile = \"balanced/latest-anywhere\""));
+        assert!(content.contains("[system.pin]"));
+        assert!(content.contains("distro = \"arch\""));
+        assert!(content.contains("strength = \"strict\""));
+    }
+
+    #[test]
+    fn test_model_apply_updates_source_policy_without_package_changes() {
+        let (_temp_file, db_path) = create_test_db();
+        let model_dir = tempdir().unwrap();
+        let model_path = model_dir.path().join("system.toml");
+        std::fs::write(
+            &model_path,
+            r#"
+[model]
+version = 1
+
+[system.pin]
+distro = "arch"
+strength = "strict"
+"#,
+        )
+        .unwrap();
+
+        cmd_model_apply(
+            model_path.to_str().unwrap(),
+            &db_path,
+            "/",
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let pin = DistroPin::get_current(&conn).unwrap().unwrap();
+        assert_eq!(pin.distro, "arch");
+        assert_eq!(pin.mixing_policy, "strict");
     }
 }

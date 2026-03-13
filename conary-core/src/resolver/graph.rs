@@ -7,15 +7,17 @@
 
 use crate::db::models::{DependencyEntry, Trove};
 use crate::error::{Error, Result};
+use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies};
 use crate::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet, VecDeque};
+use tracing::warn;
 
 /// A node in the dependency graph representing a package
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageNode {
     pub name: String,
-    pub version: RpmVersion,
+    pub version: InstalledPackageVersion,
     pub trove_id: Option<i64>,
 }
 
@@ -23,14 +25,69 @@ impl PackageNode {
     pub fn new(name: String, version: RpmVersion) -> Self {
         Self {
             name,
+            version: InstalledPackageVersion::from_rpm(version),
+            trove_id: None,
+        }
+    }
+
+    pub fn new_installed(name: String, version: InstalledPackageVersion) -> Self {
+        Self {
+            name,
             version,
             trove_id: None,
         }
     }
 
+    pub fn new_native(name: String, version: impl Into<String>, scheme: VersionScheme) -> Self {
+        Self::new_installed(name, InstalledPackageVersion::new(version.into(), scheme))
+    }
+
     pub fn with_trove_id(mut self, trove_id: i64) -> Self {
         self.trove_id = Some(trove_id);
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InstalledPackageVersion {
+    raw: String,
+    scheme: VersionScheme,
+}
+
+impl InstalledPackageVersion {
+    pub fn new(raw: String, scheme: VersionScheme) -> Self {
+        Self { raw, scheme }
+    }
+
+    pub fn from_rpm(version: RpmVersion) -> Self {
+        Self::new(version.to_string(), VersionScheme::Rpm)
+    }
+
+    pub fn from_trove(trove: &Trove) -> Self {
+        Self::new(
+            trove.version.clone(),
+            version_scheme_from_trove(trove).unwrap_or(VersionScheme::Rpm),
+        )
+    }
+
+    pub fn scheme(&self) -> VersionScheme {
+        self.scheme
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    fn satisfies_legacy(&self, constraint: &VersionConstraint) -> bool {
+        RpmVersion::parse(&self.raw)
+            .map(|version| constraint.satisfies(&version))
+            .unwrap_or(false)
+    }
+}
+
+impl std::fmt::Display for InstalledPackageVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.raw)
     }
 }
 
@@ -40,6 +97,7 @@ pub struct DependencyEdge {
     pub from: String,
     pub to: String,
     pub constraint: VersionConstraint,
+    pub raw_constraint: Option<String>,
     pub dep_type: String,
     /// The kind of dependency (package, python, soname, pkgconfig, etc.)
     pub kind: String,
@@ -51,6 +109,7 @@ impl DependencyEdge {
         Self {
             from,
             to,
+            raw_constraint: Some(constraint.to_string()),
             constraint,
             dep_type,
             kind: "package".to_string(),
@@ -68,9 +127,28 @@ impl DependencyEdge {
         Self {
             from,
             to,
+            raw_constraint: Some(constraint.to_string()),
             constraint,
             dep_type,
             kind,
+        }
+    }
+
+    pub fn matches_version(&self, version: &InstalledPackageVersion) -> bool {
+        match version.scheme() {
+            VersionScheme::Rpm => version.satisfies_legacy(&self.constraint),
+            scheme => match self.repo_constraint_for(scheme) {
+                Some(RepoVersionConstraint::Any) if self.raw_constraint.is_none() => true,
+                Some(repo_constraint) => repo_version_satisfies(scheme, version.raw(), &repo_constraint),
+                None => false,
+            },
+        }
+    }
+
+    fn repo_constraint_for(&self, scheme: VersionScheme) -> Option<RepoVersionConstraint> {
+        match self.raw_constraint.as_deref() {
+            Some(raw) => parse_repo_constraint(scheme, raw),
+            None => Some(RepoVersionConstraint::Any),
         }
     }
 }
@@ -110,8 +188,8 @@ impl DependencyGraph {
                 .ok_or_else(|| Error::InitError("Trove from database has no ID".to_string()))?;
 
             // Parse the version
-            let version = RpmVersion::parse(&trove.version)?;
-            let node = PackageNode::new(trove.name.clone(), version).with_trove_id(trove_id);
+            let version = InstalledPackageVersion::from_trove(&trove);
+            let node = PackageNode::new_installed(trove.name.clone(), version).with_trove_id(trove_id);
 
             graph.add_node(node);
 
@@ -120,7 +198,7 @@ impl DependencyGraph {
 
             for dep in deps {
                 let constraint = if let Some(ref constraint_str) = dep.version_constraint {
-                    VersionConstraint::parse(constraint_str)?
+                    VersionConstraint::parse(constraint_str).unwrap_or(VersionConstraint::Any)
                 } else {
                     VersionConstraint::Any
                 };
@@ -129,6 +207,7 @@ impl DependencyGraph {
                     from: trove.name.clone(),
                     to: dep.depends_on_name.clone(),
                     constraint,
+                    raw_constraint: dep.version_constraint.clone(),
                     dep_type: dep.dependency_type.clone(),
                     kind: dep.kind.clone(),
                 };
@@ -325,12 +404,23 @@ impl DependencyGraph {
 
     /// Check if a version satisfies all constraints for a dependency
     pub fn check_constraints(&self, package_name: &str, version: &RpmVersion) -> Result<()> {
+        self.check_constraints_installed(
+            package_name,
+            &InstalledPackageVersion::from_rpm(version.clone()),
+        )
+    }
+
+    pub(crate) fn check_constraints_installed(
+        &self,
+        package_name: &str,
+        version: &InstalledPackageVersion,
+    ) -> Result<()> {
         // Find all packages that depend on this package
         if let Some(dependents) = self.reverse_edges.get(package_name) {
             for dependent in dependents {
                 if let Some(edges) = self.edges.get(dependent) {
                     for edge in edges {
-                        if edge.to == package_name && !edge.constraint.satisfies(version) {
+                        if edge.to == package_name && !edge.matches_version(version) {
                             return Err(Error::InitError(format!(
                                 "Version {} of {} does not satisfy constraint {} required by {}",
                                 version, package_name, edge.constraint, dependent
@@ -392,6 +482,19 @@ impl DependencyGraph {
     }
 }
 
+fn version_scheme_from_trove(trove: &Trove) -> Option<VersionScheme> {
+    match trove.version_scheme.as_deref() {
+        Some("rpm") => Some(VersionScheme::Rpm),
+        Some("debian") => Some(VersionScheme::Debian),
+        Some("arch") => Some(VersionScheme::Arch),
+        Some(other) => {
+            warn!(version_scheme = %other, trove = %trove.name, "Unknown trove version scheme, falling back to rpm compatibility");
+            Some(VersionScheme::Rpm)
+        }
+        None => Some(VersionScheme::Rpm),
+    }
+}
+
 impl Default for DependencyGraph {
     fn default() -> Self {
         Self::new()
@@ -410,6 +513,7 @@ pub struct GraphStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
     use crate::version::{RpmVersion, VersionConstraint};
 
     fn v(s: &str) -> RpmVersion {
@@ -421,6 +525,7 @@ mod tests {
             from: from.to_string(),
             to: to.to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         }
@@ -428,6 +533,14 @@ mod tests {
 
     fn node(name: &str) -> PackageNode {
         PackageNode::new(name.to_string(), v("1.0.0"))
+    }
+
+    fn setup_test_db() -> (tempfile::TempDir, Connection) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        db::init(&db_path).unwrap();
+        let conn = db::open(&db_path).unwrap();
+        (temp_dir, conn)
     }
 
     // --- Empty graph ---
@@ -726,6 +839,7 @@ mod tests {
             from: "app1".to_string(),
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            raw_constraint: Some(">= 1.0.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -733,6 +847,7 @@ mod tests {
             from: "app2".to_string(),
             to: "lib".to_string(),
             constraint: VersionConstraint::parse(">= 0.5.0").unwrap(),
+            raw_constraint: Some(">= 0.5.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         });
@@ -766,5 +881,52 @@ mod tests {
         let graph = DependencyGraph::default();
         assert_eq!(graph.nodes.len(), 0);
         assert_eq!(graph.edges.len(), 0);
+    }
+
+    #[test]
+    fn test_build_from_db_falls_back_to_rpm_for_legacy_rows() {
+        let (_dir, conn) = setup_test_db();
+        conn.execute(
+            "INSERT INTO troves (name, version, type, install_source, install_reason)
+             VALUES (?1, ?2, 'package', 'repository', 'explicit')",
+            rusqlite::params!["bash", "5.2.37-1"],
+        )
+        .unwrap();
+
+        let graph = DependencyGraph::build_from_db(&conn).unwrap();
+        let node = graph.get_node("bash").unwrap();
+
+        assert_eq!(node.version.scheme(), VersionScheme::Rpm);
+        assert_eq!(node.version.raw(), "5.2.37-1");
+    }
+
+    #[test]
+    fn test_build_from_db_uses_native_debian_constraints() {
+        let (_dir, conn) = setup_test_db();
+        conn.execute(
+            "INSERT INTO troves (id, name, version, type, install_source, install_reason, source_distro, version_scheme)
+             VALUES
+                (1, 'libfoo', '1.0-1', 'package', 'adopted-track', 'explicit', 'ubuntu-24.04', 'debian'),
+                (2, 'myapp', '2.0-1', 'package', 'adopted-track', 'explicit', 'ubuntu-24.04', 'debian')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO dependencies (trove_id, depends_on_name, dependency_type, version_constraint)
+             VALUES (2, 'libfoo', 'runtime', '>= 1.0~beta1')",
+            [],
+        )
+        .unwrap();
+
+        let graph = DependencyGraph::build_from_db(&conn).unwrap();
+        let libfoo = graph.get_node("libfoo").unwrap();
+        assert!(graph
+            .check_constraints_installed("libfoo", &libfoo.version)
+            .is_ok());
+
+        let prerelease = InstalledPackageVersion::new("1.0~alpha1-1".to_string(), VersionScheme::Debian);
+        assert!(graph
+            .check_constraints_installed("libfoo", &prerelease)
+            .is_err());
     }
 }

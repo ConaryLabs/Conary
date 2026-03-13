@@ -5,7 +5,7 @@
 //! Functions for resolving package dependencies across repositories,
 //! including transitive resolution and parallel downloads.
 
-use crate::db::models::{Trove, generate_capability_variations};
+use crate::db::models::{RepositoryPackage, RepositoryProvide, Trove, generate_capability_variations};
 use crate::error::{Error, Result};
 use crate::version::VersionConstraint;
 use rayon::prelude::*;
@@ -69,6 +69,46 @@ fn resolve_repo_dependency_by_metadata(
     )))
 }
 
+fn resolve_repo_dependency_by_capability(
+    conn: &Connection,
+    dep_name: &str,
+    options: &SelectionOptions,
+) -> Result<Option<(String, Option<String>)>> {
+    let provides = RepositoryProvide::find_by_capability(conn, dep_name)?;
+    if provides.is_empty() {
+        return Ok(None);
+    }
+
+    let all_packages = RepositoryPackage::list_all(conn)?;
+    let mut candidates = Vec::new();
+
+    for provide in provides {
+        let Some(pkg) = all_packages
+            .iter()
+            .find(|pkg| pkg.id == Some(provide.repository_package_id))
+        else {
+            continue;
+        };
+
+        for candidate in PackageSelector::search_packages(conn, &pkg.name, options)? {
+            if candidate.package.id == Some(provide.repository_package_id) {
+                candidates.push(candidate);
+                break;
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let selected = PackageSelector::select_best(candidates)?;
+    Ok(Some((
+        selected.package.name.clone(),
+        Some(selected.package.version.clone()),
+    )))
+}
+
 fn resolve_repo_dependency_request(
     conn: &Connection,
     dep_name: &str,
@@ -83,6 +123,17 @@ fn resolve_repo_dependency_request(
         if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
             return Ok((variation, constraint.clone()));
         }
+    }
+
+    if let Some((package_name, package_version)) =
+        resolve_repo_dependency_by_capability(conn, dep_name, options)?
+    {
+        let resolved_constraint = if let Some(version) = package_version {
+            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
+        } else {
+            constraint.clone()
+        };
+        return Ok((package_name, resolved_constraint));
     }
 
     if let Some((package_name, package_version)) =
@@ -209,6 +260,66 @@ pub fn resolve_dependencies(
             }
             Err(e) => {
                 // Dependency not found - this is a critical error
+                return Err(Error::NotFound(format!(
+                    "Required dependency '{dep_name}' not found in any repository: {e}"
+                )));
+            }
+        }
+    }
+
+    Ok(to_download)
+}
+
+/// Resolve dependency requests without transitive expansion.
+///
+/// Like [`resolve_dependencies`] but accepts `(name, constraint)` pairs
+/// and passes the constraint into the capability/name resolution step.
+/// Does **not** invoke the SAT solver or expand transitive dependencies.
+///
+/// Designed for callers that handle transitive expansion themselves (e.g.
+/// recursive CCS install paths where each dep install handles its own deps).
+pub fn resolve_dependency_requests(
+    conn: &Connection,
+    requests: &[(String, VersionConstraint)],
+) -> Result<Vec<(String, PackageWithRepo)>> {
+    let mut to_download = Vec::new();
+    let options = SelectionOptions::default();
+
+    for (dep_name, constraint) in requests {
+        if dep_name.starts_with("rpmlib(") || dep_name.starts_with('/') {
+            continue;
+        }
+
+        let installed = Trove::find_by_name(conn, dep_name)?;
+        if !installed.is_empty() {
+            debug!("Dependency {} already installed, skipping", dep_name);
+            continue;
+        }
+
+        let (resolved_name, resolved_constraint) =
+            resolve_repo_dependency_request(conn, dep_name, constraint, &options)?;
+
+        // Use the resolved constraint's version to pin selection when possible
+        let select_options = match &resolved_constraint {
+            VersionConstraint::Exact(v) => SelectionOptions {
+                version: Some(v.to_string()),
+                ..options.clone()
+            },
+            _ => options.clone(),
+        };
+
+        match PackageSelector::find_best_package(conn, &resolved_name, &select_options) {
+            Ok(pkg_with_repo) => {
+                info!(
+                    "Resolved dependency {} -> {} {} (repo {})",
+                    dep_name,
+                    resolved_name,
+                    pkg_with_repo.package.version,
+                    pkg_with_repo.repository.name
+                );
+                to_download.push((dep_name.clone(), pkg_with_repo));
+            }
+            Err(e) => {
                 return Err(Error::NotFound(format!(
                     "Required dependency '{dep_name}' not found in any repository: {e}"
                 )));
@@ -425,7 +536,7 @@ pub fn download_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{Repository, RepositoryPackage};
+    use crate::db::models::{Repository, RepositoryPackage, RepositoryProvide};
     use crate::db::schema;
     use rusqlite::Connection;
 
@@ -534,5 +645,122 @@ mod tests {
             constraint,
             VersionConstraint::parse("= 6.19.6-200.fc43").unwrap()
         );
+    }
+
+    #[test]
+    fn resolves_capability_dependency_from_normalized_repo_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "kernel-core".to_string(),
+            "6.19.6-200.fc43".to_string(),
+            "sha256:test".to_string(),
+            123,
+            "https://example.invalid/kernel-core.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let repo_package_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            repo_package_id,
+            "kernel-core-uname-r".to_string(),
+            Some("6.19.6-200.fc43.x86_64".to_string()),
+            "package".to_string(),
+            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, constraint) = resolve_repo_dependency_request(
+            &conn,
+            "kernel-core-uname-r",
+            &VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "kernel-core");
+        assert_eq!(
+            constraint,
+            VersionConstraint::parse("= 6.19.6-200.fc43").unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_dependency_requests_finds_direct_packages_without_transitive_expansion() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // Package A depends on B (but we only resolve A, not transitively)
+        let mut pkg_a = RepositoryPackage::new(
+            repo_id,
+            "pkg-a".to_string(),
+            "1.0-1.fc43".to_string(),
+            "sha256:a".to_string(),
+            100,
+            "https://example.invalid/pkg-a.rpm".to_string(),
+        );
+        pkg_a.insert(&conn).unwrap();
+
+        let mut pkg_b = RepositoryPackage::new(
+            repo_id,
+            "pkg-b".to_string(),
+            "2.0-1.fc43".to_string(),
+            "sha256:b".to_string(),
+            200,
+            "https://example.invalid/pkg-b.rpm".to_string(),
+        );
+        pkg_b.insert(&conn).unwrap();
+
+        let requests = vec![
+            ("pkg-a".to_string(), VersionConstraint::Any),
+            ("pkg-b".to_string(), VersionConstraint::Any),
+        ];
+
+        let result = resolve_dependency_requests(&conn, &requests).unwrap();
+
+        // Both should be found (non-transitive: just the requested packages)
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"pkg-a"));
+        assert!(names.contains(&"pkg-b"));
+    }
+
+    #[test]
+    fn resolve_dependency_requests_skips_installed() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "already-here".to_string(),
+            "1.0-1.fc43".to_string(),
+            "sha256:ah".to_string(),
+            100,
+            "https://example.invalid/already-here.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+
+        // Install a trove with the same name
+        conn.execute(
+            "INSERT INTO troves (name, version, type, install_source, install_reason)
+             VALUES ('already-here', '1.0-1.fc43', 'package', 'repository', 'explicit')",
+            [],
+        )
+        .unwrap();
+
+        let requests = vec![("already-here".to_string(), VersionConstraint::Any)];
+        let result = resolve_dependency_requests(&conn, &requests).unwrap();
+
+        assert!(result.is_empty(), "installed packages should be skipped");
     }
 }

@@ -563,6 +563,43 @@ impl RepositoryPackage {
 
         Ok(packages.len())
     }
+
+    /// Batch insert repository packages and populate their generated IDs.
+    pub fn batch_insert_with_ids(conn: &Connection, packages: &mut [Self]) -> Result<usize> {
+        if packages.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
+              is_security_update, severity, cve_ids, advisory_id, advisory_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )?;
+
+        for pkg in packages.iter_mut() {
+            stmt.execute(params![
+                &pkg.repository_id,
+                &pkg.name,
+                &pkg.version,
+                &pkg.architecture,
+                &pkg.description,
+                &pkg.checksum,
+                &pkg.size,
+                &pkg.download_url,
+                &pkg.dependencies,
+                &pkg.metadata,
+                pkg.is_security_update as i32,
+                &pkg.severity,
+                &pkg.cve_ids,
+                &pkg.advisory_id,
+                &pkg.advisory_url,
+            ])?;
+            pkg.id = Some(conn.last_insert_rowid());
+        }
+
+        Ok(packages.len())
+    }
 }
 
 fn parse_dependency_request(dep: &str) -> (String, VersionConstraint) {

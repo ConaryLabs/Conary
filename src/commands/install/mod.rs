@@ -46,12 +46,12 @@ use conary_core::db::models::{
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::repository;
+use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::Resolver;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::{
     PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
 };
-use conary_core::version::RpmVersion;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -424,13 +424,6 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let mut conn = conn;
 
     // Build dependency edges from the package
-    let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
-        format!(
-            "Failed to parse version '{}' for package '{}'",
-            pkg.version(),
-            pkg.name()
-        )
-    })?;
     let dependency_edges = build_dependency_edges(pkg.as_ref());
 
     if no_deps && !dependency_edges.is_empty() {
@@ -453,9 +446,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
         // Resolve with the new package
         let plan = resolver
-            .resolve_install(
+            .resolve_install_native(
                 pkg.name().to_string(),
-                package_version.clone(),
+                pkg.version().to_string(),
+                version_scheme_for_format(format),
                 dependency_edges,
             )
             .with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))?;
@@ -729,7 +723,12 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     }
 
     // Pre-transaction validation - check if already installed or needs upgrade
-    let old_trove_to_upgrade = match check_upgrade_status(&conn, pkg.as_ref(), allow_downgrade)? {
+    let old_trove_to_upgrade = match check_upgrade_status(
+        &conn,
+        pkg.as_ref(),
+        format,
+        allow_downgrade,
+    )? {
         UpgradeCheck::FreshInstall => None,
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
     };
@@ -1229,4 +1228,12 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;
 
     Ok(())
+}
+
+fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
+    match format {
+        PackageFormatType::Rpm => VersionScheme::Rpm,
+        PackageFormatType::Deb => VersionScheme::Debian,
+        PackageFormatType::Arch => VersionScheme::Arch,
+    }
 }

@@ -10,6 +10,7 @@
 
 #![allow(dead_code)]
 
+use super::PackageFormatType;
 use super::resolve::check_provides_dependencies;
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use crate::commands::{SandboxMode, cmd_install};
@@ -18,8 +19,9 @@ use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::traits::DependencyType;
 use conary_core::repository;
+use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{DependencyEdge, ResolutionPlan, Resolver};
-use conary_core::version::{RpmVersion, VersionConstraint};
+use conary_core::version::VersionConstraint;
 use rusqlite::Connection;
 use tempfile::TempDir;
 use tracing::{debug, info};
@@ -40,6 +42,7 @@ pub fn build_dependency_edges(pkg: &dyn PackageFormat) -> Vec<DependencyEdge> {
                 from: pkg.name().to_string(),
                 to: d.name.clone(),
                 constraint,
+                raw_constraint: d.version.clone(),
                 dep_type: "runtime".to_string(),
                 kind: "package".to_string(),
             }
@@ -53,21 +56,27 @@ pub fn build_dependency_edges(pkg: &dyn PackageFormat) -> Vec<DependencyEdge> {
 pub fn resolve_dependencies(
     conn: &Connection,
     pkg: &dyn PackageFormat,
+    format: PackageFormatType,
     dependency_edges: Vec<DependencyEdge>,
 ) -> Result<ResolutionPlan> {
-    let package_version = RpmVersion::parse(pkg.version()).with_context(|| {
-        format!(
-            "Failed to parse version '{}' for package '{}'",
-            pkg.version(),
-            pkg.name()
-        )
-    })?;
-
     let mut resolver = Resolver::new(conn).context("Failed to initialize dependency resolver")?;
 
     resolver
-        .resolve_install(pkg.name().to_string(), package_version, dependency_edges)
+        .resolve_install_native(
+            pkg.name().to_string(),
+            pkg.version().to_string(),
+            version_scheme_for_format(format),
+            dependency_edges,
+        )
         .with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))
+}
+
+fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
+    match format {
+        PackageFormatType::Rpm => VersionScheme::Rpm,
+        PackageFormatType::Deb => VersionScheme::Debian,
+        PackageFormatType::Arch => VersionScheme::Arch,
+    }
 }
 
 /// Check for dependency conflicts and handle missing dependencies
