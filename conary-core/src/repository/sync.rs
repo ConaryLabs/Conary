@@ -7,9 +7,14 @@
 
 use crate::db::models::{
     PackageDelta, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+    RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
+use crate::repository::dependency_model::{
+    ConditionalRequirementBehavior, RepositoryDependencyFlavor, RepositoryRequirementKind,
+};
 use crate::repository::parsers::{DependencyType, PackageMetadata};
+use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
@@ -108,7 +113,7 @@ fn sync_repository_native(
     }
 
     // Convert package metadata to repository rows plus normalized capability rows.
-    let synced_packages: Vec<(RepositoryPackage, Vec<RepositoryProvide>, Vec<RepositoryRequirement>)> = packages
+    let synced_packages: Vec<SyncedPackageRow> = packages
         .into_iter()
         .map(|pkg_meta| {
             let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
@@ -153,11 +158,26 @@ fn sync_repository_native(
                 serde_json::Value::Null => None,
                 value => Some(value.to_string()),
             };
-            (repo_pkg, provides, requirements)
+
+            // Persist package origin metadata from parser
+            repo_pkg.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+            repo_pkg.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+
+            // Convert parser-level requirement groups to DB models
+            let (req_groups, req_group_clauses) =
+                convert_requirement_groups(0, &pkg_meta.requirements);
+
+            SyncedPackageRow {
+                package: repo_pkg,
+                provides,
+                requirements,
+                requirement_groups: req_groups,
+                requirement_group_clauses: req_group_clauses,
+            }
         })
         .collect();
     let mut repo_packages: Vec<RepositoryPackage> =
-        synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
+        synced_packages.iter().map(|row| row.package.clone()).collect();
 
     let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
 
@@ -168,15 +188,20 @@ fn sync_repository_native(
     Ok(count)
 }
 
+/// A single synced package row with all its normalized capability data.
+struct SyncedPackageRow {
+    package: RepositoryPackage,
+    provides: Vec<RepositoryProvide>,
+    requirements: Vec<RepositoryRequirement>,
+    requirement_groups: Vec<DbRequirementGroup>,
+    requirement_group_clauses: Vec<Vec<RepositoryRequirement>>,
+}
+
 fn persist_native_sync_rows(
     conn: &Connection,
     repo: &mut Repository,
     repo_packages: &mut [RepositoryPackage],
-    synced_packages: Vec<(
-        RepositoryPackage,
-        Vec<RepositoryProvide>,
-        Vec<RepositoryRequirement>,
-    )>,
+    synced_packages: Vec<SyncedPackageRow>,
 ) -> Result<usize> {
     let repo_id = repo
         .id
@@ -186,7 +211,7 @@ fn persist_native_sync_rows(
     // Use a transaction for bulk operations (much faster than individual inserts)
     let tx = conn.unchecked_transaction()?;
 
-    // Delete old package entries for this repository
+    // Delete old package entries for this repository (cascades to provides/requirements/groups)
     RepositoryPackage::delete_by_repository(&tx, repo_id)?;
 
     // Batch insert all packages using prepared statement and retain generated IDs
@@ -194,25 +219,51 @@ fn persist_native_sync_rows(
 
     let mut repo_provides = Vec::new();
     let mut repo_requirements = Vec::new();
-    for (pkg, (_, provides, requirements)) in repo_packages.iter().zip(synced_packages.into_iter()) {
+    let mut all_groups: Vec<DbRequirementGroup> = Vec::new();
+    let mut all_group_clauses: Vec<Vec<RepositoryRequirement>> = Vec::new();
+
+    for (pkg, row) in repo_packages.iter().zip(synced_packages.into_iter()) {
         let Some(repository_package_id) = pkg.id else {
             return Err(Error::InitError(
                 "Inserted repository package missing generated ID".to_string(),
             ));
         };
 
-        repo_provides.extend(provides.into_iter().map(|mut provide| {
+        repo_provides.extend(row.provides.into_iter().map(|mut provide| {
             provide.repository_package_id = repository_package_id;
             provide
         }));
-        repo_requirements.extend(requirements.into_iter().map(|mut requirement| {
+        repo_requirements.extend(row.requirements.into_iter().map(|mut requirement| {
             requirement.repository_package_id = repository_package_id;
             requirement
         }));
+
+        // Fix up group package IDs and collect for batch insert
+        for mut group in row.requirement_groups {
+            group.repository_package_id = repository_package_id;
+            all_groups.push(group);
+        }
+        for mut clauses in row.requirement_group_clauses {
+            for clause in &mut clauses {
+                clause.repository_package_id = repository_package_id;
+            }
+            all_group_clauses.push(clauses);
+        }
     }
 
     RepositoryProvide::batch_insert(&tx, &repo_provides)?;
     RepositoryRequirement::batch_insert(&tx, &repo_requirements)?;
+
+    // Insert requirement groups and link their clauses
+    DbRequirementGroup::batch_insert_with_ids(&tx, &mut all_groups)?;
+    let mut grouped_clauses = Vec::new();
+    for (group, clauses) in all_groups.iter().zip(all_group_clauses.into_iter()) {
+        let group_id = group.id.ok_or_else(|| {
+            Error::InitError("Inserted requirement group missing generated ID".to_string())
+        })?;
+        grouped_clauses.extend(clauses.into_iter().map(|clause| clause.with_group(group_id)));
+    }
+    RepositoryRequirement::batch_insert(&tx, &grouped_clauses)?;
 
     // Update last_sync timestamp
     repo.last_sync = Some(current_timestamp());
@@ -315,6 +366,93 @@ fn parse_metadata_provide_entry(entry: &str) -> (String, Option<String>) {
     (entry.trim().to_string(), None)
 }
 
+/// Convert a `RepositoryDependencyFlavor` to its database string representation.
+fn distro_flavor_to_db(flavor: RepositoryDependencyFlavor) -> String {
+    match flavor {
+        RepositoryDependencyFlavor::Rpm => "rpm".to_string(),
+        RepositoryDependencyFlavor::Deb => "deb".to_string(),
+        RepositoryDependencyFlavor::Arch => "arch".to_string(),
+    }
+}
+
+/// Convert a `VersionScheme` to its database string representation.
+fn version_scheme_to_db(scheme: VersionScheme) -> String {
+    match scheme {
+        VersionScheme::Rpm => "rpm".to_string(),
+        VersionScheme::Debian => "debian".to_string(),
+        VersionScheme::Arch => "arch".to_string(),
+    }
+}
+
+/// Convert a `RepositoryRequirementKind` to its database string representation.
+fn requirement_kind_to_db(kind: RepositoryRequirementKind) -> String {
+    match kind {
+        RepositoryRequirementKind::Depends => "depends".to_string(),
+        RepositoryRequirementKind::PreDepends => "pre_depends".to_string(),
+        RepositoryRequirementKind::Optional => "optional".to_string(),
+        RepositoryRequirementKind::Build => "build".to_string(),
+        RepositoryRequirementKind::Conflict => "conflict".to_string(),
+        RepositoryRequirementKind::Breaks => "breaks".to_string(),
+    }
+}
+
+/// Convert a `ConditionalRequirementBehavior` to its database string representation.
+fn behavior_to_db(behavior: ConditionalRequirementBehavior) -> String {
+    match behavior {
+        ConditionalRequirementBehavior::Hard => "hard".to_string(),
+        ConditionalRequirementBehavior::Conditional => "conditional".to_string(),
+        ConditionalRequirementBehavior::UnsupportedRich => "unsupported_rich".to_string(),
+    }
+}
+
+/// Convert parser-level requirement groups into DB model groups and their linked clauses.
+///
+/// Returns `(groups, clauses)` where each clause has a placeholder `group_id` of 0
+/// that will be fixed up after the groups are inserted with real IDs.
+fn convert_requirement_groups(
+    repository_package_id: i64,
+    groups: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+) -> (Vec<DbRequirementGroup>, Vec<Vec<RepositoryRequirement>>) {
+    let mut db_groups = Vec::with_capacity(groups.len());
+    let mut clause_batches = Vec::with_capacity(groups.len());
+
+    for group in groups {
+        let mut db_group = DbRequirementGroup::new(
+            repository_package_id,
+            requirement_kind_to_db(group.kind),
+            behavior_to_db(group.behavior),
+        );
+        db_group.description = group.description.clone();
+        db_group.native_text = group.native_text.clone();
+
+        let clauses: Vec<RepositoryRequirement> = group
+            .alternatives
+            .iter()
+            .map(|clause| {
+                let dep_type = match group.kind {
+                    RepositoryRequirementKind::Optional => "optional",
+                    RepositoryRequirementKind::Build => "build",
+                    _ => "runtime",
+                };
+                // group_id placeholder 0 -- fixed up after group insert
+                RepositoryRequirement::new(
+                    repository_package_id,
+                    clause.name.clone(),
+                    clause.version_constraint.clone(),
+                    "package".to_string(),
+                    dep_type.to_string(),
+                    clause.native_text.clone(),
+                )
+            })
+            .collect();
+
+        db_groups.push(db_group);
+        clause_batches.push(clauses);
+    }
+
+    (db_groups, clause_batches)
+}
+
 /// Response from Remi metadata API (`GET /v1/{distro}/metadata`)
 #[derive(serde::Deserialize)]
 struct RemiMetadataResponse {
@@ -337,11 +475,7 @@ fn remi_sync_row(
     endpoint: String,
     distro: String,
     entry: RemiPackageEntry,
-) -> (
-    RepositoryPackage,
-    Vec<RepositoryProvide>,
-    Vec<RepositoryRequirement>,
-) {
+) -> SyncedPackageRow {
     let system_arch = registry::detect_system_arch();
     let download_url = format!(
         "{endpoint}/v1/{distro}/packages/{}/download",
@@ -396,7 +530,13 @@ fn remi_sync_row(
         })
         .collect();
 
-    (pkg, provides, requirements)
+    SyncedPackageRow {
+        package: pkg,
+        provides,
+        requirements,
+        requirement_groups: Vec::new(),
+        requirement_group_clauses: Vec::new(),
+    }
 }
 
 fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
@@ -457,11 +597,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
 
     // Deduplicate by (name, version, arch) — Remi metadata may contain duplicates
     let mut seen = HashSet::new();
-    let synced_packages: Vec<(
-        RepositoryPackage,
-        Vec<RepositoryProvide>,
-        Vec<RepositoryRequirement>,
-    )> = response
+    let synced_packages: Vec<SyncedPackageRow> = response
         .packages
         .into_iter()
         .filter_map(|entry| {
@@ -484,7 +620,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         .collect();
 
     let mut repo_packages: Vec<RepositoryPackage> =
-        synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
+        synced_packages.iter().map(|row| row.package.clone()).collect();
     let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
 
     info!(
@@ -708,8 +844,14 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{RepositoryProvide, RepositoryRequirement};
+    use crate::db::models::{
+        RepositoryProvide, RepositoryRequirement,
+        RepositoryRequirementGroup as DbRequirementGroup,
+    };
     use crate::db::schema::migrate;
+    use crate::repository::dependency_model::{
+        self as dep_model, ConditionalRequirementBehavior, RepositoryRequirementKind,
+    };
     use crate::repository::parsers::Dependency;
     use serde_json::json;
 
@@ -816,8 +958,8 @@ mod tests {
         });
 
         let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
-        let synced_packages = vec![(
-            RepositoryPackage::new(
+        let synced_packages = vec![SyncedPackageRow {
+            package: RepositoryPackage::new(
                 repo_id,
                 pkg_meta.name.clone(),
                 pkg_meta.version.clone(),
@@ -827,9 +969,11 @@ mod tests {
             ),
             provides,
             requirements,
-        )];
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }];
         let mut repo_packages: Vec<RepositoryPackage> =
-            synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
+            synced_packages.iter().map(|row| row.package.clone()).collect();
 
         let count =
             persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages)
@@ -885,29 +1029,379 @@ mod tests {
             })),
         };
 
-        let (_pkg, provides, requirements) = remi_sync_row(
+        let row = remi_sync_row(
             7,
             "https://packages.conary.io".to_string(),
             "fedora".to_string(),
             entry,
         );
 
-        assert!(provides.iter().any(|provide| {
+        assert!(row.provides.iter().any(|provide| {
             provide.capability == "kernel-core-uname-r"
                 && provide.version.as_deref() == Some("6.19.6-200.fc43.x86_64")
                 && provide.raw.as_deref()
                     == Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
         }));
-        assert!(requirements.iter().any(|requirement| {
+        assert!(row.requirements.iter().any(|requirement| {
             requirement.capability == "kernel-modules-core-uname-r"
                 && requirement.version_constraint.as_deref()
                     == Some("= 6.19.6-200.fc43.x86_64")
                 && requirement.raw.as_deref()
                     == Some("kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64")
         }));
-        assert!(requirements.iter().any(|requirement| {
+        assert!(row.requirements.iter().any(|requirement| {
             requirement.capability == "glibc"
                 && requirement.version_constraint.as_deref() == Some(">= 2.39")
         }));
+    }
+
+    #[test]
+    fn test_sync_persists_distro_and_version_scheme() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "fedora-updates".to_string(),
+            "https://example.com/fedora".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg_meta = PackageMetadata::new(
+            "bash".to_string(),
+            "5.2.37-1.fc43".to_string(),
+            "deadbeef".to_string(),
+            2048,
+            "https://example.com/fedora/bash.rpm".to_string(),
+        );
+        pkg_meta.source_distro = Some(RepositoryDependencyFlavor::Rpm);
+        pkg_meta.version_scheme = Some(VersionScheme::Rpm);
+
+        let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
+        let synced = vec![SyncedPackageRow {
+            package: {
+                let mut p = RepositoryPackage::new(
+                    repo_id,
+                    pkg_meta.name.clone(),
+                    pkg_meta.version.clone(),
+                    pkg_meta.checksum.clone(),
+                    pkg_meta.size as i64,
+                    pkg_meta.download_url.clone(),
+                );
+                p.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+                p.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+                p
+            },
+            provides,
+            requirements,
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced.iter().map(|row| row.package.clone()).collect();
+
+        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].distro.as_deref(), Some("rpm"));
+        assert_eq!(stored[0].version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn test_sync_persists_debian_origin_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "debian-main".to_string(),
+            "https://example.com/debian".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg_meta = PackageMetadata::new(
+            "postfix".to_string(),
+            "3.9.1-1".to_string(),
+            "aabbccdd".to_string(),
+            512,
+            "https://example.com/debian/postfix.deb".to_string(),
+        );
+        pkg_meta.source_distro = Some(RepositoryDependencyFlavor::Deb);
+        pkg_meta.version_scheme = Some(VersionScheme::Debian);
+
+        let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
+        let synced = vec![SyncedPackageRow {
+            package: {
+                let mut p = RepositoryPackage::new(
+                    repo_id,
+                    pkg_meta.name.clone(),
+                    pkg_meta.version.clone(),
+                    pkg_meta.checksum.clone(),
+                    pkg_meta.size as i64,
+                    pkg_meta.download_url.clone(),
+                );
+                p.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+                p.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+                p
+            },
+            provides,
+            requirements,
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced.iter().map(|row| row.package.clone()).collect();
+
+        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].distro.as_deref(), Some("deb"));
+        assert_eq!(stored[0].version_scheme.as_deref(), Some("debian"));
+    }
+
+    #[test]
+    fn test_sync_persists_arch_origin_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.com/arch".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg_meta = PackageMetadata::new(
+            "ripgrep".to_string(),
+            "14.1.0-1".to_string(),
+            "abc123".to_string(),
+            1234,
+            "https://example.com/arch/ripgrep.pkg.tar.zst".to_string(),
+        );
+        pkg_meta.source_distro = Some(RepositoryDependencyFlavor::Arch);
+        pkg_meta.version_scheme = Some(VersionScheme::Arch);
+
+        let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
+        let synced = vec![SyncedPackageRow {
+            package: {
+                let mut p = RepositoryPackage::new(
+                    repo_id,
+                    pkg_meta.name.clone(),
+                    pkg_meta.version.clone(),
+                    pkg_meta.checksum.clone(),
+                    pkg_meta.size as i64,
+                    pkg_meta.download_url.clone(),
+                );
+                p.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+                p.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+                p
+            },
+            provides,
+            requirements,
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced.iter().map(|row| row.package.clone()).collect();
+
+        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].distro.as_deref(), Some("arch"));
+        assert_eq!(stored[0].version_scheme.as_deref(), Some("arch"));
+    }
+
+    #[test]
+    fn test_sync_persists_requirement_groups_with_alternatives() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "debian-main".to_string(),
+            "https://example.com/debian".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // Simulate a Debian package with an OR dependency: default-mta | mail-transport-agent
+        let or_group = dep_model::RepositoryRequirementGroup::alternatives(
+            RepositoryRequirementKind::Depends,
+            vec![
+                dep_model::RepositoryRequirementClause::name_only("default-mta".to_string()),
+                dep_model::RepositoryRequirementClause::name_only(
+                    "mail-transport-agent".to_string(),
+                ),
+            ],
+        )
+        .with_native_text("default-mta | mail-transport-agent".to_string());
+
+        let simple_group = dep_model::RepositoryRequirementGroup::simple(
+            RepositoryRequirementKind::Depends,
+            dep_model::RepositoryRequirementClause::versioned(
+                "libc6".to_string(),
+                ">= 2.34".to_string(),
+            ),
+        );
+
+        let mut pkg_meta = PackageMetadata::new(
+            "postfix".to_string(),
+            "3.9.1-1".to_string(),
+            "aabbcc".to_string(),
+            4096,
+            "https://example.com/debian/postfix.deb".to_string(),
+        );
+        pkg_meta.source_distro = Some(RepositoryDependencyFlavor::Deb);
+        pkg_meta.version_scheme = Some(VersionScheme::Debian);
+        pkg_meta.requirements = vec![or_group, simple_group];
+
+        let (provides, flat_reqs) = normalized_repository_capabilities(&pkg_meta);
+        let (req_groups, req_group_clauses) = convert_requirement_groups(0, &pkg_meta.requirements);
+
+        let synced = vec![SyncedPackageRow {
+            package: {
+                let mut p = RepositoryPackage::new(
+                    repo_id,
+                    pkg_meta.name.clone(),
+                    pkg_meta.version.clone(),
+                    pkg_meta.checksum.clone(),
+                    pkg_meta.size as i64,
+                    pkg_meta.download_url.clone(),
+                );
+                p.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+                p.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+                p
+            },
+            provides,
+            requirements: flat_reqs,
+            requirement_groups: req_groups,
+            requirement_group_clauses: req_group_clauses,
+        }];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced.iter().map(|row| row.package.clone()).collect();
+
+        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        let pkg_id = stored[0].id.unwrap();
+
+        // Verify requirement groups were persisted
+        let groups = DbRequirementGroup::find_by_repository_package(&conn, pkg_id).unwrap();
+        assert_eq!(groups.len(), 2);
+
+        // First group: OR alternative
+        let or = groups.iter().find(|g| {
+            g.native_text.as_deref() == Some("default-mta | mail-transport-agent")
+        });
+        assert!(or.is_some(), "OR group should be persisted");
+        let or = or.unwrap();
+        assert_eq!(or.kind, "depends");
+        assert_eq!(or.behavior, "hard");
+
+        // Verify the OR group has two clauses
+        let or_clauses = RepositoryRequirement::find_by_group(&conn, or.id.unwrap()).unwrap();
+        assert_eq!(or_clauses.len(), 2);
+        assert!(or_clauses.iter().any(|c| c.capability == "default-mta"));
+        assert!(or_clauses
+            .iter()
+            .any(|c| c.capability == "mail-transport-agent"));
+
+        // Second group: simple versioned dependency
+        let simple = groups.iter().find(|g| g.native_text.is_none());
+        assert!(simple.is_some(), "simple group should be persisted");
+        let simple = simple.unwrap();
+        let simple_clauses =
+            RepositoryRequirement::find_by_group(&conn, simple.id.unwrap()).unwrap();
+        assert_eq!(simple_clauses.len(), 1);
+        assert_eq!(simple_clauses[0].capability, "libc6");
+        assert_eq!(
+            simple_clauses[0].version_constraint.as_deref(),
+            Some(">= 2.34")
+        );
+    }
+
+    #[test]
+    fn test_sync_persists_conditional_requirement_behavior() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.com/fedora".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // Simulate a conditional RPM rich dependency
+        let conditional_group = dep_model::RepositoryRequirementGroup::simple(
+            RepositoryRequirementKind::Depends,
+            dep_model::RepositoryRequirementClause::versioned(
+                "systemd".to_string(),
+                ">= 255".to_string(),
+            ),
+        )
+        .with_behavior(ConditionalRequirementBehavior::Conditional)
+        .with_native_text("(systemd >= 255 if systemd-resolved)".to_string());
+
+        let mut pkg_meta = PackageMetadata::new(
+            "resolved-client".to_string(),
+            "1.0-1.fc43".to_string(),
+            "ff00ff".to_string(),
+            256,
+            "https://example.com/fedora/resolved-client.rpm".to_string(),
+        );
+        pkg_meta.source_distro = Some(RepositoryDependencyFlavor::Rpm);
+        pkg_meta.version_scheme = Some(VersionScheme::Rpm);
+        pkg_meta.requirements = vec![conditional_group];
+
+        let (provides, flat_reqs) = normalized_repository_capabilities(&pkg_meta);
+        let (req_groups, req_group_clauses) = convert_requirement_groups(0, &pkg_meta.requirements);
+
+        let synced = vec![SyncedPackageRow {
+            package: {
+                let mut p = RepositoryPackage::new(
+                    repo_id,
+                    pkg_meta.name.clone(),
+                    pkg_meta.version.clone(),
+                    pkg_meta.checksum.clone(),
+                    pkg_meta.size as i64,
+                    pkg_meta.download_url.clone(),
+                );
+                p.distro = pkg_meta.source_distro.map(distro_flavor_to_db);
+                p.version_scheme = pkg_meta.version_scheme.map(version_scheme_to_db);
+                p
+            },
+            provides,
+            requirements: flat_reqs,
+            requirement_groups: req_groups,
+            requirement_group_clauses: req_group_clauses,
+        }];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced.iter().map(|row| row.package.clone()).collect();
+
+        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        let pkg_id = stored[0].id.unwrap();
+
+        let groups = DbRequirementGroup::find_by_repository_package(&conn, pkg_id).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].kind, "depends");
+        assert_eq!(groups[0].behavior, "conditional");
+        assert_eq!(
+            groups[0].native_text.as_deref(),
+            Some("(systemd >= 255 if systemd-resolved)")
+        );
+
+        let clauses = RepositoryRequirement::find_by_group(&conn, groups[0].id.unwrap()).unwrap();
+        assert_eq!(clauses.len(), 1);
+        assert_eq!(clauses[0].capability, "systemd");
+        assert_eq!(
+            clauses[0].version_constraint.as_deref(),
+            Some(">= 255")
+        );
     }
 }

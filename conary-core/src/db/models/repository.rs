@@ -545,8 +545,8 @@ impl RepositoryPackage {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         )?;
 
         for pkg in packages {
@@ -566,6 +566,8 @@ impl RepositoryPackage {
                 &pkg.cve_ids,
                 &pkg.advisory_id,
                 &pkg.advisory_url,
+                &pkg.distro,
+                &pkg.version_scheme,
             ])?;
         }
 
@@ -581,8 +583,8 @@ impl RepositoryPackage {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         )?;
 
         for pkg in packages.iter_mut() {
@@ -602,6 +604,8 @@ impl RepositoryPackage {
                 &pkg.cve_ids,
                 &pkg.advisory_id,
                 &pkg.advisory_url,
+                &pkg.distro,
+                &pkg.version_scheme,
             ])?;
             pkg.id = Some(conn.last_insert_rowid());
         }
