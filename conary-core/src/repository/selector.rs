@@ -4,9 +4,17 @@
 //!
 //! This module handles selecting the best package when multiple matches exist
 //! across different repositories, versions, or architectures.
+//!
+//! Policy awareness is layered on top of existing priority/version logic:
+//! - Architecture compatibility handles RPM `noarch`, Debian `all`, Arch `any`
+//! - Version ordering uses scheme-aware comparison (never cross-scheme)
+//! - `ResolutionPolicy` filters candidates by request scope and mixing policy
+//! - Canonical expansion surfaces all cross-distro implementations for root requests
 
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
+use crate::repository::dependency_model::RepositoryDependencyFlavor;
+use crate::repository::resolution_policy::{CandidateOrigin, ResolutionPolicy};
 use crate::repository::versioning::compare_repo_package_versions;
 use rusqlite::Connection;
 use tracing::{debug, info};
@@ -20,6 +28,14 @@ pub struct SelectionOptions {
     pub repository: Option<String>,
     /// Specific architecture to filter (if None, use system architecture)
     pub architecture: Option<String>,
+    /// Resolution policy to apply when filtering candidates.
+    /// When `None`, all candidates from enabled repositories are accepted.
+    pub policy: Option<ResolutionPolicy>,
+    /// Whether this selection is for a root (user-typed) request.
+    /// Policy request-scope constraints only apply to root requests.
+    pub is_root: bool,
+    /// The primary distro flavor of the system (for mixing policy checks).
+    pub primary_flavor: Option<RepositoryDependencyFlavor>,
 }
 
 /// Information about a package with its repository
@@ -38,11 +54,16 @@ impl PackageSelector {
         super::registry::detect_system_arch()
     }
 
-    /// Check if a package architecture is compatible with the system
+    /// Check if a package architecture is compatible with the system.
+    ///
+    /// Handles the arch-independent markers from all three ecosystems:
+    /// - RPM: `noarch`
+    /// - Debian: `all`
+    /// - Arch Linux / ALPM: `any`
     pub fn is_architecture_compatible(pkg_arch: Option<&str>, system_arch: &str) -> bool {
         match pkg_arch {
-            None => true,           // Unknown architecture - assume compatible
-            Some("noarch") => true, // noarch is compatible with everything
+            None => true,
+            Some("noarch" | "all" | "any") => true,
             Some(arch) => arch == system_arch,
         }
     }
@@ -50,7 +71,7 @@ impl PackageSelector {
     /// Search for packages by name with selection options
     ///
     /// Returns all matching packages with their repository information,
-    /// filtered by the selection options.
+    /// filtered by the selection options and resolution policy.
     pub fn search_packages(
         conn: &Connection,
         package_name: &str,
@@ -114,6 +135,26 @@ impl PackageSelector {
                 continue;
             }
 
+            // Apply resolution policy filter
+            if let Some(ref policy) = options.policy {
+                let origin = CandidateOrigin {
+                    repository: repo.name.clone(),
+                    flavor: infer_repo_flavor(&repo),
+                };
+                if !policy.accepts_candidate(
+                    &origin,
+                    package_name,
+                    options.is_root,
+                    options.primary_flavor,
+                ) {
+                    debug!(
+                        "Policy rejected package {} {} from repository {} (flavor {:?})",
+                        pkg.name, pkg.version, repo.name, origin.flavor
+                    );
+                    continue;
+                }
+            }
+
             results.push(PackageWithRepo {
                 package: pkg,
                 repository: repo,
@@ -127,8 +168,8 @@ impl PackageSelector {
     ///
     /// Selection criteria (in order of priority):
     /// 1. Repository priority (higher is better)
-    /// 2. Version (latest version)
-    /// 3. First match (stable tie-breaker)
+    /// 2. Version (latest version, using scheme-aware comparison)
+    /// 3. Repository name as stable tie-breaker (avoids non-determinism)
     pub fn select_best(mut candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
         if candidates.is_empty() {
             return Err(Error::NotFound("No matching packages found".to_string()));
@@ -143,11 +184,17 @@ impl PackageSelector {
                     &b.repository,
                 ) {
                     Some(ord) => ord.reverse(),
-                    None => b
-                        .repository
-                        .name
-                        .cmp(&a.repository.name)
-                        .then_with(|| b.package.version.cmp(&a.package.version)),
+                    // Cross-scheme comparison is incomparable -- fall back to
+                    // repository name ordering so results are deterministic
+                    // without inventing a synthetic version ordering.
+                    None => {
+                        debug!(
+                            "Incomparable version schemes for {} ({}) vs {} ({}); using repo name order",
+                            a.repository.name, a.package.version,
+                            b.repository.name, b.package.version,
+                        );
+                        a.repository.name.cmp(&b.repository.name)
+                    }
                 },
                 ord => ord,
             },
@@ -194,11 +241,48 @@ impl PackageSelector {
     }
 }
 
+/// Infer the distro flavor of a repository from its name and URL.
+///
+/// This bridges the gap between the repository model (which stores name/URL)
+/// and the policy model (which operates on `RepositoryDependencyFlavor`).
+fn infer_repo_flavor(repo: &Repository) -> RepositoryDependencyFlavor {
+    use crate::repository::registry::{RepositoryFormat, detect_repository_format};
+    match detect_repository_format(&repo.name, &repo.url) {
+        RepositoryFormat::Fedora => RepositoryDependencyFlavor::Rpm,
+        RepositoryFormat::Debian => RepositoryDependencyFlavor::Deb,
+        RepositoryFormat::Arch => RepositoryDependencyFlavor::Arch,
+        RepositoryFormat::Json => {
+            // Best-effort: check name patterns
+            let name = repo.name.to_lowercase();
+            if name.contains("fedora")
+                || name.contains("rhel")
+                || name.contains("centos")
+                || name.contains("suse")
+            {
+                RepositoryDependencyFlavor::Rpm
+            } else if name.contains("ubuntu")
+                || name.contains("debian")
+                || name.contains("mint")
+            {
+                RepositoryDependencyFlavor::Deb
+            } else if name.contains("arch") || name.contains("manjaro") {
+                RepositoryDependencyFlavor::Arch
+            } else {
+                // Default to RPM as the most common
+                RepositoryDependencyFlavor::Rpm
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::models::{Repository, RepositoryPackage};
     use crate::db::schema;
+    use crate::repository::resolution_policy::{
+        DependencyMixingPolicy, RequestScope, ResolutionPolicy,
+    };
     use rusqlite::Connection;
 
     #[test]
@@ -236,6 +320,22 @@ mod tests {
         assert!(PackageSelector::is_architecture_compatible(
             None,
             system_arch
+        ));
+    }
+
+    #[test]
+    fn test_debian_all_architecture_compatible() {
+        assert!(PackageSelector::is_architecture_compatible(
+            Some("all"),
+            "x86_64"
+        ));
+    }
+
+    #[test]
+    fn test_arch_any_architecture_compatible() {
+        assert!(PackageSelector::is_architecture_compatible(
+            Some("any"),
+            "x86_64"
         ));
     }
 
@@ -288,5 +388,253 @@ mod tests {
         let selected = PackageSelector::select_best(candidates).unwrap();
 
         assert_eq!(selected.package.version, "1.0");
+    }
+
+    #[test]
+    fn policy_repo_scope_filters_root_request() {
+        let conn = test_db();
+
+        // Create two repos: fedora and ubuntu
+        let mut fedora_repo = Repository::new(
+            "fedora-43".to_string(),
+            "https://mirrors.fedoraproject.org/metalink".to_string(),
+        );
+        fedora_repo.priority = 10;
+        fedora_repo.insert(&conn).unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        // Add curl to both
+        let mut pkg_fed = RepositoryPackage::new(
+            fedora.id.unwrap(), "curl".into(), "8.9.1".into(),
+            "sha256:fed".into(), 1, "https://example.com/curl.rpm".into(),
+        );
+        pkg_fed.architecture = Some("x86_64".into());
+        pkg_fed.insert(&conn).unwrap();
+
+        let mut pkg_ubu = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "curl".into(), "8.5.0".into(),
+            "sha256:ubu".into(), 1, "https://example.com/curl.deb".into(),
+        );
+        pkg_ubu.architecture = Some("x86_64".into());
+        pkg_ubu.insert(&conn).unwrap();
+
+        // With --repo fedora-43, root request should only find fedora
+        let policy = ResolutionPolicy::new()
+            .with_scope(RequestScope::Repository("fedora-43".into()));
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: true,
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "curl", &options).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].repository.name, "fedora-43");
+    }
+
+    #[test]
+    fn policy_repo_scope_does_not_filter_transitive_deps() {
+        let conn = test_db();
+
+        let mut fedora_repo = Repository::new(
+            "fedora-43".to_string(),
+            "https://mirrors.fedoraproject.org/metalink".to_string(),
+        );
+        fedora_repo.priority = 10;
+        fedora_repo.insert(&conn).unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        let mut pkg_fed = RepositoryPackage::new(
+            fedora.id.unwrap(), "libcurl".into(), "8.9.1".into(),
+            "sha256:fed".into(), 1, "https://example.com/libcurl.rpm".into(),
+        );
+        pkg_fed.architecture = Some("x86_64".into());
+        pkg_fed.insert(&conn).unwrap();
+
+        let mut pkg_ubu = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "libcurl".into(), "8.5.0".into(),
+            "sha256:ubu".into(), 1, "https://example.com/libcurl.deb".into(),
+        );
+        pkg_ubu.architecture = Some("x86_64".into());
+        pkg_ubu.insert(&conn).unwrap();
+
+        // Request scope targets fedora, but is_root=false so scope is ignored
+        let policy = ResolutionPolicy::new()
+            .with_scope(RequestScope::Repository("fedora-43".into()));
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: false,
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "libcurl", &options).unwrap();
+        assert_eq!(candidates.len(), 2, "transitive dep sees both repos");
+    }
+
+    #[test]
+    fn strict_policy_rejects_cross_flavor_dep() {
+        let conn = test_db();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
+            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+        );
+        pkg.architecture = Some("x86_64".into());
+        pkg.insert(&conn).unwrap();
+
+        // Strict policy with RPM primary flavor -- debian package should be rejected
+        let policy = ResolutionPolicy::new()
+            .with_mixing(DependencyMixingPolicy::Strict);
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: false,
+            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
+        assert!(candidates.is_empty(), "strict policy rejects cross-flavor");
+    }
+
+    #[test]
+    fn permissive_policy_allows_cross_flavor_dep() {
+        let conn = test_db();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
+            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+        );
+        pkg.architecture = Some("x86_64".into());
+        pkg.insert(&conn).unwrap();
+
+        let policy = ResolutionPolicy::new()
+            .with_mixing(DependencyMixingPolicy::Permissive);
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: false,
+            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
+        assert_eq!(candidates.len(), 1, "permissive policy allows cross-flavor");
+    }
+
+    #[test]
+    fn guarded_policy_allows_cross_flavor_dep() {
+        let conn = test_db();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "libssl3".into(), "3.0.13".into(),
+            "sha256:ssl".into(), 1, "https://example.com/libssl3.deb".into(),
+        );
+        pkg.architecture = Some("x86_64".into());
+        pkg.insert(&conn).unwrap();
+
+        // Guarded policy allows cross-flavor but callers should log warnings
+        let policy = ResolutionPolicy::new()
+            .with_mixing(DependencyMixingPolicy::Guarded);
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: false,
+            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
+        assert_eq!(candidates.len(), 1, "guarded policy allows cross-flavor");
+    }
+
+    #[test]
+    fn incomparable_cross_scheme_falls_back_to_repo_name_order() {
+        let conn = test_db();
+
+        // Create fedora and ubuntu repos at same priority
+        let mut fedora_repo = Repository::new(
+            "fedora-43".to_string(),
+            "https://mirrors.fedoraproject.org/metalink".to_string(),
+        );
+        fedora_repo.priority = 10;
+        fedora_repo.insert(&conn).unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-43").unwrap().unwrap();
+
+        let mut ubuntu_repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        ubuntu_repo.priority = 10;
+        ubuntu_repo.insert(&conn).unwrap();
+        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble").unwrap().unwrap();
+
+        let mut pkg_fed = RepositoryPackage::new(
+            fedora.id.unwrap(), "curl".into(), "8.9.1-2.fc43".into(),
+            "sha256:fed".into(), 1, "https://example.com/curl.rpm".into(),
+        );
+        pkg_fed.architecture = Some("x86_64".into());
+        pkg_fed.insert(&conn).unwrap();
+
+        let mut pkg_ubu = RepositoryPackage::new(
+            ubuntu.id.unwrap(), "curl".into(), "8.5.0-2ubuntu1".into(),
+            "sha256:ubu".into(), 1, "https://example.com/curl.deb".into(),
+        );
+        pkg_ubu.architecture = Some("x86_64".into());
+        pkg_ubu.insert(&conn).unwrap();
+
+        // With permissive policy, both candidates are present
+        let policy = ResolutionPolicy::new()
+            .with_mixing(DependencyMixingPolicy::Permissive);
+
+        let options = SelectionOptions {
+            policy: Some(policy),
+            is_root: true,
+            ..Default::default()
+        };
+        let candidates = PackageSelector::search_packages(&conn, "curl", &options).unwrap();
+        assert_eq!(candidates.len(), 2);
+
+        // select_best should pick deterministically (alphabetical repo name)
+        let selected = PackageSelector::select_best(candidates).unwrap();
+        // "fedora-43" < "ubuntu-noble" alphabetically, so fedora wins
+        assert_eq!(selected.repository.name, "fedora-43");
     }
 }

@@ -26,7 +26,8 @@ use dependencies::build_dependency_edges;
 use execute::{convert_extracted_files, get_files_to_remove};
 use prepare::{check_upgrade_status, parse_package};
 use resolve::{
-    ResolutionOutcome, ResolvedSourceType, check_provides_dependencies, resolve_package_path,
+    PolicyOptions, ResolutionOutcome, ResolvedSourceType, check_provides_dependencies,
+    resolve_package_path_with_policy,
 };
 use scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
@@ -92,6 +93,23 @@ pub struct InstallOptions<'a> {
     pub yes: bool,
     /// Install from a specific distro (cross-distro canonical resolution)
     pub from_distro: Option<String>,
+}
+
+/// Map a distro identifier string to its `RepositoryDependencyFlavor`.
+///
+/// Returns `None` for unrecognised distro names.
+fn distro_name_to_flavor(distro: &str) -> Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor> {
+    use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
+    let d = distro.to_lowercase();
+    if d.contains("fedora") || d.contains("rhel") || d.contains("centos") || d.contains("suse") {
+        Some(RepositoryDependencyFlavor::Rpm)
+    } else if d.contains("ubuntu") || d.contains("debian") || d.contains("mint") {
+        Some(RepositoryDependencyFlavor::Deb)
+    } else if d.contains("arch") || d.contains("manjaro") {
+        Some(RepositoryDependencyFlavor::Arch)
+    } else {
+        None
+    }
 }
 
 pub(super) fn run_triggers(
@@ -209,7 +227,49 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // for the main install transaction.
     let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
-    // If --from <distro> was specified, resolve the canonical name to that distro's package name
+    // Build resolution policy from CLI flags.
+    // --from-distro constrains the root request to a specific distro flavor;
+    // --repo constrains to a specific repository.  Both apply to the root
+    // request only (transitive deps are governed by the mixing policy).
+    let policy = {
+        use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+
+        let scope = if let Some(ref target_distro) = from_distro {
+            // Map distro name to the correct flavor for request-scope filtering
+            let flavor = distro_name_to_flavor(target_distro);
+            if let Some(f) = flavor {
+                RequestScope::DistroFlavor(f)
+            } else {
+                // Unknown flavor -- use repo scope as a fallback
+                RequestScope::Repository(target_distro.clone())
+            }
+        } else if let Some(ref r) = repo {
+            RequestScope::Repository(r.clone())
+        } else {
+            RequestScope::Any
+        };
+
+        // Read mixing policy from distro pin (if set)
+        let mixing = {
+            use conary_core::db::models::DistroPin;
+            use conary_core::repository::resolution_policy::DependencyMixingPolicy;
+            match DistroPin::get_current(&conn) {
+                Ok(Some(pin)) => match pin.mixing_policy.as_str() {
+                    "strict" => DependencyMixingPolicy::Strict,
+                    "guarded" => DependencyMixingPolicy::Guarded,
+                    "permissive" => DependencyMixingPolicy::Permissive,
+                    _ => DependencyMixingPolicy::Strict,
+                },
+                _ => DependencyMixingPolicy::Strict,
+            }
+        };
+
+        ResolutionPolicy::new().with_scope(scope).with_mixing(mixing)
+    };
+
+    // If --from <distro> was specified, resolve the canonical name to that distro's package name.
+    // Otherwise, use canonical expansion to find the best implementation for the
+    // current system (canonical expansion applies only to root requests, never deps).
     let resolved_name: Option<String> = if let Some(ref target_distro) = from_distro {
         if let Some(canonical) =
             conary_core::db::models::CanonicalPackage::resolve_name(&conn, package)?
@@ -237,7 +297,30 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             None
         }
     } else {
-        None
+        // No explicit --from-distro: use canonical resolver to expand and rank
+        // implementations by pin/affinity/override.  This only applies to root
+        // requests -- deps are never canonically expanded.
+        use conary_core::resolver::canonical::CanonicalResolver;
+        let canonical_resolver = CanonicalResolver::new(&conn);
+        let candidates = canonical_resolver.expand(package)?;
+        if candidates.len() > 1 {
+            let ranked = canonical_resolver
+                .rank_candidates_with_policy(&candidates, &policy)?;
+            info!(
+                "Canonical expansion for '{}': {} implementations, best = '{}' ({})",
+                package,
+                ranked.len(),
+                ranked[0].distro_name,
+                ranked[0].distro,
+            );
+            // Use the top-ranked implementation
+            Some(ranked[0].distro_name.clone())
+        } else if candidates.len() == 1 {
+            Some(candidates[0].distro_name.clone())
+        } else {
+            // No canonical mapping -- use the name as-is
+            None
+        }
     };
     let package = resolved_name.as_deref().unwrap_or(package);
 
@@ -325,13 +408,23 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let progress = InstallProgress::single("Installing");
     progress.set_phase(&package_name, InstallPhase::Downloading);
 
+    // Build policy options for resolution.  The root request carries the
+    // full policy; transitive deps will inherit the mixing policy but not
+    // the request scope (that is handled inside the resolver).
+    let policy_opts = PolicyOptions {
+        policy: Some(policy),
+        is_root: true,
+        primary_flavor: None, // Will be inferred from the pinned distro inside selector
+    };
+
     // Resolve package path (download if needed)
-    let resolved = match resolve_package_path(
+    let resolved = match resolve_package_path_with_policy(
         &package_name,
         db_path,
         version.as_deref(),
         repo.as_deref(),
         &progress,
+        &policy_opts,
     )? {
         ResolutionOutcome::AlreadyInstalled { name, version } => {
             println!(
