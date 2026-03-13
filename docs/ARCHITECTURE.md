@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-07
-revision: 2
-summary: Update schema to v48 (admin_tokens, admin_audit_log), add admin API architecture
+last_updated: 2026-03-13
+revision: 3
+summary: Update schema to v51, add cross-distro repo capability tables and new modules, fix crate/test counts
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v48 |        +------+-----+
+     |  SQLite v51 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -89,7 +89,7 @@ can be flagged as stale when the parent updates.
 
 ## Module Map
 
-The project is a Cargo workspace with 4 crates:
+The project is a Cargo workspace with 5 crates:
 
 ```
 conary/                  Root crate -- CLI binary
@@ -108,8 +108,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v48, migration dispatcher
-    |   +-- migrations.rs All 48 migration functions
+    |   +-- schema.rs    Schema v51, migration dispatcher
+    |   +-- migrations.rs All 51 migration functions
     |   +-- models/      ORM-style model structs
     +-- transaction/     Crash-safe atomic operations
     |   +-- journal.rs   Append-only recovery journal
@@ -129,6 +129,9 @@ conary-core/             Core library crate
     |   +-- metalink.rs  Metalink XML parser
     |   +-- substituter.rs Content substituter chain
     |   +-- resolution.rs Per-package routing strategies
+    |   +-- dependency_model.rs Cross-distro dependency model (provides/requires/groups)
+    |   +-- versioning.rs Cross-distro version scheme awareness
+    |   +-- resolution_policy.rs Per-repo capability resolution policies
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -154,6 +157,7 @@ conary-core/             Core library crate
     |   +-- remote.rs    Remote collection fetching
     |   +-- lockfile.rs  Model lockfile for remote includes
     |   +-- signing.rs   Ed25519 collection signing
+    |   +-- replatform.rs Cross-distro system replatforming
     +-- recipe/          Source-based package building
     |   +-- kitchen/     Build environment (cook, fetch, provenance)
     |   +-- parser.rs    TOML recipe parser
@@ -189,6 +193,15 @@ conary-core/             Core library crate
 conary-erofs/            EROFS image builder for composefs
 +-- src/
     +-- lib.rs           EROFS filesystem image generation
+
+conary-test/             Declarative test infrastructure (TOML manifests, container management)
++-- src/
+    +-- config/          TOML manifest and distro config parsing
+    +-- engine/          Test suite, runner, assertions
+    +-- container/       ContainerBackend trait, bollard implementation
+    +-- report/          JSON output, SSE event streaming
+    +-- server/          Axum HTTP API, MCP server (rmcp)
+    +-- cli.rs           Binary entrypoint
 
 conary-server/           Remi server + conaryd (feature-gated: --features server)
 +-- src/
@@ -378,7 +391,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v48)
+## Database Schema (v51)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 
@@ -397,6 +410,9 @@ Components:
 Repository:
   repositories        Configured repos (URL, priority, TUF, default strategy)
   repository_packages Available packages from synced metadata
+  repository_provides Cross-distro capability provides (kind, capability, version)
+  repository_requirements Cross-distro capability requirements (kind, capability, version_constraint)
+  repository_requirement_groups OR-alternative requirement groups
   labels / label_path Package provenance and search order
   mirror_health       Per-mirror latency/throughput/health scores
 

@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-13
+revision: 1
+summary: Add YAML frontmatter; spec verified accurate against current ccs manifest code
+---
+
 # CCS Package Format Specification v1
 
 ## Overview
@@ -731,7 +737,7 @@ The `ccs.lock` file records exact dependency versions for reproducible builds.
 
 [metadata]
 version = 1
-generated_by = "conary 0.2.0"
+generated_by = "conary 0.5.0"
 manifest_hash = "sha256:abc123..."  # Hash of ccs.toml
 
 [[dependencies]]

@@ -57,7 +57,7 @@ cargo build --features server
 cargo build --release
 ```
 
-The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
+The project is a Cargo workspace with 5 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
 
 ## Running Tests
 
@@ -104,7 +104,7 @@ cargo test
 
 ### Rust Specifics
 
-- Edition 2024, minimum supported Rust version 1.93
+- Edition 2024, minimum supported Rust version 1.94
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling
@@ -116,7 +116,7 @@ Write clear, descriptive commit messages. Use the imperative mood in the subject
 
 ## Module Overview
 
-The project is a Cargo workspace with 4 crates:
+The project is a Cargo workspace with 5 crates:
 
 **`conary`** (root) -- CLI binary
 
@@ -162,6 +162,16 @@ The project is a Cargo workspace with 4 crates:
 | `src/server/` | Remi on-demand CCS conversion proxy |
 | `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
 | `src/federation/` | CAS federation -- peer discovery, chunk routing, mTLS, mDNS |
+
+**`conary-test`** -- Declarative test infrastructure (TOML manifests, container management)
+
+| Module | Purpose |
+|--------|---------|
+| `src/config/` | TOML manifest and distro config parsing |
+| `src/engine/` | Test suite, runner, assertions |
+| `src/container/` | ContainerBackend trait, bollard implementation |
+| `src/report/` | JSON output, SSE event streaming |
+| `src/server/` | Axum HTTP API, MCP server (rmcp) |
 
 ## Pull Request Process
 
