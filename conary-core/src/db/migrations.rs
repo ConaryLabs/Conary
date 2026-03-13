@@ -2382,6 +2382,40 @@ pub fn migrate_v50(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 51 - Requirement groups, version_scheme on repository_packages and provides
+///
+/// Adds:
+/// - `repository_requirement_groups` table so each OR-alternative group is first-class
+/// - `version_scheme` column on `repository_packages` for per-package scheme awareness
+/// - `version_scheme` column on `repository_provides` to record the native scheme of
+///   the provide version text
+pub fn migrate_v51(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS repository_requirement_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_package_id INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'depends',
+            behavior TEXT NOT NULL DEFAULT 'hard',
+            description TEXT,
+            native_text TEXT,
+            FOREIGN KEY (repository_package_id) REFERENCES repository_packages(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_repo_req_groups_pkg
+            ON repository_requirement_groups(repository_package_id);
+
+        ALTER TABLE repository_packages ADD COLUMN version_scheme TEXT;
+        ALTER TABLE repository_provides ADD COLUMN version_scheme TEXT;
+        ALTER TABLE repository_requirements ADD COLUMN group_id INTEGER REFERENCES repository_requirement_groups(id) ON DELETE CASCADE;
+        CREATE INDEX IF NOT EXISTS idx_repo_requirements_group
+            ON repository_requirements(group_id);
+        ",
+    )?;
+
+    info!("Schema version 51 applied successfully (requirement groups, version_scheme columns)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2400,7 +2434,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 50);
+        assert_eq!(version, 51);
 
         // Insert into canonical_packages
         conn.execute(
@@ -2451,6 +2485,18 @@ mod tests {
 
         // Verify new columns on troves
         conn.execute("SELECT source_distro, version_scheme FROM troves LIMIT 0", [])
+            .unwrap();
+
+        // Verify v51: repository_requirement_groups table
+        conn.execute("SELECT id, repository_package_id, kind, behavior, description, native_text FROM repository_requirement_groups LIMIT 0", [])
+            .unwrap();
+
+        // Verify v51: version_scheme on repository_packages
+        conn.execute("SELECT version_scheme FROM repository_packages LIMIT 0", [])
+            .unwrap();
+
+        // Verify v51: version_scheme on repository_provides
+        conn.execute("SELECT version_scheme FROM repository_provides LIMIT 0", [])
             .unwrap();
     }
 }

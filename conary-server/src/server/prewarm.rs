@@ -251,6 +251,8 @@ fn get_packages_to_convert(
             cve_ids: None,
             advisory_id: None,
             advisory_url: None,
+            distro: None,
+            version_scheme: None,
         })
     })?;
 
