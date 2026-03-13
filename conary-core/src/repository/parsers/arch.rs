@@ -8,6 +8,12 @@
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryDependencyFlavor,
+    RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
+use crate::repository::versioning::VersionScheme;
 use std::collections::HashMap;
 use std::io::Read;
 use tar::Archive;
@@ -99,6 +105,108 @@ impl ArchParser {
         }
 
         dependencies
+    }
+
+    /// Classify an Arch provide entry.
+    fn classify_arch_provide(name: &str) -> RepositoryCapabilityKind {
+        if name.contains(".so") {
+            RepositoryCapabilityKind::Soname
+        } else {
+            RepositoryCapabilityKind::Virtual
+        }
+    }
+
+    /// Build structured requirement groups from a depends file.
+    fn parse_structured_depends(
+        &self,
+        content: &str,
+    ) -> Vec<RepositoryRequirementGroup> {
+        let fields = self.parse_desc_file(content);
+        let mut groups = Vec::new();
+
+        if let Some(deps) = fields.get("DEPENDS") {
+            for dep in deps {
+                let (name, constraint) = self.parse_dependency_string(dep);
+                let clause = if constraint.is_empty() {
+                    RepositoryRequirementClause::name_only(name)
+                } else {
+                    RepositoryRequirementClause::versioned(name, constraint)
+                };
+                groups.push(
+                    RepositoryRequirementGroup::simple(
+                        RepositoryRequirementKind::Depends,
+                        clause,
+                    )
+                    .with_native_text(dep.clone()),
+                );
+            }
+        }
+
+        if let Some(opts) = fields.get("OPTDEPENDS") {
+            for opt in opts {
+                let (pkg_name, desc) = if let Some((pkg, d)) = opt.split_once(':') {
+                    let (name, _) = self.parse_dependency_string(pkg.trim());
+                    (name, Some(d.trim().to_string()))
+                } else {
+                    let (name, _) = self.parse_dependency_string(opt);
+                    (name, None)
+                };
+                groups.push(RepositoryRequirementGroup::optional(
+                    RepositoryRequirementClause::name_only(pkg_name),
+                    desc,
+                ));
+            }
+        }
+
+        groups
+    }
+
+    /// Build structured provides from desc fields.
+    fn build_structured_provides(
+        &self,
+        name: &str,
+        version: &str,
+        desc_fields: &HashMap<String, Vec<String>>,
+    ) -> Vec<RepositoryProvide> {
+        let mut provides = vec![RepositoryProvide::package_name(
+            name.to_string(),
+            Some(version.to_string()),
+        )];
+
+        if let Some(prov_list) = desc_fields.get("PROVIDES") {
+            for prov in prov_list {
+                let (prov_name, prov_constraint) = self.parse_dependency_string(prov);
+                let kind = if prov_name == name {
+                    RepositoryCapabilityKind::PackageName
+                } else {
+                    Self::classify_arch_provide(&prov_name)
+                };
+
+                // Extract version from constraint like "=3-64" or ">=1.0"
+                let prov_version = if prov_constraint.is_empty() {
+                    None
+                } else {
+                    let trimmed = prov_constraint.trim();
+                    let ver_part = trimmed
+                        .strip_prefix(">=")
+                        .or_else(|| trimmed.strip_prefix("<="))
+                        .or_else(|| trimmed.strip_prefix('>'))
+                        .or_else(|| trimmed.strip_prefix('<'))
+                        .or_else(|| trimmed.strip_prefix('='))
+                        .unwrap_or(trimmed);
+                    Some(ver_part.trim().to_string())
+                };
+
+                provides.push(RepositoryProvide {
+                    name: prov_name,
+                    kind,
+                    version: prov_version,
+                    native_text: Some(prov.clone()),
+                });
+            }
+        }
+
+        provides
     }
 
     fn package_from_fields(
@@ -202,6 +310,13 @@ impl ArchParser {
             .map(|content| self.parse_depends_file(content))
             .unwrap_or_default();
 
+        let requirements = depends_content
+            .map(|content| self.parse_structured_depends(content))
+            .unwrap_or_default();
+
+        let structured_provides =
+            self.build_structured_provides(&name, &version, desc_fields);
+
         Ok(PackageMetadata {
             name,
             version,
@@ -213,10 +328,10 @@ impl ArchParser {
             download_url,
             dependencies,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: None,
-            version_scheme: None,
-            requirements: Vec::new(),
-            provides: Vec::new(),
+            source_distro: Some(RepositoryDependencyFlavor::Arch),
+            version_scheme: Some(VersionScheme::Arch),
+            requirements,
+            provides: structured_provides,
         })
     }
 
@@ -372,5 +487,190 @@ smtp-server=1.0
 
         assert!(provides.contains(&"mail-transport-agent"));
         assert!(provides.contains(&"smtp-server=1.0"));
+    }
+
+    #[test]
+    fn test_source_distro_and_version_scheme() {
+        let parser = ArchParser::new("core".to_string());
+        let desc = "\
+%NAME%
+bash
+
+%VERSION%
+5.2.037-1
+
+%FILENAME%
+bash-5.2.037-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+123
+
+%ARCH%
+x86_64
+";
+        let fields = parser.parse_desc_file(desc);
+        let pkg = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap();
+
+        assert_eq!(pkg.source_distro, Some(RepositoryDependencyFlavor::Arch));
+        assert_eq!(pkg.version_scheme, Some(VersionScheme::Arch));
+    }
+
+    #[test]
+    fn test_structured_versioned_depends() {
+        let parser = ArchParser::new("core".to_string());
+        let desc = "\
+%NAME%
+bash
+
+%VERSION%
+5.2.037-1
+
+%FILENAME%
+bash-5.2.037-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+123
+
+%ARCH%
+x86_64
+";
+        let depends = "\
+%DEPENDS%
+glibc>=2.36
+readline
+ncurses
+";
+        let fields = parser.parse_desc_file(desc);
+        let pkg = parser
+            .package_from_fields("https://example.test", &fields, Some(&depends.to_string()))
+            .unwrap();
+
+        assert_eq!(pkg.requirements.len(), 3);
+
+        let glibc = &pkg.requirements[0];
+        assert_eq!(glibc.kind, RepositoryRequirementKind::Depends);
+        assert_eq!(glibc.alternatives[0].name, "glibc");
+        assert_eq!(
+            glibc.alternatives[0].version_constraint.as_deref(),
+            Some(">=2.36")
+        );
+
+        let readline = &pkg.requirements[1];
+        assert_eq!(readline.alternatives[0].name, "readline");
+        assert!(readline.alternatives[0].version_constraint.is_none());
+    }
+
+    #[test]
+    fn test_structured_versioned_provides() {
+        let parser = ArchParser::new("core".to_string());
+        let desc = "\
+%NAME%
+glibc
+
+%VERSION%
+2.40-1
+
+%FILENAME%
+glibc-2.40-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+200
+
+%ARCH%
+x86_64
+
+%PROVIDES%
+libm.so=6-64
+libpthread.so
+";
+
+        let fields = parser.parse_desc_file(desc);
+        let pkg = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap();
+
+        // Self-provide + 2 explicit provides
+        assert!(pkg.provides.len() >= 3);
+
+        let self_prov = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "glibc" && p.kind == RepositoryCapabilityKind::PackageName)
+            .expect("self-provide missing");
+        assert_eq!(self_prov.version.as_deref(), Some("2.40-1"));
+
+        let libm = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "libm.so")
+            .expect("libm.so provide missing");
+        assert_eq!(libm.kind, RepositoryCapabilityKind::Soname);
+        assert_eq!(libm.version.as_deref(), Some("6-64"));
+
+        let libpthread = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "libpthread.so")
+            .expect("libpthread.so provide missing");
+        assert_eq!(libpthread.kind, RepositoryCapabilityKind::Soname);
+        assert!(libpthread.version.is_none());
+    }
+
+    #[test]
+    fn test_implicit_self_provide_always_present() {
+        let parser = ArchParser::new("core".to_string());
+        let desc = "\
+%NAME%
+coreutils
+
+%VERSION%
+9.5-1
+
+%FILENAME%
+coreutils-9.5-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+100
+
+%ARCH%
+x86_64
+";
+        let fields = parser.parse_desc_file(desc);
+        let pkg = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap();
+
+        assert!(!pkg.provides.is_empty());
+        let self_prov = &pkg.provides[0];
+        assert_eq!(self_prov.name, "coreutils");
+        assert_eq!(self_prov.kind, RepositoryCapabilityKind::PackageName);
+        assert_eq!(self_prov.version.as_deref(), Some("9.5-1"));
+    }
+
+    #[test]
+    fn test_dependency_string_with_operator() {
+        let parser = ArchParser::new("core".to_string());
+
+        let (name, constraint) = parser.parse_dependency_string("openssl>=3.0");
+        assert_eq!(name, "openssl");
+        assert_eq!(constraint, ">=3.0");
+
+        let (name2, constraint2) = parser.parse_dependency_string("zlib=1.3.1-1");
+        assert_eq!(name2, "zlib");
+        assert_eq!(constraint2, "=1.3.1-1");
     }
 }
