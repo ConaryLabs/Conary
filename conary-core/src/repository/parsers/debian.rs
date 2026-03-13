@@ -195,6 +195,10 @@ impl DebianParser {
             download_url,
             dependencies,
             extra_metadata: serde_json::Value::Object(extra),
+            source_distro: None,
+            version_scheme: None,
+            requirements: Vec::new(),
+            provides: Vec::new(),
         })
     }
 }

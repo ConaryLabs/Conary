@@ -12,6 +12,10 @@ pub mod debian;
 pub mod fedora;
 
 use crate::error::Result;
+use crate::repository::dependency_model::{
+    RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
+};
+use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
 /// Repository metadata parser trait
@@ -50,11 +54,34 @@ pub struct PackageMetadata {
     /// Full URL to download the package file
     pub download_url: String,
 
-    /// Package dependencies
+    /// Package dependencies (legacy flat list, kept for transition compatibility).
     pub dependencies: Vec<Dependency>,
 
     /// Additional format-specific metadata (stored as JSON)
     pub extra_metadata: serde_json::Value,
+
+    // -- Normalized native semantics (Step 4) ----------------------------------
+
+    /// Which distro ecosystem this metadata came from.
+    ///
+    /// `None` for legacy parsers that have not been updated yet.
+    pub source_distro: Option<RepositoryDependencyFlavor>,
+
+    /// The version comparison scheme that applies to `version`.
+    ///
+    /// `None` for legacy parsers that have not been updated yet.
+    pub version_scheme: Option<VersionScheme>,
+
+    /// Normalized requirement groups (alternatives, conditional markers).
+    ///
+    /// Empty until the parser populates them; the legacy `dependencies` field
+    /// remains as a transition compatibility layer.
+    pub requirements: Vec<RepositoryRequirementGroup>,
+
+    /// Normalized provides (package name, virtual caps, sonames, files).
+    ///
+    /// Empty until the parser populates them.
+    pub provides: Vec<RepositoryProvide>,
 }
 
 /// Package dependency information
@@ -122,6 +149,10 @@ impl PackageMetadata {
             download_url,
             dependencies: Vec::new(),
             extra_metadata: serde_json::Value::Null,
+            source_distro: None,
+            version_scheme: None,
+            requirements: Vec::new(),
+            provides: Vec::new(),
         }
     }
 }

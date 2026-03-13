@@ -24,8 +24,10 @@ pub mod resolution;
 pub mod substituter;
 mod sync;
 
+pub mod dependency_model;
 pub mod gpg;
 pub mod parsers;
+pub mod resolution_policy;
 pub mod selector;
 pub mod versioning;
 
