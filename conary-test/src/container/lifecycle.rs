@@ -116,7 +116,6 @@ impl BollardBackend {
     }
 }
 
-
 #[async_trait]
 impl ContainerBackend for BollardBackend {
     async fn build_image(

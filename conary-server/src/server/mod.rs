@@ -642,7 +642,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     Ok(())
 }
 
-
 /// Start the Remi server (legacy single-port mode)
 pub async fn run_server(config: ServerConfig) -> Result<()> {
     tracing::info!("Starting Conary Remi server on {}", config.bind_addr);
