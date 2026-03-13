@@ -9,6 +9,7 @@ use crate::db::models::{
     CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, SystemAffinity,
 };
 use crate::error::{Error, Result};
+use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use rusqlite::Connection;
 
 /// A candidate package from canonical expansion
@@ -164,6 +165,87 @@ impl<'db> CanonicalResolver<'db> {
         }
     }
 
+    /// Rank candidates with explicit request scope applied first.
+    ///
+    /// When `policy` carries a `RequestScope::Repository` or
+    /// `RequestScope::DistroFlavor`, candidates matching the scope sort before
+    /// all others.  The remaining tie-breaking follows the same
+    /// override > pin > affinity > alphabetical order as `rank_candidates`.
+    pub fn rank_candidates_with_policy(
+        &self,
+        candidates: &[ResolverCandidate],
+        policy: &ResolutionPolicy,
+    ) -> Result<Vec<ResolverCandidate>> {
+        let mut ranked = candidates.to_vec();
+
+        let pin = DistroPin::get_current(self.conn)?;
+        let affinities = SystemAffinity::list(self.conn)?;
+
+        ranked.sort_by(|a, b| {
+            // 0. Explicit request scope first (root requests only)
+            match &policy.request_scope {
+                RequestScope::Repository(repo) => {
+                    // Prefer candidates whose distro matches the repo name pattern
+                    let a_match = a.distro.contains(repo.as_str());
+                    let b_match = b.distro.contains(repo.as_str());
+                    if a_match != b_match {
+                        return b_match.cmp(&a_match);
+                    }
+                }
+                RequestScope::DistroFlavor(flavor) => {
+                    let a_match = distro_matches_flavor(&a.distro, *flavor);
+                    let b_match = distro_matches_flavor(&b.distro, *flavor);
+                    if a_match != b_match {
+                        return b_match.cmp(&a_match);
+                    }
+                }
+                RequestScope::Any => {}
+            }
+
+            // 1. Package override takes priority
+            let a_override = PackageOverride::get(self.conn, a.canonical_id)
+                .ok()
+                .flatten()
+                .is_some_and(|o| o.from_distro == a.distro);
+            let b_override = PackageOverride::get(self.conn, b.canonical_id)
+                .ok()
+                .flatten()
+                .is_some_and(|o| o.from_distro == b.distro);
+            if a_override != b_override {
+                return b_override.cmp(&a_override);
+            }
+
+            // 2. Pinned distro
+            if let Some(ref p) = pin {
+                let a_pinned = a.distro == p.distro;
+                let b_pinned = b.distro == p.distro;
+                if a_pinned != b_pinned {
+                    return b_pinned.cmp(&a_pinned);
+                }
+            }
+
+            // 3. Highest affinity percentage
+            let a_affinity = affinities
+                .iter()
+                .find(|af| af.distro == a.distro)
+                .map_or(0.0, |af| af.percentage);
+            let b_affinity = affinities
+                .iter()
+                .find(|af| af.distro == b.distro)
+                .map_or(0.0, |af| af.percentage);
+            if (a_affinity - b_affinity).abs() > f64::EPSILON {
+                return b_affinity
+                    .partial_cmp(&a_affinity)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+            }
+
+            // 4. Alphabetical distro as tiebreaker
+            a.distro.cmp(&b.distro)
+        });
+
+        Ok(ranked)
+    }
+
     /// Get packages that conflict with the given package (canonical equivalents).
     /// All distro implementations of the same canonical package conflict with each other.
     pub fn get_conflicts(&self, package_name: &str) -> Result<Vec<String>> {
@@ -191,11 +273,34 @@ impl<'db> CanonicalResolver<'db> {
     }
 }
 
+/// Check whether a distro identifier matches a `RepositoryDependencyFlavor`.
+fn distro_matches_flavor(
+    distro: &str,
+    flavor: crate::repository::dependency_model::RepositoryDependencyFlavor,
+) -> bool {
+    use crate::repository::dependency_model::RepositoryDependencyFlavor;
+    let d = distro.to_lowercase();
+    match flavor {
+        RepositoryDependencyFlavor::Rpm => {
+            d.contains("fedora")
+                || d.contains("rhel")
+                || d.contains("centos")
+                || d.contains("suse")
+        }
+        RepositoryDependencyFlavor::Deb => {
+            d.contains("ubuntu") || d.contains("debian") || d.contains("mint")
+        }
+        RepositoryDependencyFlavor::Arch => d.contains("arch") || d.contains("manjaro"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation, PackageOverride};
     use crate::db::schema;
+    use crate::repository::dependency_model::RepositoryDependencyFlavor;
+    use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
 
@@ -372,5 +477,105 @@ mod tests {
         let resolver = CanonicalResolver::new(&conn);
         let conflicts = resolver.get_conflicts("nonexistent").unwrap();
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_rank_with_policy_scope_repo() {
+        let (_t, conn) = create_test_db();
+
+        let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "curl".into(), "auto".into());
+        i1.insert_or_ignore(&conn).unwrap();
+        let mut i2 =
+            PackageImplementation::new(cid, "ubuntu-noble".into(), "curl".into(), "auto".into());
+        i2.insert_or_ignore(&conn).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("curl").unwrap();
+
+        // Policy scope: prefer ubuntu-noble
+        let policy = ResolutionPolicy::new()
+            .with_scope(RequestScope::Repository("ubuntu-noble".into()));
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked[0].distro, "ubuntu-noble");
+    }
+
+    #[test]
+    fn test_rank_with_policy_scope_flavor() {
+        let (_t, conn) = create_test_db();
+
+        let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "curl".into(), "auto".into());
+        i1.insert_or_ignore(&conn).unwrap();
+        let mut i2 =
+            PackageImplementation::new(cid, "ubuntu-noble".into(), "curl".into(), "auto".into());
+        i2.insert_or_ignore(&conn).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("curl").unwrap();
+
+        // Policy scope: prefer Deb flavor
+        let policy = ResolutionPolicy::new()
+            .with_scope(RequestScope::DistroFlavor(RepositoryDependencyFlavor::Deb));
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked[0].distro, "ubuntu-noble");
+    }
+
+    #[test]
+    fn test_rank_override_beats_pin() {
+        let (_t, conn) = create_test_db();
+
+        // Pin to ubuntu-noble
+        DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
+
+        let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut i1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "mesa".into(), "auto".into());
+        i1.insert_or_ignore(&conn).unwrap();
+        let mut i2 =
+            PackageImplementation::new(cid, "ubuntu-noble".into(), "mesa".into(), "auto".into());
+        i2.insert_or_ignore(&conn).unwrap();
+
+        // Override mesa to fedora
+        PackageOverride::set(&conn, cid, "fedora-41", None).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("mesa").unwrap();
+
+        let policy = ResolutionPolicy::new();
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        // Override should beat pin
+        assert_eq!(ranked[0].distro, "fedora-41");
+    }
+
+    #[test]
+    fn test_distro_matches_flavor() {
+        assert!(distro_matches_flavor(
+            "fedora-41",
+            RepositoryDependencyFlavor::Rpm
+        ));
+        assert!(distro_matches_flavor(
+            "ubuntu-noble",
+            RepositoryDependencyFlavor::Deb
+        ));
+        assert!(distro_matches_flavor(
+            "arch",
+            RepositoryDependencyFlavor::Arch
+        ));
+        assert!(!distro_matches_flavor(
+            "fedora-41",
+            RepositoryDependencyFlavor::Deb
+        ));
     }
 }

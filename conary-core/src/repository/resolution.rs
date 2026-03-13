@@ -59,7 +59,9 @@ use crate::error::{Error, Result};
 use crate::label::Label;
 use crate::recipe::{Kitchen, KitchenConfig, parse_recipe};
 use crate::repository::client::RepositoryClient;
+use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::remi::RemiClient;
+use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 use crate::repository::{DownloadOptions, download_package_verified};
 use rusqlite::Connection;
@@ -99,6 +101,12 @@ pub struct ResolutionOptions {
     pub gpg_options: Option<DownloadOptions>,
     /// Whether to skip local CAS check
     pub skip_cas: bool,
+    /// Resolution policy controlling cross-distro selection.
+    pub policy: Option<ResolutionPolicy>,
+    /// Whether this resolution is for a root (user-typed) request.
+    pub is_root: bool,
+    /// The primary distro flavor of the system (for mixing policy checks).
+    pub primary_flavor: Option<RepositoryDependencyFlavor>,
 }
 
 impl ResolutionOptions {
@@ -108,6 +116,9 @@ impl ResolutionOptions {
             version: self.version.clone(),
             repository: self.repository.clone(),
             architecture: self.architecture.clone(),
+            policy: self.policy.clone(),
+            is_root: self.is_root,
+            primary_flavor: self.primary_flavor,
         }
     }
 }
@@ -824,6 +835,9 @@ mod tests {
             output_dir: None,
             gpg_options: None,
             skip_cas: false,
+            policy: None,
+            is_root: false,
+            primary_flavor: None,
         };
 
         let sel_options = res_options.to_selection_options();

@@ -18,6 +18,8 @@ use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary_core::db::models::{ProvideEntry, Redirect};
 use conary_core::db::paths::keyring_dir;
+use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
+use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::repository::{PackageSource, ResolutionOptions, resolve_package};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -78,6 +80,17 @@ impl ResolvedSourceType {
     }
 }
 
+/// Options that control policy-aware resolution at the install layer.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyOptions {
+    /// Resolution policy to filter candidates.
+    pub policy: Option<ResolutionPolicy>,
+    /// Whether this is a root (user-typed) request.
+    pub is_root: bool,
+    /// The primary distro flavor for mixing policy checks.
+    pub primary_flavor: Option<RepositoryDependencyFlavor>,
+}
+
 /// Resolve package to a local path, downloading from repository if needed
 ///
 /// This is the main entry point for package resolution. It uses the unified
@@ -85,12 +98,28 @@ impl ResolvedSourceType {
 ///
 /// Returns `ResolutionOutcome::AlreadyInstalled` if the package is already
 /// installed at the requested version, avoiding unnecessary downloads.
+#[allow(dead_code)] // Convenience wrapper kept for callers without policy
 pub fn resolve_package_path(
     package: &str,
     db_path: &str,
     version: Option<&str>,
     repo: Option<&str>,
     progress: &InstallProgress,
+) -> Result<ResolutionOutcome> {
+    resolve_package_path_with_policy(package, db_path, version, repo, progress, &PolicyOptions::default())
+}
+
+/// Resolve package to a local path with explicit policy control.
+///
+/// Like `resolve_package_path` but accepts a `PolicyOptions` to constrain
+/// candidate selection via `ResolutionPolicy`.
+pub fn resolve_package_path_with_policy(
+    package: &str,
+    db_path: &str,
+    version: Option<&str>,
+    repo: Option<&str>,
+    progress: &InstallProgress,
+    policy_opts: &PolicyOptions,
 ) -> Result<ResolutionOutcome> {
     // Check if package is a local file
     if Path::new(package).exists() {
@@ -121,6 +150,9 @@ pub fn resolve_package_path(
         output_dir: None,
         gpg_options: None, // Will be set per-repository in resolver
         skip_cas: false,
+        policy: policy_opts.policy.clone(),
+        is_root: policy_opts.is_root,
+        primary_flavor: policy_opts.primary_flavor,
     };
 
     // Use unified resolver

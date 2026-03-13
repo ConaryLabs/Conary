@@ -685,6 +685,9 @@ pub fn cmd_update(
                     None
                 },
                 skip_cas: false,
+                policy: None,
+                is_root: false,
+                primary_flavor: None,
             };
 
             // Use unified resolver - respects remi/binary/recipe strategies
