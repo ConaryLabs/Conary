@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [test-v0.2.0] - 2026-03-13
+
+### Other
+- feat(model): promote source policy to first-class Conary contract
+- fix(phase3): harden group k server resilience coverage
+- fix(phase3): harden group h recovery coverage
+- fix(phase3): harden group g integrity coverage
+- fix(integration): stabilize phase 3 group m installs
+- fix(integration): align phase 3 fixtures and repo names
+- fix(conary-test): expand manifest vars in assertions
+- fix(conary-test): load fixture vars from remi config
+- fix(conary-test): bootstrap repos for isolated phase runs
+- fix(conary-test): bind mount host results directories
+- fix(conary-test): initialize test containers before suites
+- fix(conary-test): stage remi image build contexts
+- fix(conary-test): use workspace build context for images
+- fix(conary-test): avoid empty registry config on podman builds
+- chore(conary-test): format touched engine files
+- feat(conary-test): add qemu_boot step type for boot verification tests
+- feat(conary-test): verify phase 3 support in CLI
+- feat(conary-test): add flaky test retry support with majority-pass logic
+- feat(conary-test): add mock_server setup for simulating repo failures
+- feat(conary-test): add kill_after_log step type for crash recovery tests
+- feat(conary-test): add distro_overrides variable substitution in manifests
+- feat(conary-test): add resource constraints to container configuration
+- fix(test): validate conflicting assertion fields
+- refactor(test): use Vec<TestPackage> in DistroConfig
+- refactor(test): extract service layer from handlers
+- refactor(test): use status.as_str() in MCP list_runs
+- fix(test): remove double JSON serialization in get_run
+- fix(test): add eviction policy to prevent unbounded run history growth
+- fix(test): replace unwrap in to_sse with error handling
+- refactor(conary-test): simplify crate — deduplicate helpers, hoist workspace deps
+- feat(test): convert Phase 2 tests T38-T76 to TOML manifests (Groups A-F)
+- feat(test): convert Phase 1 tests T11-T37 to TOML manifests
+- feat(test): convert Phase 1 tests T01-T10 to TOML manifest
+- feat(test): wire CLI subcommands to engine, container backend, and server
+- feat(test): add MCP server with rmcp tool definitions
+- feat(test): add HTTP server — Axum routes, handlers, shared state
+- feat(test): add report module — JSON output and SSE event streaming
+- feat(test): wire test runner to container backend with mock tests
+- feat(test): add container module — bollard backend with ContainerBackend trait
+- feat(test): add engine module -- TestSuite, assertions, runner skeleton
+- feat(test): add config module — TOML manifest and distro config parsing
+- feat(test): scaffold conary-test crate with CLI skeleton
+
 ## [server-v0.4.0] - 2026-03-13
 
 ### Other
