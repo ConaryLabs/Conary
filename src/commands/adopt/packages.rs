@@ -24,6 +24,9 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
         return Err(anyhow::anyhow!("No packages specified"));
     }
 
+    // Hint if source policy is unconfigured (first-run guidance)
+    super::super::hint_unconfigured_source_policy();
+
     // Detect system package manager
     let pkg_mgr = SystemPackageManager::detect();
     if !pkg_mgr.is_available() {

@@ -801,6 +801,22 @@ impl SystemConfig {
             })
         })
     }
+
+    /// Check whether the source policy has been explicitly configured.
+    ///
+    /// Returns `true` if any of the following are set to non-default values:
+    /// - `distro` or `pin` (explicit source pin)
+    /// - `convergence` is not `TrackOnly`
+    /// - `allowed_distros` is non-empty
+    ///
+    /// When this returns `false`, the system is running with default source
+    /// policy and the user may benefit from a configuration hint.
+    pub fn is_source_policy_configured(&self) -> bool {
+        self.pin.is_some()
+            || self.distro.is_some()
+            || self.convergence != ConvergenceIntent::TrackOnly
+            || !self.allowed_distros.is_empty()
+    }
 }
 
 /// Per-package override to source from a different distro
@@ -927,6 +943,50 @@ impl SystemModel {
         }
 
         Ok(())
+    }
+
+    /// Resolve which override (if any) applies to a given package name.
+    ///
+    /// Checks override scope in priority order: exact > family > class.
+    /// - "exact" (or None): override key must match `package_name` exactly
+    /// - "family": override key matches `canonical_family` (if provided)
+    /// - "class": override key matches `package_class` (if provided)
+    ///
+    /// Returns the override key and config for the first match at the
+    /// highest-priority scope level.
+    pub fn resolve_override(
+        &self,
+        package_name: &str,
+        canonical_family: Option<&str>,
+        package_class: Option<&str>,
+    ) -> Option<(&str, &PackageOverrideConfig)> {
+        // Priority 1: exact match (scope is None or "exact")
+        for (key, config) in &self.overrides {
+            let scope = config.scope.as_deref().unwrap_or("exact");
+            if scope == "exact" && key == package_name {
+                return Some((key.as_str(), config));
+            }
+        }
+
+        // Priority 2: family match
+        if let Some(family) = canonical_family {
+            for (key, config) in &self.overrides {
+                if config.scope.as_deref() == Some("family") && key == family {
+                    return Some((key.as_str(), config));
+                }
+            }
+        }
+
+        // Priority 3: class match
+        if let Some(class) = package_class {
+            for (key, config) in &self.overrides {
+                if config.scope.as_deref() == Some("class") && key == class {
+                    return Some((key.as_str(), config));
+                }
+            }
+        }
+
+        None
     }
 
     /// Serialize the model to TOML
@@ -1475,5 +1535,119 @@ strength = "hard"
             ConvergenceIntent::FullOwnership.display_name(),
             "full-ownership"
         );
+    }
+
+    #[test]
+    fn test_override_scope_exact_wins_over_family_and_class() {
+        let input = r#"
+[model]
+version = 1
+
+[overrides]
+kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
+kernel-core = { from = "arch", reason = "exact match override" }
+libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+
+        // Exact match wins even though family and class are available
+        let result = model.resolve_override(
+            "kernel-core",
+            Some("kernel"),
+            Some("libs"),
+        );
+        assert!(result.is_some());
+        let (key, config) = result.unwrap();
+        assert_eq!(key, "kernel-core");
+        assert_eq!(config.from, "arch");
+    }
+
+    #[test]
+    fn test_override_scope_family_wins_over_class() {
+        let input = r#"
+[model]
+version = 1
+
+[overrides]
+kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
+libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+
+        // No exact match for "kernel-headers", family "kernel" should win over class "libs"
+        let result = model.resolve_override(
+            "kernel-headers",
+            Some("kernel"),
+            Some("libs"),
+        );
+        assert!(result.is_some());
+        let (key, config) = result.unwrap();
+        assert_eq!(key, "kernel");
+        assert_eq!(config.from, "fedora-43");
+    }
+
+    #[test]
+    fn test_override_scope_class_fallback() {
+        let input = r#"
+[model]
+version = 1
+
+[overrides]
+libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+
+        // No exact or family match, class should match
+        let result = model.resolve_override(
+            "libssl",
+            None,
+            Some("libs"),
+        );
+        assert!(result.is_some());
+        let (key, config) = result.unwrap();
+        assert_eq!(key, "libs");
+        assert_eq!(config.from, "ubuntu-noble");
+    }
+
+    #[test]
+    fn test_override_scope_no_match_returns_none() {
+        let input = r#"
+[model]
+version = 1
+
+[overrides]
+mesa = { from = "fedora-41" }
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+
+        let result = model.resolve_override("vim", None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_source_policy_default_is_unconfigured() {
+        let config = SystemConfig::default();
+        assert!(!config.is_source_policy_configured());
+    }
+
+    #[test]
+    fn test_source_policy_with_distro_pin_is_configured() {
+        let mut config = SystemConfig::default();
+        config.distro = Some("arch".to_string());
+        assert!(config.is_source_policy_configured());
+    }
+
+    #[test]
+    fn test_source_policy_with_convergence_is_configured() {
+        let mut config = SystemConfig::default();
+        config.convergence = ConvergenceIntent::CasBacked;
+        assert!(config.is_source_policy_configured());
+    }
+
+    #[test]
+    fn test_source_policy_with_allowed_distros_is_configured() {
+        let mut config = SystemConfig::default();
+        config.allowed_distros = vec!["fedora-43".to_string()];
+        assert!(config.is_source_policy_configured());
     }
 }

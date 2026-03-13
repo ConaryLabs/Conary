@@ -201,6 +201,9 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         from_distro,
     } = opts;
 
+    // Hint if source policy is unconfigured (first-run guidance)
+    super::hint_unconfigured_source_policy();
+
     // Open the database once for all pre-install checks (canonical resolution,
     // adoption check, promotion check). This connection is later promoted to `mut`
     // for the main install transaction.

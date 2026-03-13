@@ -10,6 +10,7 @@ use super::super::create_state_snapshot;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove};
+use conary_core::model;
 use conary_core::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
 use std::io::{self, Write};
 use tracing::{info, warn};
@@ -71,11 +72,39 @@ pub fn cmd_adopt_takeover(
         return Ok(());
     }
 
+    // Log convergence context from system model if available
+    let convergence_intent = if model::model_exists(None) {
+        match model::load_model(None) {
+            Ok(m) => {
+                let intent = &m.system.convergence;
+                info!(
+                    "System model convergence intent: {} (target: {})",
+                    intent.display_name(),
+                    intent.target_install_source()
+                );
+                Some(intent.clone())
+            }
+            Err(e) => {
+                info!("Could not load system model for convergence context: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     println!(
         "Will take over {} package(s) from {} to Conary ownership:",
         targets.len(),
         pkg_mgr.display_name()
     );
+    if let Some(ref intent) = convergence_intent {
+        println!(
+            "  Convergence intent: {} (target state: {})",
+            intent.display_name(),
+            intent.target_install_source()
+        );
+    }
     for t in &targets {
         println!("  {} {} ({})", t.name, t.version, t.install_source.as_str());
     }
