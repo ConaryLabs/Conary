@@ -17,6 +17,17 @@ for CCS chunk operations.
 - `RemiClient` / `AsyncRemiClient` -- client for Remi CCS server (async variant feature-gated)
 - `PackageResolver` / `PackageSource` -- resolution with `ResolutionOptions`
 - `SubstituterChain` -- binary substituter pipeline
+- `RepositoryDependencyFlavor` -- dependency flavor annotation (from `dependency_model.rs`)
+- `RepositoryCapabilityKind` -- capability kind enum (from `dependency_model.rs`)
+- `RepositoryRequirementGroup` -- OR-group of requirement clauses (from `dependency_model.rs`)
+- `RepositoryRequirementClause` -- single clause within a requirement group (from `dependency_model.rs`)
+- `RepositoryProvide` -- normalized provide record (from `dependency_model.rs`)
+- `VersionScheme` -- RPM, Debian, ALPM version scheme discriminant (from `versioning.rs`)
+- `RepositoryVersion` -- scheme-aware parsed version (from `versioning.rs`)
+- `RepoVersionConstraint` -- version constraint with scheme (from `versioning.rs`)
+- `ResolutionPolicy` -- policy for candidate filtering (from `resolution_policy.rs`)
+- `RequestScope` -- scope of a resolution request (from `resolution_policy.rs`)
+- `DependencyMixingPolicy` -- controls cross-format dependency mixing (from `resolution_policy.rs`)
 
 ## Constants
 - `HTTP_TIMEOUT` -- 30 seconds default
@@ -31,7 +42,8 @@ for CCS chunk operations.
 - `chunk_fetcher` module is feature-gated behind `--features server`
 
 ## Gotchas
-- `parsers/` contains format-specific metadata parsers (arch.rs, debian.rs), not package parsers
+- `parsers/` contains format-specific metadata parsers (arch.rs, debian.rs, fedora.rs), not package parsers
+- Normalized provides/requirements tables replace JSON blob scanning for dependency resolution
 - `remi.rs` has both sync `RemiClient` and async `AsyncRemiClient` (server feature only)
 - `registry.rs` handles format detection and parser creation
 - `metalink.rs` parses both XML metalink files and HTTP metalink headers
@@ -39,7 +51,11 @@ for CCS chunk operations.
 ## Files
 - `client.rs` -- `RepositoryClient`, `RetryPolicy`, `validate_url_scheme()`
 - `sync.rs` -- `sync_repository()`, `needs_sync()`, timestamp helpers
-- `parsers/` -- `arch.rs`, `debian.rs` format-specific metadata parsers
+- `parsers/` -- `arch.rs`, `debian.rs`, `fedora.rs` format-specific metadata parsers
+- `dependency_model.rs` -- cross-distro normalized dependency/provide types
+- `versioning.rs` -- scheme-aware version comparison (RPM, Debian, ALPM)
+- `resolution_policy.rs` -- policy types for request scope, mixing, and candidate filtering
+- `selector.rs` -- package candidate selection logic
 - `mirror_health.rs` -- per-mirror tracking
 - `remi.rs` -- Remi CCS server client
 - `download.rs` -- `download_package()`, checksum verification

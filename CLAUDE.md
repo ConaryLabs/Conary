@@ -5,10 +5,11 @@
 ```bash
 cargo build                              # Client-only (default, use for dev)
 cargo build --features server            # With Remi server + conaryd daemon
-cargo test                               # ~200 unit tests + 76 integration tests
+cargo test                               # ~260 unit tests + 76 integration tests
 cargo build -p conary-test               # Test infrastructure crate
 cargo test -p conary-test                # Test engine unit tests
 cargo clippy -- -D warnings              # Lint
+cargo fmt --check                        # Format check
 ```
 
 IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
@@ -45,7 +46,7 @@ Add `!` after the type for breaking changes: `feat!: remove legacy API`.
 
 Scopes are optional: `feat(resolver): add SAT backtracking`.
 
-**Release:** Run `./scripts/release.sh [conary|erofs|server|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
+**Release:** Run `./scripts/release.sh [conary|erofs|server|test|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
 
 **Publish:** Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds CCS + native packages (RPM/DEB/Arch) in parallel containers and deploys to Remi. Forgejo's `release.yaml` automatically verifies the release landed. See `.claude/rules/infrastructure.md` for details.
 
@@ -57,7 +58,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **CAS**: Content-addressable storage for files
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP
 
-Database schema is currently **v48** (40+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
+Database schema is currently **v51** (50+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 

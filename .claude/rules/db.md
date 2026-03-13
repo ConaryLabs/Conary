@@ -6,7 +6,7 @@ paths:
 # Database Module
 
 All runtime state lives in SQLite. No config files for runtime state -- this is a core
-architectural invariant. The schema is at version v48 with 40+ tables across 48 migrations.
+architectural invariant. The schema is at version v51 with 50+ tables across 51 migrations.
 Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Key Types
@@ -19,6 +19,9 @@ Connection management uses `rusqlite::Connection` directly (no pool).
 - `TriggerEngine` / `Trigger` -- post-install trigger definitions
 - `AdminToken` -- admin API token (name, token_hash, scopes, created_at, last_used_at)
 - `AuditEntry` -- admin audit log entry (token_name, action, method, path, status_code, request/response bodies, duration_ms)
+- `RepositoryProvide` -- normalized provider record for dependency resolution
+- `RepositoryRequirement` -- normalized requirement record for dependency resolution
+- `RepositoryRequirementGroup` -- OR-group of requirements for a package
 
 ## Invariants
 - Every `db::open()` and `db::init()` sets WAL mode, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`
@@ -35,6 +38,6 @@ Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Files
 - `mod.rs` -- `init()`, `open()`, `open_fast()`, `with_transaction()`, connection setup
-- `schema.rs` -- migration runner with version-gated inline migration blocks (v1-v48)
+- `schema.rs` -- migration runner with version-gated inline migration blocks (v1-v51)
 - `paths.rs` -- centralized path derivation (db_dir, objects_dir, keyring_dir, temp_dir)
 - `models/` -- 30+ model files, one per table group

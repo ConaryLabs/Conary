@@ -45,6 +45,10 @@
 | `src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
 | `src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
+| `src/repository/dependency_model.rs` | Cross-distro normalized dependency/provide types |
+| `src/repository/versioning.rs` | Scheme-aware version comparison (RPM, Debian, ALPM) |
+| `src/repository/resolution_policy.rs` | Policy types for request scope, mixing, and candidate filtering |
+| `src/model/replatform.rs` | Source policy replatform and convergence planning |
 
 ### conary-erofs -- EROFS image builder for composefs
 
