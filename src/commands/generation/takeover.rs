@@ -11,6 +11,7 @@ use super::switch::switch_live;
 use crate::commands::install::is_package_blocked;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::Trove;
+use conary_core::model;
 use conary_core::packages::SystemPackageManager;
 use std::collections::HashSet;
 use std::io::Write;
@@ -87,6 +88,29 @@ pub fn cmd_system_takeover(
     println!("Conary System Takeover");
     println!("======================");
     println!();
+
+    // Display convergence context from system model if available
+    if model::model_exists(None) {
+        match model::load_model(None) {
+            Ok(m) => {
+                let intent = &m.system.convergence;
+                info!(
+                    "System model convergence intent: {} (target: {})",
+                    intent.display_name(),
+                    intent.target_install_source()
+                );
+                println!(
+                    "Convergence intent: {} (target state: {})",
+                    intent.display_name(),
+                    intent.target_install_source()
+                );
+                println!();
+            }
+            Err(e) => {
+                info!("Could not load system model for convergence context: {e}");
+            }
+        }
+    }
 
     // Pre-flight safety checks
     preflight_checks()?;

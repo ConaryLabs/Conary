@@ -6,10 +6,12 @@ use super::metadata::{
     GenerationMetadata, ROOT_SYMLINKS, generation_path, generations_dir, is_excluded,
 };
 use anyhow::{Context, Result, anyhow};
-use conary_core::db::models::{FileEntry, StateEngine, Trove};
+use conary_core::db::models::{FileEntry, InstallSource, StateEngine, Trove};
 use conary_core::db::paths::objects_dir;
+use conary_core::model;
+use conary_core::model::ConvergenceIntent;
 use std::io::BufWriter;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Build a new generation as an EROFS image from the current system state
 ///
@@ -17,6 +19,42 @@ use tracing::{debug, info};
 /// containing all installed package files with CAS digest references
 /// suitable for composefs mounting.
 pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &str) -> Result<i64> {
+    // Step 0: Check convergence intent -- generation building requires at least CAS-backed
+    let convergence = if model::model_exists(None) {
+        model::load_model(None)
+            .ok()
+            .map(|m| m.system.convergence.clone())
+    } else {
+        None
+    };
+    if let Some(ref intent) = convergence {
+        info!(
+            "Convergence intent: {} (target: {})",
+            intent.display_name(),
+            intent.target_install_source()
+        );
+        if *intent == ConvergenceIntent::TrackOnly {
+            warn!(
+                "Convergence intent is 'track-only' -- packages at AdoptedTrack \
+                 lack CAS content and will be skipped in the generation image. \
+                 Set convergence to 'cas-backed' or 'full-ownership' for complete generations."
+            );
+        }
+    }
+
+    // Check for non-CAS-backed packages that will be excluded from the generation
+    let all_troves = Trove::list_all(conn).unwrap_or_default();
+    let track_only_count = all_troves
+        .iter()
+        .filter(|t| t.install_source == InstallSource::AdoptedTrack)
+        .count();
+    if track_only_count > 0 {
+        warn!(
+            "{track_only_count} package(s) are at AdoptedTrack (no CAS content) \
+             and may have incomplete file coverage in the generation image"
+        );
+    }
+
     // Step 1: Composefs preflight check
     let obj_dir = objects_dir(db_path);
     let caps = preflight_composefs(&obj_dir).context("Composefs preflight failed")?;

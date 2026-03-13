@@ -291,6 +291,36 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Emit a one-time hint when source policy is not explicitly configured.
+///
+/// Checks whether a system model exists and, if so, whether the source policy
+/// section has been explicitly set. When running with pure defaults, emits an
+/// informational message guiding the user to configure their source policy.
+///
+/// This is a non-blocking hint -- it never prevents the operation from proceeding.
+pub(crate) fn hint_unconfigured_source_policy() {
+    use conary_core::model;
+
+    if !model::model_exists(None) {
+        // No model file at all -- not an error; the user may not be using models
+        return;
+    }
+    match model::load_model(None) {
+        Ok(m) if !m.system.is_source_policy_configured() => {
+            eprintln!(
+                "hint: Source policy is using defaults (track-only, any distro)."
+            );
+            eprintln!(
+                "      Configure [system] in /etc/conary/system.toml to set convergence,",
+            );
+            eprintln!(
+                "      distro pin, or allowed distros. See 'conary model diff' for details.",
+            );
+        }
+        _ => {}
+    }
+}
+
 /// Create a state snapshot after a successful operation
 pub(crate) fn create_state_snapshot(
     conn: &rusqlite::Connection,

@@ -1595,4 +1595,51 @@ mod tests {
             Some(ReplatformBlockedReason::ArchitectureMismatch)
         );
     }
+
+    #[test]
+    fn test_convergence_plans_ownership_state_transition_adopted_track_to_taken() {
+        use crate::model::parser::ConvergenceIntent;
+
+        // Given: packages at various adoption states and FullOwnership convergence intent
+        let convergence = ConvergenceIntent::FullOwnership;
+        let target_source = convergence.target_install_source();
+
+        // Verify the convergence target maps to "taken"
+        assert_eq!(target_source, "taken");
+
+        // Given: a package currently at AdoptedTrack
+        let adopted_track = InstallSource::AdoptedTrack;
+        let adopted_full = InstallSource::AdoptedFull;
+        let taken = InstallSource::Taken;
+
+        // AdoptedTrack is not at the convergence target
+        assert_ne!(adopted_track.as_str(), target_source);
+        // AdoptedFull is not at the convergence target either
+        assert_ne!(adopted_full.as_str(), target_source);
+        // Taken IS the convergence target
+        assert_eq!(taken.as_str(), target_source);
+
+        // Verify the state ordering: AdoptedTrack < AdoptedFull < Taken
+        // Each convergence level maps to a progressively deeper ownership state
+        assert_eq!(
+            ConvergenceIntent::TrackOnly.target_install_source(),
+            adopted_track.as_str()
+        );
+        assert_eq!(
+            ConvergenceIntent::CasBacked.target_install_source(),
+            adopted_full.as_str()
+        );
+        assert_eq!(
+            ConvergenceIntent::FullOwnership.target_install_source(),
+            taken.as_str()
+        );
+
+        // AdoptedTrack is adopted (not yet converged)
+        assert!(adopted_track.is_adopted());
+        // AdoptedFull is adopted (not yet converged for FullOwnership)
+        assert!(adopted_full.is_adopted());
+        // Taken is Conary-owned (fully converged)
+        assert!(!taken.is_adopted());
+        assert!(taken.is_conary_owned());
+    }
 }
