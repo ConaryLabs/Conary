@@ -35,3 +35,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Remi smoke check
         run: ./scripts/remi-health.sh --smoke
+
+  deploy-remi:
+    runs-on: linux-native
+    needs: [build, test, clippy, remi-smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to Remi
+        run: ssh root@ssh.conary.io 'cd /root/conary-src && ./scripts/rebuild-remi.sh'
