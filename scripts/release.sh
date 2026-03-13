@@ -6,12 +6,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 usage() {
-    echo "Usage: $0 [conary|erofs|server|all] [--dry-run]"
+    echo "Usage: $0 [conary|erofs|server|test|all] [--dry-run]"
     echo ""
     echo "Analyze conventional commits since last tag and bump versions."
     echo "  conary   - conary CLI + conary-core (src/, conary-core/)"
     echo "  erofs    - conary-erofs (conary-erofs/)"
     echo "  server   - conary-server (conary-server/)"
+    echo "  test     - conary-test (conary-test/)"
     echo "  all      - all groups"
     echo "  --dry-run  Show what would happen without making changes"
     exit 1
@@ -23,7 +24,7 @@ RELEASE_RELEASE_GROUPS=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        conary|erofs|server|all) RELEASE_GROUPS+=("$arg") ;;
+        conary|erofs|server|test|all) RELEASE_GROUPS+=("$arg") ;;
         *) usage ;;
     esac
 done
@@ -31,19 +32,21 @@ done
 [[ ${#RELEASE_GROUPS[@]} -eq 0 ]] && usage
 
 if [[ " ${RELEASE_GROUPS[*]} " == *" all "* ]]; then
-    RELEASE_GROUPS=(conary erofs server)
+    RELEASE_GROUPS=(conary erofs server test)
 fi
 
 declare -A TAG_PREFIX=(
     [conary]="v"
     [erofs]="erofs-v"
     [server]="server-v"
+    [test]="test-v"
 )
 
 declare -A PATH_SCOPES=(
     [conary]="src/ conary-core/"
     [erofs]="conary-erofs/"
     [server]="conary-server/"
+    [test]="conary-test/"
 )
 
 latest_tag() {
@@ -261,6 +264,10 @@ for group in "${RELEASE_GROUPS[@]}"; do
         server)
             update_cargo_version "conary-server/Cargo.toml" "$new_version"
             echo "  Updated conary-server/Cargo.toml"
+            ;;
+        test)
+            update_cargo_version "conary-test/Cargo.toml" "$new_version"
+            echo "  Updated conary-test/Cargo.toml"
             ;;
     esac
 

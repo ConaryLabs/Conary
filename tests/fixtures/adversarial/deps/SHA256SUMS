@@ -1,0 +1,14 @@
+c7205e9c4db54f08ca796dd5dc58fceca25ec7e9cf307276ee83a6fcaaa799c3  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs
+0abd609750b99d977959dda1bd9a11383d5290aa8154df0c69ce5c8a762bd7d6  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs
+32b5919e7dbac7033dec35e4429ee94c4b9ccc704f40afb81ac804fd1df1af61  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-base-v2/output/dep-base-2.0.0.ccs
+a3a1796f05d953861b065937a91134ea119175f7fc0e314645a088dca7557ad6  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-circular-a-v1/output/dep-circular-a-1.0.0.ccs
+a7e60b26cfb73d8d823d48835bfa8648b5770c9cc5ac4e715e094bcef977e86e  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-circular-b-v1/output/dep-circular-b-1.0.0.ccs
+3fd570b80cbf3b86c07f197cdeebc96f14e6e47ed4e21d201755e06131c9c66f  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs
+2d951d76b7d6bc152d60f1c2e6639e77b6bd39483a23c740f0ef75a0517b3a90  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs
+c7262dd7291e0e3198b9f72d19aed86d7260c39c8cf894eb44f3055351a935de  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs
+8a9c52542c052a0b51153b9bb56dc8d58e1927438e6a1a5555bc65f46ea28cb1  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-or-a-v1/output/dep-or-a-1.0.0.ccs
+668e3f782feaaab0006378193a81f1b100de0106de2e17076b759ca5abe9e3e1  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs
+7a66e86209051587ac1c9be99fadacf2addfbd43bdbab8a5a11f14066208bd7b  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs
+c1d3aa7eff577c9b381c160aa1a5d632cf163e3726e6856bc2a74dd1fbe2b289  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-unresolvable-v1/output/dep-unresolvable-1.0.0.ccs
+90d03ed6ca4ed5b80eda5a7256bebc835a140f71aec8cefc5dad3af23298030a  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-virtual-consumer-v1/output/dep-virtual-consumer-1.0.0.ccs
+3e888bda5584fe5ae4a81de7121fe6fc4cdd54e50bb0efd24e4c2d02d8ab0329  /home/peter/Conary/tests/fixtures/adversarial/deps/dep-virtual-provider-v1/output/dep-virtual-provider-1.0.0.ccs

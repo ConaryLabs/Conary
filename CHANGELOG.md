@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.5.0] - 2026-03-13
+
+### Other
+- refactor(conary): remove repo solving stopgaps after native normalization
+- test(core): add cross-distro SAT and policy regression coverage
+- feat(core): make installed solver inputs version-scheme aware
+- feat(core): load native repo semantics into SAT provider
+- feat(core): add seamless cross-distro root package selection
+- feat(core): query normalized repo capabilities for dependency resolution
+- feat(core): persist native repo semantics during sync
+- feat(core): normalize arch repo semantics
+- feat(core): normalize debian repo semantics
+- feat(core): normalize fedora repo semantics
+- feat(core): persist native repo semantics and version schemes
+- feat(core): add native repo semantics and resolution policy types
+- fix(model): address spec compliance gaps in source policy
+- feat(model): promote source policy to first-class Conary contract
+- fix(core): skip conditional repo rpm dependencies in SAT requests
+- fix(core): allow repo capability lookup beyond virtual heuristics
+- fix(core): resolve repo capability deps by provide version
+- fix(core): preserve repo dependency constraints in SAT resolution
+- fix(conary): promote grouped remi deps in satisfy mode
+- fix(core): allow larger remi metadata responses
+- fix(server): include package metadata in remi index
+- fix(conary): install repo-resolvable converted deps in satisfy mode
+- fix(core): parse namespaced fedora metadata entries
+- fix(conary): surface unresolved converted deps
+- fix(core): resolve kernel capability deps from repo metadata
+- fix(phase3): harden group m real-world operations
+- fix(phase3): harden group j dependency edge coverage
+- fix(phase3): harden group i security boundary coverage
+- fix(phase3): harden group h recovery coverage
+- fix(phase3): harden group g integrity coverage
+- fix(conary): harden remi ccs dependency resolution
+- fix(conary): honor self-provided ccs dependencies
+- fix(conary): resolve converted ccs deps from package metadata
+- fix(core): map repo capability deps to package names
+- fix(conary): resolve dependencies for remi ccs installs
+- fix(core): make fuzzy provide checks honor soname suffixes
+- fix(conary): use fuzzy provide matching for ccs dependencies
+- fix(core): match rpm soname provides during dependency checks
+
 ## [v0.4.0] - 2026-03-11
 
 ### Fixed
