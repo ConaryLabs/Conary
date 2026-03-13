@@ -175,15 +175,11 @@ impl TestRunner {
                         test_def.id
                     );
                 };
-                self.run_resource_scoped_test(
-                    manifest,
-                    test_def,
-                    backend,
-                    base_container_config,
-                )
-                .await?
+                self.run_resource_scoped_test(manifest, test_def, backend, base_container_config)
+                    .await?
             } else {
-                self.run_test_attempt(test_def, backend, container_id).await?
+                self.run_test_attempt(test_def, backend, container_id)
+                    .await?
             };
 
             info!(
@@ -651,9 +647,10 @@ impl TestRunner {
         };
 
         if let Some(tmpfs_size_mb) = resources.tmpfs_size_mb {
-            container_config
-                .tmpfs
-                .insert("/var/lib/conary".to_string(), format!("size={tmpfs_size_mb}m"));
+            container_config.tmpfs.insert(
+                "/var/lib/conary".to_string(),
+                format!("size={tmpfs_size_mb}m"),
+            );
         }
 
         if let Some(memory_limit_mb) = resources.memory_limit_mb {
@@ -726,15 +723,14 @@ impl TestRunner {
                 .stdout_contains_if_success
                 .as_ref()
                 .map(|value| self.substitute_vars(value)),
-            stdout_contains_any_if_success: assertion
-                .stdout_contains_any_if_success
-                .as_ref()
-                .map(|values| {
+            stdout_contains_any_if_success: assertion.stdout_contains_any_if_success.as_ref().map(
+                |values| {
                     values
                         .iter()
                         .map(|value| self.substitute_vars(value))
                         .collect()
-                }),
+                },
+            ),
             stderr_contains: assertion
                 .stderr_contains
                 .as_ref()
@@ -747,10 +743,13 @@ impl TestRunner {
                 .file_not_exists
                 .as_ref()
                 .map(|value| self.substitute_vars(value)),
-            file_checksum: assertion.file_checksum.as_ref().map(|checksum| FileChecksum {
-                path: self.substitute_vars(&checksum.path),
-                sha256: self.substitute_vars(&checksum.sha256),
-            }),
+            file_checksum: assertion
+                .file_checksum
+                .as_ref()
+                .map(|checksum| FileChecksum {
+                    path: self.substitute_vars(&checksum.path),
+                    sha256: self.substitute_vars(&checksum.sha256),
+                }),
         }
     }
 }
@@ -962,18 +961,15 @@ mod tests {
                 v1_version: Some("1.0.0".to_string()),
                 v1_ccs_file: Some("conary-test-fixture-1.0.0.ccs".to_string()),
                 v1_hello_sha256: Some(
-                    "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53"
-                        .to_string(),
+                    "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53".to_string(),
                 ),
                 v2_version: Some("2.0.0".to_string()),
                 v2_ccs_file: Some("conary-test-fixture-2.0.0.ccs".to_string()),
                 v2_hello_sha256: Some(
-                    "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db"
-                        .to_string(),
+                    "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db".to_string(),
                 ),
                 v2_added_sha256: Some(
-                    "9767b0b4d55db9aee6638c9875b5cefea50c952cc77fbc5703ebc866b0daba3c"
-                        .to_string(),
+                    "9767b0b4d55db9aee6638c9875b5cefea50c952cc77fbc5703ebc866b0daba3c".to_string(),
                 ),
             }),
         }
@@ -1470,7 +1466,10 @@ mod tests {
         let expanded = runner.expand_assertion(&assertion);
         assert_eq!(
             expanded.stdout_contains_all,
-            Some(vec!["conary-test-fixture".to_string(), "Version".to_string()])
+            Some(vec![
+                "conary-test-fixture".to_string(),
+                "Version".to_string()
+            ])
         );
         assert_eq!(
             expanded.stderr_contains.as_deref(),
@@ -1481,7 +1480,10 @@ mod tests {
             Some("/tmp/conary-test-fixture")
         );
         assert_eq!(
-            expanded.file_checksum.as_ref().map(|chk| chk.sha256.as_str()),
+            expanded
+                .file_checksum
+                .as_ref()
+                .map(|chk| chk.sha256.as_str()),
             Some("abc123")
         );
     }

@@ -9,9 +9,8 @@ use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryDependencyFlavor,
-    RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
+    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
+    RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::versioning::VersionScheme;
 use std::collections::HashMap;
@@ -117,10 +116,7 @@ impl ArchParser {
     }
 
     /// Build structured requirement groups from a depends file.
-    fn parse_structured_depends(
-        &self,
-        content: &str,
-    ) -> Vec<RepositoryRequirementGroup> {
+    fn parse_structured_depends(&self, content: &str) -> Vec<RepositoryRequirementGroup> {
         let fields = self.parse_desc_file(content);
         let mut groups = Vec::new();
 
@@ -133,11 +129,8 @@ impl ArchParser {
                     RepositoryRequirementClause::versioned(name, constraint)
                 };
                 groups.push(
-                    RepositoryRequirementGroup::simple(
-                        RepositoryRequirementKind::Depends,
-                        clause,
-                    )
-                    .with_native_text(dep.clone()),
+                    RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, clause)
+                        .with_native_text(dep.clone()),
                 );
             }
         }
@@ -314,8 +307,7 @@ impl ArchParser {
             .map(|content| self.parse_structured_depends(content))
             .unwrap_or_default();
 
-        let structured_provides =
-            self.build_structured_provides(&name, &version, desc_fields);
+        let structured_provides = self.build_structured_provides(&name, &version, desc_fields);
 
         Ok(PackageMetadata {
             name,

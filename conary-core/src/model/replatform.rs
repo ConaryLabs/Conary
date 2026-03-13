@@ -114,7 +114,12 @@ fn candidate_target_package(
     candidates.sort_by(|(pkg_a, repo_a), (pkg_b, repo_b)| {
         compare_repo_package_versions(pkg_a, repo_a, pkg_b, repo_b)
             .map(|ord| ord.reverse())
-            .unwrap_or_else(|| repo_b.name.cmp(&repo_a.name).then_with(|| pkg_b.version.cmp(&pkg_a.version)))
+            .unwrap_or_else(|| {
+                repo_b
+                    .name
+                    .cmp(&repo_a.name)
+                    .then_with(|| pkg_b.version.cmp(&pkg_a.version))
+            })
     });
     Ok(candidates.into_iter().next().map(|(pkg, _)| pkg))
 }
@@ -170,7 +175,10 @@ pub fn replatform_estimate_from_affinities(
         return None;
     }
 
-    let total_packages: i64 = affinities.iter().map(|affinity| affinity.package_count).sum();
+    let total_packages: i64 = affinities
+        .iter()
+        .map(|affinity| affinity.package_count)
+        .sum();
     if total_packages == 0 {
         return None;
     }
@@ -267,7 +275,8 @@ pub fn replatform_execution_plan(
                 architecture.as_deref(),
             )?;
             let install_route_kind = install_route.as_ref().map(|route| route.kind);
-            let architecture_mismatch = match (current_architecture.as_ref(), architecture.as_ref()) {
+            let architecture_mismatch = match (current_architecture.as_ref(), architecture.as_ref())
+            {
                 (Some(current_arch), Some(target_arch)) => current_arch != target_arch,
                 _ => false,
             };
@@ -279,7 +288,9 @@ pub fn replatform_execution_plan(
                 unresolved_dependencies.is_empty(),
             ) {
                 (_, _, _, true, _) => Some(ReplatformBlockedReason::ArchitectureMismatch),
-                (_, _, _, false, false) => Some(ReplatformBlockedReason::UnsatisfiedTargetDependencies),
+                (_, _, _, false, false) => {
+                    Some(ReplatformBlockedReason::UnsatisfiedTargetDependencies)
+                }
                 (Some(_), Some(_), Some(InstallRouteKind::ExactVersion), false, true) => None,
                 (Some(_), Some(_), Some(InstallRouteKind::AnyVersionFallback), false, true) => {
                     Some(ReplatformBlockedReason::AnyVersionRouteOnly)
@@ -287,9 +298,15 @@ pub fn replatform_execution_plan(
                 (Some(_), Some(_), Some(InstallRouteKind::DefaultStrategy), false, true) => {
                     Some(ReplatformBlockedReason::MissingVersionedInstallRoute)
                 }
-                (None, _, _, false, true) => Some(ReplatformBlockedReason::MissingRepositoryMetadata),
-                (Some(_), None, _, false, true) => Some(ReplatformBlockedReason::MissingRepositoryPackageId),
-                (Some(_), Some(_), None, false, true) => Some(ReplatformBlockedReason::MissingInstallRoute),
+                (None, _, _, false, true) => {
+                    Some(ReplatformBlockedReason::MissingRepositoryMetadata)
+                }
+                (Some(_), None, _, false, true) => {
+                    Some(ReplatformBlockedReason::MissingRepositoryPackageId)
+                }
+                (Some(_), Some(_), None, false, true) => {
+                    Some(ReplatformBlockedReason::MissingInstallRoute)
+                }
             };
             transactions.push(ReplatformExecutionTransaction {
                 package: package.clone(),
@@ -333,15 +350,17 @@ fn unresolved_target_dependencies(
     let Some(repository) = Repository::find_by_name(conn, repository_name)? else {
         return Ok(Vec::new());
     };
-    let Some(target_pkg) = RepositoryPackage::find_by_repository(conn, repository.id.unwrap_or_default())?
-        .into_iter()
-        .find(|pkg| pkg.id == Some(repository_package_id))
+    let Some(target_pkg) =
+        RepositoryPackage::find_by_repository(conn, repository.id.unwrap_or_default())?
+            .into_iter()
+            .find(|pkg| pkg.id == Some(repository_package_id))
     else {
         return Ok(Vec::new());
     };
 
     let target_scheme = infer_version_scheme(&repository).unwrap_or(VersionScheme::Rpm);
-    let requests = normalized_requirement_requests(conn, repository_package_id, &target_pkg, target_scheme)?;
+    let requests =
+        normalized_requirement_requests(conn, repository_package_id, &target_pkg, target_scheme)?;
     let detected_arch = PackageSelector::detect_architecture();
     let target_arch = architecture.unwrap_or(&detected_arch);
     let mut unresolved = Vec::new();
@@ -355,29 +374,30 @@ fn unresolved_target_dependencies(
                 ..SelectionOptions::default()
             },
         )?;
-        let satisfied = candidates.into_iter().any(|candidate| {
-            let Some(candidate_scheme) = infer_version_scheme(&candidate.repository) else {
-                return matches!(constraint, RepoVersionConstraint::Any);
-            };
-            if !matches!(constraint, RepoVersionConstraint::Any) && candidate_scheme != target_scheme {
-                return false;
-            }
-            repo_version_satisfies(candidate_scheme, &candidate.package.version, &constraint)
-        }) || normalized_repo_provider_satisfies(
-            conn,
-            &dep_name,
-            &constraint,
-            target_arch,
-            target_scheme,
-        )?
-            || repo_metadata_provider_satisfies(
+        let satisfied =
+            candidates.into_iter().any(|candidate| {
+                let Some(candidate_scheme) = infer_version_scheme(&candidate.repository) else {
+                    return matches!(constraint, RepoVersionConstraint::Any);
+                };
+                if !matches!(constraint, RepoVersionConstraint::Any)
+                    && candidate_scheme != target_scheme
+                {
+                    return false;
+                }
+                repo_version_satisfies(candidate_scheme, &candidate.package.version, &constraint)
+            }) || normalized_repo_provider_satisfies(
                 conn,
                 &dep_name,
                 &constraint,
                 target_arch,
                 target_scheme,
-            )?
-            || tracked_provider_satisfies(conn, &dep_name, &constraint, target_scheme);
+            )? || repo_metadata_provider_satisfies(
+                conn,
+                &dep_name,
+                &constraint,
+                target_arch,
+                target_scheme,
+            )? || tracked_provider_satisfies(conn, &dep_name, &constraint, target_scheme);
 
         if !satisfied {
             unresolved.push(match raw_constraint {
@@ -452,7 +472,9 @@ fn normalized_repo_provider_satisfies(
         let Some(provider_scheme) = infer_version_scheme(&repo) else {
             continue;
         };
-        if !matches!(constraint, RepoVersionConstraint::Any) && provider_scheme != requirement_scheme {
+        if !matches!(constraint, RepoVersionConstraint::Any)
+            && provider_scheme != requirement_scheme
+        {
             continue;
         }
 
@@ -470,7 +492,10 @@ fn normalized_repo_provider_satisfies(
     Ok(false)
 }
 
-fn repository_package_by_id(conn: &Connection, repository_package_id: i64) -> Result<Option<RepositoryPackage>> {
+fn repository_package_by_id(
+    conn: &Connection,
+    repository_package_id: i64,
+) -> Result<Option<RepositoryPackage>> {
     let packages = RepositoryPackage::list_all(conn)?;
     Ok(packages
         .into_iter()
@@ -496,7 +521,9 @@ fn repo_metadata_provider_satisfies(
         let Some(provider_scheme) = infer_version_scheme(&repo) else {
             continue;
         };
-        if !matches!(constraint, RepoVersionConstraint::Any) && provider_scheme != requirement_scheme {
+        if !matches!(constraint, RepoVersionConstraint::Any)
+            && provider_scheme != requirement_scheme
+        {
             continue;
         }
 
@@ -615,7 +642,10 @@ pub fn visible_realignment_proposals(
     let troves = Trove::list_all(conn)?;
     let mut proposals = Vec::new();
 
-    for trove in troves.into_iter().filter(|t| t.trove_type == TroveType::Package) {
+    for trove in troves
+        .into_iter()
+        .filter(|t| t.trove_type == TroveType::Package)
+    {
         let current_distro = current_package_distro(conn, &trove)?;
         if current_distro.as_deref() == Some(target_distro) {
             continue;
@@ -627,7 +657,9 @@ pub fn visible_realignment_proposals(
                 current_distro,
                 target_distro: target_distro.to_string(),
                 target_version: target_pkg.version,
-                architecture: target_pkg.architecture.or_else(|| trove.architecture.clone()),
+                architecture: target_pkg
+                    .architecture
+                    .or_else(|| trove.architecture.clone()),
                 target_repository: Repository::find_by_id(conn, target_pkg.repository_id)?
                     .map(|repo| repo.name),
                 target_repository_package_id: target_pkg.id,
@@ -646,8 +678,8 @@ mod tests {
         InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
         RepositoryPackage, ResolutionStrategy, SystemAffinity, Trove, TroveType,
     };
-    use crate::model::state::{InstalledPackage, SystemState};
     use crate::db::schema;
+    use crate::model::state::{InstalledPackage, SystemState};
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
 
@@ -663,17 +695,27 @@ mod tests {
     fn test_visible_realignment_candidates_counts_same_name_target_impls() {
         let (_temp, conn) = create_test_db();
 
-        let mut fedora_repo = Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
         fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
-        let mut arch_repo = Repository::new("arch".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo =
+            Repository::new("arch".to_string(), "https://example.test/arch".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
-        let mut fedora_label = LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
         fedora_label.insert(&conn).unwrap();
-        fedora_label.set_repository(&conn, Some(fedora_repo_id)).unwrap();
+        fedora_label
+            .set_repository(&conn, Some(fedora_repo_id))
+            .unwrap();
 
         let mut trove = Trove::new_with_source(
             "vim".to_string(),
@@ -729,8 +771,10 @@ mod tests {
     fn test_source_policy_replatform_snapshot_combines_estimate_and_candidates() {
         let (_temp, conn) = create_test_db();
 
-        let mut fedora_repo =
-            Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
         fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
@@ -739,10 +783,15 @@ mod tests {
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
-        let mut fedora_label =
-            LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
         fedora_label.insert(&conn).unwrap();
-        fedora_label.set_repository(&conn, Some(fedora_repo_id)).unwrap();
+        fedora_label
+            .set_repository(&conn, Some(fedora_repo_id))
+            .unwrap();
 
         let mut trove = Trove::new_with_source(
             "vim".to_string(),
@@ -779,13 +828,23 @@ mod tests {
         assert_eq!(snapshot.visible_realignment_proposals.len(), 1);
         assert_eq!(snapshot.visible_realignment_proposals[0].package, "vim");
         assert_eq!(
-            snapshot.visible_realignment_proposals[0].current_distro.as_deref(),
+            snapshot.visible_realignment_proposals[0]
+                .current_distro
+                .as_deref(),
             Some("fedora-43")
         );
-        assert_eq!(snapshot.visible_realignment_proposals[0].target_distro, "arch");
-        assert_eq!(snapshot.visible_realignment_proposals[0].target_version, "2.0");
         assert_eq!(
-            snapshot.visible_realignment_proposals[0].architecture.as_deref(),
+            snapshot.visible_realignment_proposals[0].target_distro,
+            "arch"
+        );
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0].target_version,
+            "2.0"
+        );
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0]
+                .architecture
+                .as_deref(),
             Some("x86_64")
         );
         let estimate = snapshot.estimate.expect("expected estimate");
@@ -798,12 +857,18 @@ mod tests {
     fn test_source_policy_replatform_snapshot_uses_native_repo_version_ordering() {
         let (_temp, conn) = create_test_db();
 
-        let mut fedora_repo =
-            Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
         fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
-        let mut fedora_label = LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
         fedora_label.repository_id = Some(fedora_repo_id);
         let fedora_label_id = fedora_label.insert(&conn).unwrap();
 
@@ -850,7 +915,10 @@ mod tests {
 
         assert_eq!(snapshot.visible_realignment_candidates, 1);
         assert_eq!(snapshot.visible_realignment_proposals[0].package, "demo");
-        assert_eq!(snapshot.visible_realignment_proposals[0].target_version, "1.0");
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0].target_version,
+            "1.0"
+        );
     }
 
     #[test]
@@ -916,8 +984,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_collects_replace_actions() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         arch_repo.insert(&conn).unwrap();
@@ -959,7 +1029,10 @@ mod tests {
         assert_eq!(plan.transactions[0].package, "bash");
         assert_eq!(plan.transactions[1].package, "vim");
         assert_eq!(plan.transactions[0].current_version, "5.1.0");
-        assert_eq!(plan.transactions[0].current_architecture.as_deref(), Some("x86_64"));
+        assert_eq!(
+            plan.transactions[0].current_architecture.as_deref(),
+            Some("x86_64")
+        );
         assert_eq!(plan.transactions[0].target_version, "5.2.0");
         assert!(!plan.transactions[0].executable);
         assert_eq!(
@@ -967,7 +1040,10 @@ mod tests {
             Some("arch-core")
         );
         assert_eq!(plan.transactions[0].install_repository_package_id, Some(11));
-        assert_eq!(plan.transactions[0].install_route.as_deref(), Some("default:legacy"));
+        assert_eq!(
+            plan.transactions[0].install_route.as_deref(),
+            Some("default:legacy")
+        );
         assert_eq!(
             plan.transactions[0].blocked_reason,
             Some(ReplatformBlockedReason::MissingVersionedInstallRoute)
@@ -1003,8 +1079,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_reports_missing_versioned_install_route() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy_distro = Some("arch".to_string());
         arch_repo.insert(&conn).unwrap();
 
@@ -1034,8 +1112,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_reports_any_version_route_only() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
@@ -1081,8 +1161,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_marks_exact_version_resolution_executable() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
@@ -1127,8 +1209,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_blocks_when_target_dependencies_are_missing() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
@@ -1142,9 +1226,8 @@ mod tests {
             "https://example.test/arch/vim.pkg.tar.zst".to_string(),
         );
         target_pkg.architecture = Some("x86_64".to_string());
-        target_pkg.dependencies = Some(
-            serde_json::to_string(&vec!["libmagic >= 1.0".to_string()]).unwrap(),
-        );
+        target_pkg.dependencies =
+            Some(serde_json::to_string(&vec!["libmagic >= 1.0".to_string()]).unwrap());
         target_pkg.insert(&conn).unwrap();
 
         let mut resolution = PackageResolution::new(
@@ -1190,8 +1273,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target_dependency() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
@@ -1205,9 +1290,8 @@ mod tests {
             "https://example.test/arch/vim.pkg.tar.zst".to_string(),
         );
         target_pkg.architecture = Some("x86_64".to_string());
-        target_pkg.dependencies = Some(
-            serde_json::to_string(&vec!["libmagic.so.1".to_string()]).unwrap(),
-        );
+        target_pkg.dependencies =
+            Some(serde_json::to_string(&vec!["libmagic.so.1".to_string()]).unwrap());
         target_pkg.insert(&conn).unwrap();
 
         let mut resolution = PackageResolution::new(
@@ -1232,8 +1316,11 @@ mod tests {
         provider_trove.architecture = Some("x86_64".to_string());
         let provider_trove_id = provider_trove.insert(&conn).unwrap();
 
-        let mut provide =
-            ProvideEntry::new(provider_trove_id, "libmagic.so.1()(64bit)".to_string(), None);
+        let mut provide = ProvideEntry::new(
+            provider_trove_id,
+            "libmagic.so.1()(64bit)".to_string(),
+            None,
+        );
         provide.insert(&conn).unwrap();
 
         let actions = vec![DiffAction::ReplatformReplace {
@@ -1260,8 +1347,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_dependency() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
@@ -1276,8 +1365,10 @@ mod tests {
         );
         target_pkg.architecture = Some("x86_64".to_string());
         target_pkg.dependencies = Some(
-            serde_json::to_string(&vec!["kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()])
-                .unwrap(),
+            serde_json::to_string(&vec![
+                "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+            ])
+            .unwrap(),
         );
         target_pkg.insert(&conn).unwrap();
 
@@ -1333,10 +1424,13 @@ mod tests {
     }
 
     #[test]
-    fn test_replatform_execution_plan_accepts_debian_repo_metadata_provider_for_target_dependency() {
+    fn test_replatform_execution_plan_accepts_debian_repo_metadata_provider_for_target_dependency()
+    {
         let (_temp, conn) = create_test_db();
-        let mut deb_repo =
-            Repository::new("ubuntu-main".to_string(), "https://example.test/ubuntu".to_string());
+        let mut deb_repo = Repository::new(
+            "ubuntu-main".to_string(),
+            "https://example.test/ubuntu".to_string(),
+        );
         deb_repo.default_strategy = Some("legacy".to_string());
         deb_repo.default_strategy_distro = Some("ubuntu-24.04".to_string());
         let deb_repo_id = deb_repo.insert(&conn).unwrap();
@@ -1350,9 +1444,8 @@ mod tests {
             "https://example.test/ubuntu/mailer.deb".to_string(),
         );
         target_pkg.architecture = Some("amd64".to_string());
-        target_pkg.dependencies = Some(
-            serde_json::to_string(&vec!["mail-transport-agent".to_string()]).unwrap(),
-        );
+        target_pkg.dependencies =
+            Some(serde_json::to_string(&vec!["mail-transport-agent".to_string()]).unwrap());
         target_pkg.insert(&conn).unwrap();
 
         let mut provider_pkg = RepositoryPackage::new(
@@ -1409,8 +1502,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_accepts_debian_normalized_provider_with_version_constraint() {
         let (_temp, conn) = create_test_db();
-        let mut deb_repo =
-            Repository::new("ubuntu-main".to_string(), "https://archive.ubuntu.com/ubuntu".to_string());
+        let mut deb_repo = Repository::new(
+            "ubuntu-main".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
         deb_repo.default_strategy = Some("legacy".to_string());
         deb_repo.default_strategy_distro = Some("ubuntu-24.04".to_string());
         let deb_repo_id = deb_repo.insert(&conn).unwrap();
@@ -1493,8 +1588,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_accepts_arch_repo_metadata_provider_for_target_dependency() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(&conn).unwrap();
@@ -1508,9 +1605,8 @@ mod tests {
             "https://example.test/arch/mailer.pkg.tar.zst".to_string(),
         );
         target_pkg.architecture = Some("x86_64".to_string());
-        target_pkg.dependencies = Some(
-            serde_json::to_string(&vec!["mail-transport-agent".to_string()]).unwrap(),
-        );
+        target_pkg.dependencies =
+            Some(serde_json::to_string(&vec!["mail-transport-agent".to_string()]).unwrap());
         target_pkg.insert(&conn).unwrap();
 
         let mut provider_pkg = RepositoryPackage::new(
@@ -1567,8 +1663,10 @@ mod tests {
     #[test]
     fn test_replatform_execution_plan_reports_architecture_mismatch() {
         let (_temp, conn) = create_test_db();
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         arch_repo.insert(&conn).unwrap();

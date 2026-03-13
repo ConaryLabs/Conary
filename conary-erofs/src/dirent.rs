@@ -368,7 +368,7 @@ mod tests {
         // We need more: 67 entries -> names_base = 804, offset at entry 66 = 804 + 66000 = 66804 > 65535.
         let mut entries: Vec<DirEntry> = (0..67)
             .map(|i| DirEntry {
-                name: format!("{}{}", "a".repeat(999), format!("{i:01}")),
+                name: format!("{}{i:01}", "a".repeat(999)),
                 nid: i,
                 file_type: EROFS_FT_REG_FILE,
             })

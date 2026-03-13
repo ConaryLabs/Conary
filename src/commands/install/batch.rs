@@ -734,16 +734,11 @@ pub fn prepare_package_for_batch(
     let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check for existing installation
-    let (is_upgrade, old_trove) = match check_upgrade_status(
-        &conn,
-        pkg.as_ref(),
-        format,
-        allow_downgrade,
-    )?
-    {
-        UpgradeCheck::FreshInstall => (false, None),
-        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
-    };
+    let (is_upgrade, old_trove) =
+        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
+            UpgradeCheck::FreshInstall => (false, None),
+            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
+        };
 
     let old_files = get_old_files_for_upgrade(&conn, old_trove.as_deref(), pkg.files())?;
 
@@ -809,8 +804,7 @@ pub fn prepare_from_parsed(
     let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
 
     // Check for existing installation
-    let (is_upgrade, old_trove) =
-        match check_upgrade_status(&conn, pkg, format, allow_downgrade)? {
+    let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg, format, allow_downgrade)? {
         UpgradeCheck::FreshInstall => (false, None),
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
     };

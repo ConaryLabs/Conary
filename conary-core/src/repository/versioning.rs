@@ -84,20 +84,22 @@ pub fn compare_mixed_repo_versions(
     b_scheme: VersionScheme,
     b: &str,
 ) -> Option<Ordering> {
-    (a_scheme == b_scheme).then(|| compare_repo_versions(a_scheme, a, b)).flatten()
+    (a_scheme == b_scheme)
+        .then(|| compare_repo_versions(a_scheme, a, b))
+        .flatten()
 }
 
-pub fn parse_repo_constraint(
-    _scheme: VersionScheme,
-    raw: &str,
-) -> Option<RepoVersionConstraint> {
+pub fn parse_repo_constraint(_scheme: VersionScheme, raw: &str) -> Option<RepoVersionConstraint> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Some(RepoVersionConstraint::Any);
     }
 
     for (op, ctor) in [
-        (">=", RepoVersionConstraint::GreaterOrEqual as fn(String) -> RepoVersionConstraint),
+        (
+            ">=",
+            RepoVersionConstraint::GreaterOrEqual as fn(String) -> RepoVersionConstraint,
+        ),
         ("<=", RepoVersionConstraint::LessOrEqual),
         ("<<", RepoVersionConstraint::LessThan),
         (">>", RepoVersionConstraint::GreaterThan),
@@ -248,11 +250,7 @@ enum SegmentFlavor {
     Arch,
 }
 
-fn compare_optional_segment(
-    a: Option<&str>,
-    b: Option<&str>,
-    flavor: SegmentFlavor,
-) -> Ordering {
+fn compare_optional_segment(a: Option<&str>, b: Option<&str>, flavor: SegmentFlavor) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => compare_segmented(a, b, flavor),
         (None, None) => Ordering::Equal,
@@ -443,12 +441,7 @@ mod tests {
     #[test]
     fn rejects_cross_scheme_comparison() {
         assert_eq!(
-            compare_mixed_repo_versions(
-                VersionScheme::Debian,
-                "1.0",
-                VersionScheme::Arch,
-                "1.0-1"
-            ),
+            compare_mixed_repo_versions(VersionScheme::Debian, "1.0", VersionScheme::Arch, "1.0-1"),
             None
         );
     }
@@ -457,7 +450,11 @@ mod tests {
     fn debian_constraints_use_native_ordering() {
         let constraint =
             parse_repo_constraint(VersionScheme::Debian, ">= 1.0~beta1").expect("constraint");
-        assert!(repo_version_satisfies(VersionScheme::Debian, "1.0", &constraint));
+        assert!(repo_version_satisfies(
+            VersionScheme::Debian,
+            "1.0",
+            &constraint
+        ));
         assert!(!repo_version_satisfies(
             VersionScheme::Debian,
             "0.9",

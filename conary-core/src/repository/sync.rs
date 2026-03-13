@@ -176,8 +176,10 @@ fn sync_repository_native(
             }
         })
         .collect();
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced_packages.iter().map(|row| row.package.clone()).collect();
+    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
+        .iter()
+        .map(|row| row.package.clone())
+        .collect();
 
     let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
 
@@ -261,7 +263,11 @@ fn persist_native_sync_rows(
         let group_id = group.id.ok_or_else(|| {
             Error::InitError("Inserted requirement group missing generated ID".to_string())
         })?;
-        grouped_clauses.extend(clauses.into_iter().map(|clause| clause.with_group(group_id)));
+        grouped_clauses.extend(
+            clauses
+                .into_iter()
+                .map(|clause| clause.with_group(group_id)),
+        );
     }
     RepositoryRequirement::batch_insert(&tx, &grouped_clauses)?;
 
@@ -285,11 +291,13 @@ fn normalized_repository_capabilities(
         Some(pkg_meta.name.clone()),
     )];
 
-    provides.extend(extract_extra_metadata_provides(&pkg_meta.extra_metadata).into_iter().map(
-        |(capability, version, raw)| {
-            RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
-        },
-    ));
+    provides.extend(
+        extract_extra_metadata_provides(&pkg_meta.extra_metadata)
+            .into_iter()
+            .map(|(capability, version, raw)| {
+                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+            }),
+    );
 
     let requirements = pkg_meta
         .dependencies
@@ -477,10 +485,7 @@ fn remi_sync_row(
     entry: RemiPackageEntry,
 ) -> SyncedPackageRow {
     let system_arch = registry::detect_system_arch();
-    let download_url = format!(
-        "{endpoint}/v1/{distro}/packages/{}/download",
-        entry.name
-    );
+    let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
 
     let mut pkg = RepositoryPackage::new(
         repo_id,
@@ -505,13 +510,11 @@ fn remi_sync_row(
         "package".to_string(),
         Some(entry.name.clone()),
     )];
-    provides.extend(
-        extract_extra_metadata_provides(&metadata)
-            .into_iter()
-            .map(|(capability, version, raw)| {
-                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
-            }),
-    );
+    provides.extend(extract_extra_metadata_provides(&metadata).into_iter().map(
+        |(capability, version, raw)| {
+            RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+        },
+    ));
 
     let requirements = entry
         .dependencies
@@ -619,8 +622,10 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
         })
         .collect();
 
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced_packages.iter().map(|row| row.package.clone()).collect();
+    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
+        .iter()
+        .map(|row| row.package.clone())
+        .collect();
     let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
 
     info!(
@@ -845,8 +850,7 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
 mod tests {
     use super::*;
     use crate::db::models::{
-        RepositoryProvide, RepositoryRequirement,
-        RepositoryRequirementGroup as DbRequirementGroup,
+        RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
     };
     use crate::db::schema::migrate;
     use crate::repository::dependency_model::{
@@ -972,12 +976,13 @@ mod tests {
             requirement_groups: Vec::new(),
             requirement_group_clauses: Vec::new(),
         }];
-        let mut repo_packages: Vec<RepositoryPackage> =
-            synced_packages.iter().map(|row| row.package.clone()).collect();
+        let mut repo_packages: Vec<RepositoryPackage> = synced_packages
+            .iter()
+            .map(|row| row.package.clone())
+            .collect();
 
-        let count =
-            persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages)
-                .unwrap();
+        let count = persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages)
+            .unwrap();
         assert_eq!(count, 1);
 
         let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
@@ -1039,13 +1044,11 @@ mod tests {
         assert!(row.provides.iter().any(|provide| {
             provide.capability == "kernel-core-uname-r"
                 && provide.version.as_deref() == Some("6.19.6-200.fc43.x86_64")
-                && provide.raw.as_deref()
-                    == Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
+                && provide.raw.as_deref() == Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
         }));
         assert!(row.requirements.iter().any(|requirement| {
             requirement.capability == "kernel-modules-core-uname-r"
-                && requirement.version_constraint.as_deref()
-                    == Some("= 6.19.6-200.fc43.x86_64")
+                && requirement.version_constraint.as_deref() == Some("= 6.19.6-200.fc43.x86_64")
                 && requirement.raw.as_deref()
                     == Some("kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64")
         }));
@@ -1293,9 +1296,9 @@ mod tests {
         assert_eq!(groups.len(), 2);
 
         // First group: OR alternative
-        let or = groups.iter().find(|g| {
-            g.native_text.as_deref() == Some("default-mta | mail-transport-agent")
-        });
+        let or = groups
+            .iter()
+            .find(|g| g.native_text.as_deref() == Some("default-mta | mail-transport-agent"));
         assert!(or.is_some(), "OR group should be persisted");
         let or = or.unwrap();
         assert_eq!(or.kind, "depends");
@@ -1305,9 +1308,11 @@ mod tests {
         let or_clauses = RepositoryRequirement::find_by_group(&conn, or.id.unwrap()).unwrap();
         assert_eq!(or_clauses.len(), 2);
         assert!(or_clauses.iter().any(|c| c.capability == "default-mta"));
-        assert!(or_clauses
-            .iter()
-            .any(|c| c.capability == "mail-transport-agent"));
+        assert!(
+            or_clauses
+                .iter()
+                .any(|c| c.capability == "mail-transport-agent")
+        );
 
         // Second group: simple versioned dependency
         let simple = groups.iter().find(|g| g.native_text.is_none());
@@ -1399,9 +1404,6 @@ mod tests {
         let clauses = RepositoryRequirement::find_by_group(&conn, groups[0].id.unwrap()).unwrap();
         assert_eq!(clauses.len(), 1);
         assert_eq!(clauses[0].capability, "systemd");
-        assert_eq!(
-            clauses[0].version_constraint.as_deref(),
-            Some(">= 255")
-        );
+        assert_eq!(clauses[0].version_constraint.as_deref(), Some(">= 255"));
     }
 }

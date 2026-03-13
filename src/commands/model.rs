@@ -22,11 +22,10 @@ use conary_core::model::parser::SystemModel;
 use conary_core::model::remote::fetch_remote_collection;
 use conary_core::model::{
     DiffAction, ModelDerivedPackage, ModelDiff, ModelDiffSummary, ReplatformEstimate,
-    ReplatformExecutionPlan, ReplatformStatus, SystemState, capture_current_state, compute_diff,
-    compute_diff_with_includes_offline, parse_model_file, parse_trove_spec, snapshot_to_model,
-    VisibleRealignmentProposal, planned_replatform_actions, replatform_execution_plan,
-    replatform_estimate_from_affinities,
-    source_policy_replatform_snapshot,
+    ReplatformExecutionPlan, ReplatformStatus, SystemState, VisibleRealignmentProposal,
+    capture_current_state, compute_diff, compute_diff_with_includes_offline, parse_model_file,
+    parse_trove_spec, planned_replatform_actions, replatform_estimate_from_affinities,
+    replatform_execution_plan, snapshot_to_model, source_policy_replatform_snapshot,
 };
 use rusqlite::Connection;
 use tracing::{debug, info};
@@ -77,12 +76,11 @@ fn compute_model_diff(
         _ => None,
     }) {
         let snapshot = source_policy_replatform_snapshot(conn, target_distro)?;
-        diff.visible_realignment_candidates = Some(
-            conary_core::model::VisibleRealignmentCandidates {
+        diff.visible_realignment_candidates =
+            Some(conary_core::model::VisibleRealignmentCandidates {
                 target_distro: snapshot.target_distro.clone(),
                 candidate_count: snapshot.visible_realignment_candidates,
-            },
-        );
+            });
         diff.visible_realignment_proposals = Some(snapshot.visible_realignment_proposals);
         let planned_actions = planned_replatform_actions(
             &conary_core::model::SourcePolicyReplatformSnapshot {
@@ -186,15 +184,17 @@ fn model_check_drift_headline(diff: &ModelDiff) -> String {
             "DRIFT: source policy pending replatform estimate for {} (about {} package(s) may need realignment)",
             estimate.target_distro, estimate.packages_to_realign
         ),
-        Some(ReplatformStatus::PolicyOnlyPending) => match diff.summary().visible_realignment_candidates
-        {
-            Some(candidates) => format!(
-                "DRIFT: source policy changed; replatform planning is still pending ({} visible package candidate(s))",
-                candidates
-            ),
-            None => "DRIFT: source policy changed; replatform planning is still pending"
-                .to_string(),
-        },
+        Some(ReplatformStatus::PolicyOnlyPending) => {
+            match diff.summary().visible_realignment_candidates {
+                Some(candidates) => format!(
+                    "DRIFT: source policy changed; replatform planning is still pending ({} visible package candidate(s))",
+                    candidates
+                ),
+                None => {
+                    "DRIFT: source policy changed; replatform planning is still pending".to_string()
+                }
+            }
+        }
         Some(ReplatformStatus::PackageConvergencePlanned { structural_changes }) => format!(
             "DRIFT: source policy transition with {} planned package change(s)",
             structural_changes
@@ -262,7 +262,10 @@ fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -> String {
     )];
 
     for transaction in &plan.transactions {
-        let current = transaction.current_distro.as_deref().unwrap_or("unknown source");
+        let current = transaction
+            .current_distro
+            .as_deref()
+            .unwrap_or("unknown source");
         let status = if transaction.executable {
             "executable"
         } else {
@@ -330,9 +333,7 @@ fn render_replatform_blocked_reason(
         conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute => {
             "missing versioned install route"
         }
-        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => {
-            "missing install route"
-        }
+        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => "missing install route",
         conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
             "unsatisfied target dependencies"
         }
@@ -533,7 +534,11 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<
         .iter()
         .filter(|a| matches!(a, DiffAction::Remove { .. }))
         .collect();
-    let replatforms: Vec<_> = diff.actions.iter().filter(|a| is_replatform_action(a)).collect();
+    let replatforms: Vec<_> = diff
+        .actions
+        .iter()
+        .filter(|a| is_replatform_action(a))
+        .collect();
     let others: Vec<_> = diff
         .actions
         .iter()
@@ -697,7 +702,10 @@ pub fn cmd_model_apply(
 
     if let Some(plan) = replatform_execution_plan(
         &conn,
-        &actions.iter().map(|action| (*action).clone()).collect::<Vec<_>>(),
+        &actions
+            .iter()
+            .map(|action| (*action).clone())
+            .collect::<Vec<_>>(),
     )? {
         println!("{}", render_replatform_execution_plan(&plan));
         println!();
@@ -1504,21 +1512,30 @@ mod tests {
     }
 
     fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
-        let mut fedora_repo =
-            Repository::new("fedora".to_string(), "https://example.test/fedora".to_string());
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
         fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
         let fedora_repo_id = fedora_repo.insert(conn).unwrap();
 
-        let mut arch_repo =
-            Repository::new("arch-core".to_string(), "https://example.test/arch".to_string());
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
         arch_repo.default_strategy = Some("legacy".to_string());
         arch_repo.default_strategy_distro = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(conn).unwrap();
 
-        let mut fedora_label =
-            LabelEntry::new("fedora".to_string(), "f43".to_string(), "stable".to_string());
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
         fedora_label.insert(conn).unwrap();
-        fedora_label.set_repository(conn, Some(fedora_repo_id)).unwrap();
+        fedora_label
+            .set_repository(conn, Some(fedora_repo_id))
+            .unwrap();
 
         for (name, version) in [("vim", "9.0.1"), ("bash", "5.1.0"), ("zsh", "5.8.0")] {
             let mut trove = Trove::new_with_source(
@@ -1946,7 +1963,9 @@ strength = "strict"
         let rendered = render_replatform_execution_plan(&plan);
 
         assert!(rendered.contains("Planned replatform transactions (2):"));
-        assert!(rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0"));
+        assert!(
+            rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0")
+        );
         assert!(rendered.contains(
             "via arch-core [repo-pkg:11] [route:default:legacy] [missing versioned install route]"
         ));
@@ -2033,7 +2052,9 @@ strength = "strict"
 
         let rendered = render_replatform_execution_plan(&plan);
 
-        assert!(rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0"));
+        assert!(
+            rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0")
+        );
         assert!(rendered.contains("via arch-core [repo-pkg:22] [route:resolution:binary]"));
         assert!(!rendered.contains("missing install route"));
         assert!(!rendered.contains("only any-version install route"));
@@ -2261,7 +2282,12 @@ strength = "strict"
         let temp_dir = tempdir().unwrap();
         let output_path = temp_dir.path().join("system.toml");
 
-        cmd_model_snapshot(output_path.to_str().unwrap(), &db_path, Some("snapshot test")).unwrap();
+        cmd_model_snapshot(
+            output_path.to_str().unwrap(),
+            &db_path,
+            Some("snapshot test"),
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("[system]"));

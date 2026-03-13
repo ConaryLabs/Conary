@@ -307,15 +307,9 @@ pub(crate) fn hint_unconfigured_source_policy() {
     }
     match model::load_model(None) {
         Ok(m) if !m.system.is_source_policy_configured() => {
-            eprintln!(
-                "hint: Source policy is using defaults (track-only, any distro)."
-            );
-            eprintln!(
-                "      Configure [system] in /etc/conary/system.toml to set convergence,",
-            );
-            eprintln!(
-                "      distro pin, or allowed distros. See 'conary model diff' for details.",
-            );
+            eprintln!("hint: Source policy is using defaults (track-only, any distro).");
+            eprintln!("      Configure [system] in /etc/conary/system.toml to set convergence,",);
+            eprintln!("      distro pin, or allowed distros. See 'conary model diff' for details.",);
         }
         _ => {}
     }

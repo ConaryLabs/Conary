@@ -14,11 +14,11 @@ use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::db::models::RepositoryProvide;
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
-use conary_core::db::models::{RepositoryProvide};
 use conary_core::repository;
 use conary_core::repository::selector::{PackageSelector, SelectionOptions};
 use conary_core::resolver::MissingDependency;
@@ -427,13 +427,14 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                     build_dependency_requests(&unresolved_missing, &dep_plan.to_install);
 
                 if dry_run {
-                    repository::resolve_dependency_requests(&conn, &dep_requests)
-                        .with_context(|| {
+                    repository::resolve_dependency_requests(&conn, &dep_requests).with_context(
+                        || {
                             format!(
                                 "Failed to resolve dependencies from repositories for '{}'",
                                 ccs_pkg.name()
                             )
-                        })?;
+                        },
+                    )?;
                 } else {
                     if !yes {
                         println!();
@@ -659,12 +660,20 @@ mod tests {
 
         // Two deps should have been promoted
         assert_eq!(dep_plan.to_install.len(), 2, "expected 2 promoted deps");
-        let promoted_names: Vec<&str> = dep_plan.to_install.iter().map(|d| d.name.as_str()).collect();
+        let promoted_names: Vec<&str> = dep_plan
+            .to_install
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
         assert!(promoted_names.contains(&"coreutils-common"));
         assert!(promoted_names.contains(&"kernel-core-uname-r"));
 
         // The nonexistent dep should remain unresolvable
-        assert_eq!(dep_plan.unresolvable.len(), 1, "expected 1 still-unresolvable");
+        assert_eq!(
+            dep_plan.unresolvable.len(),
+            1,
+            "expected 1 still-unresolvable"
+        );
         assert_eq!(dep_plan.unresolvable[0].name, "nonexistent-fantasy-pkg");
     }
 

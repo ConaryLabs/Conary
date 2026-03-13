@@ -106,7 +106,14 @@ pub fn resolve_package_path(
     repo: Option<&str>,
     progress: &InstallProgress,
 ) -> Result<ResolutionOutcome> {
-    resolve_package_path_with_policy(package, db_path, version, repo, progress, &PolicyOptions::default())
+    resolve_package_path_with_policy(
+        package,
+        db_path,
+        version,
+        repo,
+        progress,
+        &PolicyOptions::default(),
+    )
 }
 
 /// Resolve package to a local path with explicit policy control.

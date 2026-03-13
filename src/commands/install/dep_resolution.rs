@@ -53,8 +53,8 @@ pub fn resolve_missing_deps_policy_aware(
     explicit_mode: Option<DepMode>,
     convergence: &conary_core::model::parser::ConvergenceIntent,
 ) -> DepResolutionPlan {
-    let effective_mode = explicit_mode
-        .unwrap_or_else(|| DepMode::from_convergence_intent(convergence));
+    let effective_mode =
+        explicit_mode.unwrap_or_else(|| DepMode::from_convergence_intent(convergence));
     debug!(
         "Dep resolution: explicit_mode={:?}, convergence={}, effective={}",
         explicit_mode,

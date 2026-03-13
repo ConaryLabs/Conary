@@ -614,7 +614,11 @@ mod tests {
     #[test]
     fn trove_update_source_identity_backfills_existing_rows() {
         let (_dir, conn) = setup_test_db();
-        let mut trove = Trove::new("bash".to_string(), "5.2.37-1".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "bash".to_string(),
+            "5.2.37-1".to_string(),
+            TroveType::Package,
+        );
         let trove_id = trove.insert(&conn).unwrap();
 
         Trove::update_source_identity(&conn, trove_id, Some("fedora-43"), Some("rpm")).unwrap();

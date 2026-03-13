@@ -538,7 +538,8 @@ mod tests {
         );
         libfoo.insert(&conn).unwrap();
 
-        let result = solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
+        let result =
+            solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
 
         assert!(result.conflict_message.is_none(), "{result:?}");
         let names: Vec<&str> = result
@@ -608,7 +609,7 @@ mod tests {
     // Task 11: Cross-distro SAT and policy regression tests
     // ==========================================================================
 
-    use crate::db::models::{ProvideEntry, RepositoryProvide, RepositoryRequirementGroup};
+    use crate::db::models::{RepositoryProvide, RepositoryRequirementGroup};
 
     /// Helper: insert a trove with version_scheme and its dependencies
     fn insert_native_trove(
@@ -734,7 +735,11 @@ mod tests {
             "RPM capability chain should resolve: {:?}",
             result.conflict_message
         );
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"kernel"));
         assert!(names.contains(&"kernel-core"));
         assert!(names.contains(&"glibc"));
@@ -782,11 +787,8 @@ mod tests {
         mailx.insert(&conn).unwrap();
         let mailx_id = mailx.id.unwrap();
 
-        let mut group = RepositoryRequirementGroup::new(
-            mailx_id,
-            "depends".to_string(),
-            "hard".to_string(),
-        );
+        let mut group =
+            RepositoryRequirementGroup::new(mailx_id, "depends".to_string(), "hard".to_string());
         group.native_text = Some("default-mta | mail-transport-agent".to_string());
         group.insert(&conn).unwrap();
         let group_id = group.id.unwrap();
@@ -813,20 +815,24 @@ mod tests {
         .with_group(group_id);
         clause_b.insert(&conn).unwrap();
 
-        let result = solve_install(
-            &conn,
-            &[("bsd-mailx".to_string(), VersionConstraint::Any)],
-        )
-        .unwrap();
+        let result =
+            solve_install(&conn, &[("bsd-mailx".to_string(), VersionConstraint::Any)]).unwrap();
 
         assert!(
             result.conflict_message.is_none(),
             "Debian OR dep should resolve via mail-transport-agent provider: {:?}",
             result.conflict_message
         );
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"bsd-mailx"));
-        assert!(names.contains(&"exim4"), "exim4 should be pulled in via OR dep");
+        assert!(
+            names.contains(&"exim4"),
+            "exim4 should be pulled in via OR dep"
+        );
     }
 
     #[test]
@@ -861,7 +867,11 @@ mod tests {
         let result =
             solve_install(&conn, &[("ripgrep".to_string(), VersionConstraint::Any)]).unwrap();
         assert!(result.conflict_message.is_none(), "{result:?}");
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"ripgrep"));
         assert!(names.contains(&"glibc"));
     }
@@ -955,7 +965,11 @@ mod tests {
             "Should resolve via provide version: {:?}",
             result.conflict_message
         );
-        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"kernel"));
         assert!(
             names.contains(&"kernel-modules-core"),

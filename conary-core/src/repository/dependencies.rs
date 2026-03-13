@@ -47,9 +47,7 @@ fn resolve_repo_dependency_by_capability(
 
         // Direct ID-based lookup: fetch name from the provide's package row.
         let pkg_name: Option<String> = conn
-            .prepare_cached(
-                "SELECT name FROM repository_packages WHERE id = ?1",
-            )?
+            .prepare_cached("SELECT name FROM repository_packages WHERE id = ?1")?
             .query_row([provide.repository_package_id], |row| row.get(0))
             .ok();
 
@@ -103,7 +101,9 @@ fn resolve_repo_dependency_by_metadata(
             let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
                 continue;
             };
-            let Some(provides) = metadata.get("rpm_provides").and_then(|value| value.as_array())
+            let Some(provides) = metadata
+                .get("rpm_provides")
+                .and_then(|value| value.as_array())
             else {
                 continue;
             };

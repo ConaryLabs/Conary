@@ -64,7 +64,9 @@ fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
         match component {
             Component::CurDir => {}
             Component::Normal(part) => normalized.push(part),
-            Component::ParentDir => anyhow::bail!("path traversal detected in package path: {path}"),
+            Component::ParentDir => {
+                anyhow::bail!("path traversal detected in package path: {path}")
+            }
             Component::RootDir | Component::Prefix(_) => {
                 anyhow::bail!("invalid package path component in {path}")
             }
@@ -125,8 +127,12 @@ fn installed_versions_satisfying_constraint(
     let matches = installed
         .into_iter()
         .filter_map(|trove| {
-            version_satisfies_constraint(&trove.version, trove.version_scheme.as_deref(), version_constraint)
-                .then_some(trove.version)
+            version_satisfies_constraint(
+                &trove.version,
+                trove.version_scheme.as_deref(),
+                version_constraint,
+            )
+            .then_some(trove.version)
         })
         .collect();
 
@@ -183,7 +189,8 @@ fn validate_incoming_version_against_dependents(
     package_name: &str,
     incoming_version: &str,
 ) -> Result<()> {
-    let scheme = installed_package_version_scheme(conn, package_name)?.unwrap_or(VersionScheme::Rpm);
+    let scheme =
+        installed_package_version_scheme(conn, package_name)?.unwrap_or(VersionScheme::Rpm);
     let dependents = conary_core::db::models::DependencyEntry::find_dependents(conn, package_name)?;
     let mut violations = Vec::new();
 
@@ -229,9 +236,11 @@ fn installed_package_version_scheme(
     conn: &rusqlite::Connection,
     package_name: &str,
 ) -> Result<Option<VersionScheme>> {
-    Ok(conary_core::db::models::Trove::find_by_name(conn, package_name)?
-        .into_iter()
-        .find_map(|trove| parse_version_scheme(trove.version_scheme.as_deref())))
+    Ok(
+        conary_core::db::models::Trove::find_by_name(conn, package_name)?
+            .into_iter()
+            .find_map(|trove| parse_version_scheme(trove.version_scheme.as_deref())),
+    )
 }
 
 fn parse_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
@@ -243,11 +252,7 @@ fn parse_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
     }
 }
 
-fn repo_constraint_set_satisfied(
-    scheme: VersionScheme,
-    version: &str,
-    raw: &str,
-) -> Result<bool> {
+fn repo_constraint_set_satisfied(scheme: VersionScheme, version: &str, raw: &str) -> Result<bool> {
     for part in split_constraint_parts(raw) {
         let constraint = parse_repo_constraint(scheme, part)
             .ok_or_else(|| anyhow::anyhow!("invalid version constraint: {raw}"))?;
@@ -259,7 +264,9 @@ fn repo_constraint_set_satisfied(
 }
 
 fn split_constraint_parts(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split(',').map(str::trim).filter(|part| !part.is_empty())
+    raw.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
 }
 
 fn repo_constraint_satisfies(
@@ -445,7 +452,10 @@ pub fn cmd_ccs_install(
                     rel_path.display()
                 );
             }
-            anyhow::bail!("duplicate deployment path detected for {}", rel_path.display());
+            anyhow::bail!(
+                "duplicate deployment path detected for {}",
+                rel_path.display()
+            );
         }
     }
     let detected_provides = LanguageDepDetector::detect_all_provides(
@@ -513,10 +523,7 @@ pub fn cmd_ccs_install(
         }
 
         if stripped_special_bits {
-            println!(
-                "Warning: stripped setuid/setgid bits from {}",
-                file.path
-            );
+            println!("Warning: stripped setuid/setgid bits from {}", file.path);
         }
 
         // Store in CAS for rollback support
@@ -747,7 +754,11 @@ pub fn cmd_ccs_install(
     }
 
     // Step 9: Execute post-hooks (including post_install script)
-    if !hooks.systemd.is_empty() || !hooks.tmpfiles.is_empty() || !hooks.sysctl.is_empty() || !hooks.alternatives.is_empty() {
+    if !hooks.systemd.is_empty()
+        || !hooks.tmpfiles.is_empty()
+        || !hooks.sysctl.is_empty()
+        || !hooks.alternatives.is_empty()
+    {
         let mut non_script_hooks = hooks.clone();
         non_script_hooks.post_install = None;
         println!("Executing post-install hooks...");
@@ -797,8 +808,8 @@ pub fn cmd_ccs_install(
 #[cfg(test)]
 mod tests {
     use super::installed_versions_satisfying_constraint;
-    use super::validate_package_dependency;
     use super::validate_incoming_version_against_dependents;
+    use super::validate_package_dependency;
 
     #[test]
     fn installed_versions_respect_version_constraints() {
@@ -996,5 +1007,4 @@ mod tests {
             validate_package_dependency(&conn, "dep-base", Some(">=2.0"), false).unwrap_err();
         assert!(error.to_string().contains("dependency version mismatch"));
     }
-
 }

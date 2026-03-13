@@ -642,57 +642,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ensure_admin_bootstrap_token;
-
-    fn test_db_path() -> std::path::PathBuf {
-        let tmp = tempfile::tempdir().expect("create tempdir");
-        let db_path = tmp.path().join("conary.db");
-        {
-            let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-            conary_core::db::schema::migrate(&conn).expect("migrate schema");
-        }
-        std::mem::forget(tmp);
-        db_path
-    }
-
-    #[tokio::test]
-    async fn ensure_admin_bootstrap_token_inserts_once() {
-        let db_path = test_db_path();
-        ensure_admin_bootstrap_token(
-            db_path.clone(),
-            "bootstrap-token",
-            "config-bootstrap",
-            "admin.bootstrap_token config",
-        )
-        .await
-        .expect("seed bootstrap token");
-        ensure_admin_bootstrap_token(
-            db_path.clone(),
-            "bootstrap-token",
-            "config-bootstrap",
-            "admin.bootstrap_token config",
-        )
-        .await
-        .expect("seed bootstrap token idempotently");
-
-        let conn = conary_core::db::open(&db_path).expect("open db");
-        let found = conary_core::db::models::admin_token::find_by_hash(
-            &conn,
-            &crate::server::auth::hash_token("bootstrap-token"),
-        )
-        .expect("query token")
-        .expect("token exists");
-        assert_eq!(found.name, "config-bootstrap");
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| row.get(0))
-            .expect("count tokens");
-        assert_eq!(count, 1);
-    }
-}
 
 /// Start the Remi server (legacy single-port mode)
 pub async fn run_server(config: ServerConfig) -> Result<()> {
@@ -829,4 +778,56 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 
     tracing::info!("Bloom filter initialized with {} chunks", hashes.len());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_admin_bootstrap_token;
+
+    fn test_db_path() -> std::path::PathBuf {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("conary.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            conary_core::db::schema::migrate(&conn).expect("migrate schema");
+        }
+        std::mem::forget(tmp);
+        db_path
+    }
+
+    #[tokio::test]
+    async fn ensure_admin_bootstrap_token_inserts_once() {
+        let db_path = test_db_path();
+        ensure_admin_bootstrap_token(
+            db_path.clone(),
+            "bootstrap-token",
+            "config-bootstrap",
+            "admin.bootstrap_token config",
+        )
+        .await
+        .expect("seed bootstrap token");
+        ensure_admin_bootstrap_token(
+            db_path.clone(),
+            "bootstrap-token",
+            "config-bootstrap",
+            "admin.bootstrap_token config",
+        )
+        .await
+        .expect("seed bootstrap token idempotently");
+
+        let conn = conary_core::db::open(&db_path).expect("open db");
+        let found = conary_core::db::models::admin_token::find_by_hash(
+            &conn,
+            &crate::server::auth::hash_token("bootstrap-token"),
+        )
+        .expect("query token")
+        .expect("token exists");
+        assert_eq!(found.name, "config-bootstrap");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| row.get(0))
+            .expect("count tokens");
+        assert_eq!(count, 1);
+    }
 }
