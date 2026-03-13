@@ -9,7 +9,7 @@ Two servers, one CI system.
 - **Hardware:** Hetzner, 12 cores, 64GB RAM, 2x 1TB NVMe RAID 0
 - **OS:** Ubuntu 24.04, Rust 1.94
 - **Storage:** 1.7TB at `/conary` (ext4 on LVM)
-- **Deploy:** `rsync` source, `cargo build --release --features server`, copy binary, `systemctl restart remi`
+- **Deploy:** Auto-deployed by Forgejo CI on push to main (after tests pass). Manual: `scripts/rebuild-remi.sh` on Remi, or `scripts/deploy-forge.sh` locally for Forge.
 - **Sites:** `./deploy/deploy-sites.sh [site|packages|both]` — NEVER deploy `site/build/` to `/conary/web/`
 - **Admin API:** `:8082` (external, bearer token auth) -- token management, CI proxy, SSE events, MCP endpoint
 - **MCP endpoint:** `https://packages.conary.io:8082/mcp` (Streamable HTTP transport for LLM agents)
@@ -43,7 +43,7 @@ Two servers, one CI system.
 
 | Workflow | Trigger | Jobs | Duration |
 |----------|---------|------|----------|
-| `ci.yaml` | Push to main, manual | build, test, clippy, remi-smoke | ~5 min |
+| `ci.yaml` | Push to main, manual | build, test, clippy, remi-smoke, deploy-remi | ~5 min |
 | `release.yaml` | Push `v*` tag | Verify release landed on Remi (waits for GH Actions) | ~3 min |
 | `integration.yaml` | Push to main, manual | 3-distro Podman matrix (fedora43, ubuntu-noble, arch) | ~15 min |
 | `e2e.yaml` | Daily 06:00 UTC, manual | 3-distro Phase 1+2 deep E2E | ~20-30 min |
@@ -59,10 +59,12 @@ Two servers, one CI system.
 |--------|---------|
 | `scripts/remi-health.sh --smoke` | Quick Remi check (5 endpoints) |
 | `scripts/remi-health.sh --full` | Comprehensive Remi check (includes conversion) |
-| `scripts/release.sh [conary\|erofs\|server\|all]` | Auto-version bump from conventional commits |
+| `scripts/release.sh [conary\|erofs\|server\|test\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
+| `scripts/rebuild-remi.sh` | Pull, build, restart Remi server (runs on Remi) |
+| `scripts/deploy-forge.sh` | Rsync source to Forge for testing |
 
 ## Release Pipeline
 
@@ -113,10 +115,11 @@ End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and
 
 ## Version Groups
 
-Three independent version tracks with tag prefixes:
+Four independent version tracks with tag prefixes:
 
 | Group | Tag prefix | Crates | Cargo.toml locations |
 |-------|-----------|--------|---------------------|
 | conary | `v` | conary + conary-core | `Cargo.toml`, `conary-core/Cargo.toml` |
 | erofs | `erofs-v` | conary-erofs | `conary-erofs/Cargo.toml` |
 | server | `server-v` | conary-server | `conary-server/Cargo.toml` |
+| test | `test-v` | conary-test | `conary-test/Cargo.toml` |

@@ -18,6 +18,8 @@ for install/removal with backtracking support.
 - `ConaryProvider<'db>` -- resolvo `DependencyProvider` + `Interner` bridge
 - `SatResolution` / `SatPackage` -- SAT solver output types
 - `ComponentResolver` -- component-level resolution for independent install/remove
+- `SolverDep` -- dependency enum: `Single` vs `OrGroup` for OR-dependency modeling
+- `ConaryPackageVersion::InstalledNative` -- variant for non-RPM installed packages
 
 ## Invariants
 - `Resolver::new()` builds the full graph from DB at construction
@@ -32,6 +34,7 @@ for install/removal with backtracking support.
 - `SatSource::Installed` vs `SatSource::Repository` distinguishes existing vs new packages
 - `provider.rs` queries DB on demand -- not all packages are loaded upfront
 - `canonical/` submodule handles canonical name resolution (separate concern)
+- OR groups from normalized requirement groups are modeled via `VersionSetUnionId` in resolvo
 
 ## Files
 - `engine.rs` -- `Resolver` struct, `resolve_install()`, `resolve()`
