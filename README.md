@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.3.0](https://img.shields.io/badge/version-0.3.0-orange.svg)](CHANGELOG.md)
+[![v0.5.0](https://img.shields.io/badge/version-0.5.0-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 270+ tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 260+ tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**100K+ lines of Rust, 270+ tests, database schema v48.** This is not a prototype.
+**100K+ lines of Rust, 260+ tests, database schema v51.** This is not a prototype.
 
 ---
 
@@ -461,12 +461,12 @@ conary federation stats --days 7      # Bandwidth savings report
 
 ## Building
 
-Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), and `conary-server` (Remi + conaryd).
+Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 5 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
 
 ```bash
 cargo build                          # Client only (default)
 cargo build --features server        # With Remi server + conaryd daemon
-cargo test                           # Run all tests (~200 unit tests)
+cargo test                           # Run all tests (~260 unit tests)
 cargo clippy -- -D warnings          # Lint check
 ```
 
@@ -481,7 +481,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.3.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 270+ tests passing across 3 distros (schema v48). System generations (EROFS + composefs), system takeover, and the bootstrap pipeline are implemented. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 16 MCP tools for LLM agent integration).
+**Version 0.5.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 260+ tests passing across 3 distros (schema v51). System generations (EROFS + composefs), system takeover, the bootstrap pipeline, and cross-distro repository capability resolution are implemented. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 16 MCP tools for LLM agent integration).
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 

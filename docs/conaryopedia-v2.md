@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-07
-revision: 2
-summary: Update schema version to v48, add external admin API reference
+last_updated: 2026-03-13
+revision: 3
+summary: Update schema to v51, add cross-distro repo capability resolution tables
 ---
 
 # Conaryopedia v2
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v48). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v51). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -1810,7 +1810,7 @@ CCS lockfiles (`ccs.lock`) capture the exact resolved dependency state for repro
 [metadata]
 version = 1
 generated = "2026-03-03T12:00:00Z"
-generator = "conary 0.2.0"
+generator = "conary 0.5.0"
 package = "myapp"
 package_version = "1.0.0"
 
