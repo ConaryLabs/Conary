@@ -8,6 +8,12 @@
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
+use crate::repository::dependency_model::{
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryDependencyFlavor,
+    RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
+use crate::repository::versioning::VersionScheme;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde_json::json;
@@ -224,35 +230,42 @@ impl FedoraParser {
 
                                 if let Some(name) = dep_name
                                     && !name.starts_with("rpmlib(")
-                                    && !name.starts_with('/')
+                                    && !name.starts_with("config(")
                                 {
                                     let constraint = match (dep_flags, dep_ver) {
                                         (Some(flags), Some(ver)) => {
-                                            let op = match flags.as_str() {
-                                                "GE" => ">=",
-                                                "LE" => "<=",
-                                                "EQ" => "=",
-                                                "LT" => "<",
-                                                "GT" => ">",
-                                                _ => "",
-                                            };
+                                            let op = rpm_flags_to_op(&flags);
                                             if op.is_empty() {
                                                 String::new()
                                             } else {
-                                                format!("{} {}", op, ver)
+                                                format!("{op} {ver}")
                                             }
                                         }
                                         _ => String::new(),
                                     };
 
-                                    match format_section {
-                                        Some(FormatSection::Requires) => {
-                                            pkg.dependencies.push((name, constraint));
+                                    if name.starts_with('/') {
+                                        // File-path entry: only include in
+                                        // structured output
+                                        match format_section {
+                                            Some(FormatSection::Requires) => {
+                                                pkg.file_requires.push(name);
+                                            }
+                                            Some(FormatSection::Provides) => {
+                                                pkg.file_provides.push(name);
+                                            }
+                                            None => {}
                                         }
-                                        Some(FormatSection::Provides) => {
-                                            pkg.provides.push((name, constraint));
+                                    } else {
+                                        match format_section {
+                                            Some(FormatSection::Requires) => {
+                                                pkg.dependencies.push((name, constraint));
+                                            }
+                                            Some(FormatSection::Provides) => {
+                                                pkg.provides.push((name, constraint));
+                                            }
+                                            None => {}
                                         }
-                                        None => {}
                                     }
                                 }
                             }
@@ -322,6 +335,77 @@ struct PackageBuilder {
     url: Option<String>,
     dependencies: Vec<(String, String)>,
     provides: Vec<(String, String)>,
+    /// File-path provides (e.g. `/usr/bin/foo`) -- filtered from legacy output
+    /// but included in structured provides.
+    file_provides: Vec<String>,
+    /// File-path requires (e.g. `/usr/bin/sh`) -- filtered from legacy output
+    /// but included in structured requirements.
+    file_requires: Vec<String>,
+}
+
+/// Classify an RPM provide name into the appropriate capability kind.
+fn classify_rpm_provide(name: &str) -> RepositoryCapabilityKind {
+    if name.starts_with('/') {
+        RepositoryCapabilityKind::File
+    } else if name.contains(".so") {
+        RepositoryCapabilityKind::Soname
+    } else {
+        // Will be refined to PackageName for self-provides in the builder
+        RepositoryCapabilityKind::Generic
+    }
+}
+
+/// Convert RPM flags string to a version constraint operator.
+fn rpm_flags_to_op(flags: &str) -> &str {
+    match flags {
+        "GE" => ">=",
+        "LE" => "<=",
+        "EQ" => "=",
+        "LT" => "<",
+        "GT" => ">",
+        _ => "",
+    }
+}
+
+/// Check whether an RPM requires entry looks like a rich/conditional dep.
+///
+/// Rich deps have the form `(foo if bar)`, `(foo or bar)`, etc.
+fn is_rich_dep(name: &str) -> bool {
+    name.starts_with('(') && name.ends_with(')')
+}
+
+/// Build a `RepositoryRequirementGroup` from a single RPM requires entry.
+fn rpm_require_to_group(name: &str, constraint: &str) -> RepositoryRequirementGroup {
+    let native_text = if constraint.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} {constraint}")
+    };
+
+    if is_rich_dep(name) {
+        // Rich/conditional dep -- mark as conditional, keep opaque text
+        let clause = RepositoryRequirementClause {
+            name: name.to_string(),
+            capability_kind: None,
+            version_constraint: None,
+            native_text: Some(native_text.clone()),
+        };
+        RepositoryRequirementGroup {
+            kind: RepositoryRequirementKind::Depends,
+            behavior: ConditionalRequirementBehavior::Conditional,
+            alternatives: vec![clause],
+            description: None,
+            native_text: Some(native_text),
+        }
+    } else {
+        let clause = if constraint.is_empty() {
+            RepositoryRequirementClause::name_only(name.to_string())
+        } else {
+            RepositoryRequirementClause::versioned(name.to_string(), constraint.to_string())
+        };
+        RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, clause)
+            .with_native_text(native_text)
+    }
 }
 
 impl PackageBuilder {
@@ -406,26 +490,98 @@ impl PackageBuilder {
             })
             .collect();
 
-        // Convert dependencies
+        // Build structured requirements
+        let mut requirements: Vec<RepositoryRequirementGroup> = self
+            .dependencies
+            .iter()
+            .map(|(dep_name, constraint)| rpm_require_to_group(dep_name, constraint))
+            .collect();
+
+        // Include file-path requires in structured output
+        for file_req in &self.file_requires {
+            let clause = RepositoryRequirementClause {
+                name: file_req.clone(),
+                capability_kind: Some(RepositoryCapabilityKind::File),
+                version_constraint: None,
+                native_text: Some(file_req.clone()),
+            };
+            requirements.push(
+                RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, clause)
+                    .with_native_text(file_req.clone()),
+            );
+        }
+
+        // Build structured provides
+        let mut structured_provides: Vec<RepositoryProvide> = Vec::new();
+
+        // Implicit self-provide: the package name itself
+        structured_provides.push(RepositoryProvide::package_name(
+            name.clone(),
+            Some(version.clone()),
+        ));
+
+        for (prov_name, prov_constraint) in &self.provides {
+            let kind = if prov_name == &name {
+                RepositoryCapabilityKind::PackageName
+            } else {
+                classify_rpm_provide(prov_name)
+            };
+
+            let prov_version = if prov_constraint.is_empty() {
+                None
+            } else {
+                // Constraint is "= 1.2.3" -- extract just the version part
+                let trimmed = prov_constraint.trim();
+                let ver_part = trimmed
+                    .strip_prefix("= ")
+                    .or_else(|| trimmed.strip_prefix(">="))
+                    .or_else(|| trimmed.strip_prefix("<="))
+                    .or_else(|| trimmed.strip_prefix('>'))
+                    .or_else(|| trimmed.strip_prefix('<'))
+                    .or_else(|| trimmed.strip_prefix('='))
+                    .unwrap_or(trimmed);
+                Some(ver_part.trim().to_string())
+            };
+
+            let native_text = if prov_constraint.is_empty() {
+                prov_name.clone()
+            } else {
+                format!("{prov_name} {prov_constraint}")
+            };
+
+            structured_provides.push(RepositoryProvide {
+                name: prov_name.clone(),
+                kind,
+                version: prov_version,
+                native_text: Some(native_text),
+            });
+        }
+
+        // Include file-path provides in structured output
+        for file_prov in &self.file_provides {
+            structured_provides.push(RepositoryProvide::file(file_prov.clone()));
+        }
+
+        // Convert dependencies (legacy)
         let dependencies = self
             .dependencies
             .into_iter()
-            .map(|(name, constraint)| {
+            .map(|(dep_name, constraint)| {
                 if constraint.is_empty() {
-                    Dependency::runtime(name)
+                    Dependency::runtime(dep_name)
                 } else {
-                    Dependency::runtime_versioned(name, constraint)
+                    Dependency::runtime_versioned(dep_name, constraint)
                 }
             })
             .collect();
         let rpm_provides: Vec<String> = self
             .provides
             .iter()
-            .map(|(name, constraint)| {
+            .map(|(prov_name, constraint)| {
                 if constraint.is_empty() {
-                    name.clone()
+                    prov_name.clone()
                 } else {
-                    format!("{name} {constraint}")
+                    format!("{prov_name} {constraint}")
                 }
             })
             .collect();
@@ -457,10 +613,10 @@ impl PackageBuilder {
             download_url,
             dependencies,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: None,
-            version_scheme: None,
-            requirements: Vec::new(),
-            provides: Vec::new(),
+            source_distro: Some(RepositoryDependencyFlavor::Rpm),
+            version_scheme: Some(VersionScheme::Rpm),
+            requirements,
+            provides: structured_provides,
         })
     }
 }
@@ -596,5 +752,186 @@ mod tests {
 
         assert!(provides.contains(&"kernel-core-uname-r = 6.19.6-200.fc43.x86_64"));
         assert!(requires.contains(&"systemd >= 255"));
+    }
+
+    #[test]
+    fn test_builder_sets_source_distro_and_version_scheme() {
+        let builder = valid_builder();
+        let pkg = builder.build("https://example.com").unwrap();
+        assert_eq!(pkg.source_distro, Some(RepositoryDependencyFlavor::Rpm));
+        assert_eq!(pkg.version_scheme, Some(VersionScheme::Rpm));
+    }
+
+    #[test]
+    fn test_structured_kernel_uname_r_provide() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>kernel-core</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="6.19.6" rel="200.fc43"/>
+    <checksum type="sha256">deadbeef</checksum>
+    <summary>kernel core</summary>
+    <description>kernel core</description>
+    <size package="123"/>
+    <location href="Packages/k/kernel-core-6.19.6-200.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:provides>
+        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc43.x86_64"/>
+      </rpm:provides>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let pkg = &packages[0];
+
+        // Should have self-provide + kernel-core-uname-r
+        assert!(pkg.provides.len() >= 2);
+
+        let uname_provide = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "kernel-core-uname-r")
+            .expect("kernel-core-uname-r provide not found");
+        assert_eq!(uname_provide.kind, RepositoryCapabilityKind::Generic);
+        assert_eq!(
+            uname_provide.version.as_deref(),
+            Some("6.19.6-200.fc43.x86_64")
+        );
+        assert_eq!(
+            uname_provide.native_text.as_deref(),
+            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
+        );
+    }
+
+    #[test]
+    fn test_structured_versioned_provide_coreutils() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>coreutils-common</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="9.7" rel="1.fc43"/>
+    <checksum type="sha256">abcd1234</checksum>
+    <summary>Common files for coreutils</summary>
+    <description>Common files</description>
+    <size package="456"/>
+    <location href="Packages/c/coreutils-common-9.7-1.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:provides>
+        <rpm:entry name="coreutils-common" flags="EQ" ver="9.7"/>
+      </rpm:provides>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let pkg = &packages[0];
+
+        // Self-provide from the explicit entry should be PackageName kind
+        let self_provide = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "coreutils-common" && p.native_text.is_some())
+            .expect("explicit self-provide not found");
+        assert_eq!(self_provide.kind, RepositoryCapabilityKind::PackageName);
+        assert_eq!(self_provide.version.as_deref(), Some("9.7"));
+    }
+
+    #[test]
+    fn test_structured_rich_conditional_dep() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>test-pkg</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1.0" rel="1.fc43"/>
+    <checksum type="sha256">beef1234</checksum>
+    <summary>Test</summary>
+    <description>Test</description>
+    <size package="100"/>
+    <location href="Packages/t/test-pkg-1.0-1.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:requires>
+        <rpm:entry name="(foo if bar)"/>
+        <rpm:entry name="systemd" flags="GE" ver="255"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let pkg = &packages[0];
+
+        assert_eq!(pkg.requirements.len(), 2);
+
+        // Rich dep should be conditional
+        let rich = &pkg.requirements[0];
+        assert_eq!(rich.behavior, ConditionalRequirementBehavior::Conditional);
+        assert_eq!(rich.alternatives[0].name, "(foo if bar)");
+
+        // Normal dep should be hard
+        let normal = &pkg.requirements[1];
+        assert_eq!(normal.behavior, ConditionalRequirementBehavior::Hard);
+        assert_eq!(normal.alternatives[0].name, "systemd");
+        assert_eq!(
+            normal.alternatives[0].version_constraint.as_deref(),
+            Some(">= 255")
+        );
+    }
+
+    #[test]
+    fn test_structured_soname_provide() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>glibc</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="2.40" rel="1.fc43"/>
+    <checksum type="sha256">cafe0001</checksum>
+    <summary>glibc</summary>
+    <description>glibc</description>
+    <size package="200"/>
+    <location href="Packages/g/glibc-2.40-1.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:provides>
+        <rpm:entry name="libc.so.6()(64bit)"/>
+      </rpm:provides>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser.parse_primary_xml(xml, "https://example.com").unwrap();
+        let pkg = &packages[0];
+
+        let soname = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "libc.so.6()(64bit)")
+            .expect("soname provide not found");
+        assert_eq!(soname.kind, RepositoryCapabilityKind::Soname);
+        assert!(soname.version.is_none());
+    }
+
+    #[test]
+    fn test_implicit_self_provide() {
+        let builder = valid_builder();
+        let pkg = builder.build("https://example.com").unwrap();
+
+        let self_provide = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "test-package" && p.kind == RepositoryCapabilityKind::PackageName)
+            .expect("implicit self-provide not found");
+        assert_eq!(self_provide.version.as_deref(), Some("1:2.3.4-5.fc43"));
     }
 }
