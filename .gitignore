@@ -73,6 +73,7 @@ vendor/
 # Git worktrees
 .worktrees/
 
-# Completed plan archives (active plans stay tracked)
+# Completed plan/spec archives (active ones stay tracked)
 docs/superpowers/plans/archive/
+docs/superpowers/specs/archive/
 tests/integration/remi/runner/__pycache__/
