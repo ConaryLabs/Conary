@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [server-v0.4.0] - 2026-03-13
+
+### Other
+- feat(core): persist native repo semantics and version schemes
+- fix(server): include package metadata in remi index
+- fix(server): auto-refresh stale repository metadata
+- fix(server): include converted-only packages in metadata
+- feat(server): honor configured admin bootstrap token
+- feat(server): add admin upload for custom ccs packages
+- feat(server): add authenticated test fixture publishing
+
 ## [v0.5.0] - 2026-03-13
 
 ### Other
