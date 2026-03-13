@@ -8,16 +8,58 @@
 
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::repository::registry::{RepositoryFormat, detect_repository_format};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Which native version comparison algorithm to use.
+///
+/// Each distro ecosystem has its own version string format and comparison
+/// rules.  This enum selects the correct algorithm so that versions are
+/// never compared across incompatible schemes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VersionScheme {
+    /// RPM-based version ordering (epoch:version-release, segment-based).
     Rpm,
+    /// Debian dpkg version ordering (epoch:upstream-revision, tilde semantics).
     Debian,
+    /// Arch Linux / ALPM version ordering (epoch:pkgver-pkgrel).
     Arch,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A version string paired with its comparison scheme.
+///
+/// Carrying the scheme alongside the string prevents accidental cross-scheme
+/// comparison and makes it explicit which algorithm governs ordering.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RepositoryVersion {
+    /// The raw version string (e.g. `"1:1.2.3-2.fc43"`).
+    pub raw: String,
+    /// Which comparison scheme applies to this version.
+    pub scheme: VersionScheme,
+}
+
+impl RepositoryVersion {
+    /// Create a new repository version.
+    #[must_use]
+    pub fn new(raw: String, scheme: VersionScheme) -> Self {
+        Self { raw, scheme }
+    }
+
+    /// Compare with another version.  Returns `None` if the schemes differ.
+    #[must_use]
+    pub fn compare(&self, other: &Self) -> Option<Ordering> {
+        compare_mixed_repo_versions(self.scheme, &self.raw, other.scheme, &other.raw)
+    }
+
+    /// Check whether this version satisfies a constraint.
+    #[must_use]
+    pub fn satisfies(&self, constraint: &RepoVersionConstraint) -> bool {
+        repo_version_satisfies(self.scheme, &self.raw, constraint)
+    }
+}
+
+/// A version constraint in native repository format.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RepoVersionConstraint {
     Any,
     Exact(String),
@@ -437,5 +479,27 @@ mod tests {
             "1.0-9",
             &constraint
         ));
+    }
+
+    #[test]
+    fn repository_version_same_scheme_compare() {
+        let a = RepositoryVersion::new("1.2.3-2.fc43".to_string(), VersionScheme::Rpm);
+        let b = RepositoryVersion::new("1.2.3-1.fc43".to_string(), VersionScheme::Rpm);
+        assert_eq!(a.compare(&b), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn repository_version_cross_scheme_returns_none() {
+        let rpm = RepositoryVersion::new("1.0".to_string(), VersionScheme::Rpm);
+        let deb = RepositoryVersion::new("1.0".to_string(), VersionScheme::Debian);
+        assert_eq!(rpm.compare(&deb), None);
+    }
+
+    #[test]
+    fn repository_version_satisfies_constraint() {
+        let v = RepositoryVersion::new("1.0".to_string(), VersionScheme::Debian);
+        let constraint =
+            parse_repo_constraint(VersionScheme::Debian, ">= 0.9").expect("constraint");
+        assert!(v.satisfies(&constraint));
     }
 }
