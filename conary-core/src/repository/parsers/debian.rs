@@ -73,6 +73,31 @@ impl DebianParser {
         dependencies
     }
 
+    fn parse_provides(&self, provides_str: &str) -> Vec<String> {
+        let mut provides = Vec::new();
+
+        for provide in provides_str.split(',') {
+            let provide = provide.trim();
+            if provide.is_empty() {
+                continue;
+            }
+
+            if let Some(paren_pos) = provide.find('(') {
+                let name = provide[..paren_pos].trim();
+                let constraint = provide[paren_pos + 1..].trim_end_matches(')').trim();
+                if constraint.is_empty() {
+                    provides.push(name.to_string());
+                } else {
+                    provides.push(format!("{name} {constraint}"));
+                }
+            } else {
+                provides.push(provide.to_string());
+            }
+        }
+
+        provides
+    }
+
     /// Parse a single dependency string
     /// Format: "package (>= 1.0)" or "package (= 1.0-1)" or "package"
     fn parse_dependency(&self, dep: &str) -> Option<(String, String)> {
@@ -87,6 +112,90 @@ impl DebianParser {
             // No version constraint
             Some((dep.trim().to_string(), String::new()))
         }
+    }
+
+    fn package_from_entry(&self, repo_url: &str, entry: DebianPackageEntry) -> Result<PackageMetadata> {
+        const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+
+        let size: u64 = entry
+            .size
+            .parse()
+            .map_err(|e| Error::ParseError(format!("Invalid size '{}': {}", entry.size, e)))?;
+
+        if size > MAX_PACKAGE_SIZE {
+            return Err(Error::ParseError(format!(
+                "Package {} size {} exceeds maximum allowed (5GB)",
+                entry.package, size
+            )));
+        }
+
+        let dependencies = if let Some(deps) = &entry.depends {
+            self.parse_dependencies(deps)
+        } else {
+            Vec::new()
+        };
+
+        if entry.filename.contains("..")
+            || entry.filename.starts_with('/')
+            || entry.filename.contains("://")
+        {
+            return Err(Error::ParseError(format!(
+                "Suspicious filename in Packages file: {}",
+                entry.filename
+            )));
+        }
+
+        let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), entry.filename);
+
+        let mut extra = serde_json::Map::new();
+        if let Some(homepage) = entry.homepage {
+            extra.insert("homepage".to_string(), serde_json::Value::String(homepage));
+        }
+        if let Some(section) = entry.section {
+            extra.insert("section".to_string(), serde_json::Value::String(section));
+        }
+        if let Some(installed_size) = entry.installed_size {
+            extra.insert(
+                "installed_size".to_string(),
+                serde_json::Value::String(installed_size),
+            );
+        }
+        if let Some(provides) = entry.provides {
+            extra.insert(
+                "deb_provides".to_string(),
+                serde_json::Value::Array(
+                    self.parse_provides(&provides)
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        extra.insert(
+            "format".to_string(),
+            serde_json::Value::String("deb".to_string()),
+        );
+        extra.insert(
+            "distribution".to_string(),
+            serde_json::Value::String(self.distribution.clone()),
+        );
+        extra.insert(
+            "component".to_string(),
+            serde_json::Value::String(self.component.clone()),
+        );
+
+        Ok(PackageMetadata {
+            name: entry.package,
+            version: entry.version,
+            architecture: Some(entry.architecture),
+            description: entry.description,
+            checksum: entry.sha256,
+            checksum_type: ChecksumType::Sha256,
+            size,
+            download_url,
+            dependencies,
+            extra_metadata: serde_json::Value::Object(extra),
+        })
     }
 }
 
@@ -105,6 +214,8 @@ struct DebianPackageEntry {
     filename: String,
     #[serde(default)]
     depends: Option<String>,
+    #[serde(default)]
+    provides: Option<String>,
     #[serde(default)]
     homepage: Option<String>,
     #[serde(default)]
@@ -129,86 +240,9 @@ impl RepositoryParser for DebianParser {
 
         debug!("Parsed {} package entries", entries.len());
 
-        // Convert to PackageMetadata
         let mut packages = Vec::new();
         for entry in entries {
-            // Validate size - reject unreasonably large packages (>5GB)
-            const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024; // 5 GB
-
-            let size: u64 = entry
-                .size
-                .parse()
-                .map_err(|e| Error::ParseError(format!("Invalid size '{}': {}", entry.size, e)))?;
-
-            if size > MAX_PACKAGE_SIZE {
-                return Err(Error::ParseError(format!(
-                    "Package {} size {} exceeds maximum allowed (5GB)",
-                    entry.package, size
-                )));
-            }
-
-            // Parse dependencies
-            let dependencies = if let Some(deps) = &entry.depends {
-                self.parse_dependencies(deps)
-            } else {
-                Vec::new()
-            };
-
-            // Validate filename for path traversal attacks
-            if entry.filename.contains("..")
-                || entry.filename.starts_with('/')
-                || entry.filename.contains("://")
-            {
-                return Err(Error::ParseError(format!(
-                    "Suspicious filename in Packages file: {}",
-                    entry.filename
-                )));
-            }
-
-            // Build download URL
-            let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), entry.filename);
-
-            // Build extra metadata
-            let mut extra = serde_json::Map::new();
-            if let Some(homepage) = entry.homepage {
-                extra.insert("homepage".to_string(), serde_json::Value::String(homepage));
-            }
-            if let Some(section) = entry.section {
-                extra.insert("section".to_string(), serde_json::Value::String(section));
-            }
-            if let Some(installed_size) = entry.installed_size {
-                extra.insert(
-                    "installed_size".to_string(),
-                    serde_json::Value::String(installed_size),
-                );
-            }
-            extra.insert(
-                "format".to_string(),
-                serde_json::Value::String("deb".to_string()),
-            );
-            extra.insert(
-                "distribution".to_string(),
-                serde_json::Value::String(self.distribution.clone()),
-            );
-            extra.insert(
-                "component".to_string(),
-                serde_json::Value::String(self.component.clone()),
-            );
-
-            let package = PackageMetadata {
-                name: entry.package,
-                version: entry.version,
-                architecture: Some(entry.architecture),
-                description: entry.description,
-                checksum: entry.sha256,
-                checksum_type: ChecksumType::Sha256,
-                size,
-                download_url,
-                dependencies,
-                extra_metadata: serde_json::Value::Object(extra),
-            };
-
-            packages.push(package);
+            packages.push(self.package_from_entry(repo_url, entry)?);
         }
 
         info!("Parsed {} packages from Debian repository", packages.len());
@@ -256,5 +290,36 @@ mod tests {
         assert_eq!(deps.len(), 2);
         assert_eq!(deps[0].name, "package-a");
         assert_eq!(deps[1].name, "other-package");
+    }
+
+    #[test]
+    fn test_sync_metadata_persists_debian_provides_in_extra_metadata() {
+        let entry = DebianPackageEntry {
+            package: "mail-transport-agent".to_string(),
+            version: "1.0-1".to_string(),
+            architecture: "amd64".to_string(),
+            description: Some("Test package".to_string()),
+            sha256: "deadbeef".to_string(),
+            size: "123".to_string(),
+            filename: "pool/main/m/mail-transport-agent.deb".to_string(),
+            depends: None,
+            homepage: None,
+            section: None,
+            installed_size: None,
+            provides: Some("mail-transport-agent, smtp-server (= 1.0-1)".to_string()),
+        };
+
+        let parser =
+            DebianParser::new("noble".to_string(), "main".to_string(), "amd64".to_string());
+        let package = parser.package_from_entry("https://example.test", entry).unwrap();
+        let metadata = package.extra_metadata.as_object().unwrap();
+        let provides = metadata
+            .get("deb_provides")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        let provides: Vec<&str> = provides.iter().filter_map(|value| value.as_str()).collect();
+
+        assert!(provides.contains(&"mail-transport-agent"));
+        assert!(provides.contains(&"smtp-server = 1.0-1"));
     }
 }

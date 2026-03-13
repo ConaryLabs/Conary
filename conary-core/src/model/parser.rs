@@ -11,6 +11,10 @@ use super::{ModelError, ModelResult};
 /// Current model file version
 pub const MODEL_VERSION: u32 = 1;
 
+fn default_source_profile() -> Option<String> {
+    Some("balanced/latest-anywhere".to_string())
+}
+
 /// The main system model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemModel {
@@ -686,9 +690,84 @@ impl Default for FederationConfig {
     }
 }
 
-/// System-level configuration (distro pin, mixing policy)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Source pin configuration for package sourcing preferences
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourcePinConfig {
+    /// Preferred distro to pin to (e.g., "arch", "ubuntu-noble")
+    pub distro: String,
+
+    /// Pin strength / mixing behavior (e.g., "strict", "guarded", "hard")
+    #[serde(default)]
+    pub strength: Option<String>,
+}
+
+/// Convergence intent controls how aggressively the system should migrate
+/// packages toward Conary-managed state when the source policy changes.
+///
+/// Each level reuses existing install-source primitives:
+/// - `TrackOnly` -> `AdoptedTrack` (metadata tracking, no CAS content)
+/// - `CasBacked` -> `AdoptedFull` (tracked + CAS-backed content)
+/// - `FullOwnership` -> `Taken` / `Repository` (Conary fully owns the package)
+///
+/// The default for non-interactive flows is `TrackOnly`, which provides
+/// visibility and dependency accounting without disrupting system packages.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConvergenceIntent {
+    /// Track packages for visibility and dependency bookkeeping.
+    /// Maps to `InstallSource::AdoptedTrack`.
+    #[default]
+    TrackOnly,
+    /// Track packages and back content with CAS storage.
+    /// Maps to `InstallSource::AdoptedFull`. Required for generation-building.
+    CasBacked,
+    /// Fully take over package ownership via Remi install or takeover.
+    /// Maps to `InstallSource::Taken` or `InstallSource::Repository`.
+    /// Unlocks generations, rollback, verification, provenance, and storage dedup.
+    FullOwnership,
+}
+
+impl ConvergenceIntent {
+    /// Return the display name used in user-facing output.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::TrackOnly => "track-only",
+            Self::CasBacked => "cas-backed",
+            Self::FullOwnership => "full-ownership",
+        }
+    }
+
+    /// Return the target install-source value that this convergence intent
+    /// maps to, expressed as its database string.
+    pub fn target_install_source(&self) -> &'static str {
+        match self {
+            Self::TrackOnly => "adopted-track",
+            Self::CasBacked => "adopted-full",
+            Self::FullOwnership => "taken",
+        }
+    }
+}
+
+/// System-level source policy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemConfig {
+    /// Source selection profile (default: balanced/latest-anywhere)
+    #[serde(default = "default_source_profile")]
+    pub profile: Option<String>,
+
+    /// Allowed distros for package sourcing
+    #[serde(default)]
+    pub allowed_distros: Vec<String>,
+
+    /// Explicit source pin in the richer policy shape
+    #[serde(default)]
+    pub pin: Option<SourcePinConfig>,
+
+    /// Convergence intent: how aggressively to migrate packages toward
+    /// Conary-managed state when the preferred source set changes.
+    #[serde(default)]
+    pub convergence: ConvergenceIntent,
+
     /// Default distro for package sourcing (e.g., "ubuntu-noble", "fedora-41")
     #[serde(default)]
     pub distro: Option<String>,
@@ -698,11 +777,41 @@ pub struct SystemConfig {
     pub mixing: Option<String>,
 }
 
+impl Default for SystemConfig {
+    fn default() -> Self {
+        Self {
+            profile: default_source_profile(),
+            allowed_distros: Vec::new(),
+            pin: None,
+            convergence: ConvergenceIntent::default(),
+            distro: None,
+            mixing: None,
+        }
+    }
+}
+
+impl SystemConfig {
+    /// Return the effective source pin, preferring the richer policy shape and
+    /// falling back to legacy `distro` / `mixing` fields for compatibility.
+    pub fn effective_pin(&self) -> Option<SourcePinConfig> {
+        self.pin.clone().or_else(|| {
+            self.distro.as_ref().map(|distro| SourcePinConfig {
+                distro: distro.clone(),
+                strength: self.mixing.clone(),
+            })
+        })
+    }
+}
+
 /// Per-package override to source from a different distro
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PackageOverrideConfig {
     /// Distro to source this package from (e.g., "fedora-41", "rpmfusion-41")
     pub from: String,
+
+    /// Override scope such as exact package or package family
+    #[serde(default)]
+    pub scope: Option<String>,
 
     /// Human-readable reason for the override
     #[serde(default)]
@@ -923,6 +1032,8 @@ patches = ["custom.patch"]
         model.pin.insert("openssl".to_string(), "3.0.*".to_string());
 
         let toml = model.to_toml().unwrap();
+        assert!(toml.contains("[system]"));
+        assert!(toml.contains("profile = \"balanced/latest-anywhere\""));
         let parsed = parse_model_string(&toml).unwrap();
 
         assert_eq!(parsed.config.install, model.config.install);
@@ -1171,6 +1282,53 @@ mixing = "guarded"
     }
 
     #[test]
+    fn test_parse_source_policy_profile_and_pin() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+profile = "balanced/latest-anywhere"
+allowed_distros = ["fedora-43", "arch"]
+
+[system.pin]
+distro = "arch"
+strength = "hard"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(
+            model.system.profile.as_deref(),
+            Some("balanced/latest-anywhere")
+        );
+        assert_eq!(
+            model.system.allowed_distros,
+            vec!["fedora-43".to_string(), "arch".to_string()]
+        );
+        let pin = model.system.effective_pin().expect("expected source pin");
+        assert_eq!(pin.distro, "arch");
+        assert_eq!(pin.strength.as_deref(), Some("hard"));
+    }
+
+    #[test]
+    fn test_legacy_distro_pin_maps_to_effective_pin() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+distro = "ubuntu-noble"
+mixing = "guarded"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        let pin = model
+            .system
+            .effective_pin()
+            .expect("legacy distro pin should map to effective pin");
+        assert_eq!(pin.distro, "ubuntu-noble");
+        assert_eq!(pin.strength.as_deref(), Some("guarded"));
+    }
+
+    #[test]
     fn test_parse_package_overrides() {
         let input = r#"
 [model]
@@ -1179,13 +1337,19 @@ version = 1
 [overrides]
 mesa = { from = "fedora-41" }
 nvidia-driver = { from = "rpmfusion-41", reason = "closed source drivers" }
+kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
 "#;
         let model: SystemModel = toml::from_str(input).unwrap();
-        assert_eq!(model.overrides.len(), 2);
+        assert_eq!(model.overrides.len(), 3);
         assert_eq!(model.overrides["mesa"].from, "fedora-41");
         assert_eq!(
             model.overrides["nvidia-driver"].reason.as_deref(),
             Some("closed source drivers")
+        );
+        assert_eq!(model.overrides["kernel"].scope.as_deref(), Some("family"));
+        assert_eq!(
+            model.overrides["kernel"].reason.as_deref(),
+            Some("prefer fedora kernels")
         );
     }
 
@@ -1196,8 +1360,120 @@ nvidia-driver = { from = "rpmfusion-41", reason = "closed source drivers" }
 version = 1
 "#;
         let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(
+            model.system.profile.as_deref(),
+            Some("balanced/latest-anywhere")
+        );
         assert!(model.system.distro.is_none());
         assert!(model.system.mixing.is_none());
+        assert!(model.system.allowed_distros.is_empty());
+        assert!(model.system.effective_pin().is_none());
         assert!(model.overrides.is_empty());
+    }
+
+    #[test]
+    fn test_convergence_intent_defaults_to_track_only() {
+        let input = r#"
+[model]
+version = 1
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.system.convergence, ConvergenceIntent::TrackOnly);
+    }
+
+    #[test]
+    fn test_parse_convergence_cas_backed() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+convergence = "cas-backed"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.system.convergence, ConvergenceIntent::CasBacked);
+    }
+
+    #[test]
+    fn test_parse_convergence_full_ownership() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+convergence = "full-ownership"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.system.convergence, ConvergenceIntent::FullOwnership);
+    }
+
+    #[test]
+    fn test_parse_convergence_with_pin_and_profile() {
+        let input = r#"
+[model]
+version = 1
+
+[system]
+profile = "balanced/latest-anywhere"
+convergence = "full-ownership"
+allowed_distros = ["arch", "fedora-43"]
+
+[system.pin]
+distro = "arch"
+strength = "hard"
+"#;
+        let model: SystemModel = toml::from_str(input).unwrap();
+        assert_eq!(model.system.convergence, ConvergenceIntent::FullOwnership);
+        assert_eq!(
+            model.system.profile.as_deref(),
+            Some("balanced/latest-anywhere")
+        );
+        let pin = model.system.effective_pin().unwrap();
+        assert_eq!(pin.distro, "arch");
+        assert_eq!(pin.strength.as_deref(), Some("hard"));
+    }
+
+    #[test]
+    fn test_convergence_intent_roundtrip_via_toml() {
+        let mut model = SystemModel::new();
+        model.system.convergence = ConvergenceIntent::CasBacked;
+        model.system.pin = Some(SourcePinConfig {
+            distro: "arch".to_string(),
+            strength: Some("hard".to_string()),
+        });
+
+        let toml = model.to_toml().unwrap();
+        let parsed = parse_model_string(&toml).unwrap();
+
+        assert_eq!(parsed.system.convergence, ConvergenceIntent::CasBacked);
+        let pin = parsed.system.effective_pin().unwrap();
+        assert_eq!(pin.distro, "arch");
+        assert_eq!(pin.strength.as_deref(), Some("hard"));
+    }
+
+    #[test]
+    fn test_convergence_intent_target_install_source_mapping() {
+        assert_eq!(
+            ConvergenceIntent::TrackOnly.target_install_source(),
+            "adopted-track"
+        );
+        assert_eq!(
+            ConvergenceIntent::CasBacked.target_install_source(),
+            "adopted-full"
+        );
+        assert_eq!(
+            ConvergenceIntent::FullOwnership.target_install_source(),
+            "taken"
+        );
+    }
+
+    #[test]
+    fn test_convergence_intent_display_names() {
+        assert_eq!(ConvergenceIntent::TrackOnly.display_name(), "track-only");
+        assert_eq!(ConvergenceIntent::CasBacked.display_name(), "cas-backed");
+        assert_eq!(
+            ConvergenceIntent::FullOwnership.display_name(),
+            "full-ownership"
+        );
     }
 }

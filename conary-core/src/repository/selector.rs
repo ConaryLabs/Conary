@@ -7,7 +7,7 @@
 
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
-use crate::version::RpmVersion;
+use crate::repository::versioning::compare_repo_package_versions;
 use rusqlite::Connection;
 use tracing::{debug, info};
 
@@ -136,15 +136,19 @@ impl PackageSelector {
 
         candidates.sort_by(
             |a, b| match b.repository.priority.cmp(&a.repository.priority) {
-                std::cmp::Ordering::Equal => {
-                    match (
-                        RpmVersion::parse(&a.package.version),
-                        RpmVersion::parse(&b.package.version),
-                    ) {
-                        (Ok(v_a), Ok(v_b)) => v_b.cmp(&v_a),
-                        _ => b.package.version.cmp(&a.package.version),
-                    }
-                }
+                std::cmp::Ordering::Equal => match compare_repo_package_versions(
+                    &a.package,
+                    &a.repository,
+                    &b.package,
+                    &b.repository,
+                ) {
+                    Some(ord) => ord.reverse(),
+                    None => b
+                        .repository
+                        .name
+                        .cmp(&a.repository.name)
+                        .then_with(|| b.package.version.cmp(&a.package.version)),
+                },
                 ord => ord,
             },
         );
@@ -193,6 +197,9 @@ impl PackageSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{Repository, RepositoryPackage};
+    use crate::db::schema;
+    use rusqlite::Connection;
 
     #[test]
     fn test_detect_architecture() {
@@ -230,5 +237,56 @@ mod tests {
             None,
             system_arch
         ));
+    }
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn select_best_uses_debian_version_ordering() {
+        let conn = test_db();
+
+        let mut repo = Repository::new(
+            "ubuntu-noble".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        repo.priority = 10;
+        repo.insert(&conn).unwrap();
+        let repository = Repository::find_by_name(&conn, "ubuntu-noble")
+            .unwrap()
+            .unwrap();
+        let repo_id = repository.id.unwrap();
+
+        let mut prerelease = RepositoryPackage::new(
+            repo_id,
+            "demo".to_string(),
+            "1.0~beta1".to_string(),
+            "sha256:beta".to_string(),
+            1,
+            "https://archive.ubuntu.com/ubuntu/pool/demo_1.0~beta1_amd64.deb".to_string(),
+        );
+        prerelease.architecture = Some("x86_64".to_string());
+        prerelease.insert(&conn).unwrap();
+
+        let mut stable = RepositoryPackage::new(
+            repo_id,
+            "demo".to_string(),
+            "1.0".to_string(),
+            "sha256:stable".to_string(),
+            1,
+            "https://archive.ubuntu.com/ubuntu/pool/demo_1.0_amd64.deb".to_string(),
+        );
+        stable.architecture = Some("x86_64".to_string());
+        stable.insert(&conn).unwrap();
+
+        let candidates = PackageSelector::search_packages(&conn, "demo", &SelectionOptions::default())
+            .unwrap();
+        let selected = PackageSelector::select_best(candidates).unwrap();
+
+        assert_eq!(selected.package.version, "1.0");
     }
 }

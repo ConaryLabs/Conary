@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use conary_core::model::parser::ConvergenceIntent;
+
 /// Controls how Conary handles dependencies during install and update.
 ///
 /// - `Satisfy`: Dependencies already on the system satisfy requirements (default)
@@ -14,6 +16,28 @@ pub enum DepMode {
     Satisfy,
     Adopt,
     Takeover,
+}
+
+impl DepMode {
+    /// Derive the default dep mode from the active source policy convergence intent.
+    ///
+    /// When the user has not explicitly specified `--dep-mode`, this function
+    /// provides a profile-driven default that aligns with their declared
+    /// convergence intent:
+    ///
+    /// - `TrackOnly` -> `Satisfy` (minimal disruption, track-only)
+    /// - `CasBacked` -> `Adopt` (auto-adopt so content enters CAS)
+    /// - `FullOwnership` -> `Takeover` (download and fully own everything)
+    ///
+    /// If no convergence intent is set, the default remains `Satisfy`.
+    #[allow(dead_code)] // Wired into resolve_missing_deps_policy_aware; callers land in later tasks
+    pub fn from_convergence_intent(intent: &ConvergenceIntent) -> Self {
+        match intent {
+            ConvergenceIntent::TrackOnly => Self::Satisfy,
+            ConvergenceIntent::CasBacked => Self::Adopt,
+            ConvergenceIntent::FullOwnership => Self::Takeover,
+        }
+    }
 }
 
 impl fmt::Display for DepMode {
@@ -55,5 +79,29 @@ mod tests {
     #[test]
     fn test_dep_mode_default() {
         assert_eq!(DepMode::default(), DepMode::Satisfy);
+    }
+
+    #[test]
+    fn test_dep_mode_from_convergence_track_only() {
+        assert_eq!(
+            DepMode::from_convergence_intent(&ConvergenceIntent::TrackOnly),
+            DepMode::Satisfy
+        );
+    }
+
+    #[test]
+    fn test_dep_mode_from_convergence_cas_backed() {
+        assert_eq!(
+            DepMode::from_convergence_intent(&ConvergenceIntent::CasBacked),
+            DepMode::Adopt
+        );
+    }
+
+    #[test]
+    fn test_dep_mode_from_convergence_full_ownership() {
+        assert_eq!(
+            DepMode::from_convergence_intent(&ConvergenceIntent::FullOwnership),
+            DepMode::Takeover
+        );
     }
 }

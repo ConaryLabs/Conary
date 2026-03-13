@@ -101,6 +101,121 @@ impl ArchParser {
         dependencies
     }
 
+    fn package_from_fields(
+        &self,
+        repo_url: &str,
+        desc_fields: &HashMap<String, Vec<String>>,
+        depends_content: Option<&String>,
+    ) -> Result<PackageMetadata> {
+        let name = desc_fields
+            .get("NAME")
+            .and_then(|v| v.first())
+            .ok_or_else(|| Error::ParseError("Missing %NAME% field".to_string()))?
+            .clone();
+
+        let version = desc_fields
+            .get("VERSION")
+            .and_then(|v| v.first())
+            .ok_or_else(|| Error::ParseError("Missing %VERSION% field".to_string()))?
+            .clone();
+
+        let filename = desc_fields
+            .get("FILENAME")
+            .and_then(|v| v.first())
+            .ok_or_else(|| Error::ParseError("Missing %FILENAME% field".to_string()))?
+            .clone();
+
+        let checksum = desc_fields
+            .get("SHA256SUM")
+            .and_then(|v| v.first())
+            .ok_or_else(|| Error::ParseError("Missing %SHA256SUM% field".to_string()))?
+            .clone();
+
+        let size: u64 = desc_fields
+            .get("CSIZE")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::ParseError("Missing or invalid %CSIZE% field".to_string()))?;
+
+        if size > MAX_PACKAGE_SIZE {
+            return Err(Error::ParseError(format!(
+                "Package {} size {} exceeds maximum allowed (5GB)",
+                name, size
+            )));
+        }
+
+        let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
+        let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
+
+        if filename.contains("..") || filename.starts_with('/') || filename.contains("://") {
+            return Err(Error::ParseError(format!(
+                "Suspicious filename in Arch database: {}",
+                filename
+            )));
+        }
+
+        let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
+
+        let mut extra = serde_json::Map::new();
+        if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
+            extra.insert(
+                "homepage".to_string(),
+                serde_json::Value::String(url.clone()),
+            );
+        }
+        if let Some(license) = desc_fields.get("LICENSE").and_then(|v| v.first()) {
+            extra.insert(
+                "license".to_string(),
+                serde_json::Value::String(license.clone()),
+            );
+        }
+        if let Some(builddate) = desc_fields.get("BUILDDATE").and_then(|v| v.first()) {
+            extra.insert(
+                "builddate".to_string(),
+                serde_json::Value::String(builddate.clone()),
+            );
+        }
+        if let Some(installed_size_str) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
+            extra.insert(
+                "installed_size".to_string(),
+                serde_json::Value::String(installed_size_str.clone()),
+            );
+        }
+        if let Some(provides) = desc_fields.get("PROVIDES") {
+            extra.insert(
+                "arch_provides".to_string(),
+                serde_json::Value::Array(
+                    provides
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        extra.insert(
+            "format".to_string(),
+            serde_json::Value::String("arch".to_string()),
+        );
+
+        let dependencies = depends_content
+            .map(|content| self.parse_depends_file(content))
+            .unwrap_or_default();
+
+        Ok(PackageMetadata {
+            name,
+            version,
+            architecture,
+            description,
+            checksum,
+            checksum_type: ChecksumType::Sha256,
+            size,
+            download_url,
+            dependencies,
+            extra_metadata: serde_json::Value::Object(extra),
+        })
+    }
+
     /// Parse dependency string into name and constraint
     /// Format: "package>=1.0" or "package=1.0" or "package<2.0" or just "package"
     fn parse_dependency_string(&self, dep: &str) -> (String, String) {
@@ -164,111 +279,15 @@ impl RepositoryParser for ArchParser {
         for (dir_key, desc_content) in &desc_data {
             let desc_fields = self.parse_desc_file(desc_content);
 
-            // Extract required fields
-            let name = desc_fields
-                .get("NAME")
-                .and_then(|v| v.first())
-                .ok_or_else(|| Error::ParseError("Missing %NAME% field".to_string()))?
-                .clone();
-
-            let version = desc_fields
-                .get("VERSION")
-                .and_then(|v| v.first())
-                .ok_or_else(|| Error::ParseError("Missing %VERSION% field".to_string()))?
-                .clone();
-
-            let filename = desc_fields
-                .get("FILENAME")
-                .and_then(|v| v.first())
-                .ok_or_else(|| Error::ParseError("Missing %FILENAME% field".to_string()))?
-                .clone();
-
-            let checksum = desc_fields
-                .get("SHA256SUM")
-                .and_then(|v| v.first())
-                .ok_or_else(|| Error::ParseError("Missing %SHA256SUM% field".to_string()))?
-                .clone();
-
-            let size: u64 = desc_fields
-                .get("CSIZE")
-                .and_then(|v| v.first())
-                .and_then(|s| s.parse().ok())
-                .ok_or_else(|| Error::ParseError("Missing or invalid %CSIZE% field".to_string()))?;
-
-            // Validate size - reject unreasonably large packages (>5GB)
-            if size > MAX_PACKAGE_SIZE {
-                warn!(
-                    "Package {} size {} exceeds maximum allowed (5GB), skipping",
-                    name, size
-                );
-                continue;
+            match self.package_from_fields(repo_url, &desc_fields, depends_data.get(dir_key)) {
+                Ok(package) => packages.push(package),
+                Err(Error::ParseError(message))
+                    if message.contains("exceeds maximum allowed (5GB)") =>
+                {
+                    warn!("{}", message);
+                }
+                Err(err) => return Err(err),
             }
-
-            let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
-            let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
-
-            // Validate filename for path traversal attacks
-            if filename.contains("..") || filename.starts_with('/') || filename.contains("://") {
-                return Err(Error::ParseError(format!(
-                    "Suspicious filename in Arch database: {}",
-                    filename
-                )));
-            }
-
-            // Build download URL
-            let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
-
-            // Build extra metadata
-            let mut extra = serde_json::Map::new();
-            if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
-                extra.insert(
-                    "homepage".to_string(),
-                    serde_json::Value::String(url.clone()),
-                );
-            }
-            if let Some(license) = desc_fields.get("LICENSE").and_then(|v| v.first()) {
-                extra.insert(
-                    "license".to_string(),
-                    serde_json::Value::String(license.clone()),
-                );
-            }
-            if let Some(builddate) = desc_fields.get("BUILDDATE").and_then(|v| v.first()) {
-                extra.insert(
-                    "builddate".to_string(),
-                    serde_json::Value::String(builddate.clone()),
-                );
-            }
-            if let Some(installed_size_str) = desc_fields.get("ISIZE").and_then(|v| v.first()) {
-                extra.insert(
-                    "installed_size".to_string(),
-                    serde_json::Value::String(installed_size_str.clone()),
-                );
-            }
-            extra.insert(
-                "format".to_string(),
-                serde_json::Value::String("arch".to_string()),
-            );
-
-            // Match dependencies by directory key (correct for multi-hyphen names)
-            let dependencies = depends_data
-                .get(dir_key)
-                .map(|content| self.parse_depends_file(content))
-                .unwrap_or_default();
-
-            let package = PackageMetadata {
-                name,
-                version,
-                architecture,
-                description,
-                checksum,
-                checksum_type: ChecksumType::Sha256,
-                size,
-                download_url,
-                dependencies,
-                extra_metadata: serde_json::Value::Object(extra),
-            };
-
-            packages.push(package);
         }
 
         info!("Parsed {} packages from Arch repository", packages.len());
@@ -307,5 +326,47 @@ mod tests {
         let (name2, constraint2) = parser.parse_dependency_string("readline");
         assert_eq!(name2, "readline");
         assert_eq!(constraint2, "");
+    }
+
+    #[test]
+    fn test_parse_desc_file_provides_persisted_in_extra_metadata() {
+        let parser = ArchParser::new("core".to_string());
+        let desc = "\
+%NAME%
+mailer
+
+%VERSION%
+1.0-1
+
+%FILENAME%
+mailer-1.0-1-x86_64.pkg.tar.zst
+
+%SHA256SUM%
+deadbeef
+
+%CSIZE%
+123
+
+%ARCH%
+x86_64
+
+%PROVIDES%
+mail-transport-agent
+smtp-server=1.0
+";
+
+        let fields = parser.parse_desc_file(desc);
+        let package = parser
+            .package_from_fields("https://example.test", &fields, None)
+            .unwrap();
+        let metadata = package.extra_metadata.as_object().unwrap();
+        let provides = metadata
+            .get("arch_provides")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        let provides: Vec<&str> = provides.iter().filter_map(|value| value.as_str()).collect();
+
+        assert!(provides.contains(&"mail-transport-agent"));
+        assert!(provides.contains(&"smtp-server=1.0"));
     }
 }

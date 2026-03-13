@@ -37,6 +37,34 @@ pub struct DepResolutionPlan {
     pub unresolvable: Vec<MissingDependency>,
 }
 
+/// Resolve missing dependencies using the active source policy convergence intent
+/// as the default dep mode.
+///
+/// When the user has not explicitly specified `--dep-mode`, this function reads
+/// the convergence intent from the source policy and derives an appropriate mode:
+/// - `TrackOnly` -> `Satisfy`
+/// - `CasBacked` -> `Adopt`
+/// - `FullOwnership` -> `Takeover`
+///
+/// If `explicit_mode` is `Some`, it takes precedence over the policy default.
+#[allow(dead_code)] // Callers land in later tasks (Task 8+)
+pub fn resolve_missing_deps_policy_aware(
+    conn: &rusqlite::Connection,
+    missing: &[MissingDependency],
+    explicit_mode: Option<DepMode>,
+    convergence: &conary_core::model::parser::ConvergenceIntent,
+) -> DepResolutionPlan {
+    let effective_mode = explicit_mode
+        .unwrap_or_else(|| DepMode::from_convergence_intent(convergence));
+    debug!(
+        "Dep resolution: explicit_mode={:?}, convergence={}, effective={}",
+        explicit_mode,
+        convergence.display_name(),
+        effective_mode
+    );
+    resolve_missing_deps(conn, missing, effective_mode)
+}
+
 /// Classify missing dependencies according to the chosen `DepMode`.
 ///
 /// For each missing dependency, the function checks (in order):
@@ -282,5 +310,41 @@ mod tests {
         // the dep should end up as unresolvable
         assert_eq!(plan.unresolvable.len(), 1);
         assert_eq!(plan.unresolvable[0].name, "some-obscure-lib");
+    }
+
+    #[test]
+    fn test_policy_aware_uses_convergence_when_no_explicit_mode() {
+        use conary_core::model::parser::ConvergenceIntent;
+
+        let conn = test_db();
+        let missing = vec![make_dep("pcre2", &["nginx"])];
+
+        // FullOwnership convergence intent -> Takeover mode -> to_install
+        let plan = resolve_missing_deps_policy_aware(
+            &conn,
+            &missing,
+            None,
+            &ConvergenceIntent::FullOwnership,
+        );
+        assert_eq!(plan.to_install.len(), 1);
+        assert_eq!(plan.to_install[0].name, "pcre2");
+    }
+
+    #[test]
+    fn test_policy_aware_explicit_mode_overrides_convergence() {
+        use conary_core::model::parser::ConvergenceIntent;
+
+        let conn = test_db();
+        let missing = vec![make_dep("some-obscure-lib", &["myapp"])];
+
+        // Even though convergence is FullOwnership (-> Takeover), the explicit
+        // mode Satisfy should win and produce unresolvable (no system PM in test)
+        let plan = resolve_missing_deps_policy_aware(
+            &conn,
+            &missing,
+            Some(DepMode::Satisfy),
+            &ConvergenceIntent::FullOwnership,
+        );
+        assert_eq!(plan.unresolvable.len(), 1);
     }
 }

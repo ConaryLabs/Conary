@@ -3,13 +3,20 @@
 
 use anyhow::Result;
 use conary_core::db::models::{DistroPin, SystemAffinity};
+use conary_core::model::parser::SourcePinConfig;
 
 pub fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
     if !["strict", "guarded", "permissive"].contains(&mixing) {
         anyhow::bail!("Invalid mixing policy: {mixing}. Use strict, guarded, or permissive.");
     }
     let conn = conary_core::db::open(db_path)?;
-    DistroPin::set(&conn, distro, mixing)?;
+    DistroPin::set_from_source_pin(
+        &conn,
+        &SourcePinConfig {
+            distro: distro.to_string(),
+            strength: Some(mixing.to_string()),
+        },
+    )?;
     println!("Pinned to {distro} (mixing: {mixing})");
     Ok(())
 }
@@ -64,7 +71,60 @@ pub fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
         anyhow::bail!("Invalid mixing policy: {policy}. Use strict, guarded, or permissive.");
     }
     let conn = conary_core::db::open(db_path)?;
+    if DistroPin::get_current(&conn)?.is_none() {
+        anyhow::bail!(
+            "No distro pin set. Use 'conary distro set <distro>' before changing mixing policy."
+        );
+    }
     DistroPin::set_mixing_policy(&conn, policy)?;
     println!("Mixing policy changed to {policy}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::schema;
+    use rusqlite::Connection;
+    use tempfile::NamedTempFile;
+
+    fn create_test_db() -> (NamedTempFile, String, Connection) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().display().to_string();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        (temp_file, db_path, conn)
+    }
+
+    #[test]
+    fn test_cmd_distro_set_persists_compatibility_pin() {
+        let (_temp, db_path, conn) = create_test_db();
+
+        cmd_distro_set(&db_path, "arch", "strict").unwrap();
+
+        let pin = DistroPin::get_current(&conn).unwrap().unwrap();
+        let source_pin = pin.as_source_pin();
+        assert_eq!(source_pin.distro, "arch");
+        assert_eq!(source_pin.strength.as_deref(), Some("strict"));
+    }
+
+    #[test]
+    fn test_cmd_distro_remove_clears_pin() {
+        let (_temp, db_path, conn) = create_test_db();
+        DistroPin::set(&conn, "fedora-43", "guarded").unwrap();
+
+        cmd_distro_remove(&db_path).unwrap();
+
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_cmd_distro_mixing_requires_existing_pin() {
+        let (_temp, db_path, _conn) = create_test_db();
+
+        let err = cmd_distro_mixing(&db_path, "strict").unwrap_err();
+
+        assert!(err.to_string().contains("No distro pin set"));
+    }
 }

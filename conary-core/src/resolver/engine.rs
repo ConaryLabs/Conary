@@ -6,6 +6,7 @@
 //! The dependency graph is still maintained for visualization and stats.
 
 use crate::error::Result;
+use crate::repository::versioning::VersionScheme;
 use crate::version::{RpmVersion, VersionConstraint};
 use rusqlite::Connection;
 
@@ -43,10 +44,25 @@ impl<'db> Resolver<'db> {
         version: RpmVersion,
         dependencies: Vec<DependencyEdge>,
     ) -> Result<ResolutionPlan> {
+        self.resolve_install_native(
+            package_name,
+            version.to_string(),
+            VersionScheme::Rpm,
+            dependencies,
+        )
+    }
+
+    pub fn resolve_install_native(
+        &mut self,
+        package_name: String,
+        version: String,
+        scheme: VersionScheme,
+        dependencies: Vec<DependencyEdge>,
+    ) -> Result<ResolutionPlan> {
         use crate::db::models::ProvideEntry;
 
         // Add the new package and its edges to the graph
-        let node = PackageNode::new(package_name.clone(), version);
+        let node = PackageNode::new_native(package_name.clone(), version, scheme);
         self.graph.add_node(node);
         for dep in &dependencies {
             self.graph.add_edge(dep.clone());
@@ -69,7 +85,7 @@ impl<'db> Resolver<'db> {
                 });
             } else if let Some(target) = self.graph.get_node(&dep.to) {
                 // Node exists — check version constraint
-                if !dep.constraint.satisfies(&target.version) {
+                if !dep.matches_version(&target.version) {
                     conflicts.push(Conflict::UnsatisfiableConstraint {
                         package: dep.to.clone(),
                         installed_version: target.version.to_string(),
@@ -197,7 +213,7 @@ impl<'db> Resolver<'db> {
         for (package_name, constraints) in constraint_map {
             if let Some(node) = self.graph.get_node(&package_name) {
                 for (requirer, constraint) in &constraints {
-                    if !constraint.satisfies(&node.version) {
+                    if !edge_matches_constraint(constraint, &node.version) {
                         conflicts.push(Conflict::UnsatisfiableConstraint {
                             package: package_name.clone(),
                             installed_version: node.version.to_string(),
@@ -247,6 +263,21 @@ impl<'db> Resolver<'db> {
     }
 }
 
+fn edge_matches_constraint(
+    constraint: &VersionConstraint,
+    version: &super::graph::InstalledPackageVersion,
+) -> bool {
+    let edge = DependencyEdge {
+        from: String::new(),
+        to: String::new(),
+        constraint: constraint.clone(),
+        raw_constraint: Some(constraint.to_string()),
+        dep_type: String::new(),
+        kind: "package".to_string(),
+    };
+    edge.matches_version(version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +294,7 @@ mod tests {
             from: from.to_string(),
             to: to.to_string(),
             constraint: VersionConstraint::Any,
+            raw_constraint: None,
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         }
@@ -312,6 +344,7 @@ mod tests {
             from: "app".to_string(),
             to: "libfoo".to_string(),
             constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+            raw_constraint: Some(">= 1.0.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         }];
@@ -361,6 +394,7 @@ mod tests {
             from: "app".to_string(),
             to: "libold".to_string(),
             constraint: VersionConstraint::parse(">= 2.0.0").unwrap(),
+            raw_constraint: Some(">= 2.0.0".to_string()),
             dep_type: "runtime".to_string(),
             kind: "package".to_string(),
         }];

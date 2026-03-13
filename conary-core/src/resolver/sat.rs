@@ -9,7 +9,7 @@ use resolvo::{ConditionalRequirement, Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
 
 use crate::error::{Error, Result};
-use crate::version::{RpmVersion, VersionConstraint};
+use crate::version::VersionConstraint;
 
 use super::provider::ConaryProvider;
 
@@ -26,7 +26,7 @@ pub enum SatSource {
 #[derive(Debug, Clone)]
 pub struct SatPackage {
     pub name: String,
-    pub version: RpmVersion,
+    pub version: String,
     pub source: SatSource,
 }
 
@@ -102,7 +102,7 @@ pub fn solve_install(
                 let pkg = provider.get_solvable(*sid);
                 install_order.push(SatPackage {
                     name: pkg.name.clone(),
-                    version: pkg.version.clone(),
+                    version: pkg.version.to_string(),
                     source: if pkg.trove_id.is_some() {
                         SatSource::Installed
                     } else {
@@ -173,7 +173,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                         alt.trove_id.is_some()
                             && alt.name == *dep_name
                             && !remove_set.contains(alt.name.as_str())
-                            && constraint.satisfies(&alt.version)
+                            && super::provider::constraint_matches_package(constraint, &alt.version)
                     });
                     if !has_alternative {
                         breaking_set.insert(pkg.name.clone());
@@ -206,7 +206,11 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 mod tests {
     use super::*;
     use crate::db;
-    use crate::db::models::{Changeset, ChangesetStatus, DependencyEntry, Trove, TroveType};
+    use crate::db::models::{
+        Changeset, ChangesetStatus, DependencyEntry, Repository, RepositoryPackage,
+        RepositoryRequirement, Trove, TroveType,
+    };
+    use crate::version::RpmVersion;
 
     fn setup_test_db() -> (tempfile::TempDir, Connection) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -403,6 +407,7 @@ mod tests {
                     from: "Z".to_string(),
                     to: "W".to_string(),
                     constraint: VersionConstraint::Any,
+                    raw_constraint: None,
                     dep_type: "runtime".to_string(),
                     kind: "package".to_string(),
                 }],
@@ -440,6 +445,7 @@ mod tests {
                         from: "Z".to_string(),
                         to: "W".to_string(),
                         constraint: VersionConstraint::Any,
+                        raw_constraint: None,
                         dep_type: "runtime".to_string(),
                         kind: "package".to_string(),
                     },
@@ -447,6 +453,7 @@ mod tests {
                         from: "Z".to_string(),
                         to: "NOTINSTALLED".to_string(),
                         constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
+                        raw_constraint: Some(">= 1.0.0".to_string()),
                         dep_type: "runtime".to_string(),
                         kind: "package".to_string(),
                     },
@@ -457,5 +464,112 @@ mod tests {
         assert_eq!(plan.missing.len(), 1);
         assert_eq!(plan.missing[0].name, "NOTINSTALLED");
         assert!(plan.conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_sat_install_uses_repo_native_debian_constraints_via_provider() {
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "ubuntu-main".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut app = RepositoryPackage::new(
+            repo_id,
+            "myapp".to_string(),
+            "2.0-1".to_string(),
+            "sha256:app".to_string(),
+            1,
+            "https://archive.ubuntu.com/ubuntu/pool/main/m/myapp.deb".to_string(),
+        );
+        app.insert(&conn).unwrap();
+        let app_id = app.id.unwrap();
+
+        let mut app_req = RepositoryRequirement::new(
+            app_id,
+            "libfoo".to_string(),
+            Some(">= 1.0~beta1".to_string()),
+            "package".to_string(),
+            "runtime".to_string(),
+            Some("libfoo (>= 1.0~beta1)".to_string()),
+        );
+        app_req.insert(&conn).unwrap();
+
+        let mut libfoo = RepositoryPackage::new(
+            repo_id,
+            "libfoo".to_string(),
+            "1.0-1".to_string(),
+            "sha256:libfoo".to_string(),
+            1,
+            "https://archive.ubuntu.com/ubuntu/pool/main/libf/libfoo.deb".to_string(),
+        );
+        libfoo.insert(&conn).unwrap();
+
+        let result = solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
+
+        assert!(result.conflict_message.is_none(), "{result:?}");
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|pkg| pkg.name.as_str())
+            .collect();
+        assert!(names.contains(&"myapp"));
+        assert!(names.contains(&"libfoo"));
+    }
+
+    #[test]
+    fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "arch-core".to_string(),
+            "https://geo.mirror.pkgbuild.com".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut app = RepositoryPackage::new(
+            repo_id,
+            "ripgrep".to_string(),
+            "14.1.0-1".to_string(),
+            "sha256:ripgrep".to_string(),
+            1,
+            "https://geo.mirror.pkgbuild.com/core/os/x86_64/ripgrep.pkg.tar.zst".to_string(),
+        );
+        app.insert(&conn).unwrap();
+        let app_id = app.id.unwrap();
+
+        let mut app_req = RepositoryRequirement::new(
+            app_id,
+            "glibc".to_string(),
+            Some(">= 2.39".to_string()),
+            "package".to_string(),
+            "runtime".to_string(),
+            Some("glibc >= 2.39".to_string()),
+        );
+        app_req.insert(&conn).unwrap();
+
+        let mut glibc = RepositoryPackage::new(
+            repo_id,
+            "glibc".to_string(),
+            "2.39-1".to_string(),
+            "sha256:glibc".to_string(),
+            1,
+            "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc.pkg.tar.zst".to_string(),
+        );
+        glibc.insert(&conn).unwrap();
+
+        let result =
+            solve_install(&conn, &[("ripgrep".to_string(), VersionConstraint::Any)]).unwrap();
+
+        assert!(result.conflict_message.is_none(), "{result:?}");
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|pkg| pkg.name.as_str())
+            .collect();
+        assert!(names.contains(&"ripgrep"));
+        assert!(names.contains(&"glibc"));
     }
 }

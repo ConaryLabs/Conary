@@ -2320,6 +2320,68 @@ pub fn migrate_v48(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 49 - Normalized repository capability tables
+///
+/// Adds first-class normalized tables for repo-native provides and requirements so
+/// sync, replatform planning, and later SAT work can query the same substrate.
+pub fn migrate_v49(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS repository_provides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_package_id INTEGER NOT NULL,
+            capability TEXT NOT NULL,
+            version TEXT,
+            kind TEXT NOT NULL DEFAULT 'package',
+            raw TEXT,
+            FOREIGN KEY (repository_package_id) REFERENCES repository_packages(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_repository_provides_pkg
+            ON repository_provides(repository_package_id);
+        CREATE INDEX IF NOT EXISTS idx_repository_provides_capability
+            ON repository_provides(capability);
+        CREATE INDEX IF NOT EXISTS idx_repository_provides_kind_capability
+            ON repository_provides(kind, capability);
+
+        CREATE TABLE IF NOT EXISTS repository_requirements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_package_id INTEGER NOT NULL,
+            capability TEXT NOT NULL,
+            version_constraint TEXT,
+            kind TEXT NOT NULL DEFAULT 'package',
+            dependency_type TEXT NOT NULL DEFAULT 'runtime',
+            raw TEXT,
+            FOREIGN KEY (repository_package_id) REFERENCES repository_packages(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_repository_requirements_pkg
+            ON repository_requirements(repository_package_id);
+        CREATE INDEX IF NOT EXISTS idx_repository_requirements_capability
+            ON repository_requirements(capability);
+        CREATE INDEX IF NOT EXISTS idx_repository_requirements_kind_capability
+            ON repository_requirements(kind, capability);
+        ",
+    )?;
+
+    info!("Schema version 49 applied successfully (normalized repository capabilities)");
+    Ok(())
+}
+
+/// Version 50 - Installed source identity on troves
+///
+/// Adds source distro and native version scheme metadata for installed/adopted troves
+/// so legacy solver inputs can become scheme-aware without guessing from version strings.
+pub fn migrate_v50(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE troves ADD COLUMN source_distro TEXT;
+        ALTER TABLE troves ADD COLUMN version_scheme TEXT;
+        ",
+    )?;
+
+    info!("Schema version 50 applied successfully (trove source identity)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2330,7 +2392,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
 
-        // Verify schema version is 46
+        // Verify schema version is current
         let version: i32 = conn
             .query_row(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
@@ -2338,7 +2400,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 48);
+        assert_eq!(version, 50);
 
         // Insert into canonical_packages
         conn.execute(
@@ -2385,6 +2447,10 @@ mod tests {
 
         // Verify new columns on repository_packages
         conn.execute("SELECT distro FROM repository_packages LIMIT 0", [])
+            .unwrap();
+
+        // Verify new columns on troves
+        conn.execute("SELECT source_distro, version_scheme FROM troves LIMIT 0", [])
             .unwrap();
     }
 }

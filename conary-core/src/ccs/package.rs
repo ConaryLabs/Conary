@@ -618,6 +618,8 @@ impl PackageFormat for CcsPackage {
             selection_reason: None,
             label_id: None,
             orphan_since: None,
+            source_distro: None,
+            version_scheme: None,
         }
     }
 }

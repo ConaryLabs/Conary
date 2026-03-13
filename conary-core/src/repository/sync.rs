@@ -5,8 +5,11 @@
 //! Functions for synchronizing repository metadata from remote sources,
 //! including native format support for Arch, Debian, and Fedora repositories.
 
-use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
+use crate::db::models::{
+    PackageDelta, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+};
 use crate::error::{Error, Result};
+use crate::repository::parsers::{DependencyType, PackageMetadata};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
@@ -104,10 +107,11 @@ fn sync_repository_native(
         );
     }
 
-    // Convert package metadata to RepositoryPackage structs
-    let repo_packages: Vec<RepositoryPackage> = packages
+    // Convert package metadata to repository rows plus normalized capability rows.
+    let synced_packages: Vec<(RepositoryPackage, Vec<RepositoryProvide>, Vec<RepositoryRequirement>)> = packages
         .into_iter()
         .map(|pkg_meta| {
+            let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
             // Convert parsers::Dependency to Vec<String>
             let deps_json = if !pkg_meta.dependencies.is_empty() {
                 let dep_strings: Vec<String> = pkg_meta
@@ -149,11 +153,35 @@ fn sync_repository_native(
                 serde_json::Value::Null => None,
                 value => Some(value.to_string()),
             };
-            repo_pkg
+            (repo_pkg, provides, requirements)
         })
         .collect();
+    let mut repo_packages: Vec<RepositoryPackage> =
+        synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
 
-    let count = repo_packages.len();
+    let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
+
+    info!(
+        "Synchronized {} packages from repository {}",
+        count, repo.name
+    );
+    Ok(count)
+}
+
+fn persist_native_sync_rows(
+    conn: &Connection,
+    repo: &mut Repository,
+    repo_packages: &mut [RepositoryPackage],
+    synced_packages: Vec<(
+        RepositoryPackage,
+        Vec<RepositoryProvide>,
+        Vec<RepositoryRequirement>,
+    )>,
+) -> Result<usize> {
+    let repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+    let count = synced_packages.len();
 
     // Use a transaction for bulk operations (much faster than individual inserts)
     let tx = conn.unchecked_transaction()?;
@@ -161,8 +189,30 @@ fn sync_repository_native(
     // Delete old package entries for this repository
     RepositoryPackage::delete_by_repository(&tx, repo_id)?;
 
-    // Batch insert all packages using prepared statement
-    RepositoryPackage::batch_insert(&tx, &repo_packages)?;
+    // Batch insert all packages using prepared statement and retain generated IDs
+    RepositoryPackage::batch_insert_with_ids(&tx, repo_packages)?;
+
+    let mut repo_provides = Vec::new();
+    let mut repo_requirements = Vec::new();
+    for (pkg, (_, provides, requirements)) in repo_packages.iter().zip(synced_packages.into_iter()) {
+        let Some(repository_package_id) = pkg.id else {
+            return Err(Error::InitError(
+                "Inserted repository package missing generated ID".to_string(),
+            ));
+        };
+
+        repo_provides.extend(provides.into_iter().map(|mut provide| {
+            provide.repository_package_id = repository_package_id;
+            provide
+        }));
+        repo_requirements.extend(requirements.into_iter().map(|mut requirement| {
+            requirement.repository_package_id = repository_package_id;
+            requirement
+        }));
+    }
+
+    RepositoryProvide::batch_insert(&tx, &repo_provides)?;
+    RepositoryRequirement::batch_insert(&tx, &repo_requirements)?;
 
     // Update last_sync timestamp
     repo.last_sync = Some(current_timestamp());
@@ -170,11 +220,99 @@ fn sync_repository_native(
 
     tx.commit()?;
 
-    info!(
-        "Synchronized {} packages from repository {}",
-        count, repo.name
-    );
     Ok(count)
+}
+
+fn normalized_repository_capabilities(
+    pkg_meta: &PackageMetadata,
+) -> (Vec<RepositoryProvide>, Vec<RepositoryRequirement>) {
+    let mut provides = vec![RepositoryProvide::new(
+        0,
+        pkg_meta.name.clone(),
+        Some(pkg_meta.version.clone()),
+        "package".to_string(),
+        Some(pkg_meta.name.clone()),
+    )];
+
+    provides.extend(extract_extra_metadata_provides(&pkg_meta.extra_metadata).into_iter().map(
+        |(capability, version, raw)| {
+            RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+        },
+    ));
+
+    let requirements = pkg_meta
+        .dependencies
+        .iter()
+        .map(|dep| {
+            let raw = if let Some(constraint) = dep.constraint.as_deref() {
+                if constraint.is_empty() {
+                    dep.name.clone()
+                } else {
+                    format!("{} {}", dep.name, constraint)
+                }
+            } else {
+                dep.name.clone()
+            };
+
+            let dependency_type = match dep.dep_type {
+                DependencyType::Runtime => "runtime",
+                DependencyType::Optional => "optional",
+                DependencyType::Build => "build",
+            };
+
+            let version_constraint = dep
+                .constraint
+                .as_ref()
+                .and_then(|constraint| (!constraint.is_empty()).then(|| constraint.clone()));
+
+            RepositoryRequirement::new(
+                0,
+                dep.name.clone(),
+                version_constraint,
+                "package".to_string(),
+                dependency_type.to_string(),
+                Some(raw),
+            )
+        })
+        .collect();
+
+    (provides, requirements)
+}
+
+fn extract_extra_metadata_provides(
+    metadata: &serde_json::Value,
+) -> Vec<(String, Option<String>, String)> {
+    let mut parsed = Vec::new();
+
+    for key in ["rpm_provides", "deb_provides", "arch_provides"] {
+        let Some(entries) = metadata.get(key).and_then(|value| value.as_array()) else {
+            continue;
+        };
+
+        for raw in entries.iter().filter_map(|value| value.as_str()) {
+            let (capability, version) = parse_metadata_provide_entry(raw);
+            parsed.push((capability, version, raw.to_string()));
+        }
+    }
+
+    parsed
+}
+
+fn parse_metadata_provide_entry(entry: &str) -> (String, Option<String>) {
+    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
+
+    for op in OPS {
+        if let Some((name, version)) = entry.split_once(op) {
+            let name = name.trim();
+            let version = version.trim();
+            if name.is_empty() || version.is_empty() {
+                continue;
+            }
+            return (name.to_string(), Some(version.to_string()));
+        }
+    }
+
+    (entry.trim().to_string(), None)
 }
 
 /// Response from Remi metadata API (`GET /v1/{distro}/metadata`)
@@ -192,6 +330,90 @@ struct RemiPackageEntry {
     converted: bool,
     dependencies: Option<Vec<String>>,
     metadata: Option<serde_json::Value>,
+}
+
+fn remi_sync_row(
+    repo_id: i64,
+    endpoint: String,
+    distro: String,
+    entry: RemiPackageEntry,
+) -> (
+    RepositoryPackage,
+    Vec<RepositoryProvide>,
+    Vec<RepositoryRequirement>,
+) {
+    let system_arch = registry::detect_system_arch();
+    let download_url = format!(
+        "{endpoint}/v1/{distro}/packages/{}/download",
+        entry.name
+    );
+
+    let mut pkg = RepositoryPackage::new(
+        repo_id,
+        entry.name.clone(),
+        entry.version.clone(),
+        "remi:server-verified".to_string(),
+        0,
+        download_url,
+    );
+    pkg.architecture = Some(system_arch);
+    pkg.dependencies = entry
+        .dependencies
+        .as_ref()
+        .map(|deps| serde_json::to_string(deps).unwrap_or_default());
+    pkg.metadata = entry.metadata.as_ref().map(|value| value.to_string());
+
+    let metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
+    let mut provides = vec![RepositoryProvide::new(
+        0,
+        entry.name.clone(),
+        Some(entry.version.clone()),
+        "package".to_string(),
+        Some(entry.name.clone()),
+    )];
+    provides.extend(
+        extract_extra_metadata_provides(&metadata)
+            .into_iter()
+            .map(|(capability, version, raw)| {
+                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+            }),
+    );
+
+    let requirements = entry
+        .dependencies
+        .unwrap_or_default()
+        .into_iter()
+        .map(|raw| {
+            let (capability, version_constraint) = parse_raw_dependency_entry(&raw);
+            RepositoryRequirement::new(
+                0,
+                capability,
+                version_constraint,
+                "package".to_string(),
+                "runtime".to_string(),
+                Some(raw),
+            )
+        })
+        .collect();
+
+    (pkg, provides, requirements)
+}
+
+fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
+    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
+
+    for op in OPS {
+        if let Some((name, version)) = entry.split_once(op) {
+            let name = name.trim();
+            let version = version.trim();
+            if name.is_empty() || version.is_empty() {
+                continue;
+            }
+            return (name.to_string(), Some(format!("{op} {version}")));
+        }
+    }
+
+    (entry.trim().to_string(), None)
 }
 
 /// Synchronize repository directly from a Remi metadata API
@@ -235,7 +457,11 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
 
     // Deduplicate by (name, version, arch) — Remi metadata may contain duplicates
     let mut seen = HashSet::new();
-    let repo_packages: Vec<RepositoryPackage> = response
+    let synced_packages: Vec<(
+        RepositoryPackage,
+        Vec<RepositoryProvide>,
+        Vec<RepositoryRequirement>,
+    )> = response
         .packages
         .into_iter()
         .filter_map(|entry| {
@@ -248,33 +474,18 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
             if !seen.insert(key) {
                 return None;
             }
-            let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
-            let mut pkg = RepositoryPackage::new(
+            Some(remi_sync_row(
                 repo_id,
-                entry.name,
-                entry.version,
-                "remi:server-verified".to_string(), // Marker to avoid false-positive checksum mismatch
-                0,                                  // Size unknown until download
-                download_url,
-            );
-            pkg.architecture = Some(system_arch);
-            pkg.dependencies = entry
-                .dependencies
-                .map(|deps| serde_json::to_string(&deps).unwrap_or_default());
-            pkg.metadata = entry.metadata.map(|value| value.to_string());
-            Some(pkg)
+                endpoint.to_string(),
+                distro.to_string(),
+                entry,
+            ))
         })
         .collect();
 
-    let count = repo_packages.len();
-
-    let tx = conn.unchecked_transaction()?;
-    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
-    RepositoryPackage::batch_insert(&tx, &repo_packages)?;
-
-    repo.last_sync = Some(current_timestamp());
-    repo.update(&tx)?;
-    tx.commit()?;
+    let mut repo_packages: Vec<RepositoryPackage> =
+        synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
+    let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
 
     info!(
         "Synchronized {} packages from Remi repository {}",
@@ -497,6 +708,10 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{RepositoryProvide, RepositoryRequirement};
+    use crate::db::schema::migrate;
+    use crate::repository::parsers::Dependency;
+    use serde_json::json;
 
     #[test]
     fn test_rebase_download_url_no_content_url() {
@@ -570,5 +785,129 @@ mod tests {
         let result = rebase_download_url(download_url, metadata_url, Some(content_url));
         // Can't rebase - different base, return as-is
         assert_eq!(result, "https://other-server.com/packages/foo.rpm");
+    }
+
+    #[test]
+    fn test_persist_native_sync_rows_writes_normalized_capabilities() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.com/arch".to_string(),
+        );
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg_meta = PackageMetadata::new(
+            "ripgrep".to_string(),
+            "14.1.0-1".to_string(),
+            "abc123".to_string(),
+            1234,
+            "https://example.com/arch/pool/ripgrep.pkg.tar.zst".to_string(),
+        );
+        pkg_meta.architecture = Some("x86_64".to_string());
+        pkg_meta.dependencies = vec![Dependency::runtime_versioned(
+            "glibc".to_string(),
+            ">= 2.39".to_string(),
+        )];
+        pkg_meta.extra_metadata = json!({
+            "arch_provides": ["rg=14.1.0-1"],
+        });
+
+        let (provides, requirements) = normalized_repository_capabilities(&pkg_meta);
+        let synced_packages = vec![(
+            RepositoryPackage::new(
+                repo_id,
+                pkg_meta.name.clone(),
+                pkg_meta.version.clone(),
+                pkg_meta.checksum.clone(),
+                pkg_meta.size as i64,
+                pkg_meta.download_url.clone(),
+            ),
+            provides,
+            requirements,
+        )];
+        let mut repo_packages: Vec<RepositoryPackage> =
+            synced_packages.iter().map(|(pkg, _, _)| pkg.clone()).collect();
+
+        let count =
+            persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages)
+                .unwrap();
+        assert_eq!(count, 1);
+
+        let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored_packages.len(), 1);
+        let repository_package_id = stored_packages[0].id.unwrap();
+
+        let stored_provides =
+            RepositoryProvide::find_by_repository_package(&conn, repository_package_id).unwrap();
+        assert_eq!(stored_provides.len(), 2);
+        assert!(stored_provides.iter().any(|provide| {
+            provide.capability == "ripgrep"
+                && provide.version.as_deref() == Some("14.1.0-1")
+                && provide.raw.as_deref() == Some("ripgrep")
+        }));
+        assert!(stored_provides.iter().any(|provide| {
+            provide.capability == "rg"
+                && provide.version.as_deref() == Some("14.1.0-1")
+                && provide.raw.as_deref() == Some("rg=14.1.0-1")
+        }));
+
+        let stored_requirements =
+            RepositoryRequirement::find_by_repository_package(&conn, repository_package_id)
+                .unwrap();
+        assert_eq!(stored_requirements.len(), 1);
+        assert_eq!(stored_requirements[0].capability, "glibc");
+        assert_eq!(
+            stored_requirements[0].version_constraint.as_deref(),
+            Some(">= 2.39")
+        );
+        assert_eq!(stored_requirements[0].dependency_type, "runtime");
+        assert_eq!(stored_requirements[0].raw.as_deref(), Some("glibc >= 2.39"));
+    }
+
+    #[test]
+    fn test_remi_package_entry_builds_normalized_capabilities() {
+        let entry = RemiPackageEntry {
+            name: "kernel-core".to_string(),
+            version: "6.19.6-200.fc43".to_string(),
+            converted: false,
+            dependencies: Some(vec![
+                "kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                "glibc >= 2.39".to_string(),
+            ]),
+            metadata: Some(json!({
+                "rpm_provides": [
+                    "kernel-core-uname-r = 6.19.6-200.fc43.x86_64",
+                    "kernel-core = 6.19.6-200.fc43"
+                ]
+            })),
+        };
+
+        let (_pkg, provides, requirements) = remi_sync_row(
+            7,
+            "https://packages.conary.io".to_string(),
+            "fedora".to_string(),
+            entry,
+        );
+
+        assert!(provides.iter().any(|provide| {
+            provide.capability == "kernel-core-uname-r"
+                && provide.version.as_deref() == Some("6.19.6-200.fc43.x86_64")
+                && provide.raw.as_deref()
+                    == Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
+        }));
+        assert!(requirements.iter().any(|requirement| {
+            requirement.capability == "kernel-modules-core-uname-r"
+                && requirement.version_constraint.as_deref()
+                    == Some("= 6.19.6-200.fc43.x86_64")
+                && requirement.raw.as_deref()
+                    == Some("kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64")
+        }));
+        assert!(requirements.iter().any(|requirement| {
+            requirement.capability == "glibc"
+                && requirement.version_constraint.as_deref() == Some(">= 2.39")
+        }));
     }
 }

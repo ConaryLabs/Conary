@@ -12,10 +12,12 @@ use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::traits::PackageFormat;
 use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
+use conary_core::repository::versioning::{
+    RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
+};
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
 };
-use conary_core::version::{RpmVersion, VersionConstraint};
 use rusqlite::params;
 use std::collections::HashMap;
 use std::io::Write;
@@ -120,13 +122,11 @@ fn installed_versions_satisfying_constraint(
         return Ok(installed.into_iter().map(|trove| trove.version).collect());
     };
 
-    let constraint = VersionConstraint::parse(version_constraint)
-        .with_context(|| format!("invalid version constraint: {version_constraint}"))?;
     let matches = installed
         .into_iter()
         .filter_map(|trove| {
-            let version = RpmVersion::parse(&trove.version).ok()?;
-            constraint.satisfies(&version).then_some(trove.version)
+            version_satisfies_constraint(&trove.version, trove.version_scheme.as_deref(), version_constraint)
+                .then_some(trove.version)
         })
         .collect();
 
@@ -183,8 +183,7 @@ fn validate_incoming_version_against_dependents(
     package_name: &str,
     incoming_version: &str,
 ) -> Result<()> {
-    let incoming = RpmVersion::parse(incoming_version)
-        .with_context(|| format!("invalid incoming package version: {incoming_version}"))?;
+    let scheme = installed_package_version_scheme(conn, package_name)?.unwrap_or(VersionScheme::Rpm);
     let dependents = conary_core::db::models::DependencyEntry::find_dependents(conn, package_name)?;
     let mut violations = Vec::new();
 
@@ -192,9 +191,7 @@ fn validate_incoming_version_against_dependents(
         let Some(constraint_str) = dep.version_constraint.as_deref() else {
             continue;
         };
-        let constraint = VersionConstraint::parse(constraint_str)
-            .with_context(|| format!("invalid version constraint: {constraint_str}"))?;
-        if constraint.satisfies(&incoming) {
+        if repo_constraint_set_satisfied(scheme, incoming_version, constraint_str)? {
             continue;
         }
         let dependent_name = conary_core::db::models::Trove::find_by_id(conn, dep.trove_id)?
@@ -213,6 +210,64 @@ fn validate_incoming_version_against_dependents(
         incoming_version,
         violations.join(", ")
     );
+}
+
+fn version_satisfies_constraint(
+    version: &str,
+    version_scheme: Option<&str>,
+    constraint: &str,
+) -> bool {
+    repo_constraint_set_satisfied(
+        parse_version_scheme(version_scheme).unwrap_or(VersionScheme::Rpm),
+        version,
+        constraint,
+    )
+    .unwrap_or(false)
+}
+
+fn installed_package_version_scheme(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+) -> Result<Option<VersionScheme>> {
+    Ok(conary_core::db::models::Trove::find_by_name(conn, package_name)?
+        .into_iter()
+        .find_map(|trove| parse_version_scheme(trove.version_scheme.as_deref())))
+}
+
+fn parse_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
+    match raw {
+        Some("rpm") => Some(VersionScheme::Rpm),
+        Some("debian") => Some(VersionScheme::Debian),
+        Some("arch") => Some(VersionScheme::Arch),
+        _ => None,
+    }
+}
+
+fn repo_constraint_set_satisfied(
+    scheme: VersionScheme,
+    version: &str,
+    raw: &str,
+) -> Result<bool> {
+    for part in split_constraint_parts(raw) {
+        let constraint = parse_repo_constraint(scheme, part)
+            .ok_or_else(|| anyhow::anyhow!("invalid version constraint: {raw}"))?;
+        if !repo_constraint_satisfies(scheme, version, &constraint) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn split_constraint_parts(raw: &str) -> impl Iterator<Item = &str> {
+    raw.split(',').map(str::trim).filter(|part| !part.is_empty())
+}
+
+fn repo_constraint_satisfies(
+    scheme: VersionScheme,
+    version: &str,
+    constraint: &RepoVersionConstraint,
+) -> bool {
+    repo_version_satisfies(scheme, version, constraint)
 }
 
 /// Install a CCS package
@@ -566,7 +621,7 @@ pub fn cmd_ccs_install(
                 deployed_mode(file.mode).0,
                 trove_id,
             );
-            file_entry.insert(&tx)?;
+            file_entry.insert_or_replace(&tx)?;
 
             // Register in file_contents (CAS index) and file_history
             if hash.len() == 64 {
@@ -775,6 +830,77 @@ mod tests {
         let not_matching =
             installed_versions_satisfying_constraint(&conn, "dep-base", Some(">=3.0")).unwrap();
         assert!(not_matching.is_empty());
+    }
+
+    #[test]
+    fn installed_versions_respect_debian_version_constraints() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut prerelease = conary_core::db::models::Trove::new(
+            "dep-base".to_string(),
+            "1.0~beta1".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        prerelease.version_scheme = Some("debian".to_string());
+        prerelease.insert(&conn).unwrap();
+
+        let mut stable = conary_core::db::models::Trove::new(
+            "dep-base".to_string(),
+            "1.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        stable.version_scheme = Some("debian".to_string());
+        stable.insert(&conn).unwrap();
+
+        let matching =
+            installed_versions_satisfying_constraint(&conn, "dep-base", Some(">= 1.0")).unwrap();
+        assert_eq!(matching, vec!["1.0".to_string()]);
+    }
+
+    #[test]
+    fn incoming_version_uses_arch_constraints_for_dependents() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut liba = conary_core::db::models::Trove::new(
+            "dep-liba".to_string(),
+            "1.0-1".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        liba.version_scheme = Some("arch".to_string());
+        liba.insert(&conn).unwrap();
+
+        let mut app = conary_core::db::models::Trove::new(
+            "dep-app".to_string(),
+            "1.0-1".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        app.version_scheme = Some("arch".to_string());
+        let app_id = app.insert(&conn).unwrap();
+
+        let mut dep = conary_core::db::models::DependencyEntry::new(
+            app_id,
+            "dep-liba".to_string(),
+            None,
+            "runtime".to_string(),
+            Some(">= 1.0-2".to_string()),
+        );
+        dep.insert(&conn).unwrap();
+
+        let error =
+            validate_incoming_version_against_dependents(&conn, "dep-liba", "1.0-1").unwrap_err();
+        let error_text = error.to_string();
+        assert!(error_text.contains("dependency version mismatch"));
+        assert!(error_text.contains("dep-app requires >= 1.0-2"));
+
+        validate_incoming_version_against_dependents(&conn, "dep-liba", "1.0-2").unwrap();
     }
 
     #[test]

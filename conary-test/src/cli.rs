@@ -297,11 +297,23 @@ fn run_single_distro(
         let has_failures = aggregate_suite.failed() > 0;
 
         // Cleanup container.
-        if let Err(e) = backend.stop(&container_id).await {
-            tracing::warn!(error = %e, "Failed to stop container");
-        }
-        if let Err(e) = backend.remove(&container_id).await {
-            tracing::warn!(error = %e, "Failed to remove container");
+        let keep_container = std::env::var("CONARY_TEST_KEEP_CONTAINER")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        if keep_container {
+            tracing::warn!(
+                distro,
+                id = %container_id,
+                "Keeping test container for forensic inspection"
+            );
+            eprintln!("CONARY_TEST_KEPT_CONTAINER={container_id}");
+        } else {
+            if let Err(e) = backend.stop(&container_id).await {
+                tracing::warn!(error = %e, "Failed to stop container");
+            }
+            if let Err(e) = backend.remove(&container_id).await {
+                tracing::warn!(error = %e, "Failed to remove container");
+            }
         }
 
         Ok(!has_failures)

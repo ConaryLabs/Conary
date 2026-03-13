@@ -59,6 +59,7 @@ pub fn cmd_adopt_system(
     }
 
     println!("Detected package manager: {:?}", pkg_mgr);
+    let source_identity = pkg_mgr.detect_source_identity();
 
     let mut conn = conary_core::db::open(db_path)?;
 
@@ -260,6 +261,8 @@ pub fn cmd_adopt_system(
             trove.architecture = Some(arch.clone());
             trove.description = description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
+            trove.source_distro = source_identity.source_distro.clone();
+            trove.version_scheme = source_identity.version_scheme.clone();
             if has_install_reason_data && !user_installed.contains(name) {
                 trove.install_reason = InstallReason::Dependency;
                 trove.selection_reason =

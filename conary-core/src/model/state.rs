@@ -8,8 +8,10 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 
-use super::{ModelError, ModelResult};
+use crate::db::models::DistroPin;
+use crate::model::parser::SourcePinConfig;
 
+use super::{ModelError, ModelResult};
 /// Represents the current state of the system
 #[derive(Debug, Clone)]
 pub struct SystemState {
@@ -21,6 +23,9 @@ pub struct SystemState {
 
     /// Pinned packages
     pub pinned: HashSet<String>,
+
+    /// Effective source pin mirrored from runtime compatibility state.
+    pub source_pin: Option<SourcePinConfig>,
 }
 
 /// Information about an installed package
@@ -49,6 +54,7 @@ impl SystemState {
             installed: HashMap::new(),
             explicit: HashSet::new(),
             pinned: HashSet::new(),
+            source_pin: None,
         }
     }
 
@@ -150,6 +156,10 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
         state.installed.insert(name, pkg);
     }
 
+    state.source_pin = DistroPin::get_current(conn)
+        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
+        .map(|pin| pin.as_source_pin());
+
     Ok(state)
 }
 
@@ -168,12 +178,26 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
         }
     }
 
+    model.system.pin = state.source_pin.clone();
+
     model
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::DistroPin;
+    use crate::db::schema;
+    use rusqlite::Connection;
+    use tempfile::NamedTempFile;
+
+    fn create_test_db() -> (NamedTempFile, Connection) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
 
     #[test]
     fn test_empty_state() {
@@ -224,5 +248,18 @@ mod tests {
         let model = snapshot_to_model(&state);
         assert!(model.config.install.contains(&"nginx".to_string()));
         assert_eq!(model.pin.get("nginx"), Some(&"1.24.0".to_string()));
+    }
+
+    #[test]
+    fn test_snapshot_to_model_captures_compatibility_distro_pin() {
+        let (_temp, conn) = create_test_db();
+        DistroPin::set(&conn, "arch", "strict").unwrap();
+
+        let state = capture_current_state(&conn).unwrap();
+        let model = snapshot_to_model(&state);
+
+        let effective_pin = model.system.effective_pin().unwrap();
+        assert_eq!(effective_pin.distro, "arch");
+        assert_eq!(effective_pin.strength.as_deref(), Some("strict"));
     }
 }

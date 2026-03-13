@@ -11,7 +11,7 @@ use tracing::warn;
 /// Column list for Trove SELECT queries (avoids repetition across methods)
 pub(crate) const TROVE_COLUMNS: &str = "id, name, version, type, architecture, description, \
     installed_at, installed_by_changeset_id, install_source, install_reason, \
-    flavor_spec, pinned, selection_reason, label_id, orphan_since";
+    flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, version_scheme";
 
 /// Type of trove (package, component, collection, or redirect)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
@@ -110,6 +110,10 @@ pub struct Trove {
     /// When this package became orphaned (no longer required by any explicit package).
     /// NULL means not orphaned. Used for grace period policies.
     pub orphan_since: Option<String>,
+    /// Distro identity the installed package originally came from.
+    pub source_distro: Option<String>,
+    /// Native version scheme for the installed package (rpm, debian, arch).
+    pub version_scheme: Option<String>,
 }
 
 impl Trove {
@@ -131,6 +135,8 @@ impl Trove {
             selection_reason: Some("Explicitly installed".to_string()),
             label_id: None,
             orphan_since: None,
+            source_distro: None,
+            version_scheme: None,
         }
     }
 
@@ -157,6 +163,8 @@ impl Trove {
             selection_reason: Some("Explicitly installed".to_string()),
             label_id: None,
             orphan_since: None,
+            source_distro: None,
+            version_scheme: None,
         }
     }
 
@@ -183,6 +191,8 @@ impl Trove {
             selection_reason: Some(format!("Required by {}", required_by)),
             label_id: None,
             orphan_since: None,
+            source_distro: None,
+            version_scheme: None,
         }
     }
 
@@ -209,14 +219,16 @@ impl Trove {
             selection_reason: Some(format!("Installed via @{}", collection_name)),
             label_id: None,
             orphan_since: None,
+            source_distro: None,
+            version_scheme: None,
         }
     }
 
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, source_distro, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 &self.name,
                 &self.version,
@@ -230,6 +242,8 @@ impl Trove {
                 self.pinned,
                 &self.selection_reason,
                 &self.label_id,
+                &self.source_distro,
+                &self.version_scheme,
             ],
         )?;
 
@@ -378,6 +392,16 @@ impl Trove {
             None
         });
 
+        let source_distro: Option<String> = row.get(15).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read source_distro column, falling back to None");
+            None
+        });
+
+        let version_scheme: Option<String> = row.get(16).unwrap_or_else(|_| {
+            warn!("Trove::from_row: failed to read version_scheme column, falling back to None");
+            None
+        });
+
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -394,6 +418,8 @@ impl Trove {
             selection_reason,
             label_id,
             orphan_since,
+            source_distro,
+            version_scheme,
         })
     }
 
@@ -423,6 +449,22 @@ impl Trove {
     /// Unpin a package to allow updates/removal
     pub fn unpin(conn: &Connection, id: i64) -> Result<()> {
         conn.execute("UPDATE troves SET pinned = 0 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn update_source_identity(
+        conn: &Connection,
+        id: i64,
+        source_distro: Option<&str>,
+        version_scheme: Option<&str>,
+    ) -> Result<()> {
+        conn.execute(
+            "UPDATE troves
+             SET source_distro = ?1,
+                 version_scheme = ?2
+             WHERE id = ?3",
+            params![source_distro, version_scheme, id],
+        )?;
         Ok(())
     }
 
@@ -522,7 +564,8 @@ impl Trove {
     pub fn find_adopted_unconverted(conn: &Connection) -> Result<Vec<Self>> {
         let sql = "SELECT t.id, t.name, t.version, t.type, t.architecture, \
              t.description, t.installed_at, t.installed_by_changeset_id, t.install_source, \
-             t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, t.label_id, t.orphan_since \
+             t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, t.label_id, t.orphan_since, \
+             t.source_distro, t.version_scheme \
              FROM troves t \
              LEFT JOIN converted_packages cp ON cp.trove_id = t.id \
              WHERE t.install_source IN ('adopted-track', 'adopted-full') \
@@ -534,5 +577,50 @@ impl Trove {
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(troves)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_test_db() -> (tempfile::TempDir, Connection) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+        (temp_dir, conn)
+    }
+
+    #[test]
+    fn trove_round_trips_source_identity() {
+        let (_dir, conn) = setup_test_db();
+        let mut trove = Trove::new_with_source(
+            "bash".to_string(),
+            "5.2.37-1".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+        );
+        trove.source_distro = Some("arch".to_string());
+        trove.version_scheme = Some("arch".to_string());
+
+        let trove_id = trove.insert(&conn).unwrap();
+        let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+
+        assert_eq!(loaded.source_distro.as_deref(), Some("arch"));
+        assert_eq!(loaded.version_scheme.as_deref(), Some("arch"));
+    }
+
+    #[test]
+    fn trove_update_source_identity_backfills_existing_rows() {
+        let (_dir, conn) = setup_test_db();
+        let mut trove = Trove::new("bash".to_string(), "5.2.37-1".to_string(), TroveType::Package);
+        let trove_id = trove.insert(&conn).unwrap();
+
+        Trove::update_source_identity(&conn, trove_id, Some("fedora-43"), Some("rpm")).unwrap();
+
+        let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(loaded.source_distro.as_deref(), Some("fedora-43"));
+        assert_eq!(loaded.version_scheme.as_deref(), Some("rpm"));
     }
 }

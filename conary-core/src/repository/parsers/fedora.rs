@@ -63,9 +63,11 @@ impl FedoraParser {
                         a.as_ref()
                             .map(|attr| attr.key.as_ref() == b"type")
                             .unwrap_or(false)
-                    }) && attr.value.as_ref() == b"primary"
-                    {
-                        in_primary = true;
+                    }) {
+                        let attr_value: &[u8] = attr.value.as_ref();
+                        if attr_value == b"primary" {
+                            in_primary = true;
+                        }
                     }
                 }
                 Ok(Event::Start(e) | Event::Empty(e))
