@@ -603,4 +603,401 @@ mod tests {
         assert!(names.contains(&"ripgrep"));
         assert!(names.contains(&"glibc"));
     }
+
+    // ==========================================================================
+    // Task 11: Cross-distro SAT and policy regression tests
+    // ==========================================================================
+
+    use crate::db::models::{ProvideEntry, RepositoryProvide, RepositoryRequirementGroup};
+
+    /// Helper: insert a trove with version_scheme and its dependencies
+    fn insert_native_trove(
+        conn: &Connection,
+        name: &str,
+        version: &str,
+        scheme: &str,
+        deps: &[(&str, Option<&str>)],
+    ) -> i64 {
+        let mut changeset = Changeset::new(format!("Install {name}"));
+        let _cs_id = changeset.insert(conn).unwrap();
+        changeset
+            .update_status(conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        let mut trove = Trove::new(name.to_string(), version.to_string(), TroveType::Package);
+        trove.version_scheme = Some(scheme.to_string());
+        let trove_id = trove.insert(conn).unwrap();
+
+        for (dep_name, constraint) in deps {
+            let mut dep = DependencyEntry::new(
+                trove_id,
+                dep_name.to_string(),
+                None,
+                "runtime".to_string(),
+                constraint.map(|s| s.to_string()),
+            );
+            dep.insert(conn).unwrap();
+        }
+
+        trove_id
+    }
+
+    /// Helper: insert a repo package with normalized requirements
+    fn insert_repo_pkg_with_reqs(
+        conn: &Connection,
+        repo_id: i64,
+        name: &str,
+        version: &str,
+        url: &str,
+        reqs: &[(&str, Option<&str>)],
+    ) -> i64 {
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            version.to_string(),
+            format!("sha256:{name}"),
+            1,
+            url.to_string(),
+        );
+        pkg.insert(conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        for (cap, constraint) in reqs {
+            let mut req = RepositoryRequirement::new(
+                pkg_id,
+                cap.to_string(),
+                constraint.map(|s| s.to_string()),
+                "package".to_string(),
+                "runtime".to_string(),
+                None,
+            );
+            req.insert(conn).unwrap();
+        }
+
+        pkg_id
+    }
+
+    #[test]
+    fn rpm_transitive_capability_chain() {
+        // kernel -> kernel-core-uname-r = X (capability provided by kernel-core)
+        // kernel-core -> glibc >= 2.39
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        // kernel-core provides kernel-core-uname-r
+        let kc_id = insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "kernel-core",
+            "6.19.6-200.fc43",
+            "https://mirror.fedora.invalid/kernel-core.rpm",
+            &[("glibc", Some(">= 2.39"))],
+        );
+        let mut provide = RepositoryProvide::new(
+            kc_id,
+            "kernel-core-uname-r".to_string(),
+            Some("6.19.6-200.fc43.x86_64".to_string()),
+            "package".to_string(),
+            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        // kernel depends on kernel-core-uname-r
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "kernel",
+            "6.19.6-200.fc43",
+            "https://mirror.fedora.invalid/kernel.rpm",
+            &[("kernel-core-uname-r", None)],
+        );
+
+        // glibc (leaf)
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "glibc",
+            "2.39-22.fc43",
+            "https://mirror.fedora.invalid/glibc.rpm",
+            &[],
+        );
+
+        let result =
+            solve_install(&conn, &[("kernel".to_string(), VersionConstraint::Any)]).unwrap();
+        assert!(
+            result.conflict_message.is_none(),
+            "RPM capability chain should resolve: {:?}",
+            result.conflict_message
+        );
+        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"kernel"));
+        assert!(names.contains(&"kernel-core"));
+        assert!(names.contains(&"glibc"));
+    }
+
+    #[test]
+    fn debian_or_plus_versioned_virtual_dep() {
+        // postfix depends on "default-mta | mail-transport-agent"
+        // exim4 provides mail-transport-agent
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "ubuntu-main".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        // exim4 provides "mail-transport-agent"
+        let exim_id = insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "exim4",
+            "4.97-1",
+            "https://archive.ubuntu.com/ubuntu/pool/exim4.deb",
+            &[],
+        );
+        let mut provide = RepositoryProvide::new(
+            exim_id,
+            "mail-transport-agent".to_string(),
+            None,
+            "package".to_string(),
+            None,
+        );
+        provide.insert(&conn).unwrap();
+
+        // bsd-mailx has OR dep: default-mta | mail-transport-agent (via groups)
+        let mut mailx = RepositoryPackage::new(
+            repo_id,
+            "bsd-mailx".to_string(),
+            "8.1.2-0.20220412cvs-1build2".to_string(),
+            "sha256:mailx".to_string(),
+            1,
+            "https://archive.ubuntu.com/ubuntu/pool/bsd-mailx.deb".to_string(),
+        );
+        mailx.insert(&conn).unwrap();
+        let mailx_id = mailx.id.unwrap();
+
+        let mut group = RepositoryRequirementGroup::new(
+            mailx_id,
+            "depends".to_string(),
+            "hard".to_string(),
+        );
+        group.native_text = Some("default-mta | mail-transport-agent".to_string());
+        group.insert(&conn).unwrap();
+        let group_id = group.id.unwrap();
+
+        let mut clause_a = RepositoryRequirement::new(
+            mailx_id,
+            "default-mta".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            None,
+        )
+        .with_group(group_id);
+        clause_a.insert(&conn).unwrap();
+
+        let mut clause_b = RepositoryRequirement::new(
+            mailx_id,
+            "mail-transport-agent".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            None,
+        )
+        .with_group(group_id);
+        clause_b.insert(&conn).unwrap();
+
+        let result = solve_install(
+            &conn,
+            &[("bsd-mailx".to_string(), VersionConstraint::Any)],
+        )
+        .unwrap();
+
+        assert!(
+            result.conflict_message.is_none(),
+            "Debian OR dep should resolve via mail-transport-agent provider: {:?}",
+            result.conflict_message
+        );
+        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"bsd-mailx"));
+        assert!(names.contains(&"exim4"), "exim4 should be pulled in via OR dep");
+    }
+
+    #[test]
+    fn arch_versioned_provider_chain() {
+        // ripgrep -> glibc >= 2.39 -> (leaf)
+        // Uses Arch version semantics throughout
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "arch-core".to_string(),
+            "https://geo.mirror.pkgbuild.com".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "glibc",
+            "2.39-1",
+            "https://geo.mirror.pkgbuild.com/core/glibc.pkg.tar.zst",
+            &[],
+        );
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "ripgrep",
+            "14.1.0-1",
+            "https://geo.mirror.pkgbuild.com/extra/ripgrep.pkg.tar.zst",
+            &[("glibc", Some(">= 2.39"))],
+        );
+
+        let result =
+            solve_install(&conn, &[("ripgrep".to_string(), VersionConstraint::Any)]).unwrap();
+        assert!(result.conflict_message.is_none(), "{result:?}");
+        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"ripgrep"));
+        assert!(names.contains(&"glibc"));
+    }
+
+    #[test]
+    fn installed_debian_satisfies_debian_dep_in_sat() {
+        // libc6 is already installed (Debian scheme).
+        // Installing myapp which depends on libc6 >= 2.38 should find it installed.
+        let (_dir, conn) = setup_test_db();
+
+        insert_native_trove(&conn, "libc6", "2.39-0ubuntu2", "debian", &[]);
+
+        let mut repo = Repository::new(
+            "ubuntu-main".to_string(),
+            "https://archive.ubuntu.com/ubuntu".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "myapp",
+            "1.0-1",
+            "https://archive.ubuntu.com/ubuntu/pool/myapp.deb",
+            &[("libc6", Some(">= 2.38"))],
+        );
+
+        let result =
+            solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
+        assert!(
+            result.conflict_message.is_none(),
+            "Installed Debian libc6 should satisfy dep: {:?}",
+            result.conflict_message
+        );
+
+        // libc6 should be in the result as Installed
+        let libc6 = result
+            .install_order
+            .iter()
+            .find(|p| p.name == "libc6")
+            .unwrap();
+        assert_eq!(libc6.source, SatSource::Installed);
+    }
+
+    #[test]
+    fn provide_version_used_instead_of_package_version() {
+        // Package kernel-modules-core version 6.19.6-200.fc43
+        // Provides kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64
+        // A dep on kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64
+        // should match via the provide version, not the package version.
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        // kernel-modules-core with a provide
+        let kmc_id = insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "kernel-modules-core",
+            "6.19.6-200.fc43",
+            "https://mirror.fedora.invalid/kernel-modules-core.rpm",
+            &[],
+        );
+        let mut provide = RepositoryProvide::new(
+            kmc_id,
+            "kernel-modules-core-uname-r".to_string(),
+            Some("6.19.6-200.fc43.x86_64".to_string()),
+            "package".to_string(),
+            None,
+        );
+        provide.insert(&conn).unwrap();
+
+        // kernel depends on kernel-modules-core-uname-r (any version)
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "kernel",
+            "6.19.6-200.fc43",
+            "https://mirror.fedora.invalid/kernel.rpm",
+            &[("kernel-modules-core-uname-r", None)],
+        );
+
+        let result =
+            solve_install(&conn, &[("kernel".to_string(), VersionConstraint::Any)]).unwrap();
+        assert!(
+            result.conflict_message.is_none(),
+            "Should resolve via provide version: {:?}",
+            result.conflict_message
+        );
+        let names: Vec<&str> = result.install_order.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"kernel"));
+        assert!(
+            names.contains(&"kernel-modules-core"),
+            "kernel-modules-core should be pulled in via capability provide"
+        );
+    }
+
+    #[test]
+    fn legacy_installed_rpm_fallback_in_sat() {
+        // Legacy trove (no version_scheme) should still participate in SAT
+        let (_dir, conn) = setup_test_db();
+
+        insert_trove(&conn, "bash", "5.2.21-2.fc43", &[]);
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "myshell",
+            "1.0-1.fc43",
+            "https://mirror.fedora.invalid/myshell.rpm",
+            &[("bash", Some(">= 5.0"))],
+        );
+
+        let result =
+            solve_install(&conn, &[("myshell".to_string(), VersionConstraint::Any)]).unwrap();
+        assert!(
+            result.conflict_message.is_none(),
+            "Legacy RPM trove should satisfy dep: {:?}",
+            result.conflict_message
+        );
+
+        let bash = result
+            .install_order
+            .iter()
+            .find(|p| p.name == "bash")
+            .unwrap();
+        assert_eq!(bash.source, SatSource::Installed);
+    }
 }
