@@ -240,6 +240,32 @@ impl RepositoryRequirementGroup {
         Ok(groups.len())
     }
 
+    /// Batch insert requirement groups and populate their generated IDs.
+    pub fn batch_insert_with_ids(conn: &Connection, groups: &mut [Self]) -> Result<usize> {
+        if groups.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO repository_requirement_groups
+             (repository_package_id, kind, behavior, description, native_text)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+
+        for group in groups.iter_mut() {
+            stmt.execute(params![
+                group.repository_package_id,
+                &group.kind,
+                &group.behavior,
+                &group.description,
+                &group.native_text,
+            ])?;
+            group.id = Some(conn.last_insert_rowid());
+        }
+
+        Ok(groups.len())
+    }
+
     /// List all requirement groups for a given repository package.
     pub fn find_by_repository_package(conn: &Connection, repository_package_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
