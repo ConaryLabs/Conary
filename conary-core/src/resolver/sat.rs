@@ -158,24 +158,55 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
         }
 
         if let Some(deps) = provider.get_dependency_list(sid) {
-            for (dep_name, constraint) in deps {
-                // Build reverse deps for transitive expansion
-                reverse_deps
-                    .entry(dep_name.to_string())
-                    .or_default()
-                    .push(pkg.name.clone());
+            for dep in deps {
+                // Extract simple (name, constraint) pairs for removal analysis.
+                // OR groups: if *any* alternative is still installed, the dep is satisfied.
+                let singles: Vec<(&str, &super::provider::ConaryConstraint)> = match dep {
+                    super::provider::SolverDep::Single(name, constraint) => {
+                        vec![(name.as_str(), constraint)]
+                    }
+                    super::provider::SolverDep::OrGroup(alts) => {
+                        alts.iter().map(|(n, c)| (n.as_str(), c)).collect()
+                    }
+                };
 
-                // Check if this dependency is being removed with no alternative
-                if remove_set.contains(dep_name.as_str()) && !breaking_set.contains(&pkg.name) {
-                    let has_alternative = (0..solvable_count).any(|j| {
-                        let alt_sid = resolvo::SolvableId(j as u32);
-                        let alt = provider.get_solvable(alt_sid);
-                        alt.trove_id.is_some()
-                            && alt.name == *dep_name
-                            && !remove_set.contains(alt.name.as_str())
-                            && super::provider::constraint_matches_package(constraint, &alt.version)
+                for &(dep_name, _) in &singles {
+                    reverse_deps
+                        .entry(dep_name.to_string())
+                        .or_default()
+                        .push(pkg.name.clone());
+                }
+
+                // For OR groups, the dep is broken only if ALL alternatives are gone
+                if !breaking_set.contains(&pkg.name) {
+                    let any_satisfied = singles.iter().any(|&(dep_name, constraint)| {
+                        if !remove_set.contains(dep_name) {
+                            // The dep is not being removed, so it might still satisfy
+                            return (0..solvable_count).any(|j| {
+                                let alt_sid = resolvo::SolvableId(j as u32);
+                                let alt = provider.get_solvable(alt_sid);
+                                alt.trove_id.is_some()
+                                    && alt.name == dep_name
+                                    && super::provider::constraint_matches_package(
+                                        constraint,
+                                        &alt.version,
+                                    )
+                            });
+                        }
+                        // Being removed: check if an alternative provider exists
+                        (0..solvable_count).any(|j| {
+                            let alt_sid = resolvo::SolvableId(j as u32);
+                            let alt = provider.get_solvable(alt_sid);
+                            alt.trove_id.is_some()
+                                && alt.name == dep_name
+                                && !remove_set.contains(alt.name.as_str())
+                                && super::provider::constraint_matches_package(
+                                    constraint,
+                                    &alt.version,
+                                )
+                        })
                     });
-                    if !has_alternative {
+                    if !any_satisfied {
                         breaking_set.insert(pkg.name.clone());
                     }
                 }
