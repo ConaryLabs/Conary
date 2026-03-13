@@ -1043,6 +1043,18 @@ pub(crate) fn constraint_matches_package(
         ) => RpmVersion::parse(raw)
             .map(|version| constraint.satisfies(&version))
             .unwrap_or(false),
+        // Native RPM constraint vs legacy RPM installed
+        (
+            ConaryConstraint::Repository {
+                scheme: VersionScheme::Rpm,
+                constraint,
+                ..
+            },
+            ConaryPackageVersion::Installed(version),
+        ) => {
+            let legacy = repo_constraint_to_legacy(constraint);
+            legacy.satisfies(version)
+        }
         // Native constraint vs installed native (same scheme)
         (
             ConaryConstraint::Repository { scheme, constraint, .. },
@@ -1900,6 +1912,32 @@ mod tests {
 ///
 /// Returns `None` for unknown or missing values, which callers treat as
 /// RPM (the legacy default).
+/// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM
+/// cross-format matching (repo RPM constraint vs installed RPM `RpmVersion`).
+fn repo_constraint_to_legacy(constraint: &RepoVersionConstraint) -> VersionConstraint {
+    match constraint {
+        RepoVersionConstraint::Any => VersionConstraint::Any,
+        RepoVersionConstraint::Exact(v) => {
+            VersionConstraint::parse(&format!("= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::GreaterThan(v) => {
+            VersionConstraint::parse(&format!("> {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::GreaterOrEqual(v) => {
+            VersionConstraint::parse(&format!(">= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::LessThan(v) => {
+            VersionConstraint::parse(&format!("< {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::LessOrEqual(v) => {
+            VersionConstraint::parse(&format!("<= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+        RepoVersionConstraint::NotEqual(v) => {
+            VersionConstraint::parse(&format!("!= {v}")).unwrap_or(VersionConstraint::Any)
+        }
+    }
+}
+
 fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
     match raw? {
         "rpm" => Some(VersionScheme::Rpm),
