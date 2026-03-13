@@ -41,7 +41,13 @@ pub struct ConaryPackage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConaryPackageVersion {
+    /// Installed package with RPM version (legacy or actual RPM).
     Installed(RpmVersion),
+    /// Installed package with a native (non-RPM) version scheme.
+    InstalledNative {
+        raw: String,
+        scheme: VersionScheme,
+    },
     Repository {
         raw: String,
         scheme: Option<VersionScheme>,
@@ -227,19 +233,39 @@ impl<'db> ConaryProvider<'db> {
         let troves = Trove::list_all(self.conn)?;
         for trove in troves {
             let trove_id = trove.id;
-            let version = RpmVersion::parse(&trove.version)?;
+            let scheme = parse_stored_version_scheme(trove.version_scheme.as_deref());
+
+            let version = match scheme {
+                Some(VersionScheme::Rpm) | None => {
+                    // RPM or legacy (no stored scheme): use RpmVersion
+                    ConaryPackageVersion::Installed(RpmVersion::parse(&trove.version)?)
+                }
+                Some(native_scheme) => {
+                    // Debian or Arch: use native scheme
+                    ConaryPackageVersion::InstalledNative {
+                        raw: trove.version.clone(),
+                        scheme: native_scheme,
+                    }
+                }
+            };
+
+            let effective_scheme = scheme.unwrap_or(VersionScheme::Rpm);
             let provided_capabilities = if let Some(tid) = trove_id {
                 ProvideEntry::find_by_trove(self.conn, tid)?
                     .into_iter()
                     .map(|provide| {
-                        let version = provide
-                            .version
-                            .as_deref()
-                            .and_then(|value| RpmVersion::parse(value).ok());
-                        (
-                            provide.capability,
-                            version.map(ConaryProvidedVersion::Installed),
-                        )
+                        let prov_version = provide.version.as_deref().and_then(|value| {
+                            match effective_scheme {
+                                VersionScheme::Rpm => RpmVersion::parse(value)
+                                    .ok()
+                                    .map(ConaryProvidedVersion::Installed),
+                                _ => Some(ConaryProvidedVersion::Repository {
+                                    raw: value.to_string(),
+                                    scheme: effective_scheme,
+                                }),
+                            }
+                        });
+                        (provide.capability, prov_version)
                     })
                     .collect()
             } else {
@@ -250,7 +276,7 @@ impl<'db> ConaryProvider<'db> {
 
             let pkg = ConaryPackage {
                 name: trove.name.clone(),
-                version: ConaryPackageVersion::Installed(version),
+                version,
                 trove_id,
                 repo_package_id: None,
                 provided_capabilities,
@@ -264,12 +290,28 @@ impl<'db> ConaryProvider<'db> {
                     .into_iter()
                     .filter(|d| !ProvideEntry::is_virtual_provide(&d.depends_on_name))
                     .map(|d| {
-                        let constraint = d
-                            .version_constraint
-                            .as_deref()
-                            .and_then(|s| VersionConstraint::parse(s).ok())
-                            .unwrap_or(VersionConstraint::Any);
-                        SolverDep::Single(d.depends_on_name, ConaryConstraint::Legacy(constraint))
+                        let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
+                            (VersionScheme::Rpm, Some(s)) => {
+                                ConaryConstraint::Legacy(
+                                    VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
+                                )
+                            }
+                            (VersionScheme::Rpm, None) => {
+                                ConaryConstraint::Legacy(VersionConstraint::Any)
+                            }
+                            (native, Some(s)) => ConaryConstraint::Repository {
+                                scheme: native,
+                                constraint: parse_repo_constraint(native, s)
+                                    .unwrap_or(RepoVersionConstraint::Any),
+                                raw: Some(s.to_string()),
+                            },
+                            (native, None) => ConaryConstraint::Repository {
+                                scheme: native,
+                                constraint: RepoVersionConstraint::Any,
+                                raw: None,
+                            },
+                        };
+                        SolverDep::Single(d.depends_on_name, constraint)
                     })
                     .collect();
                 self.dependencies.insert(solvable_id.0, dep_list);
@@ -924,6 +966,7 @@ impl fmt::Display for ConaryPackageVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Installed(version) => write!(f, "{}", version),
+            Self::InstalledNative { raw, .. } => write!(f, "{}", raw),
             Self::Repository { raw, .. } => write!(f, "{}", raw),
         }
     }
@@ -951,6 +994,16 @@ fn compare_package_versions_desc(
     let ord = match (a, b) {
         (ConaryPackageVersion::Installed(a), ConaryPackageVersion::Installed(b)) => Some(b.cmp(a)),
         (
+            ConaryPackageVersion::InstalledNative {
+                raw: a_raw,
+                scheme: a_scheme,
+            },
+            ConaryPackageVersion::InstalledNative {
+                raw: b_raw,
+                scheme: b_scheme,
+            },
+        ) if a_scheme == b_scheme => compare_repo_versions(*a_scheme, b_raw, a_raw),
+        (
             ConaryPackageVersion::Repository {
                 raw: a_raw,
                 scheme: Some(a_scheme),
@@ -970,13 +1023,17 @@ pub(crate) fn constraint_matches_package(
     version: &ConaryPackageVersion,
 ) -> bool {
     match (constraint, version) {
+        // Legacy constraint vs RPM installed
         (ConaryConstraint::Legacy(constraint), ConaryPackageVersion::Installed(version)) => {
             constraint.satisfies(version)
         }
+        // Legacy `Any` matches anything
         (
             ConaryConstraint::Legacy(VersionConstraint::Any),
-            ConaryPackageVersion::Repository { .. },
+            ConaryPackageVersion::Repository { .. }
+            | ConaryPackageVersion::InstalledNative { .. },
         ) => true,
+        // Legacy constraint vs RPM repo package
         (
             ConaryConstraint::Legacy(constraint),
             ConaryPackageVersion::Repository {
@@ -986,6 +1043,15 @@ pub(crate) fn constraint_matches_package(
         ) => RpmVersion::parse(raw)
             .map(|version| constraint.satisfies(&version))
             .unwrap_or(false),
+        // Native constraint vs installed native (same scheme)
+        (
+            ConaryConstraint::Repository { scheme, constraint, .. },
+            ConaryPackageVersion::InstalledNative {
+                raw,
+                scheme: installed_scheme,
+            },
+        ) if scheme == installed_scheme => repo_version_satisfies(*scheme, raw, constraint),
+        // Native constraint vs repo package (same scheme)
         (
             ConaryConstraint::Repository { scheme, constraint, .. },
             ConaryPackageVersion::Repository {
@@ -993,12 +1059,14 @@ pub(crate) fn constraint_matches_package(
                 scheme: Some(version_scheme),
             },
         ) if scheme == version_scheme => repo_version_satisfies(*scheme, raw, constraint),
+        // Native `Any` constraint matches any repo version
         (
             ConaryConstraint::Repository {
                 constraint: RepoVersionConstraint::Any,
                 ..
             },
-            ConaryPackageVersion::Repository { .. },
+            ConaryPackageVersion::Repository { .. }
+            | ConaryPackageVersion::InstalledNative { .. },
         ) => true,
         _ => false,
     }
@@ -1686,6 +1754,158 @@ mod tests {
                 scheme: VersionScheme::Arch,
             })
         );
+    }
+
+    #[test]
+    fn installed_debian_package_uses_native_version_scheme() {
+        use crate::db::models::{Changeset, ChangesetStatus, DependencyEntry, TroveType};
+
+        let (_dir, conn) = setup_test_db();
+
+        let mut changeset = Changeset::new("Install libc6".to_string());
+        changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        let mut trove =
+            Trove::new("libc6".to_string(), "2.39-0ubuntu2".to_string(), TroveType::Package);
+        trove.version_scheme = Some("debian".to_string());
+        trove.source_distro = Some("ubuntu".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+
+        let mut dep = DependencyEntry::new(
+            trove_id,
+            "libgcc-s1".to_string(),
+            None,
+            "runtime".to_string(),
+            Some(">= 3.0".to_string()),
+        );
+        dep.insert(&conn).unwrap();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider.load_installed_packages().unwrap();
+
+        // Version should be InstalledNative with Debian scheme
+        let solvable = provider
+            .solvables
+            .iter()
+            .find(|s| s.name == "libc6")
+            .unwrap();
+        assert_eq!(
+            solvable.version,
+            ConaryPackageVersion::InstalledNative {
+                raw: "2.39-0ubuntu2".to_string(),
+                scheme: VersionScheme::Debian,
+            }
+        );
+
+        // Dependencies should use Debian constraint scheme
+        let deps = provider.dependencies.values().next().unwrap();
+        let (name, constraint) = deps[0].as_single().unwrap();
+        assert_eq!(name, "libgcc-s1");
+        assert_eq!(
+            *constraint,
+            ConaryConstraint::Repository {
+                scheme: VersionScheme::Debian,
+                constraint: RepoVersionConstraint::GreaterOrEqual("3.0".to_string()),
+                raw: Some(">= 3.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn installed_arch_package_in_provider_selection() {
+        use crate::db::models::{Changeset, ChangesetStatus, TroveType};
+
+        let (_dir, conn) = setup_test_db();
+
+        let mut changeset = Changeset::new("Install glibc".to_string());
+        changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        let mut trove =
+            Trove::new("glibc".to_string(), "2.39-1".to_string(), TroveType::Package);
+        trove.version_scheme = Some("arch".to_string());
+        trove.insert(&conn).unwrap();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider.load_installed_packages().unwrap();
+
+        let solvable = provider
+            .solvables
+            .iter()
+            .find(|s| s.name == "glibc")
+            .unwrap();
+        assert_eq!(
+            solvable.version,
+            ConaryPackageVersion::InstalledNative {
+                raw: "2.39-1".to_string(),
+                scheme: VersionScheme::Arch,
+            }
+        );
+
+        // Arch constraint should match the installed version
+        let constraint = ConaryConstraint::Repository {
+            scheme: VersionScheme::Arch,
+            constraint: RepoVersionConstraint::GreaterOrEqual("2.39".to_string()),
+            raw: Some(">= 2.39".to_string()),
+        };
+        assert!(constraint_matches_package(&constraint, &solvable.version));
+    }
+
+    #[test]
+    fn legacy_rpm_fallback_for_untyped_installed_troves() {
+        use crate::db::models::{Changeset, ChangesetStatus, TroveType};
+
+        let (_dir, conn) = setup_test_db();
+
+        let mut changeset = Changeset::new("Install bash".to_string());
+        changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        // Legacy trove: no version_scheme set
+        let mut trove =
+            Trove::new("bash".to_string(), "5.2.21-2.fc43".to_string(), TroveType::Package);
+        trove.insert(&conn).unwrap();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider.load_installed_packages().unwrap();
+
+        let solvable = provider
+            .solvables
+            .iter()
+            .find(|s| s.name == "bash")
+            .unwrap();
+
+        // Should be Installed(RpmVersion), not InstalledNative
+        assert!(matches!(
+            solvable.version,
+            ConaryPackageVersion::Installed(_)
+        ));
+
+        // Legacy VersionConstraint should still work
+        let constraint = ConaryConstraint::Legacy(
+            VersionConstraint::parse(">= 5.2.0").unwrap(),
+        );
+        assert!(constraint_matches_package(&constraint, &solvable.version));
+    }
+}
+
+/// Parse a stored `version_scheme` string to a `VersionScheme`.
+///
+/// Returns `None` for unknown or missing values, which callers treat as
+/// RPM (the legacy default).
+fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
+    match raw? {
+        "rpm" => Some(VersionScheme::Rpm),
+        "debian" => Some(VersionScheme::Debian),
+        "arch" => Some(VersionScheme::Arch),
+        _ => None,
     }
 }
 

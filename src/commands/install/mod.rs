@@ -1112,6 +1112,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
         let mut trove = pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
+        trove.version_scheme = Some(scheme_to_string(version_scheme_for_format(format)));
 
         // Set custom selection reason if provided (e.g., from collection install)
         if let Some(reason) = selection_reason {
@@ -1331,5 +1332,13 @@ fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
         PackageFormatType::Rpm => VersionScheme::Rpm,
         PackageFormatType::Deb => VersionScheme::Debian,
         PackageFormatType::Arch => VersionScheme::Arch,
+    }
+}
+
+fn scheme_to_string(scheme: VersionScheme) -> String {
+    match scheme {
+        VersionScheme::Rpm => "rpm".to_string(),
+        VersionScheme::Debian => "debian".to_string(),
+        VersionScheme::Arch => "arch".to_string(),
     }
 }
