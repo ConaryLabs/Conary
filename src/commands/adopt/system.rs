@@ -36,7 +36,12 @@ pub type FileInfoTuple = (
     Option<String>,
 );
 
-/// Adopt all installed system packages
+/// Adopt all installed system packages.
+///
+/// This is the entry point to the ownership ladder: packages begin as
+/// `AdoptedTrack` (metadata only) or `AdoptedFull` (CAS-backed).  From there,
+/// `adopt --takeover` can promote them to `Taken` (full Conary ownership),
+/// and a future Remi-backed reinstall can elevate to `Repository`.
 ///
 /// Optional filters:
 /// - `pattern`: only adopt packages matching this glob (e.g., "lib*")

@@ -50,6 +50,15 @@ fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     false
 }
 
+/// Check whether a dependency string is a conditional/rich RPM dependency
+/// that should be skipped during conversion install.
+///
+/// NOTE: This duplicates the text heuristic in `conary_core::db::models::repository`.
+/// The normalized `dependency_model::ConditionalRequirementBehavior` now handles
+/// this classification during repo sync.  This function remains for CCS conversion
+/// of local packages where we only have the raw dependency text.
+// TODO: remove after full migration -- when local package dependencies are
+// parsed through the structured `dependency_model`, this heuristic is redundant.
 fn is_conditional_rpm_dependency(dep_name: &str) -> bool {
     dep_name.contains(" if ")
         || dep_name.contains(" unless ")
@@ -362,6 +371,9 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
             .dependencies()
             .iter()
             .filter(|dep| !package_self_provides(&ccs_pkg, &dep.name))
+            // Skip RPM-internal capabilities and filesystem deps.
+            // TODO: remove after full migration -- use scheme-aware dependency
+            // classification from `dependency_model` instead of string prefixes.
             .filter(|dep| !dep.name.starts_with("rpmlib(") && !dep.name.starts_with('/'))
             .filter(|dep| !is_conditional_rpm_dependency(&dep.name))
             .map(|dep| MissingDependency {
@@ -386,8 +398,22 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                 );
             }
 
-            let mut dep_plan =
-                dep_resolution::resolve_missing_deps(&conn, &unresolved_missing, dep_mode);
+            // Use policy-aware resolution so the convergence intent provides a
+            // default dep-mode when the user has not explicitly set one.
+            let convergence_intent = if conary_core::model::model_exists(None) {
+                conary_core::model::load_model(None)
+                    .ok()
+                    .map(|m| m.system.convergence.clone())
+                    .unwrap_or_default()
+            } else {
+                conary_core::model::ConvergenceIntent::default()
+            };
+            let mut dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
+                &conn,
+                &unresolved_missing,
+                Some(dep_mode),
+                &convergence_intent,
+            );
             if matches!(dep_mode, DepMode::Satisfy) {
                 promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
             }
@@ -506,16 +532,22 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                 let (_satisfied, still_missing) =
                     check_provides_dependencies(&conn, &dep_plan.unresolvable);
                 if !still_missing.is_empty() {
-                    let missing_names = still_missing
-                        .iter()
-                        .map(|dep| dep.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    let mut detail_lines = Vec::new();
+                    for dep in &still_missing {
+                        detail_lines.push(format!(
+                            "  {} {} (required by: {})",
+                            dep.name,
+                            dep.constraint,
+                            dep.required_by.join(", "),
+                        ));
+                    }
                     return Err(anyhow::anyhow!(
-                        "Cannot install {}: {} unresolvable dependencies: {}",
+                        "Cannot install {}: {} unresolvable dependencies (dep-mode={}, convergence={}):\n{}",
                         ccs_pkg.name(),
                         still_missing.len(),
-                        missing_names
+                        dep_mode,
+                        convergence_intent.display_name(),
+                        detail_lines.join("\n"),
                     ));
                 }
             }

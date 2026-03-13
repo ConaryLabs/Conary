@@ -17,6 +17,13 @@ use tracing::{info, warn};
 
 /// Take over adopted packages from the system package manager.
 ///
+/// This implements the ownership ladder transition: `AdoptedTrack` / `AdoptedFull` -> `Taken`.
+/// The ownership ladder is: `AdoptedTrack` -> `AdoptedFull` -> `Taken` -> `Repository`.
+/// - `AdoptedTrack`: metadata-only tracking (no CAS content)
+/// - `AdoptedFull`: CAS-backed adoption (content hardlinked into CAS)
+/// - `Taken`: full Conary ownership (removed from system PM)
+/// - `Repository`: installed fresh from Remi CCS repository
+///
 /// Operation order (chosen for safest failure mode):
 /// 1. Pre-capture file lists from PM while it still has the metadata
 /// 2. DB transaction: hardlink into CAS, mark as Taken
