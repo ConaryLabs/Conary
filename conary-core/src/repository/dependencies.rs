@@ -5,7 +5,7 @@
 //! Functions for resolving package dependencies across repositories,
 //! including transitive resolution and parallel downloads.
 
-use crate::db::models::{RepositoryPackage, RepositoryProvide, Trove, generate_capability_variations};
+use crate::db::models::{RepositoryProvide, Trove, generate_capability_variations};
 use crate::error::{Error, Result};
 use crate::version::VersionConstraint;
 use rayon::prelude::*;
@@ -18,6 +18,67 @@ use tracing::{debug, info};
 use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
+/// Resolve a dependency by querying normalized `repository_provides` data.
+///
+/// This is the preferred path: it queries the indexed `repository_provides`
+/// table directly instead of scanning JSON metadata blobs.  The join fetches
+/// only the package names that actually declare the capability, avoiding the
+/// expensive `list_all()` call.
+fn resolve_repo_dependency_by_capability(
+    conn: &Connection,
+    dep_name: &str,
+    options: &SelectionOptions,
+) -> Result<Option<(String, Option<String>)>> {
+    let provides = RepositoryProvide::find_by_capability(conn, dep_name)?;
+    if provides.is_empty() {
+        return Ok(None);
+    }
+
+    // Collect distinct package IDs from the provides, then look up each one
+    // by name through the selector (which handles arch filtering, version
+    // pinning, etc.).
+    let mut seen_ids = HashSet::new();
+    let mut candidates = Vec::new();
+
+    for provide in &provides {
+        if !seen_ids.insert(provide.repository_package_id) {
+            continue;
+        }
+
+        // Direct ID-based lookup: fetch name from the provide's package row.
+        let pkg_name: Option<String> = conn
+            .prepare_cached(
+                "SELECT name FROM repository_packages WHERE id = ?1",
+            )?
+            .query_row([provide.repository_package_id], |row| row.get(0))
+            .ok();
+
+        let Some(name) = pkg_name else { continue };
+
+        for candidate in PackageSelector::search_packages(conn, &name, options)? {
+            if candidate.package.id == Some(provide.repository_package_id) {
+                candidates.push(candidate);
+                break;
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let selected = PackageSelector::select_best(candidates)?;
+    Ok(Some((
+        selected.package.name.clone(),
+        Some(selected.package.version.clone()),
+    )))
+}
+
+/// Fallback: scan JSON metadata blobs for capability information.
+///
+/// This handles packages that were sync'd before normalized provide data was
+/// available.  It is only reached when the `repository_provides` table has no
+/// matching rows for the requested capability.
 fn resolve_repo_dependency_by_metadata(
     conn: &Connection,
     dep_name: &str,
@@ -69,62 +130,20 @@ fn resolve_repo_dependency_by_metadata(
     )))
 }
 
-fn resolve_repo_dependency_by_capability(
-    conn: &Connection,
-    dep_name: &str,
-    options: &SelectionOptions,
-) -> Result<Option<(String, Option<String>)>> {
-    let provides = RepositoryProvide::find_by_capability(conn, dep_name)?;
-    if provides.is_empty() {
-        return Ok(None);
-    }
-
-    let all_packages = RepositoryPackage::list_all(conn)?;
-    let mut candidates = Vec::new();
-
-    for provide in provides {
-        let Some(pkg) = all_packages
-            .iter()
-            .find(|pkg| pkg.id == Some(provide.repository_package_id))
-        else {
-            continue;
-        };
-
-        for candidate in PackageSelector::search_packages(conn, &pkg.name, options)? {
-            if candidate.package.id == Some(provide.repository_package_id) {
-                candidates.push(candidate);
-                break;
-            }
-        }
-    }
-
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let selected = PackageSelector::select_best(candidates)?;
-    Ok(Some((
-        selected.package.name.clone(),
-        Some(selected.package.version.clone()),
-    )))
-}
-
 fn resolve_repo_dependency_request(
     conn: &Connection,
     dep_name: &str,
     constraint: &VersionConstraint,
     options: &SelectionOptions,
 ) -> Result<(String, VersionConstraint)> {
+    // 1. Exact package name match -- cheapest check.
     if PackageSelector::find_best_package(conn, dep_name, options).is_ok() {
         return Ok((dep_name.to_string(), constraint.clone()));
     }
 
-    for variation in generate_capability_variations(dep_name) {
-        if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
-            return Ok((variation, constraint.clone()));
-        }
-    }
-
+    // 2. Normalized capability lookup -- preferred resolution path.
+    //    Queries the indexed `repository_provides` table before falling back
+    //    to cross-distro heuristics or JSON blob scans.
     if let Some((package_name, package_version)) =
         resolve_repo_dependency_by_capability(conn, dep_name, options)?
     {
@@ -136,6 +155,16 @@ fn resolve_repo_dependency_request(
         return Ok((package_name, resolved_constraint));
     }
 
+    // 3. Cross-distro heuristics (repology / name-variation helpers).
+    //    Only runs after exact native-format lookup fails.
+    for variation in generate_capability_variations(dep_name) {
+        if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
+            return Ok((variation, constraint.clone()));
+        }
+    }
+
+    // 4. Legacy JSON metadata blob scan -- backward compat for packages that
+    //    haven't been re-sync'd with normalized provide data yet.
     if let Some((package_name, package_version)) =
         resolve_repo_dependency_by_metadata(conn, dep_name, options)?
     {
@@ -147,6 +176,7 @@ fn resolve_repo_dependency_request(
         return Ok((package_name, resolved_constraint));
     }
 
+    // 5. Soname-based fuzzy search -- last resort for shared library deps.
     if let Some(candidate) = resolve_repo_dependency_by_search(conn, dep_name, options)? {
         return Ok((candidate, constraint.clone()));
     }
@@ -762,5 +792,232 @@ mod tests {
         let result = resolve_dependency_requests(&conn, &requests).unwrap();
 
         assert!(result.is_empty(), "installed packages should be skipped");
+    }
+
+    #[test]
+    fn resolves_rpm_provided_capability_via_normalized_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "glibc".to_string(),
+            "2.39-1.fc43".to_string(),
+            "sha256:glibc".to_string(),
+            500,
+            "https://example.invalid/glibc.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        // RPM-style soname provide
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libc.so.6(GLIBC_2.17)(64bit)".to_string(),
+            Some("2.39".to_string()),
+            "soname".to_string(),
+            Some("libc.so.6(GLIBC_2.17)(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, _) = resolve_repo_dependency_request(
+            &conn,
+            "libc.so.6(GLIBC_2.17)(64bit)",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "glibc");
+    }
+
+    #[test]
+    fn resolves_debian_virtual_package_via_normalized_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("ubuntu".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "postfix".to_string(),
+            "3.8.4-1".to_string(),
+            "sha256:postfix".to_string(),
+            300,
+            "https://example.invalid/postfix.deb".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        // Debian virtual package provide
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "mail-transport-agent".to_string(),
+            None,
+            "virtual".to_string(),
+            Some("mail-transport-agent".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, _) = resolve_repo_dependency_request(
+            &conn,
+            "mail-transport-agent",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "postfix");
+    }
+
+    #[test]
+    fn resolves_arch_versioned_provide_via_normalized_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("arch".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "sh".to_string(),
+            "5.2.37-1".to_string(),
+            "sha256:sh".to_string(),
+            200,
+            "https://example.invalid/sh.pkg.tar.zst".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        // Arch versioned provide
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "sh".to_string(),
+            Some("5.2.37".to_string()),
+            "package".to_string(),
+            Some("sh=5.2.37".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, constraint) = resolve_repo_dependency_request(
+            &conn,
+            "sh",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        // Direct package name match takes precedence
+        assert_eq!(resolved, "sh");
+        assert_eq!(constraint, VersionConstraint::Any);
+    }
+
+    #[test]
+    fn no_fallback_to_name_guessing_when_normalized_provide_exists() {
+        // When a normalized provide exists, we should use it rather than
+        // falling through to cross-distro heuristics or fuzzy search.
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // Two packages: one that matches by name heuristics, one that
+        // actually declares the provide.
+        let mut wrong_pkg = RepositoryPackage::new(
+            repo_id,
+            "libfoo".to_string(),
+            "1.0-1.fc43".to_string(),
+            "sha256:wrong".to_string(),
+            100,
+            "https://example.invalid/libfoo.rpm".to_string(),
+        );
+        wrong_pkg.insert(&conn).unwrap();
+
+        let mut correct_pkg = RepositoryPackage::new(
+            repo_id,
+            "libfoo-compat".to_string(),
+            "2.0-1.fc43".to_string(),
+            "sha256:correct".to_string(),
+            100,
+            "https://example.invalid/libfoo-compat.rpm".to_string(),
+        );
+        correct_pkg.insert(&conn).unwrap();
+        let correct_id = correct_pkg.id.unwrap();
+
+        // Only the compat package actually provides the soname
+        let mut provide = RepositoryProvide::new(
+            correct_id,
+            "libfoo.so.1".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libfoo.so.1".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, _) = resolve_repo_dependency_request(
+            &conn,
+            "libfoo.so.1",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        // Must resolve to the package that declares the provide, not the
+        // one whose name happens to match via heuristics.
+        assert_eq!(resolved, "libfoo-compat");
+    }
+
+    #[test]
+    fn capability_lookup_preferred_over_heuristics() {
+        // Verify that normalized capability lookup runs before
+        // `generate_capability_variations` heuristics.
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        // A package whose name would match a variation of the dep name
+        let mut heuristic_pkg = RepositoryPackage::new(
+            repo_id,
+            "libssl3".to_string(),
+            "3.2.0-1.fc43".to_string(),
+            "sha256:heur".to_string(),
+            100,
+            "https://example.invalid/libssl3.rpm".to_string(),
+        );
+        heuristic_pkg.insert(&conn).unwrap();
+
+        // A different package that actually provides the capability
+        let mut provider_pkg = RepositoryPackage::new(
+            repo_id,
+            "openssl-libs".to_string(),
+            "3.2.0-1.fc43".to_string(),
+            "sha256:provider".to_string(),
+            200,
+            "https://example.invalid/openssl-libs.rpm".to_string(),
+        );
+        provider_pkg.insert(&conn).unwrap();
+        let provider_id = provider_pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            provider_id,
+            "libssl.so.3".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libssl.so.3()(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let (resolved, _) = resolve_repo_dependency_request(
+            &conn,
+            "libssl.so.3",
+            &VersionConstraint::Any,
+            &SelectionOptions::default(),
+        )
+        .unwrap();
+        // Should resolve via capability, not via name heuristic
+        assert_eq!(resolved, "openssl-libs");
     }
 }
