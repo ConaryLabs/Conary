@@ -159,8 +159,20 @@ async fn execute_run(
     // Register cancellation flag.
     let cancel_flag = state.register_cancel_flag(run_id);
 
-    // Build the image.
-    let image_tag = build_image(state, distro).await?;
+    // Build the image (serialized per-distro to avoid Podman contention).
+    let image_tag = {
+        let lock = state.image_lock(distro);
+        let mut cached = lock.lock().await;
+        if let Some(ref tag) = *cached {
+            tracing::info!(run_id, image = %tag, "reusing cached image");
+            tag.clone()
+        } else {
+            tracing::info!(run_id, distro, "building image (first run for this distro)");
+            let tag = build_image(state, distro).await?;
+            *cached = Some(tag.clone());
+            tag
+        }
+    };
     tracing::info!(run_id, image = %image_tag, "image ready");
 
     // Create and start the container.
