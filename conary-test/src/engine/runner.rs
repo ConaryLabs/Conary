@@ -8,13 +8,13 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{
-    Assertion, KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef, TestManifest,
-};
+use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
+#[cfg(test)]
+use crate::config::manifest::QemuBoot;
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
+use crate::engine::executor::{ExecutionContext, StepAction, execute_step};
 use crate::engine::mock_server::start_mock_server;
-use crate::engine::qemu::run_qemu_boot;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 use crate::engine::variables;
 
@@ -26,37 +26,6 @@ pub struct TestRunner {
 }
 
 impl TestRunner {
-    fn build_kill_after_log_command(&self, expanded: &str) -> String {
-        if let Some(rest) = expanded.strip_prefix("env ") {
-            let mut env_vars = Vec::new();
-            let mut conary_args = Vec::new();
-            let mut parsing_env = true;
-
-            for token in rest.split_whitespace() {
-                if parsing_env && token.contains('=') {
-                    env_vars.push(token);
-                } else {
-                    parsing_env = false;
-                    conary_args.push(token);
-                }
-            }
-
-            if !env_vars.is_empty() && !conary_args.is_empty() {
-                return format!(
-                    "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec env {} {} {}",
-                    env_vars.join(" "),
-                    self.config.paths.conary_bin,
-                    conary_args.join(" ")
-                );
-            }
-        }
-
-        format!(
-            "printf '__CONARY_TEST_PID__=%s\\n' \"$$\"; exec {} {}",
-            self.config.paths.conary_bin, expanded
-        )
-    }
-
     pub fn new(config: GlobalConfig, distro: String) -> Self {
         let vars = variables::build_variables(&config, &distro);
         Self {
@@ -390,126 +359,34 @@ impl TestRunner {
         let mut last_exec: Option<ExecResult> = None;
         let mut failure: Option<String> = None;
 
+        let ctx = ExecutionContext {
+            conary_bin: &self.config.paths.conary_bin,
+            db_path: &self.config.paths.db,
+        };
+
         for step in &test_def.step {
-            let step_type = match step.step_type() {
-                Some(st) => st,
+            let action = match StepAction::from_step(step, &self.vars) {
+                Some(a) => a,
                 None => {
                     failure = Some("step has no recognized type".to_string());
                     break;
                 }
             };
 
-            match step_type {
-                StepType::Sleep(secs) => {
-                    tokio::time::sleep(Duration::from_secs(secs)).await;
-                }
-                StepType::Run(cmd) => {
-                    let expanded = self.substitute_vars(&cmd);
-                    let result = backend
-                        .exec(container_id, &["sh", "-c", &expanded], timeout)
-                        .await?;
-                    last_exec = Some(result);
-                }
-                StepType::Conary(args) => {
-                    let expanded = self.substitute_vars(&args);
-                    let full_cmd = format!(
-                        "{} {} --db-path {}",
-                        self.config.paths.conary_bin, expanded, self.config.paths.db
-                    );
-                    let result = backend
-                        .exec(container_id, &["sh", "-c", &full_cmd], timeout)
-                        .await?;
-                    last_exec = Some(result);
-                }
-                StepType::FileExists(path) => {
-                    let expanded = self.substitute_vars(&path);
-                    let result = backend
-                        .exec(container_id, &["test", "-e", &expanded], timeout)
-                        .await?;
-                    if result.exit_code != 0 {
-                        failure = Some(format!("file does not exist: {expanded}"));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    last_exec = Some(result);
-                }
-                StepType::FileNotExists(path) => {
-                    let expanded = self.substitute_vars(&path);
-                    let result = backend
-                        .exec(container_id, &["test", "!", "-e", &expanded], timeout)
-                        .await?;
-                    if result.exit_code != 0 {
-                        failure = Some(format!("file unexpectedly exists: {expanded}"));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    last_exec = Some(result);
-                }
-                StepType::FileExecutable(path) => {
-                    let expanded = self.substitute_vars(&path);
-                    let result = backend
-                        .exec(container_id, &["test", "-x", &expanded], timeout)
-                        .await?;
-                    if result.exit_code != 0 {
-                        failure = Some(format!("file is not executable: {expanded}"));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    last_exec = Some(result);
-                }
-                StepType::DirExists(path) => {
-                    let expanded = self.substitute_vars(&path);
-                    let result = backend
-                        .exec(container_id, &["test", "-d", &expanded], timeout)
-                        .await?;
-                    if result.exit_code != 0 {
-                        failure = Some(format!("directory does not exist: {expanded}"));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    last_exec = Some(result);
-                }
-                StepType::FileChecksum(chk) => {
-                    let expanded_path = self.substitute_vars(&chk.path);
-                    let expected_hash = self.substitute_vars(&chk.sha256);
-                    let cmd = format!("sha256sum {expanded_path}");
-                    let result = backend
-                        .exec(container_id, &["sh", "-c", &cmd], timeout)
-                        .await?;
-                    if result.exit_code != 0 {
-                        failure = Some(format!(
-                            "sha256sum failed on {expanded_path}: {}",
-                            result.stderr.trim()
-                        ));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    let actual_hash = result
-                        .stdout
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .to_string();
-                    if actual_hash != expected_hash {
-                        failure = Some(format!(
-                            "checksum mismatch for {expanded_path}: expected {}, got {actual_hash}",
-                            expected_hash
-                        ));
-                        last_exec = Some(result);
-                        break;
-                    }
-                    last_exec = Some(result);
-                }
-                StepType::KillAfterLog(config) => {
-                    let result = self
-                        .run_kill_after_log(backend, container_id, &config)
-                        .await?;
-                    last_exec = Some(result);
-                }
-                StepType::QemuBoot(config) => {
-                    let result = run_qemu_boot(&self.expand_qemu_boot(&config)).await?;
-                    last_exec = Some(result);
-                }
+            let step_result = execute_step(&action, backend, container_id, &ctx, timeout).await?;
+
+            // Sleep steps produce no exec result to assert against.
+            if !matches!(action, StepAction::Sleep(_)) {
+                last_exec = Some(ExecResult {
+                    exit_code: step_result.exit_code,
+                    stdout: step_result.stdout.clone(),
+                    stderr: step_result.stderr.clone(),
+                });
+            }
+
+            if let Some(msg) = step_result.failure {
+                failure = Some(msg);
+                break;
             }
 
             if let Some(ref assertion) = step.assert {
@@ -531,51 +408,6 @@ impl TestRunner {
         };
 
         Ok((status, message, elapsed, last_exec))
-    }
-
-    async fn run_kill_after_log(
-        &self,
-        backend: &dyn ContainerBackend,
-        container_id: &ContainerId,
-        config: &KillAfterLog,
-    ) -> Result<ExecResult> {
-        let expanded = self.substitute_vars(&config.conary);
-        let full_cmd = self.build_kill_after_log_command(&expanded);
-        let exec_id = backend
-            .exec_detached(container_id, &["sh", "-lc", &full_cmd])
-            .await?;
-        let mut logs = backend.exec_logs(&exec_id).await?;
-        let timeout = Duration::from_secs(config.timeout_seconds);
-
-        let matched = tokio::time::timeout(timeout, async {
-            while let Some(line) = logs.recv().await {
-                if line.contains(&config.pattern) {
-                    return Ok::<bool, anyhow::Error>(true);
-                }
-            }
-            Ok(false)
-        })
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "timed out waiting for log pattern {:?} after {}s",
-                config.pattern,
-                config.timeout_seconds
-            )
-        })??;
-
-        if !matched {
-            let result = backend.exec_result(&exec_id).await?;
-            bail!(
-                "log stream ended before pattern {:?} appeared; stdout: {}; stderr: {}",
-                config.pattern,
-                result.stdout.trim(),
-                result.stderr.trim()
-            );
-        }
-
-        backend.kill_exec(&exec_id, "SIGKILL").await?;
-        backend.exec_result(&exec_id).await
     }
 
     /// Apply per-test resource constraints to a container configuration.
@@ -606,10 +438,12 @@ impl TestRunner {
     }
 
     /// Replace `${VAR}` patterns in a string with values from the variable map.
+    #[cfg(test)]
     fn substitute_vars(&self, input: &str) -> String {
         variables::expand_variables(input, &self.vars)
     }
 
+    #[cfg(test)]
     fn expand_qemu_boot(&self, config: &QemuBoot) -> QemuBoot {
         variables::expand_qemu_boot(config, &self.vars)
     }
@@ -1378,8 +1212,11 @@ mod tests {
 
     #[test]
     fn test_build_kill_after_log_command_supports_env_prefix() {
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
-        let cmd = runner.build_kill_after_log_command(
+        // Delegates to executor::build_kill_after_log_command (tested there).
+        // Keep a runner-level smoke test for backward compat.
+        use crate::engine::executor;
+        let cmd = executor::build_kill_after_log_command(
+            "/usr/local/bin/conary",
             "env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500 ccs install fixture.ccs",
         );
         assert!(cmd.contains("exec env CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS=1500"));
