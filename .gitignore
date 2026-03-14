@@ -57,7 +57,9 @@ site/build/
 .gemini/
 gha-creds-*.json
 
-# Server credentials
+# Environment and credentials
+.env
+.env.local
 deploy/.credentials.toml
 
 # RPM build artifacts
