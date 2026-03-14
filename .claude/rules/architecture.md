@@ -75,8 +75,16 @@
 | Module | Purpose |
 |--------|---------|
 | `src/config/` | TOML manifest and distro config parsing |
-| `src/engine/` | Test suite, runner, assertions |
+| `src/engine/runner.rs` | Test runner -- executes manifests against containers |
+| `src/engine/executor.rs` | Step executor -- StepAction enum, per-step execution |
+| `src/engine/variables.rs` | Variable substitution engine (`${VAR}` expansion) |
+| `src/engine/container_coordinator.rs` | Container lifecycle orchestration and cleanup |
+| `src/engine/suite.rs` | TestSuite, TestResult, RunStatus types |
+| `src/engine/assertions.rs` | Assertion evaluation (exit code, stdout, file checks) |
+| `src/engine/qemu.rs` | QEMU boot step support |
 | `src/container/` | ContainerBackend trait, bollard implementation |
+| `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
 | `src/report/` | JSON output, SSE event streaming |
-| `src/server/` | Axum HTTP API, MCP server (rmcp) |
+| `src/server/state.rs` | AppState with DashMap, broadcast channel, cancellation flags |
+| `src/server/` | Axum HTTP API (14 endpoints), MCP server (13 tools via rmcp) |
 | `src/cli.rs` | Binary entrypoint |
