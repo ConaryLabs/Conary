@@ -5,11 +5,12 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::{get, post};
 
+use crate::server::auth;
 use crate::server::handlers;
 use crate::server::mcp::TestMcpServer;
 use crate::server::state::AppState;
 
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, token: Option<String>) -> Router {
     // MCP (Model Context Protocol) endpoint for LLM agent integration.
     let state_for_mcp = state.clone();
     let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
@@ -20,8 +21,11 @@ pub fn create_router(state: AppState) -> Router {
         Default::default(),
     );
 
-    Router::new()
-        .route("/v1/health", get(handlers::health))
+    // Health route — always unauthenticated.
+    let health_router = Router::new().route("/v1/health", get(handlers::health));
+
+    // All other routes (API + MCP).
+    let api_router = Router::new()
         .route("/v1/suites", get(handlers::list_suites))
         .route("/v1/runs", post(handlers::start_run))
         .route("/v1/runs", get(handlers::list_runs))
@@ -41,8 +45,16 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/images", get(handlers::list_images))
         .route("/v1/images/build", post(handlers::build_image))
         .route("/v1/cleanup", post(handlers::cleanup_containers))
-        .nest_service("/mcp", mcp_service)
-        .with_state(state)
+        .nest_service("/mcp", mcp_service);
+
+    // Apply auth middleware only if a token is configured.
+    let api_router = if let Some(token) = token {
+        auth::with_auth(api_router, token)
+    } else {
+        api_router
+    };
+
+    health_router.merge(api_router).with_state(state)
 }
 
 #[cfg(test)]
@@ -55,7 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/health")
             .body(Body::empty())
@@ -67,7 +79,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_route_exists() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs/1/stream")
             .body(Body::empty())
@@ -80,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/nonexistent")
             .body(Body::empty())
@@ -92,7 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs/12345")
             .body(Body::empty())
@@ -100,5 +112,17 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_no_auth_when_no_token() {
+        let app = create_router(test_fixtures::test_app_state(), None);
+        let req = Request::builder()
+            .uri("/v1/distros")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
     }
 }

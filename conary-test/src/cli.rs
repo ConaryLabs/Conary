@@ -38,6 +38,10 @@ enum Commands {
         /// Port to listen on
         #[arg(long, default_value = "9090")]
         port: u16,
+        /// Bearer token for authentication. If not set, reads CONARY_TEST_TOKEN env var.
+        /// If neither is set, the server runs without auth.
+        #[arg(long)]
+        token: Option<String>,
     },
 
     /// List available test suites
@@ -360,11 +364,18 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Serve { port } => {
+        Commands::Serve { port, token } => {
+            let token = token.or_else(|| std::env::var("CONARY_TEST_TOKEN").ok());
+            if token.is_some() {
+                tracing::info!("Bearer token authentication enabled");
+            } else {
+                tracing::warn!("No authentication token configured -- server is open");
+            }
             let config = load_config()?;
             let state = conary_test::server::AppState::new(config, manifest_dir());
             tracing::info!(%port, "Starting server");
-            tokio::runtime::Runtime::new()?.block_on(conary_test::server::run_server(state, port))
+            tokio::runtime::Runtime::new()?
+                .block_on(conary_test::server::run_server(state, port, token))
         }
 
         Commands::List => {
