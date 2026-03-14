@@ -175,15 +175,20 @@ name = "shared_dependency_survives_remove"
 description = "Install two packages, remove one, and verify the other still works"
 timeout = 300
 group = "M"
+depends_on = ["T139", "T140"]
+
+# Clean up from prior tests, then reinstall fresh
+[[test.step]]
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "install ${dep_heavy_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -213,7 +218,7 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-conary = "repo sync --force"
+conary = "repo sync ${REPO_NAME} --force"
 
 [test.step.assert]
 exit_code = 0
@@ -283,8 +288,12 @@ description = "Install a package, remove it, and verify filesystem and DB cleanu
 timeout = 180
 group = "M"
 
+# Remove first in case already installed from earlier tests
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -388,8 +397,12 @@ conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
 [test.step.assert]
 exit_code = 0
 
+# Remove small_package if it exists from prior tests, then reinstall
 [[test.step]]
-conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+
+[[test.step]]
+conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -413,6 +426,10 @@ timeout = 360
 group = "M"
 fatal = true
 
+# Remove fixture from prior tests, sync, and install fresh
+[[test.step]]
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+
 [[test.step]]
 conary = "repo sync ${REPO_NAME} --force"
 
@@ -420,7 +437,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never"
+conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
