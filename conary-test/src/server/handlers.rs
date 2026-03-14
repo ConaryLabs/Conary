@@ -81,6 +81,147 @@ pub async fn list_distros(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!(distros))
 }
 
+pub async fn cancel_run(State(state): State<AppState>, Path(id): Path<u64>) -> impl IntoResponse {
+    match service::cancel_run(&state, id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"run_id": id, "status": "cancelled"})),
+        ),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "run not found"})),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            }
+        }
+    }
+}
+
+pub async fn rerun_test(
+    State(state): State<AppState>,
+    Path((id, test_id)): Path<(u64, String)>,
+) -> impl IntoResponse {
+    match service::rerun_test(&state, id, &test_id) {
+        Ok(new_id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "original_run_id": id,
+                "test_id": test_id,
+                "new_run_id": new_id,
+                "status": "pending",
+            })),
+        ),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            }
+        }
+    }
+}
+
+pub async fn get_test_logs(
+    State(state): State<AppState>,
+    Path((id, test_id)): Path<(u64, String)>,
+) -> impl IntoResponse {
+    match service::get_test_logs(&state, id, &test_id) {
+        Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            }
+        }
+    }
+}
+
+pub async fn get_run_artifacts(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match service::get_run_artifacts(&state, id) {
+        Ok(artifacts) => (StatusCode::OK, Json(serde_json::json!(artifacts))),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": msg})),
+                )
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BuildImageRequest {
+    pub distro: String,
+}
+
+pub async fn build_image(
+    State(state): State<AppState>,
+    Json(req): Json<BuildImageRequest>,
+) -> impl IntoResponse {
+    match service::build_image(&state, &req.distro).await {
+        Ok(tag) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"distro": req.distro, "image": tag, "status": "built"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+pub async fn list_images(State(state): State<AppState>) -> impl IntoResponse {
+    match service::list_images(&state).await {
+        Ok(images) => (StatusCode::OK, Json(serde_json::json!(images))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+pub async fn cleanup_containers(State(state): State<AppState>) -> impl IntoResponse {
+    match service::cleanup_containers(&state).await {
+        Ok(result) => (StatusCode::OK, Json(serde_json::json!(result))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 /// SSE endpoint that streams live test events for a specific run.
 ///
 /// Subscribes to the broadcast channel, filters events by `run_id`, and
@@ -240,6 +381,75 @@ mod tests {
         let arr: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "fedora43");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_run_not_found() {
+        let app = create_router(test_fixtures::test_app_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/runs/9999/cancel")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_run_success() {
+        let state = test_fixtures::test_app_state();
+        // Create a run.
+        let suite = crate::engine::suite::TestSuite::new("smoke", 1);
+        state.insert_run(42, suite);
+        let _flag = state.register_cancel_flag(42);
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/runs/42/cancel")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_rerun_test_not_found() {
+        let app = create_router(test_fixtures::test_app_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/runs/9999/tests/T01/rerun")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_test_logs_not_found() {
+        let app = create_router(test_fixtures::test_app_state());
+        let req = Request::builder()
+            .uri("/v1/runs/9999/tests/T01/logs")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_run_artifacts_not_found() {
+        let app = create_router(test_fixtures::test_app_state());
+        let req = Request::builder()
+            .uri("/v1/runs/9999/artifacts")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
