@@ -301,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_run_unknown_distro() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs")
@@ -318,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_run_valid_distro() {
         let state = test_fixtures::test_app_state();
-        let app = create_router(state.clone());
+        let app = create_router(state.clone(), None);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs")
@@ -336,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs/9999")
             .body(Body::empty())
@@ -348,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_runs_empty() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs")
             .body(Body::empty())
@@ -366,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_distros() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/distros")
             .body(Body::empty())
@@ -385,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_run_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs/9999/cancel")
@@ -404,7 +404,7 @@ mod tests {
         state.insert_run(42, suite);
         let _flag = state.register_cancel_flag(42);
 
-        let app = create_router(state);
+        let app = create_router(state, None);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs/42/cancel")
@@ -417,7 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rerun_test_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/runs/9999/tests/T01/rerun")
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_test_logs_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs/9999/tests/T01/logs")
             .body(Body::empty())
@@ -442,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_artifacts_not_found() {
-        let app = create_router(test_fixtures::test_app_state());
+        let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/runs/9999/artifacts")
             .body(Body::empty())
@@ -457,7 +457,7 @@ mod tests {
         use crate::report::stream::TestEvent;
 
         let state = test_fixtures::test_app_state();
-        let app = create_router(state.clone());
+        let app = create_router(state.clone(), None);
 
         // Spawn the request in background, then send an event.
         let handle = tokio::spawn(async move {
