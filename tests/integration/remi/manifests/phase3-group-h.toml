@@ -27,13 +27,12 @@ name = "sigkill_mid_install_recovery"
 description = "SIGKILL mid-install and verify DB and filesystem consistency on the next run"
 timeout = 60
 group = "H"
-skip = "kill_after_log race: process completes before kill on fast installs"
 flaky = true
 retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never"
 pattern = "Deploying files"
 timeout_seconds = 30
 
@@ -48,7 +47,7 @@ stdout_contains = "ok"
 conary = "list"
 
 [test.step.assert]
-stdout_not_contains = "large-package"
+stdout_not_contains = "10k-files"
 
 # --------------------------------------------------------------------------
 # T88: Disk-full rollback
@@ -118,10 +117,8 @@ name = "cas_directory_deleted_mid_install"
 description = "Delete the CAS directory during install and verify failure plus rollback"
 timeout = 120
 group = "H"
-skip = "CAS deletion race: install completes before deletion takes effect"
-
 [[test.step]]
-run = "env CONARY_TEST_HOLD_BEFORE_CAS_WRITE_MS=10 ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/adversarial/large/large-package.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t90.out 2>/tmp/t90.err & PID=$!; while kill -0 $PID 2>/dev/null; do rm -rf /var/lib/conary/objects; sleep 0.01; done; wait $PID; STATUS=$?; cat /tmp/t90.out; cat /tmp/t90.err >&2; exit $STATUS"
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t90.out 2>/tmp/t90.err & PID=$!; while kill -0 $PID 2>/dev/null; do rm -rf /var/lib/conary/objects; sleep 0.01; done; wait $PID; STATUS=$?; cat /tmp/t90.out; cat /tmp/t90.err >&2; exit $STATUS"
 
 [test.step.assert]
 exit_code_not = 0
@@ -130,7 +127,7 @@ exit_code_not = 0
 conary = "list"
 
 [test.step.assert]
-stdout_not_contains = "large-package"
+stdout_not_contains = "10k-files"
 
 # --------------------------------------------------------------------------
 # T91: Kill after DB commit before deploy
