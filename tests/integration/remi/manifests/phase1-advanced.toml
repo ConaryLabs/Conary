@@ -19,10 +19,15 @@ phase = 1
 [[test]]
 id = "T10a"
 name = "setup_install_package"
-description = "Install test package as setup for this suite (mirrors T07 from phase1-core)"
+description = "Sync repo and install test package as setup for this suite"
 timeout = 300
-depends_on = ["T04"]
 fatal = true
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
