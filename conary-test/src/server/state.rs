@@ -2,6 +2,7 @@
 
 use crate::config::distro::GlobalConfig;
 use crate::engine::suite::TestSuite;
+use crate::report::stream::TestEvent;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,6 +14,9 @@ static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Maximum number of completed runs to retain in memory.
 const MAX_RUNS: usize = 100;
 
+/// Capacity of the broadcast channel for test events.
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: GlobalConfig,
@@ -21,15 +25,19 @@ pub struct AppState {
     /// Per-run cancellation flags. Setting a flag to `true` signals the
     /// runner to stop executing tests for that run.
     pub cancellation_flags: Arc<DashMap<u64, Arc<AtomicBool>>>,
+    /// Broadcast channel for live test events (SSE streaming).
+    pub event_tx: tokio::sync::broadcast::Sender<TestEvent>,
 }
 
 impl AppState {
     pub fn new(config: GlobalConfig, manifest_dir: String) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             config,
             manifest_dir,
             runs: Arc::new(RwLock::new(HashMap::new())),
             cancellation_flags: Arc::new(DashMap::new()),
+            event_tx,
         }
     }
 
@@ -75,6 +83,12 @@ impl AppState {
             }
         }
         runs.insert(run_id, suite);
+    }
+
+    /// Emit a test event on the broadcast channel. Silently ignores
+    /// failures (e.g., no subscribers).
+    pub fn emit_event(&self, event: TestEvent) {
+        let _ = self.event_tx.send(event);
     }
 }
 
@@ -152,5 +166,41 @@ mod tests {
         assert!(!runs.contains_key(&1));
         // The latest run should still be present.
         assert!(runs.contains_key(&(MAX_RUNS as u64 + 1)));
+    }
+
+    #[test]
+    fn broadcast_channel_delivers_events() {
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
+
+        let mut rx = state.event_tx.subscribe();
+
+        state.emit_event(TestEvent::SuiteStarted {
+            run_id: 1,
+            suite: "smoke".to_string(),
+            phase: 1,
+            total: 5,
+        });
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.run_id(), 1);
+    }
+
+    #[test]
+    fn broadcast_no_subscribers_does_not_panic() {
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
+
+        // Emitting with no subscribers should not panic.
+        state.emit_event(TestEvent::RunComplete {
+            run_id: 99,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+        });
     }
 }

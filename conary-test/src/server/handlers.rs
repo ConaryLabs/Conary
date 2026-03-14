@@ -81,6 +81,68 @@ pub async fn list_distros(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!(distros))
 }
 
+/// SSE endpoint that streams live test events for a specific run.
+///
+/// Subscribes to the broadcast channel, filters events by `run_id`, and
+/// streams them as `text/event-stream`. The stream ends when the
+/// `RunComplete` event is received or the channel closes.
+pub async fn stream_run(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> axum::response::Response {
+    let rx = state.event_tx.subscribe();
+
+    let stream = async_stream::stream! {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    // Only emit events for the requested run.
+                    if event.run_id() != id {
+                        continue;
+                    }
+                    let is_complete = matches!(event, crate::report::stream::TestEvent::RunComplete { .. });
+                    let event_name = match &event {
+                        crate::report::stream::TestEvent::SuiteStarted { .. } => "suite_started",
+                        crate::report::stream::TestEvent::TestStarted { .. } => "test_started",
+                        crate::report::stream::TestEvent::TestPassed { .. } => "test_passed",
+                        crate::report::stream::TestEvent::TestFailed { .. } => "test_failed",
+                        crate::report::stream::TestEvent::TestSkipped { .. } => "test_skipped",
+                        crate::report::stream::TestEvent::StepOutput { .. } => "step_output",
+                        crate::report::stream::TestEvent::RunComplete { .. } => "run_complete",
+                    };
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    yield Ok::<_, std::convert::Infallible>(
+                        axum::response::sse::Event::default()
+                            .event(event_name)
+                            .data(data)
+                    );
+                    if is_complete {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("SSE client for run {id} lagged by {n} events");
+                    yield Ok(
+                        axum::response::sse::Event::default()
+                            .event("error")
+                            .data(format!(r#"{{"error":"Lagged by {n} events","code":"LAGGED"}}"#))
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(30))
+                .text("ping"),
+        )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +241,43 @@ mod tests {
         let arr: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "fedora43");
+    }
+
+    #[tokio::test]
+    async fn test_stream_run_returns_sse() {
+        use crate::report::stream::TestEvent;
+
+        let state = test_fixtures::test_app_state();
+        let app = create_router(state.clone());
+
+        // Spawn the request in background, then send an event.
+        let handle = tokio::spawn(async move {
+            let req = Request::builder()
+                .uri("/v1/runs/42/stream")
+                .body(Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        });
+
+        // Send a RunComplete event to close the stream.
+        tokio::task::yield_now().await;
+        state.emit_event(TestEvent::RunComplete {
+            run_id: 42,
+            passed: 1,
+            failed: 0,
+            skipped: 0,
+        });
+
+        let response = handle.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            ct.contains("text/event-stream"),
+            "Expected text/event-stream, got: {ct}"
+        );
     }
 }
