@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use conary_core::mcp::{to_json_text, validate_path_param};
 use rmcp::{
     ErrorData as McpError, ServerHandler, handler::server::tool::ToolRouter,
     handler::server::wrapper::Parameters, model::*, tool, tool_router,
@@ -24,37 +25,6 @@ use serde::Deserialize;
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 use crate::server::forgejo::FORGEJO_REPO_PATH;
-
-/// Validate a path parameter against a safe pattern for URL interpolation.
-///
-/// Rejects values containing slashes, `..`, null bytes, or characters
-/// outside `[a-zA-Z0-9._-]`.
-///
-/// Used by the Forgejo CI proxy tools which interpolate user-supplied
-/// values into URL paths.
-fn validate_path_param(value: &str, param_name: &str) -> Result<(), McpError> {
-    if value.is_empty()
-        || value.contains('/')
-        || value.contains("..")
-        || value.contains('\0')
-        || !value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-    {
-        Err(McpError::invalid_params(
-            format!("Invalid {param_name}: must match [a-zA-Z0-9._-]+"),
-            None,
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// Serialize a value to pretty JSON, mapping failures to [`McpError`].
-fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
-    serde_json::to_string_pretty(value)
-        .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
-}
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 ///
@@ -584,14 +554,14 @@ impl RemiMcpServer {
 
 impl ServerHandler for RemiMcpServer {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("remi-mcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Remi MCP server -- manage CI workflows, inspect runs, \
+        conary_core::mcp::server_info(
+            "remi-mcp",
+            env!("CARGO_PKG_VERSION"),
+            "Remi MCP server -- manage CI workflows, inspect runs, \
              trigger builds, sync mirrors, manage admin tokens, \
              list/inspect repositories, manage federation peers, \
              and query/purge the admin audit log.",
-            )
+        )
     }
 }
 

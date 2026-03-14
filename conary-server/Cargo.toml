@@ -8,7 +8,7 @@ description = "Remi package server and conaryd daemon for Conary"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-conary-core = { path = "../conary-core", features = ["server"] }
+conary-core = { path = "../conary-core", features = ["server", "mcp"] }
 
 # Web framework
 axum.workspace = true

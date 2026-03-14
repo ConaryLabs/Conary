@@ -22,6 +22,8 @@ pub mod filesystem;
 pub mod flavor;
 pub mod hash;
 pub mod label;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod model;
 pub mod packages;
 pub mod progress;
