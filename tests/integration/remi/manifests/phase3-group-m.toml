@@ -175,7 +175,6 @@ name = "shared_dependency_survives_remove"
 description = "Install two packages, remove one, and verify the other still works"
 timeout = 300
 group = "M"
-skip = "native package install from repo not implemented"
 
 [[test.step]]
 conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
@@ -212,7 +211,6 @@ name = "sync_all_repos_and_update"
 description = "Sync all repos, apply updates, and verify the system remains consistent"
 timeout = 300
 group = "M"
-skip = "update command not implemented"
 
 [[test.step]]
 conary = "repo sync --force"
@@ -284,7 +282,6 @@ name = "install_then_remove"
 description = "Install a package, remove it, and verify filesystem and DB cleanup"
 timeout = 180
 group = "M"
-skip = "native package install from repo not implemented"
 
 [[test.step]]
 conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --yes --sandbox never"
@@ -378,7 +375,6 @@ name = "mixed_format_install_session"
 description = "Install CCS and native packages in one session and verify they coexist"
 timeout = 300
 group = "M"
-skip = "native package install from repo not implemented"
 
 [[test.step]]
 run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --db-path ${DB_PATH} >/dev/null 2>&1 || true"
@@ -415,7 +411,6 @@ name = "full_lifecycle"
 description = "Run a full lifecycle of sync, install, use, update, pin, unpin, and remove"
 timeout = 360
 group = "M"
-skip = "native package install from repo not implemented"
 fatal = true
 
 [[test.step]]
