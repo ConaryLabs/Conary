@@ -62,6 +62,10 @@ description = "Add a Remi repository"
 timeout = 10
 depends_on = ["T01"]
 
+# Remove first in case initialize_container already added it.
+[[test.step]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+
 [[test.step]]
 conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
 
