@@ -26,8 +26,7 @@ run = "curl -sf ${REMI_ENDPOINT}/v1/index/${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0
-# Response must not be empty (Python checks r.stdout.strip())
-stdout_not_contains = ""
+stdout_contains = "packages"
 
 # --------------------------------------------------------------------------
 # T68: Chunk-level install
@@ -39,6 +38,13 @@ name = "chunk_level_install"
 description = "Install fixture package from Remi via chunk-level download"
 timeout = 300
 group = "E"
+# Sync repo first so the package is discoverable
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
 # Install the fixture package via Remi
 [[test.step]]
 conary = "install ${FIXTURE_PKG_NAME} --no-deps --yes --sandbox never"
