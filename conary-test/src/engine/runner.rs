@@ -13,6 +13,7 @@ use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManif
 use crate::config::manifest::QemuBoot;
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
+use crate::engine::container_coordinator::ContainerCoordinator;
 use crate::engine::executor::{ExecutionContext, StepAction, execute_step};
 use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
@@ -194,8 +195,10 @@ impl TestRunner {
         let mut container_config = base_container_config.clone();
         self.apply_resource_constraints(&mut container_config, test_def.resources.as_ref());
 
-        let container_id = backend.create(container_config).await?;
-        backend.start(&container_id).await?;
+        let mut coordinator = ContainerCoordinator::new(backend);
+        let container_id = coordinator
+            .setup_container(&container_config, test_def.resources.as_ref())
+            .await?;
 
         let result = async {
             self.initialize_container_state(backend, &container_id, manifest.suite.phase)
@@ -207,12 +210,7 @@ impl TestRunner {
         }
         .await;
 
-        if let Err(err) = backend.stop(&container_id).await {
-            warn!(test = %test_def.id, error = %err, "failed to stop resource-scoped container");
-        }
-        if let Err(err) = backend.remove(&container_id).await {
-            warn!(test = %test_def.id, error = %err, "failed to remove resource-scoped container");
-        }
+        coordinator.teardown_container(&container_id).await?;
 
         result
     }
@@ -464,7 +462,9 @@ mod tests {
         Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef,
         TestManifest, TestStep,
     };
-    use crate::container::backend::{ContainerConfig, ExecResult};
+    use crate::container::backend::{
+        ContainerConfig, ContainerInspection, ExecResult, ImageInfo,
+    };
     use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Mutex;
@@ -620,6 +620,14 @@ mod tests {
 
         async fn logs(&self, _id: &ContainerId) -> Result<String> {
             Ok(String::new())
+        }
+
+        async fn inspect_container(&self, _id: &ContainerId) -> Result<ContainerInspection> {
+            Ok(ContainerInspection::default())
+        }
+
+        async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+            Ok(Vec::new())
         }
     }
 
