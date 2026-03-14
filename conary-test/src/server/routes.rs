@@ -25,6 +25,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/suites", get(handlers::list_suites))
         .route("/v1/runs", post(handlers::start_run))
         .route("/v1/runs", get(handlers::list_runs))
+        .route("/v1/runs/:id/stream", get(handlers::stream_run))
         .route("/v1/runs/{id}", get(handlers::get_run))
         .route("/v1/distros", get(handlers::list_distros))
         .nest_service("/mcp", mcp_service)
@@ -49,6 +50,19 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_stream_route_exists() {
+        let app = create_router(test_fixtures::test_app_state());
+        let req = Request::builder()
+            .uri("/v1/runs/1/stream")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        // The SSE endpoint should return 200 (not 404).
+        assert_ne!(response.status(), 404, "route should exist");
     }
 
     #[tokio::test]

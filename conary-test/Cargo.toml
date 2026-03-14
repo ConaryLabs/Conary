@@ -29,6 +29,9 @@ tar.workspace = true
 # Concurrency
 dashmap = "6"
 
+# Async utilities
+async-stream = "0.3"
+
 # Container management
 bollard = "0.18"
 bytes = "1"

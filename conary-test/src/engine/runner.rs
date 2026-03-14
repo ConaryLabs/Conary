@@ -20,6 +20,7 @@ use crate::engine::executor::{ExecutionContext, StepAction, execute_step};
 use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 use crate::engine::variables;
+use crate::report::stream::TestEvent;
 
 /// Executes tests from a manifest against a container.
 pub struct TestRunner {
@@ -54,12 +55,15 @@ impl TestRunner {
         container_id: &ContainerId,
         base_container_config: Option<&ContainerConfig>,
     ) -> Result<TestSuite> {
-        self.run_with_cancel(manifest, backend, container_id, base_container_config, None)
+        self.run_with_cancel(manifest, backend, container_id, base_container_config, None, None)
             .await
     }
 
-    /// Run all tests with an optional cancellation flag and suite-level
-    /// timeout enforcement.
+    /// Run all tests with an optional cancellation flag, suite-level timeout
+    /// enforcement, and optional broadcast channel for live event streaming.
+    ///
+    /// When `event_tx` is `Some((run_id, sender))`, the runner emits
+    /// `TestEvent` variants to the broadcast channel as tests execute.
     pub async fn run_with_cancel(
         &mut self,
         manifest: &TestManifest,
@@ -67,6 +71,7 @@ impl TestRunner {
         container_id: &ContainerId,
         base_container_config: Option<&ContainerConfig>,
         cancel_flag: Option<Arc<AtomicBool>>,
+        event_tx: Option<(u64, tokio::sync::broadcast::Sender<TestEvent>)>,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
 
@@ -76,6 +81,16 @@ impl TestRunner {
 
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
         suite.status = crate::engine::suite::RunStatus::Running;
+
+        // Emit suite-started event.
+        if let Some((run_id, ref tx)) = event_tx {
+            let _ = tx.send(TestEvent::SuiteStarted {
+                run_id,
+                suite: manifest.suite.name.clone(),
+                phase: manifest.suite.phase,
+                total: manifest.test.len(),
+            });
+        }
 
         // Suite-level timeout: derive a deadline from manifest config.
         let suite_deadline = manifest
@@ -139,12 +154,28 @@ impl TestRunner {
                     name: test_def.name.clone(),
                     status: TestStatus::Skipped,
                     duration_ms: 0,
-                    message: Some(msg),
+                    message: Some(msg.clone()),
                     stdout: None,
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                if let Some((run_id, ref tx)) = event_tx {
+                    let _ = tx.send(TestEvent::TestSkipped {
+                        run_id,
+                        test_id: test_def.id.clone(),
+                        message: msg,
+                    });
+                }
                 continue;
+            }
+
+            // Emit test-started event.
+            if let Some((run_id, ref tx)) = event_tx {
+                let _ = tx.send(TestEvent::TestStarted {
+                    run_id,
+                    test_id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                });
             }
 
             let (status, message, elapsed, last_exec) = if test_def.resources.is_some() {
@@ -169,16 +200,59 @@ impl TestRunner {
                 warn!("[{}] {msg}", test_def.id);
             }
 
+            // Emit step output for stdout lines.
+            if let Some((run_id, ref tx)) = event_tx
+                && let Some(ref exec) = last_exec
+            {
+                for (step_idx, line) in exec.stdout.lines().enumerate() {
+                    let _ = tx.send(TestEvent::StepOutput {
+                        run_id,
+                        test_id: test_def.id.clone(),
+                        step: step_idx,
+                        line: line.to_string(),
+                    });
+                }
+            }
+
             suite.record(TestResult {
                 id: test_def.id.clone(),
                 name: test_def.name.clone(),
                 status,
                 duration_ms: elapsed,
-                message,
+                message: message.clone(),
                 stdout: last_exec.as_ref().map(|e| e.stdout.clone()),
                 stderr: last_exec.as_ref().map(|e| e.stderr.clone()),
                 attempts: Vec::new(),
             });
+
+            // Emit test result event.
+            if let Some((run_id, ref tx)) = event_tx {
+                match status {
+                    TestStatus::Passed => {
+                        let _ = tx.send(TestEvent::TestPassed {
+                            run_id,
+                            test_id: test_def.id.clone(),
+                            duration_ms: elapsed,
+                        });
+                    }
+                    TestStatus::Failed => {
+                        let _ = tx.send(TestEvent::TestFailed {
+                            run_id,
+                            test_id: test_def.id.clone(),
+                            message: message.unwrap_or_default(),
+                            stdout: last_exec.as_ref().map(|e| e.stdout.clone()),
+                        });
+                    }
+                    TestStatus::Skipped => {
+                        let _ = tx.send(TestEvent::TestSkipped {
+                            run_id,
+                            test_id: test_def.id.clone(),
+                            message: message.unwrap_or_default(),
+                        });
+                    }
+                    TestStatus::Cancelled => {}
+                }
+            }
 
             // Fatal test: stop the entire suite on failure.
             if status == TestStatus::Failed && test_def.fatal.unwrap_or(false) {
@@ -188,6 +262,17 @@ impl TestRunner {
         }
 
         suite.finish();
+
+        // Emit run-complete event.
+        if let Some((run_id, ref tx)) = event_tx {
+            let _ = tx.send(TestEvent::RunComplete {
+                run_id,
+                passed: suite.passed(),
+                failed: suite.failed(),
+                skipped: suite.skipped(),
+            });
+        }
+
         Ok(suite)
     }
 
@@ -1452,6 +1537,7 @@ mod tests {
                 &"ctr-1".to_string(),
                 None,
                 Some(cancel_flag),
+                None,
             )
             .await
             .unwrap();
@@ -1510,7 +1596,7 @@ mod tests {
         let backend = MockBackend::new(Vec::new());
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run_with_cancel(&manifest, &backend, &"ctr-1".to_string(), None, None)
+            .run_with_cancel(&manifest, &backend, &"ctr-1".to_string(), None, None, None)
             .await
             .unwrap();
 
