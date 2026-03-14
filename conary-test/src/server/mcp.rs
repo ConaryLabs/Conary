@@ -79,6 +79,44 @@ pub struct GetTestParams {
     pub test_id: String,
 }
 
+/// Parameters for cancelling a run.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CancelRunParams {
+    /// Numeric run ID to cancel.
+    pub run_id: u64,
+}
+
+/// Parameters for re-running a single test.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RerunTestParams {
+    /// Numeric run ID of the original run.
+    pub run_id: u64,
+    /// Test identifier to re-run (e.g. "T01").
+    pub test_id: String,
+}
+
+/// Parameters for building a container image.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BuildImageParams {
+    /// Distro name to build the image for (must be configured).
+    pub distro: String,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert an `anyhow::Error` to an MCP error. Used by service functions
+/// that return `anyhow::Result`.
+fn anyhow_to_mcp(err: anyhow::Error) -> McpError {
+    let msg = err.to_string();
+    if msg.contains("not found") {
+        McpError::invalid_params(msg, None)
+    } else {
+        McpError::internal_error(msg, None)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool definitions
 // ---------------------------------------------------------------------------
@@ -200,6 +238,127 @@ impl TestMcpServer {
         let text = to_json_text(&distros)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    /// Cancel a running test run by its run ID.
+    ///
+    /// Sets the cancellation flag so the runner stops executing tests and
+    /// marks the run status as cancelled.
+    #[tool(
+        description = "Cancel a running test run. Sets the cancellation flag and marks the run as cancelled."
+    )]
+    async fn cancel_run(
+        &self,
+        Parameters(params): Parameters<CancelRunParams>,
+    ) -> Result<CallToolResult, McpError> {
+        service::cancel_run(&self.state, params.run_id).map_err(anyhow_to_mcp)?;
+
+        let value = serde_json::json!({
+            "run_id": params.run_id,
+            "status": "cancelled",
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Re-run a single test from a previous run.
+    ///
+    /// Creates a new pending run containing just the specified test and
+    /// returns the new run ID.
+    #[tool(
+        description = "Re-run a single test from a previous run. Returns the new run ID."
+    )]
+    async fn rerun_test(
+        &self,
+        Parameters(params): Parameters<RerunTestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let new_id =
+            service::rerun_test(&self.state, params.run_id, &params.test_id)
+                .map_err(anyhow_to_mcp)?;
+
+        let value = serde_json::json!({
+            "original_run_id": params.run_id,
+            "test_id": params.test_id,
+            "new_run_id": new_id,
+            "status": "pending",
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get stdout/stderr logs from all attempts of a test.
+    #[tool(
+        description = "Get stdout/stderr logs from all attempts of a test within a run."
+    )]
+    async fn get_test_logs(
+        &self,
+        Parameters(params): Parameters<GetTestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let logs = service::get_test_logs(&self.state, params.run_id, &params.test_id)
+            .map_err(anyhow_to_mcp)?;
+
+        let text = to_json_text(&logs)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get artifact information and summary for a run.
+    #[tool(
+        description = "Get artifact information (report path, summary) for a test run."
+    )]
+    async fn get_run_artifacts(
+        &self,
+        Parameters(params): Parameters<GetRunParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let artifacts = service::get_run_artifacts(&self.state, params.run_id)
+            .map_err(anyhow_to_mcp)?;
+
+        let text = to_json_text(&artifacts)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Build a container image for a configured distro.
+    #[tool(
+        description = "Build a container image for a distro. Returns the image tag on success."
+    )]
+    async fn build_image(
+        &self,
+        Parameters(params): Parameters<BuildImageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let tag = service::build_image(&self.state, &params.distro)
+            .await
+            .map_err(anyhow_to_mcp)?;
+
+        let value = serde_json::json!({
+            "distro": params.distro,
+            "image": tag,
+            "status": "built",
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// List all available container images.
+    #[tool(description = "List all available container images with ID, tags, and size.")]
+    async fn list_images(&self) -> Result<CallToolResult, McpError> {
+        let images = service::list_images(&self.state)
+            .await
+            .map_err(anyhow_to_mcp)?;
+
+        let text = to_json_text(&images)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Clean up stopped conary-test containers.
+    #[tool(
+        description = "Remove stopped conary-test containers. Returns count of removed containers."
+    )]
+    async fn cleanup_containers(&self) -> Result<CallToolResult, McpError> {
+        let result = service::cleanup_containers(&self.state)
+            .await
+            .map_err(anyhow_to_mcp)?;
+
+        let text = to_json_text(&result)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +395,6 @@ mod tests {
     fn test_mcp_tool_count() {
         let router = TestMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 6, "Expected 6 MCP tools");
+        assert_eq!(tools.len(), 13, "Expected 13 MCP tools");
     }
 }

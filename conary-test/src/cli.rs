@@ -425,8 +425,36 @@ fn main() -> Result<()> {
                 })
             }
             ImageCommands::List => {
-                println!("Image listing not yet implemented");
-                Ok(())
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(async {
+                    use conary_test::container::ContainerBackend;
+
+                    let backend = conary_test::container::BollardBackend::new()?;
+                    let images = backend.list_images().await?;
+
+                    if images.is_empty() {
+                        println!("No images found");
+                        return Ok(());
+                    }
+
+                    println!("{:<20} {:<40} SIZE", "TAG", "ID");
+                    println!("{}", "-".repeat(70));
+                    for img in &images {
+                        let tag = img
+                            .tags
+                            .first()
+                            .map(String::as_str)
+                            .unwrap_or("<none>");
+                        let short_id = if img.id.len() > 12 {
+                            &img.id[..12]
+                        } else {
+                            &img.id
+                        };
+                        let size_mb = img.size / (1024 * 1024);
+                        println!("{tag:<20} {short_id:<40} {size_mb} MB");
+                    }
+                    Ok(())
+                })
             }
         },
     }

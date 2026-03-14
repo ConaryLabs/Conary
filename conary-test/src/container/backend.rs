@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -27,7 +28,7 @@ pub struct ContainerInspection {
 }
 
 /// Metadata for a container image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ImageInfo {
     pub id: String,
     pub tags: Vec<String>,

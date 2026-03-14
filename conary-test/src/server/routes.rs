@@ -26,8 +26,21 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/runs", post(handlers::start_run))
         .route("/v1/runs", get(handlers::list_runs))
         .route("/v1/runs/:id/stream", get(handlers::stream_run))
+        .route("/v1/runs/:id/cancel", post(handlers::cancel_run))
+        .route("/v1/runs/:id/artifacts", get(handlers::get_run_artifacts))
+        .route(
+            "/v1/runs/:id/tests/:test_id/rerun",
+            post(handlers::rerun_test),
+        )
+        .route(
+            "/v1/runs/:id/tests/:test_id/logs",
+            get(handlers::get_test_logs),
+        )
         .route("/v1/runs/{id}", get(handlers::get_run))
         .route("/v1/distros", get(handlers::list_distros))
+        .route("/v1/images", get(handlers::list_images))
+        .route("/v1/images/build", post(handlers::build_image))
+        .route("/v1/cleanup", post(handlers::cleanup_containers))
         .nest_service("/mcp", mcp_service)
         .with_state(state)
 }
