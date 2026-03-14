@@ -4,8 +4,8 @@
 # Converted from tests/integration/remi/runner/test_runner.py run_phase1().
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
-# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE},
-#                   ${TEST_BINARY}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
+# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE_1},
+#                   ${TEST_BINARY_1}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
 #                   ${TEST_PACKAGE_3}, ${TEST_BINARY_3}
 
 [suite]
@@ -24,7 +24,7 @@ timeout = 60
 depends_on = ["T07"]
 
 [[test.step]]
-conary = "remove ${TEST_PACKAGE} --no-scripts"
+conary = "remove ${TEST_PACKAGE_1} --no-scripts"
 
 [test.step.assert]
 exit_code = 0
@@ -41,14 +41,14 @@ timeout = 10
 depends_on = ["T11"]
 
 [[test.step]]
-file_not_exists = "${TEST_BINARY}"
+file_not_exists = "${TEST_BINARY_1}"
 
 [[test.step]]
 conary = "list"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "${TEST_PACKAGE}"
+stdout_not_contains = "${TEST_PACKAGE_1}"
 
 # --------------------------------------------------------------------------
 # T13: Version Check
@@ -79,7 +79,7 @@ timeout = 300
 depends_on = ["T11"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE} --no-scripts --no-deps --sandbox never"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -96,11 +96,11 @@ timeout = 30
 depends_on = ["T14"]
 
 [[test.step]]
-conary = "list ${TEST_PACKAGE} --info"
+conary = "list ${TEST_PACKAGE_1} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${TEST_PACKAGE}", "Version"]
+stdout_contains_all = ["${TEST_PACKAGE_1}", "Version"]
 
 # --------------------------------------------------------------------------
 # T16: List Files
@@ -114,11 +114,11 @@ timeout = 30
 depends_on = ["T14"]
 
 [[test.step]]
-conary = "list ${TEST_PACKAGE} --files"
+conary = "list ${TEST_PACKAGE_1} --files"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_BINARY}"
+stdout_contains = "${TEST_BINARY_1}"
 
 # --------------------------------------------------------------------------
 # T17: Path Ownership
@@ -132,11 +132,11 @@ timeout = 30
 depends_on = ["T14"]
 
 [[test.step]]
-conary = "list --path ${TEST_BINARY}"
+conary = "list --path ${TEST_BINARY_1}"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_PACKAGE}"
+stdout_contains = "${TEST_PACKAGE_1}"
 
 # --------------------------------------------------------------------------
 # T18: Install Tree
@@ -219,13 +219,13 @@ timeout = 30
 depends_on = ["T14"]
 
 [[test.step]]
-conary = "pin ${TEST_PACKAGE}"
+conary = "pin ${TEST_PACKAGE_1}"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "list ${TEST_PACKAGE} --info"
+conary = "list ${TEST_PACKAGE_1} --info"
 
 [test.step.assert]
 exit_code = 0
@@ -243,13 +243,13 @@ timeout = 30
 depends_on = ["T22"]
 
 [[test.step]]
-conary = "unpin ${TEST_PACKAGE}"
+conary = "unpin ${TEST_PACKAGE_1}"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "list ${TEST_PACKAGE} --info"
+conary = "list ${TEST_PACKAGE_1} --info"
 
 [test.step.assert]
 exit_code = 0
@@ -320,7 +320,7 @@ conary = "list"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${TEST_PACKAGE}", "${TEST_PACKAGE_2}", "${TEST_PACKAGE_3}"]
+stdout_contains_all = ["${TEST_PACKAGE_1}", "${TEST_PACKAGE_2}", "${TEST_PACKAGE_3}"]
 
 # --------------------------------------------------------------------------
 # T28: Dep Mode Satisfy
@@ -334,14 +334,14 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE} --no-scripts --dep-mode satisfy --yes --sandbox never"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --dep-mode satisfy --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
 
 # Cleanup: remove the package for later tests
 [[test.step]]
-conary = "remove ${TEST_PACKAGE} --no-scripts"
+conary = "remove ${TEST_PACKAGE_1} --no-scripts"
 
 # --------------------------------------------------------------------------
 # T29: Dep Mode Adopt

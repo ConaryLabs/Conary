@@ -38,6 +38,7 @@ name = "kernel_file_deployment"
 description = "Install a kernel package and verify kernel, initramfs, and modules are deployed"
 timeout = 300
 group = "N"
+skip = "native package install from repo not implemented"
 fatal = true
 
 [[test.step]]

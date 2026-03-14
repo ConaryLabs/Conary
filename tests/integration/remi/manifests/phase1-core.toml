@@ -4,8 +4,8 @@
 # Converted from tests/integration/remi/runner/test_runner.py run_phase1().
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
-# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE},
-#                   ${TEST_BINARY}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
+# Distro variables: ${REPO_NAME}, ${REMI_DISTRO}, ${TEST_PACKAGE_1},
+#                   ${TEST_BINARY_1}, ${TEST_PACKAGE_2}, ${TEST_BINARY_2},
 #                   ${TEST_PACKAGE_3}, ${TEST_BINARY_3}
 
 [suite]
@@ -117,11 +117,11 @@ timeout = 30
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "search ${TEST_PACKAGE}"
+conary = "search ${TEST_PACKAGE_1}"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_PACKAGE}"
+stdout_contains = "${TEST_PACKAGE_1}"
 stdout_not_contains = "No packages found"
 
 # --------------------------------------------------------------------------
@@ -154,7 +154,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE} --no-scripts --no-deps --sandbox never"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -171,10 +171,10 @@ timeout = 10
 depends_on = ["T07"]
 
 [[test.step]]
-file_exists = "${TEST_BINARY}"
+file_exists = "${TEST_BINARY_1}"
 
 [[test.step]]
-file_executable = "${TEST_BINARY}"
+file_executable = "${TEST_BINARY_1}"
 
 # --------------------------------------------------------------------------
 # T09: List Installed
@@ -192,7 +192,7 @@ conary = "list"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_PACKAGE}"
+stdout_contains = "${TEST_PACKAGE_1}"
 
 # --------------------------------------------------------------------------
 # T10: Install Nonexistent
