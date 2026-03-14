@@ -706,4 +706,35 @@ mod tests {
         assert_eq!(BollardBackend::normalize_signal_name("SIGTERM"), "TERM");
         assert_eq!(BollardBackend::normalize_signal_name("KILL"), "KILL");
     }
+
+    #[tokio::test]
+    #[ignore] // Requires podman/docker runtime
+    async fn smoke_test_real_container() {
+        use crate::container::backend::{ContainerBackend, ContainerConfig};
+        use std::time::Duration;
+
+        let backend = BollardBackend::new().expect("connect to container runtime");
+
+        let config = ContainerConfig {
+            image: "docker.io/library/alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let id = backend.create(config).await.expect("create container");
+        backend.start(&id).await.expect("start container");
+
+        let result = backend
+            .exec(&id, &["echo", "hello"], Duration::from_secs(10))
+            .await
+            .expect("exec echo");
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.stdout.trim().contains("hello"),
+            "stdout should contain 'hello', got: {}",
+            result.stdout
+        );
+
+        backend.stop(&id).await.expect("stop container");
+        backend.remove(&id).await.expect("remove container");
+    }
 }

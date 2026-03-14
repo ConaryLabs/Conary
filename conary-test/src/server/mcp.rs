@@ -264,16 +264,13 @@ impl TestMcpServer {
     ///
     /// Creates a new pending run containing just the specified test and
     /// returns the new run ID.
-    #[tool(
-        description = "Re-run a single test from a previous run. Returns the new run ID."
-    )]
+    #[tool(description = "Re-run a single test from a previous run. Returns the new run ID.")]
     async fn rerun_test(
         &self,
         Parameters(params): Parameters<RerunTestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let new_id =
-            service::rerun_test(&self.state, params.run_id, &params.test_id)
-                .map_err(anyhow_to_mcp)?;
+        let new_id = service::rerun_test(&self.state, params.run_id, &params.test_id)
+            .map_err(anyhow_to_mcp)?;
 
         let value = serde_json::json!({
             "original_run_id": params.run_id,
@@ -286,9 +283,7 @@ impl TestMcpServer {
     }
 
     /// Get stdout/stderr logs from all attempts of a test.
-    #[tool(
-        description = "Get stdout/stderr logs from all attempts of a test within a run."
-    )]
+    #[tool(description = "Get stdout/stderr logs from all attempts of a test within a run.")]
     async fn get_test_logs(
         &self,
         Parameters(params): Parameters<GetTestParams>,
@@ -301,24 +296,20 @@ impl TestMcpServer {
     }
 
     /// Get artifact information and summary for a run.
-    #[tool(
-        description = "Get artifact information (report path, summary) for a test run."
-    )]
+    #[tool(description = "Get artifact information (report path, summary) for a test run.")]
     async fn get_run_artifacts(
         &self,
         Parameters(params): Parameters<GetRunParams>,
     ) -> Result<CallToolResult, McpError> {
-        let artifacts = service::get_run_artifacts(&self.state, params.run_id)
-            .map_err(anyhow_to_mcp)?;
+        let artifacts =
+            service::get_run_artifacts(&self.state, params.run_id).map_err(anyhow_to_mcp)?;
 
         let text = to_json_text(&artifacts)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     /// Build a container image for a configured distro.
-    #[tool(
-        description = "Build a container image for a distro. Returns the image tag on success."
-    )]
+    #[tool(description = "Build a container image for a distro. Returns the image tag on success.")]
     async fn build_image(
         &self,
         Parameters(params): Parameters<BuildImageParams>,

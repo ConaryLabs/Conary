@@ -10,9 +10,9 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
 #[cfg(test)]
 use crate::config::manifest::QemuBoot;
+use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::container_coordinator::ContainerCoordinator;
@@ -55,8 +55,15 @@ impl TestRunner {
         container_id: &ContainerId,
         base_container_config: Option<&ContainerConfig>,
     ) -> Result<TestSuite> {
-        self.run_with_cancel(manifest, backend, container_id, base_container_config, None, None)
-            .await
+        self.run_with_cancel(
+            manifest,
+            backend,
+            container_id,
+            base_container_config,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Run all tests with an optional cancellation flag, suite-level timeout
@@ -104,10 +111,7 @@ impl TestRunner {
                 .as_ref()
                 .is_some_and(|f| f.load(Ordering::Relaxed))
             {
-                info!(
-                    "[{}] {}: cancelled by flag",
-                    test_def.id, test_def.name
-                );
+                info!("[{}] {}: cancelled by flag", test_def.id, test_def.name);
                 suite.record(TestResult {
                     id: test_def.id.clone(),
                     name: test_def.name.clone(),
@@ -525,9 +529,7 @@ impl TestRunner {
             };
 
             // Per-step timeout overrides the test-level timeout.
-            let step_timeout = step
-                .timeout
-                .map_or(timeout, Duration::from_secs);
+            let step_timeout = step.timeout.map_or(timeout, Duration::from_secs);
 
             let step_result =
                 execute_step(&action, backend, container_id, &ctx, step_timeout).await?;
@@ -621,9 +623,7 @@ mod tests {
         Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef,
         TestManifest, TestStep,
     };
-    use crate::container::backend::{
-        ContainerConfig, ContainerInspection, ExecResult, ImageInfo,
-    };
+    use crate::container::backend::{ContainerConfig, ContainerInspection, ExecResult, ImageInfo};
     use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Mutex;
@@ -1503,7 +1503,10 @@ mod tests {
                 flaky: None,
                 retries: None,
                 retry_delay_ms: None,
-                step: vec![simple_step_run("echo ok", Some(make_assertion(Some(0), None)))],
+                step: vec![simple_step_run(
+                    "echo ok",
+                    Some(make_assertion(Some(0), None)),
+                )],
                 resources: None,
                 depends_on: None,
                 fatal: None,
@@ -1648,5 +1651,81 @@ mod tests {
             .unwrap();
 
         assert_eq!(suite.passed(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_runs_independent() {
+        // Two independent runs should complete without interfering with each
+        // other. Each gets its own MockBackend, runner, and manifest.
+        let backend_a = MockBackend::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "run-a".to_string(),
+            stderr: String::new(),
+        }]);
+        let backend_b = MockBackend::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "run-b".to_string(),
+            stderr: String::new(),
+        }]);
+
+        let manifest_a = make_manifest(vec![TestDef {
+            id: "T-A1".to_string(),
+            name: "run_a_test".to_string(),
+            description: "test in run A".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            retry_delay_ms: None,
+            step: vec![simple_step_run(
+                "echo run-a",
+                Some(make_assertion(Some(0), Some("run-a"))),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let manifest_b = make_manifest(vec![TestDef {
+            id: "T-B1".to_string(),
+            name: "run_b_test".to_string(),
+            description: "test in run B".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            retry_delay_ms: None,
+            step: vec![simple_step_run(
+                "echo run-b",
+                Some(make_assertion(Some(0), Some("run-b"))),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let (suite_a, suite_b) = tokio::join!(
+            async {
+                let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+                runner
+                    .run(&manifest_a, &backend_a, &"ctr-a".to_string(), None)
+                    .await
+                    .unwrap()
+            },
+            async {
+                let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+                runner
+                    .run(&manifest_b, &backend_b, &"ctr-b".to_string(), None)
+                    .await
+                    .unwrap()
+            },
+        );
+
+        assert_eq!(suite_a.passed(), 1, "run A should pass");
+        assert_eq!(suite_b.passed(), 1, "run B should pass");
+        assert_eq!(suite_a.failed(), 0, "run A should have no failures");
+        assert_eq!(suite_b.failed(), 0, "run B should have no failures");
+        assert_eq!(suite_a.results[0].id, "T-A1");
+        assert_eq!(suite_b.results[0].id, "T-B1");
     }
 }
