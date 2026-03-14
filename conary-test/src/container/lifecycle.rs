@@ -648,7 +648,7 @@ impl ContainerBackend for BollardBackend {
         let images = self
             .docker
             .list_images(Some(bollard::image::ListImagesOptions::<String> {
-                all: true,
+                all: false,
                 ..Default::default()
             }))
             .await
@@ -656,10 +656,19 @@ impl ContainerBackend for BollardBackend {
 
         let result = images
             .into_iter()
-            .map(|img| ImageInfo {
-                id: img.id,
-                tags: img.repo_tags,
-                size: u64::try_from(img.size).unwrap_or(0),
+            .filter(|img| {
+                img.repo_tags
+                    .iter()
+                    .any(|tag| tag.starts_with("conary-test-"))
+            })
+            .map(|img| {
+                let short_id = img.id.strip_prefix("sha256:").unwrap_or(&img.id);
+                let short_id = &short_id[..12.min(short_id.len())];
+                ImageInfo {
+                    id: short_id.to_string(),
+                    tags: img.repo_tags,
+                    size: u64::try_from(img.size).unwrap_or(0),
+                }
             })
             .collect();
 

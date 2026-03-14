@@ -158,6 +158,15 @@ impl TestMcpServer {
         let result = service::start_run(&self.state, &params.suite, &params.distro, params.phase)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
+        // Spawn the actual test execution in a background task.
+        service::spawn_run(
+            &self.state,
+            result.run_id,
+            &params.suite,
+            &params.distro,
+            params.phase,
+        );
+
         let value = serde_json::json!({
             "run_id": result.run_id,
             "status": "pending",
@@ -275,13 +284,22 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<RerunTestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let new_id = service::rerun_test(&self.state, params.run_id, &params.test_id)
+        let rerun = service::rerun_test(&self.state, params.run_id, &params.test_id)
             .map_err(anyhow_to_mcp)?;
+
+        // Spawn execution using the original suite's manifest.
+        service::spawn_run(
+            &self.state,
+            rerun.run_id,
+            &rerun.suite_name,
+            &rerun.distro,
+            rerun.phase,
+        );
 
         let value = serde_json::json!({
             "original_run_id": params.run_id,
             "test_id": params.test_id,
-            "new_run_id": new_id,
+            "new_run_id": rerun.run_id,
             "status": "pending",
         });
         let text = to_json_text(&value)?;

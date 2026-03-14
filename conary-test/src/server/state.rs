@@ -7,6 +7,14 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+/// Metadata for a run that persists alongside the TestSuite.
+#[derive(Debug, Clone)]
+pub struct RunMeta {
+    pub suite_name: String,
+    pub distro: String,
+    pub phase: u32,
+}
+
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Maximum number of completed runs to retain in memory.
@@ -22,6 +30,8 @@ pub struct AppState {
     /// Concurrent map of run IDs to test suites. Replaces the previous
     /// `Arc<RwLock<HashMap>>` with lock-free per-shard concurrency.
     pub runs: Arc<DashMap<u64, TestSuite>>,
+    /// Per-run metadata (suite name, distro, phase) for rerun lookups.
+    pub run_meta: Arc<DashMap<u64, RunMeta>>,
     /// Per-run cancellation flags. Setting a flag to `true` signals the
     /// runner to stop executing tests for that run.
     pub cancellation_flags: Arc<DashMap<u64, Arc<AtomicBool>>>,
@@ -36,6 +46,7 @@ impl AppState {
             config,
             manifest_dir,
             runs: Arc::new(DashMap::new()),
+            run_meta: Arc::new(DashMap::new()),
             cancellation_flags: Arc::new(DashMap::new()),
             event_tx,
         }

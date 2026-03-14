@@ -34,13 +34,17 @@ pub async fn start_run(
     Json(req): Json<StartRunRequest>,
 ) -> impl IntoResponse {
     match service::start_run(&state, &req.suite, &req.distro, req.phase) {
-        Ok(result) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "run_id": result.run_id,
-                "status": "pending",
-            })),
-        ),
+        Ok(result) => {
+            // Spawn the actual test execution in a background task.
+            service::spawn_run(&state, result.run_id, &req.suite, &req.distro, req.phase);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "run_id": result.run_id,
+                    "status": "pending",
+                })),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -109,15 +113,19 @@ pub async fn rerun_test(
     Path((id, test_id)): Path<(u64, String)>,
 ) -> impl IntoResponse {
     match service::rerun_test(&state, id, &test_id) {
-        Ok(new_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "original_run_id": id,
-                "test_id": test_id,
-                "new_run_id": new_id,
-                "status": "pending",
-            })),
-        ),
+        Ok(rerun) => {
+            // Spawn execution using the original suite's manifest.
+            service::spawn_run(&state, rerun.run_id, &rerun.suite_name, &rerun.distro, rerun.phase);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "original_run_id": id,
+                    "test_id": test_id,
+                    "new_run_id": rerun.run_id,
+                    "status": "pending",
+                })),
+            )
+        }
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
