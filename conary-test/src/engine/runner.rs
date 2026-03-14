@@ -9,14 +9,14 @@ use tracing::{info, warn};
 
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{
-    Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef,
-    TestManifest,
+    Assertion, KillAfterLog, QemuBoot, ResourceConstraints, StepType, TestDef, TestManifest,
 };
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::mock_server::start_mock_server;
 use crate::engine::qemu::run_qemu_boot;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
+use crate::engine::variables;
 
 /// Executes tests from a manifest against a container.
 pub struct TestRunner {
@@ -58,63 +58,7 @@ impl TestRunner {
     }
 
     pub fn new(config: GlobalConfig, distro: String) -> Self {
-        let mut vars = HashMap::new();
-        vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
-        vars.insert("DB_PATH".to_string(), config.paths.db.clone());
-        vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
-        if let Some(fixture_dir) = &config.paths.fixture_dir {
-            vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
-        }
-
-        if let Some(fixtures) = &config.fixtures {
-            if let Some(value) = &fixtures.package {
-                vars.insert("FIXTURE_PKG_NAME".to_string(), value.clone());
-            }
-            if let Some(value) = &fixtures.file {
-                vars.insert("FIXTURE_FILE".to_string(), value.clone());
-            }
-            if let Some(value) = &fixtures.added_file {
-                vars.insert("FIXTURE_ADDED_FILE".to_string(), value.clone());
-            }
-            if let Some(value) = &fixtures.marker {
-                vars.insert("FIXTURE_MARKER".to_string(), value.clone());
-            }
-            if let Some(fixture_dir) = &config.paths.fixture_dir {
-                if let Some(value) = &fixtures.v1_ccs_file {
-                    vars.insert(
-                        "FIXTURE_V1_CCS".to_string(),
-                        format!("{fixture_dir}/conary-test-fixture/v1/output/{value}"),
-                    );
-                }
-                if let Some(value) = &fixtures.v2_ccs_file {
-                    vars.insert(
-                        "FIXTURE_V2_CCS".to_string(),
-                        format!("{fixture_dir}/conary-test-fixture/v2/output/{value}"),
-                    );
-                }
-            }
-            if let Some(value) = &fixtures.v1_hello_sha256 {
-                vars.insert("FIXTURE_V1_HELLO_SHA256".to_string(), value.clone());
-            }
-            if let Some(value) = &fixtures.v2_hello_sha256 {
-                vars.insert("FIXTURE_V2_HELLO_SHA256".to_string(), value.clone());
-            }
-            if let Some(value) = &fixtures.v2_added_sha256 {
-                vars.insert("FIXTURE_V2_ADDED_SHA256".to_string(), value.clone());
-            }
-        }
-
-        // Add distro-specific variables if present.
-        if let Some(dc) = config.distros.get(&distro) {
-            vars.insert("REMI_DISTRO".to_string(), dc.remi_distro.clone());
-            vars.insert("REPO_NAME".to_string(), dc.repo_name.clone());
-            for (i, tp) in dc.test_packages.iter().enumerate() {
-                let n = i + 1;
-                vars.insert(format!("TEST_PACKAGE_{n}"), tp.package.clone());
-                vars.insert(format!("TEST_BINARY_{n}"), tp.binary.clone());
-            }
-        }
-
+        let vars = variables::build_variables(&config, &distro);
         Self {
             config,
             distro,
@@ -124,9 +68,7 @@ impl TestRunner {
 
     /// Load distro-specific manifest variables into the runner variable map.
     pub fn load_manifest_vars(&mut self, manifest: &TestManifest) {
-        if let Some(overrides) = manifest.distro_overrides.get(&self.distro) {
-            self.vars.extend(overrides.clone());
-        }
+        variables::load_manifest_overrides(&mut self.vars, manifest, &self.distro);
     }
 
     /// Run all tests in the manifest against the given container.
@@ -665,92 +607,15 @@ impl TestRunner {
 
     /// Replace `${VAR}` patterns in a string with values from the variable map.
     fn substitute_vars(&self, input: &str) -> String {
-        if !input.contains("${") {
-            return input.to_string();
-        }
-        let mut result = input.to_string();
-        for (key, value) in &self.vars {
-            let pattern = format!("${{{key}}}");
-            result = result.replace(&pattern, value);
-        }
-        result
+        variables::expand_variables(input, &self.vars)
     }
 
     fn expand_qemu_boot(&self, config: &QemuBoot) -> QemuBoot {
-        QemuBoot {
-            image: self.substitute_vars(&config.image),
-            memory_mb: config.memory_mb,
-            timeout_seconds: config.timeout_seconds,
-            ssh_port: config.ssh_port,
-            commands: config
-                .commands
-                .iter()
-                .map(|cmd| self.substitute_vars(cmd))
-                .collect(),
-            expect_output: config
-                .expect_output
-                .iter()
-                .map(|s| self.substitute_vars(s))
-                .collect(),
-        }
+        variables::expand_qemu_boot(config, &self.vars)
     }
 
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
-        Assertion {
-            exit_code: assertion.exit_code,
-            exit_code_not: assertion.exit_code_not,
-            stdout_contains: assertion
-                .stdout_contains
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            stdout_not_contains: assertion
-                .stdout_not_contains
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            stdout_contains_all: assertion.stdout_contains_all.as_ref().map(|values| {
-                values
-                    .iter()
-                    .map(|value| self.substitute_vars(value))
-                    .collect()
-            }),
-            stdout_contains_any: assertion.stdout_contains_any.as_ref().map(|values| {
-                values
-                    .iter()
-                    .map(|value| self.substitute_vars(value))
-                    .collect()
-            }),
-            stdout_contains_if_success: assertion
-                .stdout_contains_if_success
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            stdout_contains_any_if_success: assertion.stdout_contains_any_if_success.as_ref().map(
-                |values| {
-                    values
-                        .iter()
-                        .map(|value| self.substitute_vars(value))
-                        .collect()
-                },
-            ),
-            stderr_contains: assertion
-                .stderr_contains
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            file_exists: assertion
-                .file_exists
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            file_not_exists: assertion
-                .file_not_exists
-                .as_ref()
-                .map(|value| self.substitute_vars(value)),
-            file_checksum: assertion
-                .file_checksum
-                .as_ref()
-                .map(|checksum| FileChecksum {
-                    path: self.substitute_vars(&checksum.path),
-                    sha256: self.substitute_vars(&checksum.sha256),
-                }),
-        }
+        variables::expand_assertion(assertion, &self.vars)
     }
 }
 
@@ -762,8 +627,8 @@ mod tests {
         TestPackage,
     };
     use crate::config::manifest::{
-        Assertion, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef, TestManifest,
-        TestStep,
+        Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef,
+        TestManifest, TestStep,
     };
     use crate::container::backend::{ContainerConfig, ExecResult};
     use async_trait::async_trait;
