@@ -76,6 +76,7 @@ name = "bls_entry_created"
 description = "Installing a kernel and building a generation should produce a BLS entry"
 timeout = 180
 group = "N"
+depends_on = ["T150"]
 
 [[test.step]]
 run = "${CONARY_BIN} system generation build"
@@ -122,6 +123,7 @@ name = "kernel_generation_rollback"
 description = "Rolling back a generation should leave boot entries in a consistent prior state"
 timeout = 180
 group = "N"
+depends_on = ["T150"]
 
 [[test.step]]
 run = "${CONARY_BIN} system generation rollback 2>&1 || true"
@@ -146,6 +148,7 @@ name = "bootloader_config_deployed"
 description = "Install the bootloader package and verify expected config paths exist"
 timeout = 300
 group = "N"
+depends_on = ["T150"]
 
 [[test.step]]
 conary = "install ${bootloader_package} --repo ${distro_repo} --yes --sandbox never"

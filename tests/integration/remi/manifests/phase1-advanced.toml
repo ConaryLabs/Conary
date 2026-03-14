@@ -13,6 +13,24 @@ name = "Phase 1: Advanced Integration (T11-T37)"
 phase = 1
 
 # --------------------------------------------------------------------------
+# T10a: Setup - Install test package (suite-local prerequisite)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T10a"
+name = "setup_install_package"
+description = "Install test package as setup for this suite (mirrors T07 from phase1-core)"
+timeout = 300
+depends_on = ["T04"]
+fatal = true
+
+[[test.step]]
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
 # T11: Remove Package
 # --------------------------------------------------------------------------
 
@@ -21,7 +39,7 @@ id = "T11"
 name = "remove_package"
 description = "Remove previously installed test package"
 timeout = 60
-depends_on = ["T07"]
+depends_on = ["T10a"]
 
 [[test.step]]
 conary = "remove ${TEST_PACKAGE_1} --no-scripts"
