@@ -500,7 +500,13 @@ impl ContainerBackend for BollardBackend {
             )
             .await?;
         if result.exit_code != 0 {
-            bail!("failed to signal exec {exec_id}: {}", result.stderr.trim());
+            let stderr = result.stderr.trim();
+            // "No such process" means the process already exited — not an error.
+            if stderr.contains("No such process") {
+                tracing::debug!(exec_id, "process already exited, ignoring kill failure");
+                return Ok(());
+            }
+            bail!("failed to signal exec {exec_id}: {stderr}");
         }
         Ok(())
     }

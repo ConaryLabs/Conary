@@ -203,7 +203,7 @@ timeout = 60
 group = "H"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0.ccs --allow-unsigned --sandbox never"
 
 [test.step.assert]
 exit_code_not = 0

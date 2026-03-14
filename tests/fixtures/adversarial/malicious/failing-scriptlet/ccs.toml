@@ -1,0 +1,29 @@
+[package]
+name = "failing-scriptlet"
+version = "1.0.0"
+description = "Fixture with a post-install hook that exits non-zero"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["failing-scriptlet"]
+binaries = ["/usr/bin/failing-scriptlet"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[hooks.post_install]
+script = """
+echo "failing-scriptlet: intentional failure" >&2
+exit 1
+"""
