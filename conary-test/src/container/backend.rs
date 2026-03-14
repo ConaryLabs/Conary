@@ -18,6 +18,22 @@ pub struct ExecResult {
     pub stderr: String,
 }
 
+/// Inspection details for a running container.
+#[derive(Debug, Clone, Default)]
+pub struct ContainerInspection {
+    pub memory_limit: Option<u64>,
+    pub tmpfs: HashMap<String, String>,
+    pub network_mode: Option<String>,
+}
+
+/// Metadata for a container image.
+#[derive(Debug, Clone)]
+pub struct ImageInfo {
+    pub id: String,
+    pub tags: Vec<String>,
+    pub size: u64,
+}
+
 /// A host-to-container volume mount.
 #[derive(Debug, Clone)]
 pub struct VolumeMount {
@@ -104,4 +120,10 @@ pub trait ContainerBackend: Send + Sync {
 
     /// Retrieve all logs (stdout + stderr) from the container.
     async fn logs(&self, id: &ContainerId) -> Result<String>;
+
+    /// Inspect a container's configuration (memory limits, tmpfs, network).
+    async fn inspect_container(&self, id: &ContainerId) -> Result<ContainerInspection>;
+
+    /// List all available container images.
+    async fn list_images(&self) -> Result<Vec<ImageInfo>>;
 }

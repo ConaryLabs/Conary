@@ -20,7 +20,10 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tracing::{debug, warn};
 
-use super::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult, VolumeMount};
+use super::backend::{
+    ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,
+    VolumeMount,
+};
 
 struct RunningExec {
     container_id: ContainerId,
@@ -612,6 +615,55 @@ impl ContainerBackend for BollardBackend {
         }
 
         Ok(output)
+    }
+
+    async fn inspect_container(&self, id: &ContainerId) -> Result<ContainerInspection> {
+        let info = self
+            .docker
+            .inspect_container(id, None)
+            .await
+            .context("failed to inspect container")?;
+
+        let host_config = info.host_config.as_ref();
+
+        let memory_limit = host_config
+            .and_then(|hc| hc.memory)
+            .and_then(|m| u64::try_from(m).ok())
+            .filter(|&m| m > 0);
+
+        let tmpfs = host_config
+            .and_then(|hc| hc.tmpfs.clone())
+            .unwrap_or_default();
+
+        let network_mode = host_config.and_then(|hc| hc.network_mode.clone());
+
+        Ok(ContainerInspection {
+            memory_limit,
+            tmpfs,
+            network_mode,
+        })
+    }
+
+    async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+        let images = self
+            .docker
+            .list_images(Some(bollard::image::ListImagesOptions::<String> {
+                all: true,
+                ..Default::default()
+            }))
+            .await
+            .context("failed to list images")?;
+
+        let result = images
+            .into_iter()
+            .map(|img| ImageInfo {
+                id: img.id,
+                tags: img.repo_tags,
+                size: u64::try_from(img.size).unwrap_or(0),
+            })
+            .collect();
+
+        Ok(result)
     }
 }
 

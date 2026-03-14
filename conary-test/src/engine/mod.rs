@@ -1,6 +1,7 @@
 // conary-test/src/engine/mod.rs
 
 pub mod assertions;
+pub mod container_coordinator;
 pub mod executor;
 pub mod mock_server;
 pub mod qemu;
@@ -9,6 +10,7 @@ pub mod suite;
 pub mod variables;
 
 pub use assertions::evaluate_assertion;
+pub use container_coordinator::ContainerCoordinator;
 pub use runner::TestRunner;
 pub use suite::{RunStatus, TestResult, TestStatus, TestSuite};
 
