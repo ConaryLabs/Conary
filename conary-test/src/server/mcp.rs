@@ -7,10 +7,16 @@
 //!
 //! The MCP endpoint is mounted at `/mcp` on the HTTP server.
 
+use std::future::Future;
+
 use conary_core::mcp::to_json_text;
 use rmcp::{
-    ErrorData as McpError, ServerHandler, handler::server::tool::ToolRouter,
-    handler::server::wrapper::Parameters, model::*, tool, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler,
+    handler::server::tool::{ToolCallContext, ToolRouter},
+    handler::server::wrapper::Parameters,
+    model::*,
+    service::RequestContext,
+    tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -365,6 +371,30 @@ impl ServerHandler for TestMcpServer {
              start and inspect test runs, query individual test results, \
              and list configured distros.",
         )
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListToolsResult {
+            tools: self.tool_router.list_all(),
+            ..Default::default()
+        }))
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        let tool_context = ToolCallContext::new(self, request, context);
+        async move { self.tool_router.call(tool_context).await }
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router.get(name).cloned()
     }
 }
 
