@@ -6,6 +6,7 @@ use crate::report::stream::TestEvent;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::Mutex;
 
 /// Metadata for a run that persists alongside the TestSuite.
 #[derive(Debug, Clone)]
@@ -35,6 +36,9 @@ pub struct AppState {
     /// Per-run cancellation flags. Setting a flag to `true` signals the
     /// runner to stop executing tests for that run.
     pub cancellation_flags: Arc<DashMap<u64, Arc<AtomicBool>>>,
+    /// Per-distro image build locks. Ensures only one image build runs at a
+    /// time per distro, with the built tag cached for subsequent runs.
+    pub image_locks: Arc<DashMap<String, Arc<Mutex<Option<String>>>>>,
     /// Broadcast channel for live test events (SSE streaming).
     pub event_tx: tokio::sync::broadcast::Sender<TestEvent>,
 }
@@ -47,6 +51,7 @@ impl AppState {
             manifest_dir,
             runs: Arc::new(DashMap::new()),
             run_meta: Arc::new(DashMap::new()),
+            image_locks: Arc::new(DashMap::new()),
             cancellation_flags: Arc::new(DashMap::new()),
             event_tx,
         }
@@ -73,6 +78,14 @@ impl AppState {
     /// Remove the cancellation flag for a completed run.
     pub fn remove_cancel_flag(&self, run_id: u64) {
         self.cancellation_flags.remove(&run_id);
+    }
+
+    /// Get the per-distro image build lock. Creates one if it doesn't exist.
+    pub fn image_lock(&self, distro: &str) -> Arc<Mutex<Option<String>>> {
+        self.image_locks
+            .entry(distro.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone()
     }
 
     pub fn next_run_id() -> u64 {
