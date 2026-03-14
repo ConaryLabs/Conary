@@ -26,6 +26,9 @@ hex.workspace = true
 futures.workspace = true
 tar.workspace = true
 
+# Concurrency
+dashmap = "6"
+
 # Container management
 bollard = "0.18"
 bytes = "1"

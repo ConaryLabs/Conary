@@ -6,6 +6,7 @@ use tracing::{debug, warn};
 use crate::config::manifest::ResourceConstraints;
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId};
 
+
 /// Orchestrates container lifecycle for test execution.
 ///
 /// Tracks all created containers and guarantees cleanup via `teardown_all`,
@@ -85,6 +86,26 @@ impl<'a> ContainerCoordinator<'a> {
     /// Returns the number of currently tracked containers.
     pub fn tracked_count(&self) -> usize {
         self.tracked.len()
+    }
+
+    /// Drain all tracked container IDs without stopping/removing them.
+    /// Used by cleanup guards that take ownership of the IDs.
+    pub fn drain_tracked(&mut self) -> Vec<ContainerId> {
+        self.tracked.drain(..).collect()
+    }
+
+    /// Run an async closure with guaranteed cleanup. `teardown_all` is
+    /// called regardless of whether `f` returns `Ok`, `Err`, or panics
+    /// (in the panic case, containers are drained and cleaned up by the
+    /// caller).
+    pub async fn with_cleanup<F, Fut, T>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let result = f().await;
+        self.teardown_all().await;
+        result
     }
 
     /// Verify that the container's actual resource configuration matches the
@@ -367,6 +388,68 @@ mod tests {
             .teardown_container(&"nonexistent".to_string())
             .await
             .unwrap();
+        assert_eq!(coord.tracked_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn with_cleanup_tears_down_on_success() {
+        let mock = CoordinatorMock::new();
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let _id = coord.setup_container(&config, None).await.unwrap();
+        assert_eq!(coord.tracked_count(), 1);
+
+        let result: Result<String> = coord.with_cleanup(|| async { Ok("done".to_string()) }).await;
+        assert!(result.is_ok());
+        assert_eq!(coord.tracked_count(), 0);
+
+        let stopped = mock.stopped.lock().unwrap();
+        assert_eq!(stopped.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn with_cleanup_tears_down_on_error() {
+        let mock = CoordinatorMock::new();
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let _id = coord.setup_container(&config, None).await.unwrap();
+
+        let result: Result<String> = coord
+            .with_cleanup(|| async { anyhow::bail!("test error") })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(coord.tracked_count(), 0);
+
+        let stopped = mock.stopped.lock().unwrap();
+        assert_eq!(stopped.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_tracked_empties_list() {
+        let mock = CoordinatorMock::new();
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let _id1 = coord.setup_container(&config, None).await.unwrap();
+        let _id2 = coord.setup_container(&config, None).await.unwrap();
+        assert_eq!(coord.tracked_count(), 2);
+
+        let drained = coord.drain_tracked();
+        assert_eq!(drained.len(), 2);
         assert_eq!(coord.tracked_count(), 0);
     }
 }

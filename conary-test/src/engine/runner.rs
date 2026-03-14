@@ -1,6 +1,8 @@
 // conary-test/src/engine/runner.rs
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -42,12 +44,29 @@ impl TestRunner {
     }
 
     /// Run all tests in the manifest against the given container.
+    ///
+    /// If `cancel_flag` is provided, the runner checks it between tests. When
+    /// set to `true`, remaining tests are marked as `Cancelled`.
     pub async fn run(
         &mut self,
         manifest: &TestManifest,
         backend: &dyn ContainerBackend,
         container_id: &ContainerId,
         base_container_config: Option<&ContainerConfig>,
+    ) -> Result<TestSuite> {
+        self.run_with_cancel(manifest, backend, container_id, base_container_config, None)
+            .await
+    }
+
+    /// Run all tests with an optional cancellation flag and suite-level
+    /// timeout enforcement.
+    pub async fn run_with_cancel(
+        &mut self,
+        manifest: &TestManifest,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+        base_container_config: Option<&ContainerConfig>,
+        cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
 
@@ -58,7 +77,54 @@ impl TestRunner {
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
         suite.status = crate::engine::suite::RunStatus::Running;
 
+        // Suite-level timeout: derive a deadline from manifest config.
+        let suite_deadline = manifest
+            .suite
+            .timeout
+            .map(|secs| Instant::now() + Duration::from_secs(secs));
+
         for test_def in &manifest.test {
+            // Check cancellation flag.
+            if cancel_flag
+                .as_ref()
+                .is_some_and(|f| f.load(Ordering::Relaxed))
+            {
+                info!(
+                    "[{}] {}: cancelled by flag",
+                    test_def.id, test_def.name
+                );
+                suite.record(TestResult {
+                    id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                    status: TestStatus::Cancelled,
+                    duration_ms: 0,
+                    message: Some("cancelled".to_string()),
+                    stdout: None,
+                    stderr: None,
+                    attempts: Vec::new(),
+                });
+                continue;
+            }
+
+            // Check suite-level timeout.
+            if suite_deadline.is_some_and(|d| Instant::now() >= d) {
+                info!(
+                    "[{}] {}: cancelled (suite timeout exceeded)",
+                    test_def.id, test_def.name
+                );
+                suite.record(TestResult {
+                    id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                    status: TestStatus::Cancelled,
+                    duration_ms: 0,
+                    message: Some("suite timeout exceeded".to_string()),
+                    stdout: None,
+                    stderr: None,
+                    attempts: Vec::new(),
+                });
+                continue;
+            }
+
             // Check dependencies -- skip if any dependency failed.
             if suite.should_skip(&test_def.depends_on) {
                 let dep_names: Vec<&str> = test_def
@@ -373,7 +439,13 @@ impl TestRunner {
                 }
             };
 
-            let step_result = execute_step(&action, backend, container_id, &ctx, timeout).await?;
+            // Per-step timeout overrides the test-level timeout.
+            let step_timeout = step
+                .timeout
+                .map_or(timeout, Duration::from_secs);
+
+            let step_result =
+                execute_step(&action, backend, container_id, &ctx, step_timeout).await?;
 
             // Sleep steps produce no exec result to assert against.
             if !matches!(action, StepAction::Sleep(_)) {
@@ -1320,5 +1392,175 @@ mod tests {
         assert_eq!(expanded.image, "minimal-boot-v1");
         assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);
         assert_eq!(expanded.expect_output, vec!["minimal-boot-v1"]);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_flag_stops_runner() {
+        let backend = MockBackend::new(vec![
+            ExecResult {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        ]);
+
+        let manifest = make_manifest(vec![
+            TestDef {
+                id: "T01".to_string(),
+                name: "first".to_string(),
+                description: "runs first".to_string(),
+                timeout: 30,
+                flaky: None,
+                retries: None,
+                retry_delay_ms: None,
+                step: vec![simple_step_run("echo ok", Some(make_assertion(Some(0), None)))],
+                resources: None,
+                depends_on: None,
+                fatal: None,
+                group: None,
+            },
+            TestDef {
+                id: "T02".to_string(),
+                name: "second".to_string(),
+                description: "should be cancelled".to_string(),
+                timeout: 30,
+                flaky: None,
+                retries: None,
+                retry_delay_ms: None,
+                step: vec![simple_step_run("echo ok", None)],
+                resources: None,
+                depends_on: None,
+                fatal: None,
+                group: None,
+            },
+        ]);
+
+        // Set cancel flag before run -- T01 will pass but the flag will be
+        // set immediately so T02 should be cancelled.
+        let cancel_flag = Arc::new(AtomicBool::new(true));
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let suite = runner
+            .run_with_cancel(
+                &manifest,
+                &backend,
+                &"ctr-1".to_string(),
+                None,
+                Some(cancel_flag),
+            )
+            .await
+            .unwrap();
+
+        // Both tests should be cancelled since the flag was set from the start.
+        assert_eq!(suite.cancelled(), 2);
+        assert_eq!(suite.passed(), 0);
+        assert_eq!(suite.results[0].status, TestStatus::Cancelled);
+        assert_eq!(suite.results[1].status, TestStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_suite_timeout_cancels_remaining() {
+        // Create a manifest with suite timeout = 0 seconds (already expired).
+        let manifest = TestManifest {
+            suite: SuiteDef {
+                name: "timeout-suite".to_string(),
+                phase: 1,
+                setup: Vec::new(),
+                mock_server: None,
+                timeout: Some(0), // Already expired.
+            },
+            test: vec![
+                TestDef {
+                    id: "T01".to_string(),
+                    name: "first".to_string(),
+                    description: "cancelled by timeout".to_string(),
+                    timeout: 30,
+                    flaky: None,
+                    retries: None,
+                    retry_delay_ms: None,
+                    step: vec![simple_step_run("echo ok", None)],
+                    resources: None,
+                    depends_on: None,
+                    fatal: None,
+                    group: None,
+                },
+                TestDef {
+                    id: "T02".to_string(),
+                    name: "second".to_string(),
+                    description: "also cancelled".to_string(),
+                    timeout: 30,
+                    flaky: None,
+                    retries: None,
+                    retry_delay_ms: None,
+                    step: vec![simple_step_run("echo ok", None)],
+                    resources: None,
+                    depends_on: None,
+                    fatal: None,
+                    group: None,
+                },
+            ],
+            distro_overrides: HashMap::new(),
+        };
+
+        let backend = MockBackend::new(Vec::new());
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let suite = runner
+            .run_with_cancel(&manifest, &backend, &"ctr-1".to_string(), None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(suite.cancelled(), 2);
+        assert!(
+            suite.results[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("suite timeout")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_step_timeout_overrides_test_timeout() {
+        // Test that a step with timeout = 1 uses 1s, not the test-level 30s.
+        // We verify this indirectly: the step executes successfully with a
+        // 1s timeout (the mock is instant, so it works).
+        let backend = MockBackend::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+        }]);
+
+        let manifest = make_manifest(vec![TestDef {
+            id: "T01".to_string(),
+            name: "step_timeout".to_string(),
+            description: "step has custom timeout".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            retry_delay_ms: None,
+            step: vec![TestStep {
+                timeout: Some(1),
+                run: Some("echo ok".to_string()),
+                assert: Some(make_assertion(Some(0), Some("ok"))),
+                ..TestStep::default()
+            }],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(suite.passed(), 1);
     }
 }

@@ -2,9 +2,10 @@
 
 use crate::config::distro::GlobalConfig;
 use crate::engine::suite::TestSuite;
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -17,6 +18,9 @@ pub struct AppState {
     pub config: GlobalConfig,
     pub manifest_dir: String,
     pub runs: Arc<RwLock<HashMap<u64, TestSuite>>>,
+    /// Per-run cancellation flags. Setting a flag to `true` signals the
+    /// runner to stop executing tests for that run.
+    pub cancellation_flags: Arc<DashMap<u64, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -25,7 +29,31 @@ impl AppState {
             config,
             manifest_dir,
             runs: Arc::new(RwLock::new(HashMap::new())),
+            cancellation_flags: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Register a cancellation flag for a run. Returns the flag for the
+    /// caller to pass into the runner.
+    pub fn register_cancel_flag(&self, run_id: u64) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.cancellation_flags.insert(run_id, Arc::clone(&flag));
+        flag
+    }
+
+    /// Signal cancellation for a run. Returns `true` if the run was found.
+    pub fn cancel_run(&self, run_id: u64) -> bool {
+        if let Some(flag) = self.cancellation_flags.get(&run_id) {
+            flag.store(true, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove the cancellation flag for a completed run.
+    pub fn remove_cancel_flag(&self, run_id: u64) {
+        self.cancellation_flags.remove(&run_id);
     }
 
     pub fn next_run_id() -> u64 {
@@ -70,6 +98,38 @@ mod tests {
         );
         let runs = state.runs.try_read().unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_register_and_cancel_flag() {
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
+
+        let flag = state.register_cancel_flag(42);
+        assert!(!flag.load(Ordering::Relaxed));
+
+        // Cancel the run.
+        assert!(state.cancel_run(42));
+        assert!(flag.load(Ordering::Relaxed));
+
+        // Cancel a non-existent run returns false.
+        assert!(!state.cancel_run(999));
+    }
+
+    #[test]
+    fn test_remove_cancel_flag() {
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
+
+        let _flag = state.register_cancel_flag(42);
+        assert!(state.cancellation_flags.contains_key(&42));
+
+        state.remove_cancel_flag(42);
+        assert!(!state.cancellation_flags.contains_key(&42));
     }
 
     #[tokio::test]
