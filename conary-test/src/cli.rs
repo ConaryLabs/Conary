@@ -42,6 +42,10 @@ enum Commands {
         /// If neither is set, the server runs without auth.
         #[arg(long)]
         token: Option<String>,
+        /// Maximum number of test runs that execute concurrently. Additional
+        /// runs queue until a slot becomes available.
+        #[arg(long, default_value = "2")]
+        max_concurrent: usize,
     },
 
     /// List available test suites
@@ -364,7 +368,11 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Serve { port, token } => {
+        Commands::Serve {
+            port,
+            token,
+            max_concurrent,
+        } => {
             let token = token.or_else(|| std::env::var("CONARY_TEST_TOKEN").ok());
             if token.is_some() {
                 tracing::info!("Bearer token authentication enabled");
@@ -372,8 +380,12 @@ fn main() -> Result<()> {
                 tracing::warn!("No authentication token configured -- server is open");
             }
             let config = load_config()?;
-            let state = conary_test::server::AppState::new(config, manifest_dir());
-            tracing::info!(%port, "Starting server");
+            let state = conary_test::server::AppState::with_max_concurrent(
+                config,
+                manifest_dir(),
+                max_concurrent,
+            );
+            tracing::info!(%port, max_concurrent, "Starting server");
             tokio::runtime::Runtime::new()?
                 .block_on(conary_test::server::run_server(state, port, token))
         }

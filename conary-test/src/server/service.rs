@@ -128,6 +128,15 @@ pub fn spawn_run(state: &AppState, run_id: u64, suite_name: &str, distro: &str, 
     let distro = distro.to_string();
 
     tokio::spawn(async move {
+        // Wait for a permit -- limits concurrent test execution to prevent
+        // resource exhaustion on memory-constrained hosts.
+        let _permit = state
+            .run_semaphore
+            .acquire()
+            .await
+            .expect("run semaphore closed");
+        tracing::info!(run_id, "acquired run permit");
+
         if let Err(e) = execute_run(&state, run_id, &suite_name, &distro, phase).await {
             tracing::error!(run_id, error = %e, "test run failed");
             if let Some(mut entry) = state.runs.get_mut(&run_id) {
@@ -135,6 +144,7 @@ pub fn spawn_run(state: &AppState, run_id: u64, suite_name: &str, distro: &str, 
             }
             state.remove_cancel_flag(run_id);
         }
+        // _permit drops here, releasing the semaphore slot.
     });
 }
 
