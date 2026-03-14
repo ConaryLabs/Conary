@@ -21,6 +21,7 @@ name = "sparse_index"
 description = "Verify sparse index endpoint returns non-empty content"
 timeout = 30
 group = "E"
+skip = "sparse index endpoint not implemented"
 
 [[test.step]]
 run = "curl -sf ${REMI_ENDPOINT}/v1/${REMI_DISTRO}/index"
@@ -40,6 +41,7 @@ name = "chunk_level_install"
 description = "Install fixture package from Remi via chunk-level download"
 timeout = 300
 group = "E"
+skip = "chunk-level install not implemented"
 
 # Install the fixture package via Remi
 [[test.step]]

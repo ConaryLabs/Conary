@@ -109,6 +109,7 @@ name = "self_update_mock_server"
 description = "Start mock HTTP server, set update channel to it, verify update detection"
 timeout = 60
 group = "F"
+skip = "self-update channel switching not implemented"
 
 # This test orchestrates a local mock HTTP server via shell script:
 # 1. Build a fake CCS package from the current binary

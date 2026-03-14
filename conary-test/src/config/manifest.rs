@@ -50,6 +50,9 @@ pub struct TestDef {
     pub fatal: Option<bool>,
     #[serde(default)]
     pub group: Option<String>,
+    /// When set, the test is skipped with this reason string.
+    #[serde(default)]
+    pub skip: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

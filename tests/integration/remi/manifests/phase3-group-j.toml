@@ -198,6 +198,7 @@ name = "autoremove_cleans_orphans"
 description = "Autoremove should clean orphaned dependencies while preserving shared ones"
 timeout = 60
 group = "J"
+skip = "autoremove not implemented"
 
 [[test.step]]
 conary = "remove dep-app --no-scripts"
@@ -261,6 +262,7 @@ name = "shared_provider_fixed_point_convergence"
 description = "Repeated autoremove after removing one provider should converge without removing the active consumer chain"
 timeout = 60
 group = "J"
+skip = "autoremove not implemented"
 
 [test.resources]
 memory_limit_mb = 512

@@ -144,6 +144,23 @@ impl TestRunner {
                 continue;
             }
 
+            // Check manifest-level skip.
+            if let Some(reason) = &test_def.skip {
+                let msg = format!("skipped: {reason}");
+                info!("[{}] {}: {msg}", test_def.id, test_def.name);
+                suite.record(TestResult {
+                    id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                    status: TestStatus::Skipped,
+                    duration_ms: 0,
+                    message: Some(msg),
+                    stdout: None,
+                    stderr: None,
+                    attempts: Vec::new(),
+                });
+                continue;
+            }
+
             // Check dependencies -- skip if any dependency failed.
             if suite.should_skip(&test_def.depends_on) {
                 let dep_names: Vec<&str> = test_def
@@ -913,6 +930,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -950,6 +968,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -996,6 +1015,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
+            skip: None,
             },
             TestDef {
                 id: "T02".to_string(),
@@ -1010,6 +1030,7 @@ mod tests {
                 depends_on: Some(vec!["T01".to_string()]),
                 fatal: None,
                 group: None,
+            skip: None,
             },
         ]);
 
@@ -1060,6 +1081,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -1126,6 +1148,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -1181,6 +1204,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -1263,6 +1287,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
+            skip: None,
             }],
             distro_overrides: HashMap::new(),
         };
@@ -1429,6 +1454,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -1511,6 +1537,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
+            skip: None,
             },
             TestDef {
                 id: "T02".to_string(),
@@ -1525,6 +1552,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
+            skip: None,
             },
         ]);
 
@@ -1577,6 +1605,7 @@ mod tests {
                     depends_on: None,
                     fatal: None,
                     group: None,
+            skip: None,
                 },
                 TestDef {
                     id: "T02".to_string(),
@@ -1591,6 +1620,7 @@ mod tests {
                     depends_on: None,
                     fatal: None,
                     group: None,
+            skip: None,
                 },
             ],
             distro_overrides: HashMap::new(),
@@ -1642,6 +1672,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
@@ -1684,6 +1715,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let manifest_b = make_manifest(vec![TestDef {
@@ -1702,6 +1734,7 @@ mod tests {
             depends_on: None,
             fatal: None,
             group: None,
+            skip: None,
         }]);
 
         let (suite_a, suite_b) = tokio::join!(
