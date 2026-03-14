@@ -5,6 +5,7 @@ pub mod mock_server;
 pub mod qemu;
 pub mod runner;
 pub mod suite;
+pub mod variables;
 
 pub use assertions::evaluate_assertion;
 pub use runner::TestRunner;
