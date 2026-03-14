@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 server = ["dep:async-trait", "dep:futures"]
+mcp = ["dep:rmcp"]
 
 [dependencies]
 # Database
@@ -134,3 +135,6 @@ seccompiler = "0.4"
 # Server-gated deps (async chunk fetcher)
 async-trait = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+
+# MCP helpers (optional, feature-gated)
+rmcp = { workspace = true, features = ["server"], optional = true }

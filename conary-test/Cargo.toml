@@ -6,6 +6,8 @@ rust-version = "1.94"
 description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"
 
 [dependencies]
+conary-core = { path = "../conary-core", features = ["mcp"] }
+
 # Workspace shared
 anyhow.workspace = true
 thiserror.workspace = true

@@ -7,6 +7,7 @@
 //!
 //! The MCP endpoint is mounted at `/mcp` on the HTTP server.
 
+use conary_core::mcp::to_json_text;
 use rmcp::{
     ErrorData as McpError, ServerHandler, handler::server::tool::ToolRouter,
     handler::server::wrapper::Parameters, model::*, tool, tool_router,
@@ -17,12 +18,6 @@ use serde::Deserialize;
 use crate::report::json::to_json_report;
 use crate::server::service;
 use crate::server::state::AppState;
-
-/// Serialize a value to pretty JSON, mapping failures to [`McpError`].
-fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
-    serde_json::to_string_pretty(value)
-        .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
-}
 
 /// MCP server instance that wraps conary-test operations as tools.
 ///
@@ -216,16 +211,13 @@ impl TestMcpServer {
 
 impl ServerHandler for TestMcpServer {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                "conary-test-mcp",
-                env!("CARGO_PKG_VERSION"),
-            ))
-            .with_instructions(
-                "Conary test infrastructure MCP server -- list test suites, \
-                 start and inspect test runs, query individual test results, \
-                 and list configured distros.",
-            )
+        conary_core::mcp::server_info(
+            "conary-test-mcp",
+            env!("CARGO_PKG_VERSION"),
+            "Conary test infrastructure MCP server -- list test suites, \
+             start and inspect test runs, query individual test results, \
+             and list configured distros.",
+        )
     }
 }
 
