@@ -78,7 +78,7 @@ pub fn list_suites(state: &AppState) -> Result<Vec<SuiteInfo>> {
 }
 
 /// Start a new test run after validating the distro name.
-pub async fn start_run(
+pub fn start_run(
     state: &AppState,
     suite_name: &str,
     distro: &str,
@@ -90,7 +90,7 @@ pub async fn start_run(
 
     let run_id = AppState::next_run_id();
     let suite = TestSuite::new(suite_name, phase);
-    state.insert_run(run_id, suite).await;
+    state.insert_run(run_id, suite);
 
     Ok(StartRunResult {
         run_id,
@@ -101,28 +101,31 @@ pub async fn start_run(
 }
 
 /// Retrieve a run's full report as a JSON value.
-pub async fn get_run(state: &AppState, run_id: u64) -> Result<serde_json::Value> {
-    let runs = state.runs.read().await;
-    match runs.get(&run_id) {
-        Some(suite) => to_json_value(suite),
+pub fn get_run(state: &AppState, run_id: u64) -> Result<serde_json::Value> {
+    match state.runs.get(&run_id) {
+        Some(entry) => to_json_value(&entry),
         None => bail!("run {run_id} not found"),
     }
 }
 
 /// List runs with summary information, sorted by run ID descending.
-pub async fn list_runs(state: &AppState, limit: usize) -> Vec<RunSummary> {
-    let runs = state.runs.read().await;
-    let mut summaries: Vec<RunSummary> = runs
+pub fn list_runs(state: &AppState, limit: usize) -> Vec<RunSummary> {
+    let mut summaries: Vec<RunSummary> = state
+        .runs
         .iter()
-        .map(|(&id, suite)| RunSummary {
-            run_id: id,
-            suite: suite.name.clone(),
-            phase: suite.phase,
-            status: suite.status.as_str().to_string(),
-            total: suite.total(),
-            passed: suite.passed(),
-            failed: suite.failed(),
-            skipped: suite.skipped(),
+        .map(|entry| {
+            let id = *entry.key();
+            let suite = entry.value();
+            RunSummary {
+                run_id: id,
+                suite: suite.name.clone(),
+                phase: suite.phase,
+                status: suite.status.as_str().to_string(),
+                total: suite.total(),
+                passed: suite.passed(),
+                failed: suite.failed(),
+                skipped: suite.skipped(),
+            }
         })
         .collect();
 
@@ -153,35 +156,34 @@ mod tests {
     use super::*;
     use crate::test_fixtures;
 
-    #[tokio::test]
-    async fn test_start_run_unknown_distro() {
+    #[test]
+    fn test_start_run_unknown_distro() {
         let state = test_fixtures::test_app_state();
-        let result = start_run(&state, "smoke", "nonexistent", 1).await;
+        let result = start_run(&state, "smoke", "nonexistent", 1);
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_start_run_valid_distro() {
+    #[test]
+    fn test_start_run_valid_distro() {
         let state = test_fixtures::test_app_state();
-        let result = start_run(&state, "smoke", "fedora43", 1).await.unwrap();
+        let result = start_run(&state, "smoke", "fedora43", 1).unwrap();
         assert_eq!(result.suite, "smoke");
         assert_eq!(result.distro, "fedora43");
 
-        let runs = state.runs.read().await;
-        assert!(runs.contains_key(&result.run_id));
+        assert!(state.runs.contains_key(&result.run_id));
     }
 
-    #[tokio::test]
-    async fn test_get_run_not_found() {
+    #[test]
+    fn test_get_run_not_found() {
         let state = test_fixtures::test_app_state();
-        let result = get_run(&state, 9999).await;
+        let result = get_run(&state, 9999);
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_list_runs_empty() {
+    #[test]
+    fn test_list_runs_empty() {
         let state = test_fixtures::test_app_state();
-        let runs = list_runs(&state, 20).await;
+        let runs = list_runs(&state, 20);
         assert!(runs.is_empty());
     }
 
