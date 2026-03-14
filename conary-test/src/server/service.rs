@@ -254,7 +254,7 @@ async fn execute_run(
 async fn initialize_container(
     state: &AppState,
     distro: &str,
-    phase: u32,
+    _phase: u32,
     backend: &dyn ContainerBackend,
     container_id: &crate::container::ContainerId,
 ) -> Result<()> {
@@ -299,7 +299,7 @@ async fn initialize_container(
             .await?;
     }
 
-    if phase > 1 {
+    {
         let distro_config = config
             .distros
             .get(distro)
