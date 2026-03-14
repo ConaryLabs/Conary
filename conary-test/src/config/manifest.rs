@@ -21,6 +21,10 @@ pub struct SuiteDef {
     pub setup: Vec<TestStep>,
     #[serde(default)]
     pub mock_server: Option<MockServerConfig>,
+    /// Suite-level timeout in seconds. If set, the entire suite must
+    /// complete within this duration or remaining tests are cancelled.
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -33,6 +37,9 @@ pub struct TestDef {
     pub flaky: Option<bool>,
     #[serde(default)]
     pub retries: Option<u32>,
+    /// Delay in milliseconds between retry attempts (default 0).
+    #[serde(default)]
+    pub retry_delay_ms: Option<u64>,
     #[serde(default)]
     pub step: Vec<TestStep>,
     #[serde(default)]
@@ -47,6 +54,10 @@ pub struct TestDef {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TestStep {
+    /// Per-step timeout override in seconds. Falls back to the test-level
+    /// timeout when absent.
+    #[serde(default)]
+    pub timeout: Option<u64>,
     #[serde(default)]
     pub run: Option<String>,
     #[serde(default)]
@@ -389,6 +400,111 @@ stdout_not_contains = "hello"
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("conflicting"));
         assert!(err.to_string().contains("T01"));
+    }
+
+    #[test]
+    fn test_retry_delay_ms_parses() {
+        let toml = r#"
+[suite]
+name = "retry-delay"
+phase = 1
+
+[[test]]
+id = "T01"
+name = "with_delay"
+description = "Has retry delay"
+timeout = 30
+flaky = true
+retries = 3
+retry_delay_ms = 500
+
+[[test.step]]
+run = "echo ok"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert_eq!(manifest.test[0].retry_delay_ms, Some(500));
+    }
+
+    #[test]
+    fn test_retry_delay_ms_defaults_to_none() {
+        let toml = r#"
+[suite]
+name = "no-delay"
+phase = 1
+
+[[test]]
+id = "T01"
+name = "no_delay"
+description = "No retry delay"
+timeout = 30
+
+[[test.step]]
+run = "echo ok"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.test[0].retry_delay_ms.is_none());
+    }
+
+    #[test]
+    fn test_suite_timeout_parses() {
+        let toml = r#"
+[suite]
+name = "timed"
+phase = 1
+timeout = 300
+
+[[test]]
+id = "T01"
+name = "test"
+description = "A test"
+timeout = 30
+
+[[test.step]]
+run = "echo ok"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert_eq!(manifest.suite.timeout, Some(300));
+    }
+
+    #[test]
+    fn test_step_timeout_override_parses() {
+        let toml = r#"
+[suite]
+name = "step-timeout"
+phase = 1
+
+[[test]]
+id = "T01"
+name = "step_timeout"
+description = "Step with timeout"
+timeout = 30
+
+[[test.step]]
+timeout = 60
+run = "long-running-command"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert_eq!(manifest.test[0].step[0].timeout, Some(60));
+    }
+
+    #[test]
+    fn test_step_timeout_defaults_to_none() {
+        let toml = r#"
+[suite]
+name = "no-step-timeout"
+phase = 1
+
+[[test]]
+id = "T01"
+name = "default_step"
+description = "Step without timeout"
+timeout = 30
+
+[[test.step]]
+run = "echo ok"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.test[0].step[0].timeout.is_none());
     }
 
     #[test]
