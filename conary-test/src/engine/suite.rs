@@ -90,7 +90,7 @@ impl TestSuite {
     }
 
     pub fn record(&mut self, result: TestResult) {
-        if result.status == TestStatus::Failed {
+        if matches!(result.status, TestStatus::Failed | TestStatus::Skipped) {
             self.failed_ids.insert(result.id.clone());
         }
         self.results.push(result);
