@@ -67,6 +67,21 @@ Database schema is currently **v51** (50+ tables, version-gated migration blocks
 
 See `.claude/rules/` for detailed tool selection guides, architecture reference, and infrastructure/CI docs.
 
+## MCP Servers
+
+Two MCP servers are configured for direct infrastructure interaction:
+
+| Server | Endpoint | Purpose |
+|--------|----------|---------|
+| **remi-admin** | `packages.conary.io:8082/mcp` | Remi production server management |
+| **conary-test** | `forge.conarylabs.com:9090/mcp` | Test infrastructure on Forge |
+
+**remi-admin** tools: CI workflows (`ci_dispatch`, `ci_list_runs`, `ci_get_run`, `ci_get_logs`), mirror sync, token management, repo inspection, federation peers, audit log.
+
+**conary-test** tools: Start/monitor test runs (`start_run`, `get_run`, `list_runs`), inspect results (`get_test`, `get_test_logs`), rerun failures (`rerun_test`), manage images (`build_image`, `list_images`), cleanup containers.
+
+Use these MCP tools instead of SSH/curl for infrastructure operations. After a service restart on Forge, the MCP session goes stale -- restart Claude Code to reconnect.
+
 ## Doc Versioning
 
 When modifying files in `docs/`, add or update a YAML frontmatter header:
