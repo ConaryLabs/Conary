@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-14
-revision: 1
+revision: 2
 summary: Design for fixing 7 integration test failures and implementing capability policy engine
 ---
 
@@ -21,15 +21,21 @@ need attention:
 
 ### The `solve_removal()` Bug (6 of 7 failures)
 
-`conary-core/src/resolver/sat.rs:185-194` checks whether a dependency is
-satisfied by scanning installed solvables for a **name match**:
+`conary-core/src/resolver/sat.rs` lines 182-212 check whether a dependency is
+satisfied by scanning installed solvables for a **name match**. The bug appears
+in **both branches** of the satisfaction check:
+
+- **Lines 185-195** (dep NOT being removed): `alt.name == dep_name`
+- **Lines 197-207** (dep being removed): `alt.name == dep_name` with additional
+  `!remove_set.contains()` filter
 
 ```rust
 alt.name == dep_name  // Only checks package NAME, not provides
 ```
 
-Dependencies can be satisfied by **provides/capabilities** from
-differently-named packages. The code never queries `ProvideEntry`.
+Both branches must be patched. Dependencies can be satisfied by
+**provides/capabilities** from differently-named packages. The code never
+queries `ProvideEntry`.
 
 **Group J (T112, T114):** CCS packages depend on virtual capabilities. The
 provider package has a different name than the capability. Name-only matching
@@ -69,47 +75,61 @@ supported"`. Needs a real policy engine.
 
 **Location:** `conary-core/src/resolver/sat.rs`, `solve_removal()` function.
 
-Replace the inner satisfaction check (lines 182-211) to query provides instead
-of matching package names.
+Replace the inner satisfaction check (both branches at lines 185-195 and
+197-207) to query provides instead of matching package names.
+
+**Provides cache location:** Load the provides cache into `ConaryProvider`
+alongside installed packages (via `load_installed_packages()` or a new
+`load_installed_provides()` method). This keeps all DB access in the provider
+and maintains the existing pattern where `sat.rs` operates on in-memory data
+only. The cache is a `HashMap<String, Vec<(i64, Option<String>)>>` mapping
+capability name to `(trove_id, version)` pairs.
 
 **Algorithm:**
 
 ```
-At start of solve_removal():
-  Preload all provides into HashMap<String, Vec<(trove_id, version)>>
-  from ProvideEntry table (for performance, avoid per-dep DB queries)
+In ConaryProvider::load_installed_provides():
+  Query all ProvideEntry rows for installed troves
+  Build HashMap<capability_name, Vec<(trove_id, version)>>
+  Also index capability variations (via generate_capability_variations())
 
-For each dep (dep_name, constraint) of each installed package:
+In solve_removal(), for each dep (dep_name, constraint):
   1. If dep_name is being removed:
-     Query provides map for dep_name
+     Query provider's provides cache for dep_name
      Filter out providers whose trove is in the remove_set
      If any provider remains -> satisfied
   2. If dep_name is NOT being removed:
-     Query provides map for dep_name
+     Query provider's provides cache for dep_name
      If any provider exists -> satisfied
   3. Fall back to fuzzy matching (soname variations, cross-distro)
-     via ProvideEntry::generate_capability_variations()
+     via the pre-indexed capability variations
 ```
 
 This leverages existing fuzzy matching in `ProvideEntry` which handles sonames,
 cross-distro variations, case-insensitive matching, and paren-pattern matching.
 
-**Performance:** Preload provides into memory at the start rather than
-per-dependency DB queries. The provides table is bounded by installed package
-count, so memory impact is small.
+**Performance:** Preload provides into `ConaryProvider` at the start rather
+than per-dependency DB queries. On a fully adopted Fedora system, the provides
+table may contain 20,000-50,000 entries (sonames, file provides, virtual
+capabilities across 400+ packages). Each entry is a small string, so memory
+impact remains manageable.
 
-### 2. Verify/Fix Adopted Package Provides
+### 2. Verify Adopted Package Provides Granularity
 
-**Prerequisite check:** Query the DB on a test container after
-`system adopt --system` to verify adopted packages have provide entries.
+The adoption code paths (`system.rs:403-425` and `packages.rs:265-287`) do
+record provides via `ProvideEntry::new()` during `system adopt`. The install
+command's `mod.rs:1280-1295` records provides for packages installed via
+`--dep-mode takeover`. So provides data should exist.
 
-**If provides are missing:** Add provide recording to the adoption code path,
-importing from RPM metadata (sonames, file provides, virtual capabilities).
-This is the same data conary already parses during `repo sync` for repository
-packages.
+**The real risk is granularity mismatch**, not missing data. RPM provides
+strings like `"libc.so.6(GLIBC_2.34)(64bit)"` may not match dependency names
+like `"libc.so.6"` without fuzzy matching. The `solve_removal()` fix must use
+`generate_capability_variations()` to bridge this gap.
 
-**If provides are already recorded:** No change needed -- the `solve_removal()`
-fix alone handles everything.
+**Verification step:** After implementing the `solve_removal()` fix, run the
+group-m tests. If they still fail, inspect the provides and dependencies tables
+to identify granularity mismatches and tune the fuzzy matching accordingly.
+This step is likely unnecessary but serves as a safety net.
 
 ### 3. CCS Install `--reinstall` Flag
 
@@ -123,11 +143,21 @@ fix alone handles everything.
 
 Scope: ~15 lines across CLI definition and `ccs/install.rs`.
 
+**Note on T148:** T148 has two independent fix paths. The primary path is the
+`solve_removal()` fix (step 1), which makes the cleanup `remove` step succeed
+so the "already installed" check is never hit. If the `solve_removal()` fix
+does not fully resolve T148's cleanup (e.g., due to provides granularity
+mismatch), the `--reinstall` flag serves as a fallback -- the test manifest
+cleanup step could be updated to use `ccs install --reinstall` instead of
+relying on remove + reinstall.
+
 ### 4. Move T150 to QEMU Test Suite
 
 - Remove T150 from `phase3-group-n-container.toml`
-- Create `phase3-group-n-qemu.toml` using existing QEMU boot step support
-  (`conary-test/src/engine/qemu.rs`)
+- Move T150 into the existing `phase3-group-n-qemu.toml` (which already
+  contains T156-T159). T150 keeps its test ID.
+- Adapt T150 to use `qemu_boot` step type (matching the existing QEMU tests)
+  instead of `conary` and `run` steps
 - Test flow: boot QEMU VM from base image, install kernel package, verify
   `/boot/` and `/lib/modules/` contents
 - Fallback: if QEMU support isn't ready for full test execution, skip T150
@@ -135,8 +165,17 @@ Scope: ~15 lines across CLI definition and `ccs/install.rs`.
 
 ### 5. Capability Policy Engine
 
-**Architecture:** Three-tier policy model for install-time capability
-enforcement.
+**Architecture:** Three-tier policy model for install-time Linux capability
+(`CAP_*`) enforcement.
+
+**Relationship to existing module:** The existing `conary-core/src/capability/`
+module handles higher-level runtime capabilities (network ports, filesystem
+paths, syscall profiles) via `CapabilityDeclaration`. The policy engine here
+targets **Linux capabilities** (`CAP_NET_RAW`, `CAP_SYS_ADMIN`, etc.) declared
+in CCS manifests. These are distinct concepts: `CapabilityDeclaration` controls
+sandbox enforcement at runtime, while the policy engine gates installation
+based on privilege requirements. The CCS manifest's `capabilities` field maps
+to Linux `CAP_*` constants; the policy engine evaluates these at install time.
 
 **Policy tiers:**
 
@@ -184,7 +223,7 @@ After implementation, the following tests should pass:
 | T114 | OR dependency alternative not found | solve_removal provides check |
 | T142 | Takeover removal blocked | solve_removal + adopted provides |
 | T145 | Takeover removal blocked | solve_removal + adopted provides |
-| T148 | Cleanup fails then "already installed" | solve_removal (cleanup works) |
+| T148 | Cleanup fails then "already installed" | solve_removal (primary); --reinstall (fallback) |
 | T149 | Takeover removal blocked | solve_removal + adopted provides |
 | T150 | Container kernel deploy | QEMU migration |
 | T104 | Capability policy missing | Policy engine (prompt tier) |
