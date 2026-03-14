@@ -22,7 +22,7 @@ use crate::server::state::AppState;
 /// MCP server instance that wraps conary-test operations as tools.
 ///
 /// Each MCP session gets its own `TestMcpServer` clone, but they all share
-/// the same `AppState` (which contains `Arc<RwLock<...>>` for runs).
+/// the same `AppState` (which contains `DashMap` for runs).
 #[derive(Clone)]
 pub struct TestMcpServer {
     state: AppState,
@@ -112,7 +112,6 @@ impl TestMcpServer {
         Parameters(params): Parameters<StartRunParams>,
     ) -> Result<CallToolResult, McpError> {
         let result = service::start_run(&self.state, &params.suite, &params.distro, params.phase)
-            .await
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let value = serde_json::json!({
@@ -134,10 +133,9 @@ impl TestMcpServer {
     ) -> Result<CallToolResult, McpError> {
         // MCP get_run returns the full JSON report as text (not a Value),
         // so we use to_json_report here for the string representation.
-        let runs = self.state.runs.read().await;
-        match runs.get(&params.run_id) {
-            Some(suite) => {
-                let json_str = to_json_report(suite)
+        match self.state.runs.get(&params.run_id) {
+            Some(entry) => {
+                let json_str = to_json_report(&entry)
                     .map_err(|e| McpError::internal_error(format!("Report error: {e}"), None))?;
                 Ok(CallToolResult::success(vec![Content::text(json_str)]))
             }
@@ -159,7 +157,7 @@ impl TestMcpServer {
         Parameters(params): Parameters<ListRunsParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(20).min(100);
-        let summaries = service::list_runs(&self.state, limit).await;
+        let summaries = service::list_runs(&self.state, limit);
 
         let text = to_json_text(&summaries)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -171,12 +169,11 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<GetTestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let runs = self.state.runs.read().await;
-        let suite = runs.get(&params.run_id).ok_or_else(|| {
+        let entry = self.state.runs.get(&params.run_id).ok_or_else(|| {
             McpError::invalid_params(format!("Run {} not found", params.run_id), None)
         })?;
 
-        let test = suite
+        let test = entry
             .results
             .iter()
             .find(|r| r.id == params.test_id)

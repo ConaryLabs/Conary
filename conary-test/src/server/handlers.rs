@@ -33,7 +33,7 @@ pub async fn start_run(
     State(state): State<AppState>,
     Json(req): Json<StartRunRequest>,
 ) -> impl IntoResponse {
-    match service::start_run(&state, &req.suite, &req.distro, req.phase).await {
+    match service::start_run(&state, &req.suite, &req.distro, req.phase) {
         Ok(result) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
@@ -49,7 +49,7 @@ pub async fn start_run(
 }
 
 pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
-    let summaries = service::list_runs(&state, usize::MAX).await;
+    let summaries = service::list_runs(&state, usize::MAX);
     // HTTP handler sorts ascending by run_id for backwards compatibility.
     let mut summaries = summaries;
     summaries.sort_by_key(|s| s.run_id);
@@ -57,7 +57,7 @@ pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> impl IntoResponse {
-    match service::get_run(&state, id).await {
+    match service::get_run(&state, id) {
         Ok(value) => (StatusCode::OK, Json(value)),
         Err(e) => {
             let msg = e.to_string();
@@ -190,8 +190,7 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let runs = state.runs.read().await;
-        assert_eq!(runs.len(), 1);
+        assert_eq!(state.runs.len(), 1);
     }
 
     #[tokio::test]

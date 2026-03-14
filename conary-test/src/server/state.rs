@@ -4,10 +4,8 @@ use crate::config::distro::GlobalConfig;
 use crate::engine::suite::TestSuite;
 use crate::report::stream::TestEvent;
 use dashmap::DashMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::RwLock;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -21,7 +19,9 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 pub struct AppState {
     pub config: GlobalConfig,
     pub manifest_dir: String,
-    pub runs: Arc<RwLock<HashMap<u64, TestSuite>>>,
+    /// Concurrent map of run IDs to test suites. Replaces the previous
+    /// `Arc<RwLock<HashMap>>` with lock-free per-shard concurrency.
+    pub runs: Arc<DashMap<u64, TestSuite>>,
     /// Per-run cancellation flags. Setting a flag to `true` signals the
     /// runner to stop executing tests for that run.
     pub cancellation_flags: Arc<DashMap<u64, Arc<AtomicBool>>>,
@@ -35,7 +35,7 @@ impl AppState {
         Self {
             config,
             manifest_dir,
-            runs: Arc::new(RwLock::new(HashMap::new())),
+            runs: Arc::new(DashMap::new()),
             cancellation_flags: Arc::new(DashMap::new()),
             event_tx,
         }
@@ -70,19 +70,23 @@ impl AppState {
 
     /// Insert a new run, evicting the oldest entry (by `started_at`) if the
     /// map has reached `MAX_RUNS`.
-    pub async fn insert_run(&self, run_id: u64, suite: TestSuite) {
-        let mut runs = self.runs.write().await;
-        if runs.len() >= MAX_RUNS {
-            // Find the key with the earliest started_at timestamp.
-            if let Some(oldest_key) = runs
-                .iter()
-                .min_by_key(|(_, s)| s.started_at)
-                .map(|(&k, _)| k)
-            {
-                runs.remove(&oldest_key);
-            }
+    pub fn insert_run(&self, run_id: u64, suite: TestSuite) {
+        if self.runs.len() >= MAX_RUNS {
+            self.evict_oldest_run();
         }
-        runs.insert(run_id, suite);
+        self.runs.insert(run_id, suite);
+    }
+
+    /// Remove the run with the earliest `started_at` timestamp.
+    fn evict_oldest_run(&self) {
+        let oldest_key = self
+            .runs
+            .iter()
+            .min_by_key(|entry| entry.value().started_at)
+            .map(|entry| *entry.key());
+        if let Some(key) = oldest_key {
+            self.runs.remove(&key);
+        }
     }
 
     /// Emit a test event on the broadcast channel. Silently ignores
@@ -110,8 +114,7 @@ mod tests {
             test_fixtures::test_global_config(),
             "/tmp/manifests".to_string(),
         );
-        let runs = state.runs.try_read().unwrap();
-        assert!(runs.is_empty());
+        assert!(state.runs.is_empty());
     }
 
     #[test]
@@ -146,8 +149,8 @@ mod tests {
         assert!(!state.cancellation_flags.contains_key(&42));
     }
 
-    #[tokio::test]
-    async fn test_eviction_removes_oldest_run() {
+    #[test]
+    fn test_eviction_removes_oldest_run() {
         let state = AppState::new(
             test_fixtures::test_global_config(),
             "/tmp/manifests".to_string(),
@@ -157,15 +160,14 @@ mod tests {
         for i in 0..=MAX_RUNS {
             let id = (i + 1) as u64;
             let suite = TestSuite::new(&format!("suite-{i}"), 1);
-            state.insert_run(id, suite).await;
+            state.insert_run(id, suite);
         }
 
-        let runs = state.runs.read().await;
-        assert_eq!(runs.len(), MAX_RUNS);
+        assert_eq!(state.runs.len(), MAX_RUNS);
         // The first inserted run (id=1) should have been evicted.
-        assert!(!runs.contains_key(&1));
+        assert!(!state.runs.contains_key(&1));
         // The latest run should still be present.
-        assert!(runs.contains_key(&(MAX_RUNS as u64 + 1)));
+        assert!(state.runs.contains_key(&(MAX_RUNS as u64 + 1)));
     }
 
     #[test]
@@ -202,5 +204,25 @@ mod tests {
             failed: 0,
             skipped: 0,
         });
+    }
+
+    #[test]
+    fn dashmap_concurrent_access() {
+        let state = AppState::new(
+            test_fixtures::test_global_config(),
+            "/tmp/manifests".to_string(),
+        );
+
+        // Insert and read concurrently (simulated sequentially in a unit test).
+        state.insert_run(1, TestSuite::new("suite-a", 1));
+        state.insert_run(2, TestSuite::new("suite-b", 2));
+
+        assert_eq!(state.runs.len(), 2);
+        assert!(state.runs.get(&1).is_some());
+        assert!(state.runs.get(&2).is_some());
+        assert_eq!(
+            state.runs.get(&1).unwrap().name,
+            "suite-a"
+        );
     }
 }
