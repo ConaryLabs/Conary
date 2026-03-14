@@ -4,7 +4,7 @@
 //! Handlers and MCP tools are thin wrappers that delegate to these
 //! functions, converting the results into their respective response types.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::config::load_manifest;
@@ -28,6 +28,14 @@ pub struct SuiteInfo {
 pub struct StartRunResult {
     pub run_id: u64,
     pub suite: String,
+    pub distro: String,
+    pub phase: u32,
+}
+
+#[derive(Debug)]
+pub struct RerunResult {
+    pub run_id: u64,
+    pub suite_name: String,
     pub distro: String,
     pub phase: u32,
 }
@@ -92,6 +100,14 @@ pub fn start_run(
     let run_id = AppState::next_run_id();
     let suite = TestSuite::new(suite_name, phase);
     state.insert_run(run_id, suite);
+    state.run_meta.insert(
+        run_id,
+        crate::server::state::RunMeta {
+            suite_name: suite_name.to_string(),
+            distro: distro.to_string(),
+            phase,
+        },
+    );
 
     Ok(StartRunResult {
         run_id,
@@ -99,6 +115,192 @@ pub fn start_run(
         distro: distro.to_string(),
         phase,
     })
+}
+
+/// Spawn a background task that actually executes a test run.
+///
+/// This handles the full lifecycle: build image, create container,
+/// initialize conary state, load manifest, run tests, update state,
+/// and clean up the container.
+pub fn spawn_run(state: &AppState, run_id: u64, suite_name: &str, distro: &str, phase: u32) {
+    let state = state.clone();
+    let suite_name = suite_name.to_string();
+    let distro = distro.to_string();
+
+    tokio::spawn(async move {
+        if let Err(e) = execute_run(&state, run_id, &suite_name, &distro, phase).await {
+            tracing::error!(run_id, error = %e, "test run failed");
+            if let Some(mut entry) = state.runs.get_mut(&run_id) {
+                entry.status = RunStatus::Cancelled;
+            }
+            state.remove_cancel_flag(run_id);
+        }
+    });
+}
+
+/// Inner async function that executes a test run end-to-end.
+async fn execute_run(
+    state: &AppState,
+    run_id: u64,
+    suite_name: &str,
+    distro: &str,
+    phase: u32,
+) -> Result<()> {
+    use crate::container::{BollardBackend, ContainerBackend, ContainerConfig, VolumeMount};
+    use crate::engine::runner::TestRunner;
+
+    tracing::info!(run_id, suite_name, distro, phase, "starting test run");
+
+    // Mark as running.
+    if let Some(mut entry) = state.runs.get_mut(&run_id) {
+        entry.status = RunStatus::Running;
+    }
+
+    // Register cancellation flag.
+    let cancel_flag = state.register_cancel_flag(run_id);
+
+    // Build the image.
+    let image_tag = build_image(state, distro).await?;
+    tracing::info!(run_id, image = %image_tag, "image ready");
+
+    // Create and start the container.
+    let backend = BollardBackend::new()?;
+    let results_dir = state.config.paths.results_dir.clone();
+    let host_results_dir = std::env::current_dir()
+        .unwrap_or_default()
+        .join("tests/integration/remi/results");
+    std::fs::create_dir_all(&host_results_dir).ok();
+
+    let container_config = ContainerConfig {
+        image: image_tag,
+        privileged: true,
+        volumes: vec![VolumeMount {
+            host_path: host_results_dir.display().to_string(),
+            container_path: results_dir,
+            read_only: false,
+        }],
+        ..Default::default()
+    };
+    let container_id = backend.create(container_config.clone()).await?;
+    tracing::info!(run_id, id = %container_id, "container created");
+    backend.start(&container_id).await?;
+
+    // Initialize conary state inside the container.
+    initialize_container(state, distro, phase, &backend, &container_id).await?;
+
+    // Load the manifest.
+    let manifest_path =
+        std::path::PathBuf::from(&state.manifest_dir).join(format!("{suite_name}.toml"));
+    let manifest = crate::config::load_manifest(&manifest_path)?;
+
+    // Run the tests.
+    let mut runner = TestRunner::new(state.config.clone(), distro.to_string());
+    let suite = runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &container_id,
+            Some(&container_config),
+            Some(cancel_flag),
+            Some((run_id, state.event_tx.clone())),
+        )
+        .await?;
+
+    // Update the suite in state with results.
+    if let Some(mut entry) = state.runs.get_mut(&run_id) {
+        entry.status = suite.status;
+        entry.results = suite.results;
+        entry.finished_at = suite.finished_at;
+    }
+
+    // Cleanup.
+    state.remove_cancel_flag(run_id);
+    if let Err(e) = backend.stop(&container_id).await {
+        tracing::warn!(run_id, error = %e, "failed to stop container");
+    }
+    if let Err(e) = backend.remove(&container_id).await {
+        tracing::warn!(run_id, error = %e, "failed to remove container");
+    }
+
+    tracing::info!(run_id, "test run complete");
+    Ok(())
+}
+
+/// Initialize conary database and repos inside a test container.
+///
+/// Mirrors the logic from `cli.rs::initialize_container_state`.
+async fn initialize_container(
+    state: &AppState,
+    distro: &str,
+    phase: u32,
+    backend: &dyn ContainerBackend,
+    container_id: &crate::container::ContainerId,
+) -> Result<()> {
+    use std::time::Duration;
+
+    let config = &state.config;
+    let db_parent = std::path::Path::new(&config.paths.db)
+        .parent()
+        .context("db path has no parent directory")?
+        .display()
+        .to_string();
+    let init_cmd = format!(
+        "mkdir -p {db_parent} && {} system init --db-path {}",
+        config.paths.conary_bin, config.paths.db
+    );
+    let init_result = backend
+        .exec(
+            container_id,
+            &["sh", "-c", &init_cmd],
+            Duration::from_secs(120),
+        )
+        .await?;
+    if init_result.exit_code != 0 {
+        bail!(
+            "failed to initialize conary database: {}{}",
+            init_result.stdout,
+            init_result.stderr
+        );
+    }
+
+    for repo in &config.setup.remove_default_repos {
+        let remove_cmd = format!(
+            "{} repo remove {} --db-path {} >/dev/null 2>&1 || true",
+            config.paths.conary_bin, repo, config.paths.db
+        );
+        backend
+            .exec(
+                container_id,
+                &["sh", "-c", &remove_cmd],
+                Duration::from_secs(30),
+            )
+            .await?;
+    }
+
+    if phase > 1 {
+        let distro_config = config
+            .distros
+            .get(distro)
+            .with_context(|| format!("unknown distro: {distro}"))?;
+        let add_repo_cmd = format!(
+            "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
+            config.paths.conary_bin,
+            distro_config.repo_name,
+            config.remi.endpoint,
+            config.remi.endpoint,
+            distro_config.remi_distro,
+            config.paths.db
+        );
+        backend
+            .exec(
+                container_id,
+                &["sh", "-c", &add_repo_cmd],
+                Duration::from_secs(60),
+            )
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Retrieve a run's full report as a JSON value.
@@ -210,8 +412,9 @@ pub fn cancel_run(state: &AppState, run_id: u64) -> Result<()> {
 }
 
 /// Re-run a single test from an existing run. Creates a new single-test
-/// pending run and returns its ID.
-pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<u64> {
+/// pending run and returns its ID along with the original suite/distro
+/// for the caller to spawn execution.
+pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<RerunResult> {
     let entry = state
         .runs
         .get(&run_id)
@@ -223,15 +426,37 @@ pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<u64> {
         .find(|r| r.id == test_id)
         .ok_or_else(|| anyhow::anyhow!("test '{test_id}' not found in run {run_id}"))?;
 
-    let suite_name = format!("rerun-{test_id}");
     let phase = entry.phase;
     drop(entry);
 
+    // Get the original run's metadata for distro and suite info.
+    let meta = state
+        .run_meta
+        .get(&run_id)
+        .ok_or_else(|| anyhow::anyhow!("metadata for run {run_id} not found"))?;
+    let distro = meta.distro.clone();
+    let original_suite = meta.suite_name.clone();
+    drop(meta);
+
+    let suite_name = format!("rerun-{test_id}");
     let new_run_id = AppState::next_run_id();
     let suite = TestSuite::new(&suite_name, phase);
     state.insert_run(new_run_id, suite);
+    state.run_meta.insert(
+        new_run_id,
+        crate::server::state::RunMeta {
+            suite_name: original_suite.clone(),
+            distro: distro.clone(),
+            phase,
+        },
+    );
 
-    Ok(new_run_id)
+    Ok(RerunResult {
+        run_id: new_run_id,
+        suite_name: original_suite,
+        distro,
+        phase,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -482,11 +707,11 @@ mod tests {
             attempts: Vec::new(),
         });
 
-        let new_id = rerun_test(&state, run.run_id, "T01").unwrap();
-        assert_ne!(new_id, run.run_id);
-        assert!(state.runs.contains_key(&new_id));
+        let rerun = rerun_test(&state, run.run_id, "T01").unwrap();
+        assert_ne!(rerun.run_id, run.run_id);
+        assert!(state.runs.contains_key(&rerun.run_id));
 
-        let new_suite = state.runs.get(&new_id).unwrap();
+        let new_suite = state.runs.get(&rerun.run_id).unwrap();
         assert_eq!(new_suite.name, "rerun-T01");
     }
 
