@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
+/// Default maximum concurrent test runs.
+pub const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
+
 /// Metadata for a run that persists alongside the TestSuite.
 #[derive(Debug, Clone)]
 pub struct RunMeta {
@@ -41,10 +44,20 @@ pub struct AppState {
     pub image_locks: Arc<DashMap<String, Arc<Mutex<Option<String>>>>>,
     /// Broadcast channel for live test events (SSE streaming).
     pub event_tx: tokio::sync::broadcast::Sender<TestEvent>,
+    /// Limits concurrent test run execution to prevent resource exhaustion.
+    pub run_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
     pub fn new(config: GlobalConfig, manifest_dir: String) -> Self {
+        Self::with_max_concurrent(config, manifest_dir, DEFAULT_MAX_CONCURRENT_RUNS)
+    }
+
+    pub fn with_max_concurrent(
+        config: GlobalConfig,
+        manifest_dir: String,
+        max_concurrent_runs: usize,
+    ) -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             config,
@@ -54,6 +67,7 @@ impl AppState {
             image_locks: Arc::new(DashMap::new()),
             cancellation_flags: Arc::new(DashMap::new()),
             event_tx,
+            run_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_runs)),
         }
     }
 
