@@ -220,9 +220,6 @@ mod tests {
         assert_eq!(state.runs.len(), 2);
         assert!(state.runs.get(&1).is_some());
         assert!(state.runs.get(&2).is_some());
-        assert_eq!(
-            state.runs.get(&1).unwrap().name,
-            "suite-a"
-        );
+        assert_eq!(state.runs.get(&1).unwrap().name, "suite-a");
     }
 }

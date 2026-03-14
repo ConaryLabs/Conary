@@ -76,12 +76,8 @@ impl StepAction {
     /// Convert an already-parsed `StepType` into an expanded `StepAction`.
     fn from_step_type(step_type: &StepType, vars: &HashMap<String, String>) -> Self {
         match step_type {
-            StepType::Run(cmd) => {
-                Self::Run(variables::expand_variables(cmd, vars))
-            }
-            StepType::Conary(args) => {
-                Self::Conary(variables::expand_variables(args, vars))
-            }
+            StepType::Run(cmd) => Self::Run(variables::expand_variables(cmd, vars)),
+            StepType::Conary(args) => Self::Conary(variables::expand_variables(args, vars)),
             StepType::FileExists(path) => {
                 Self::FileExists(PathBuf::from(variables::expand_variables(path, vars)))
             }
@@ -104,9 +100,7 @@ impl StepAction {
                 expanded.conary = variables::expand_variables(&config.conary, vars);
                 Self::KillAfterLog(expanded)
             }
-            StepType::QemuBoot(config) => {
-                Self::QemuBoot(variables::expand_qemu_boot(config, vars))
-            }
+            StepType::QemuBoot(config) => Self::QemuBoot(variables::expand_qemu_boot(config, vars)),
         }
     }
 }
@@ -150,10 +144,7 @@ pub async fn execute_step(
             Ok(StepResult::from_exec(&result, start.elapsed()))
         }
         StepAction::Conary(args) => {
-            let full_cmd = format!(
-                "{} {} --db-path {}",
-                ctx.conary_bin, args, ctx.db_path
-            );
+            let full_cmd = format!("{} {} --db-path {}", ctx.conary_bin, args, ctx.db_path);
             let result = backend
                 .exec(container_id, &["sh", "-c", &full_cmd], timeout)
                 .await?;
@@ -234,10 +225,7 @@ pub async fn execute_step(
                 return Ok(StepResult::failed(
                     &result,
                     duration,
-                    format!(
-                        "sha256sum failed on {path_str}: {}",
-                        result.stderr.trim()
-                    ),
+                    format!("sha256sum failed on {path_str}: {}", result.stderr.trim()),
                 ));
             }
             let actual_hash = result
@@ -259,13 +247,7 @@ pub async fn execute_step(
             }
         }
         StepAction::KillAfterLog(config) => {
-            let result = run_kill_after_log(
-                backend,
-                container_id,
-                config,
-                ctx.conary_bin,
-            )
-            .await?;
+            let result = run_kill_after_log(backend, container_id, config, ctx.conary_bin).await?;
             Ok(StepResult::from_exec(&result, start.elapsed()))
         }
         StepAction::QemuBoot(config) => {
@@ -500,10 +482,8 @@ mod tests {
 
     #[test]
     fn build_kill_command_with_env() {
-        let cmd = build_kill_after_log_command(
-            "/usr/bin/conary",
-            "env HOLD_MS=1500 ccs install foo.ccs",
-        );
+        let cmd =
+            build_kill_after_log_command("/usr/bin/conary", "env HOLD_MS=1500 ccs install foo.ccs");
         assert!(cmd.contains("exec env HOLD_MS=1500 /usr/bin/conary ccs install foo.ccs"));
     }
 

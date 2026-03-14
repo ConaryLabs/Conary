@@ -54,7 +54,10 @@ mod tests {
             message: "failed to start container".to_string(),
             source: None,
         };
-        assert_eq!(err.to_string(), "container error: failed to start container");
+        assert_eq!(
+            err.to_string(),
+            "container error: failed to start container"
+        );
     }
 
     #[test]
@@ -79,5 +82,71 @@ mod tests {
         let anyhow_err = anyhow!("something went wrong internally");
         let err = ConaryTestError::Internal(anyhow_err);
         assert_eq!(err.to_string(), "something went wrong internally");
+    }
+
+    #[test]
+    fn run_not_found_display() {
+        let err = ConaryTestError::RunNotFound("42".to_string());
+        assert_eq!(err.to_string(), "run not found: 42");
+    }
+
+    #[test]
+    fn timeout_display() {
+        let err = ConaryTestError::Timeout {
+            test_id: "T05".to_string(),
+            timeout_secs: 30,
+        };
+        let display = err.to_string();
+        assert!(
+            display.contains("T05"),
+            "should contain test_id, got: {display}"
+        );
+        assert!(
+            display.contains("30"),
+            "should contain timeout_secs, got: {display}"
+        );
+        assert_eq!(display, "test timed out after 30s: T05");
+    }
+
+    #[test]
+    fn cancelled_display() {
+        let err = ConaryTestError::Cancelled("user requested stop".to_string());
+        assert_eq!(err.to_string(), "run cancelled: user requested stop");
+    }
+
+    #[test]
+    fn test_not_found_display() {
+        let err = ConaryTestError::TestNotFound {
+            run_id: "7".to_string(),
+            test_id: "T99".to_string(),
+        };
+        assert_eq!(err.to_string(), "test not found: 7/T99");
+    }
+
+    #[test]
+    fn manifest_error_display() {
+        let err = ConaryTestError::Manifest {
+            file: "phase1-core.toml".to_string(),
+            message: "missing suite section".to_string(),
+        };
+        let display = err.to_string();
+        assert!(display.contains("phase1-core.toml"));
+        assert!(display.contains("missing suite section"));
+    }
+
+    #[test]
+    fn config_error_display() {
+        let err = ConaryTestError::Config("bad endpoint URL".to_string());
+        assert_eq!(err.to_string(), "config error: bad endpoint URL");
+    }
+
+    #[test]
+    fn container_error_with_source() {
+        let source = std::io::Error::new(std::io::ErrorKind::NotFound, "socket missing");
+        let err = ConaryTestError::Container {
+            message: "connection refused".to_string(),
+            source: Some(Box::new(source)),
+        };
+        assert_eq!(err.to_string(), "container error: connection refused");
     }
 }

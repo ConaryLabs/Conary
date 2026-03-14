@@ -6,7 +6,6 @@ use tracing::{debug, warn};
 use crate::config::manifest::ResourceConstraints;
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId};
 
-
 /// Orchestrates container lifecycle for test execution.
 ///
 /// Tracks all created containers and guarantees cleanup via `teardown_all`,
@@ -123,7 +122,10 @@ impl<'a> ContainerCoordinator<'a> {
 
         if let Some(expected_mb) = constraints.memory_limit_mb {
             let expected_bytes = expected_mb.saturating_mul(1024 * 1024);
-            if inspection.memory_limit.is_some_and(|actual| actual != expected_bytes) {
+            if inspection
+                .memory_limit
+                .is_some_and(|actual| actual != expected_bytes)
+            {
                 warn!(
                     id = %id,
                     expected = expected_bytes,
@@ -404,7 +406,9 @@ mod tests {
         let _id = coord.setup_container(&config, None).await.unwrap();
         assert_eq!(coord.tracked_count(), 1);
 
-        let result: Result<String> = coord.with_cleanup(|| async { Ok("done".to_string()) }).await;
+        let result: Result<String> = coord
+            .with_cleanup(|| async { Ok("done".to_string()) })
+            .await;
         assert!(result.is_ok());
         assert_eq!(coord.tracked_count(), 0);
 

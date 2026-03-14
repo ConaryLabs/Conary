@@ -440,11 +440,7 @@ fn main() -> Result<()> {
                     println!("{:<20} {:<40} SIZE", "TAG", "ID");
                     println!("{}", "-".repeat(70));
                     for img in &images {
-                        let tag = img
-                            .tags
-                            .first()
-                            .map(String::as_str)
-                            .unwrap_or("<none>");
+                        let tag = img.tags.first().map(String::as_str).unwrap_or("<none>");
                         let short_id = if img.id.len() > 12 {
                             &img.id[..12]
                         } else {
