@@ -76,6 +76,7 @@ impl TestRunner {
                     message: Some(msg),
                     stdout: None,
                     stderr: None,
+                    attempts: Vec::new(),
                 });
                 continue;
             }
@@ -110,6 +111,7 @@ impl TestRunner {
                 message,
                 stdout: last_exec.as_ref().map(|e| e.stdout.clone()),
                 stderr: last_exec.as_ref().map(|e| e.stderr.clone()),
+                attempts: Vec::new(),
             });
 
             // Fatal test: stop the entire suite on failure.
@@ -721,6 +723,7 @@ mod tests {
                 phase: 1,
                 setup: Vec::new(),
                 mock_server: None,
+                timeout: None,
             },
             test: tests,
             distro_overrides: HashMap::new(),
@@ -744,6 +747,7 @@ mod tests {
             timeout: 30,
             flaky: None,
             retries: None,
+            retry_delay_ms: None,
             step: vec![simple_step_run(
                 "echo ok",
                 Some(make_assertion(Some(0), Some("ok"))),
@@ -780,6 +784,7 @@ mod tests {
             timeout: 30,
             flaky: None,
             retries: None,
+            retry_delay_ms: None,
             step: vec![simple_step_run(
                 "false",
                 Some(make_assertion(Some(0), None)),
@@ -825,6 +830,7 @@ mod tests {
                 timeout: 30,
                 flaky: None,
                 retries: None,
+                retry_delay_ms: None,
                 step: vec![simple_step_run(
                     "false",
                     Some(make_assertion(Some(0), None)),
@@ -841,6 +847,7 @@ mod tests {
                 timeout: 30,
                 flaky: None,
                 retries: None,
+                retry_delay_ms: None,
                 step: vec![simple_step_run("echo hello", None)],
                 resources: None,
                 depends_on: Some(vec!["T01".to_string()]),
@@ -880,6 +887,7 @@ mod tests {
             timeout: 30,
             flaky: None,
             retries: None,
+            retry_delay_ms: None,
             step: vec![simple_step_kill_after_log(
                 KillAfterLog {
                     conary: "ccs install ${PKG}".to_string(),
@@ -952,6 +960,7 @@ mod tests {
             timeout: 30,
             flaky: Some(true),
             retries: Some(3),
+            retry_delay_ms: None,
             step: vec![simple_step_run(
                 "echo ok",
                 Some(make_assertion(Some(0), Some("ok"))),
@@ -1006,6 +1015,7 @@ mod tests {
             timeout: 30,
             flaky: Some(true),
             retries: Some(3),
+            retry_delay_ms: None,
             step: vec![simple_step_run(
                 "echo ok",
                 Some(make_assertion(Some(0), Some("ok"))),
@@ -1074,6 +1084,7 @@ mod tests {
                 phase: 2,
                 setup: Vec::new(),
                 mock_server: None,
+                timeout: None,
             },
             test: vec![TestDef {
                 id: "T-resource-flaky".to_string(),
@@ -1082,6 +1093,7 @@ mod tests {
                 timeout: 30,
                 flaky: Some(true),
                 retries: Some(3),
+                retry_delay_ms: None,
                 step: vec![simple_step_run(
                     "echo ok",
                     Some(make_assertion(Some(0), Some("ok"))),
@@ -1241,6 +1253,7 @@ mod tests {
             timeout: 30,
             flaky: None,
             retries: None,
+            retry_delay_ms: None,
             step: vec![simple_step_qemu_boot(
                 QemuBoot {
                     image: "https://127.0.0.1:9/minimal-boot-${PKG}.qcow2".to_string(),

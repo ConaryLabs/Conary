@@ -12,7 +12,7 @@ pub mod variables;
 pub use assertions::evaluate_assertion;
 pub use container_coordinator::ContainerCoordinator;
 pub use runner::TestRunner;
-pub use suite::{RunStatus, TestResult, TestStatus, TestSuite};
+pub use suite::{AttemptResult, RunStatus, TestResult, TestStatus, TestSuite};
 
 #[cfg(test)]
 mod tests {
@@ -28,6 +28,7 @@ mod tests {
             message: None,
             stdout: None,
             stderr: None,
+            attempts: Vec::new(),
         }
     }
 

@@ -325,6 +325,7 @@ mod tests {
                 phase: 1,
                 setup: Vec::new(),
                 mock_server: None,
+                timeout: None,
             },
             test: Vec::new(),
             distro_overrides: HashMap::new(),

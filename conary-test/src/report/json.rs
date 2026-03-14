@@ -69,6 +69,7 @@ mod tests {
             message: None,
             stdout: None,
             stderr: None,
+            attempts: Vec::new(),
         });
         suite.finish();
 
