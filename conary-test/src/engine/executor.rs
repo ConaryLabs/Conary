@@ -511,4 +511,549 @@ mod tests {
         assert_eq!(result.exit_code, 1);
         assert_eq!(result.failure, Some("boom".to_string()));
     }
+
+    // ---- from_step tests for FileNotExists, FileExecutable, DirExists ----
+
+    #[test]
+    fn from_step_file_not_exists_produces_action() {
+        let step = TestStep {
+            file_not_exists: Some("/tmp/${NAME}".to_string()),
+            ..TestStep::default()
+        };
+        let mut vars = HashMap::new();
+        vars.insert("NAME".to_string(), "gone.txt".to_string());
+
+        let action = StepAction::from_step(&step, &vars).unwrap();
+        match action {
+            StepAction::FileNotExists(path) => {
+                assert_eq!(path, PathBuf::from("/tmp/gone.txt"));
+            }
+            other => panic!("expected FileNotExists, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_step_file_executable_produces_action() {
+        let step = TestStep {
+            file_executable: Some("/usr/bin/${BIN}".to_string()),
+            ..TestStep::default()
+        };
+        let mut vars = HashMap::new();
+        vars.insert("BIN".to_string(), "conary".to_string());
+
+        let action = StepAction::from_step(&step, &vars).unwrap();
+        match action {
+            StepAction::FileExecutable(path) => {
+                assert_eq!(path, PathBuf::from("/usr/bin/conary"));
+            }
+            other => panic!("expected FileExecutable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_step_dir_exists_produces_action() {
+        let step = TestStep {
+            dir_exists: Some("/var/${DIR}".to_string()),
+            ..TestStep::default()
+        };
+        let mut vars = HashMap::new();
+        vars.insert("DIR".to_string(), "lib".to_string());
+
+        let action = StepAction::from_step(&step, &vars).unwrap();
+        match action {
+            StepAction::DirExists(path) => {
+                assert_eq!(path, PathBuf::from("/var/lib"));
+            }
+            other => panic!("expected DirExists, got {other:?}"),
+        }
+    }
+
+    // ---- execute_step unit tests with inline mock ----
+
+    use crate::container::backend::{
+        ContainerBackend, ContainerConfig, ContainerInspection, ImageInfo,
+    };
+    use async_trait::async_trait;
+    use std::path::Path;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    /// Mock backend for execute_step tests. Returns pre-configured
+    /// `ExecResult` values in FIFO order and records exec calls.
+    struct ExecMock {
+        exec_results: Mutex<Vec<ExecResult>>,
+        exec_calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl ExecMock {
+        fn new(results: Vec<ExecResult>) -> Self {
+            Self {
+                exec_results: Mutex::new(results),
+                exec_calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.exec_calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ContainerBackend for ExecMock {
+        async fn build_image(
+            &self,
+            _dockerfile: &Path,
+            _tag: &str,
+            _build_args: HashMap<String, String>,
+        ) -> Result<String> {
+            Ok("mock".to_string())
+        }
+        async fn create(&self, _config: ContainerConfig) -> Result<ContainerId> {
+            Ok("mock-ctr".to_string())
+        }
+        async fn start(&self, _id: &ContainerId) -> Result<()> {
+            Ok(())
+        }
+        async fn exec(
+            &self,
+            _id: &ContainerId,
+            cmd: &[&str],
+            _timeout: Duration,
+        ) -> Result<ExecResult> {
+            self.exec_calls
+                .lock()
+                .unwrap()
+                .push(cmd.iter().map(|s| (*s).to_string()).collect());
+            let mut results = self.exec_results.lock().unwrap();
+            if results.is_empty() {
+                Ok(ExecResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
+            } else {
+                Ok(results.remove(0))
+            }
+        }
+        async fn exec_detached(&self, _id: &ContainerId, _cmd: &[&str]) -> Result<String> {
+            Ok("exec-1".to_string())
+        }
+        async fn exec_logs(&self, _exec_id: &str) -> Result<mpsc::Receiver<String>> {
+            let (_tx, rx) = mpsc::channel(1);
+            Ok(rx)
+        }
+        async fn exec_result(&self, _exec_id: &str) -> Result<ExecResult> {
+            Ok(ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+        async fn kill(&self, _id: &ContainerId, _signal: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn kill_exec(&self, _exec_id: &str, _signal: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self, _id: &ContainerId) -> Result<()> {
+            Ok(())
+        }
+        async fn remove(&self, _id: &ContainerId) -> Result<()> {
+            Ok(())
+        }
+        async fn copy_from(&self, _id: &ContainerId, _path: &str) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        async fn copy_to(&self, _id: &ContainerId, _path: &str, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn logs(&self, _id: &ContainerId) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn inspect_container(&self, _id: &ContainerId) -> Result<ContainerInspection> {
+            Ok(ContainerInspection::default())
+        }
+        async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn test_ctx() -> ExecutionContext<'static> {
+        ExecutionContext {
+            conary_bin: "/usr/bin/conary",
+            db_path: "/var/lib/conary/db",
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_step_run() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "hello world\n".to_string(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::Run("echo hello world".to_string());
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hello world\n");
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], vec!["sh", "-c", "echo hello world"]);
+    }
+
+    #[tokio::test]
+    async fn execute_step_conary() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "installed tree\n".to_string(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::Conary("install tree".to_string());
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "installed tree\n");
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0][2].contains("/usr/bin/conary install tree --db-path"));
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_exists_success() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileExists(PathBuf::from("/usr/bin/conary"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls[0], vec!["test", "-e", "/usr/bin/conary"]);
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_exists_failure() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileExists(PathBuf::from("/missing/file"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 1);
+        assert!(result.failure.is_some());
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("file does not exist")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_not_exists_success() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileNotExists(PathBuf::from("/tmp/gone.txt"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls[0], vec!["test", "!", "-e", "/tmp/gone.txt"]);
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_not_exists_failure() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileNotExists(PathBuf::from("/tmp/exists.txt"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 1);
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("file unexpectedly exists")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_executable_success() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileExecutable(PathBuf::from("/usr/bin/conary"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls[0], vec!["test", "-x", "/usr/bin/conary"]);
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_executable_failure() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileExecutable(PathBuf::from("/tmp/script.sh"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 1);
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("file is not executable")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_step_dir_exists_success() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::DirExists(PathBuf::from("/var/lib"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+        let calls = mock.calls();
+        assert_eq!(calls[0], vec!["test", "-d", "/var/lib"]);
+    }
+
+    #[tokio::test]
+    async fn execute_step_dir_exists_failure() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::DirExists(PathBuf::from("/nonexistent"));
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 1);
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("directory does not exist")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_checksum_match() {
+        let hash = "abc123def456";
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: format!("{hash}  /tmp/file.txt\n"),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileChecksum {
+            path: PathBuf::from("/tmp/file.txt"),
+            sha256: hash.to_string(),
+        };
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_checksum_mismatch() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 0,
+            stdout: "wronghash  /tmp/file.txt\n".to_string(),
+            stderr: String::new(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileChecksum {
+            path: PathBuf::from("/tmp/file.txt"),
+            sha256: "expectedhash".to_string(),
+        };
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.failure.is_some());
+        assert!(result.failure.as_ref().unwrap().contains("checksum mismatch"));
+    }
+
+    #[tokio::test]
+    async fn execute_step_file_checksum_sha256sum_fails() {
+        let mock = ExecMock::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "No such file\n".to_string(),
+        }]);
+        let ctx = test_ctx();
+        let action = StepAction::FileChecksum {
+            path: PathBuf::from("/tmp/missing.txt"),
+            sha256: "abc".to_string(),
+        };
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.failure.is_some());
+        assert!(result.failure.as_ref().unwrap().contains("sha256sum failed"));
+    }
+
+    #[tokio::test]
+    async fn execute_step_sleep() {
+        let mock = ExecMock::new(vec![]);
+        let ctx = test_ctx();
+        let action = StepAction::Sleep(0);
+        let result = execute_step(
+            &action,
+            &mock,
+            &"ctr-1".to_string(),
+            &ctx,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.failure.is_none());
+        assert!(result.stdout.is_empty());
+        // No exec calls should have been made.
+        assert!(mock.calls().is_empty());
+    }
 }

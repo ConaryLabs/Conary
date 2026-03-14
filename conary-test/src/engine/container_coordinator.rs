@@ -456,4 +456,189 @@ mod tests {
         assert_eq!(drained.len(), 2);
         assert_eq!(coord.tracked_count(), 0);
     }
+
+    // ---- Error path tests using FailableMock ----
+
+    /// Which backend operation should fail.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FailOn {
+        Create,
+        Start,
+        Stop,
+    }
+
+    /// Mock backend that can be configured to fail on a specific operation.
+    struct FailableMock {
+        fail_on: FailOn,
+        created: Mutex<Vec<ContainerConfig>>,
+        stopped: Mutex<Vec<ContainerId>>,
+        removed: Mutex<Vec<ContainerId>>,
+    }
+
+    impl FailableMock {
+        fn new(fail_on: FailOn) -> Self {
+            Self {
+                fail_on,
+                created: Mutex::new(Vec::new()),
+                stopped: Mutex::new(Vec::new()),
+                removed: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ContainerBackend for FailableMock {
+        async fn build_image(
+            &self,
+            _dockerfile: &Path,
+            _tag: &str,
+            _build_args: HashMap<String, String>,
+        ) -> Result<String> {
+            Ok("mock".to_string())
+        }
+
+        async fn create(&self, config: ContainerConfig) -> Result<ContainerId> {
+            if self.fail_on == FailOn::Create {
+                anyhow::bail!("create failed");
+            }
+            let mut created = self.created.lock().unwrap();
+            created.push(config);
+            Ok(format!("fail-ctr-{}", created.len()))
+        }
+
+        async fn start(&self, _id: &ContainerId) -> Result<()> {
+            if self.fail_on == FailOn::Start {
+                anyhow::bail!("start failed");
+            }
+            Ok(())
+        }
+
+        async fn exec(
+            &self,
+            _id: &ContainerId,
+            _cmd: &[&str],
+            _timeout: Duration,
+        ) -> Result<ExecResult> {
+            Ok(ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+
+        async fn exec_detached(&self, _id: &ContainerId, _cmd: &[&str]) -> Result<String> {
+            Ok("exec-1".to_string())
+        }
+
+        async fn exec_logs(&self, _exec_id: &str) -> Result<mpsc::Receiver<String>> {
+            let (_tx, rx) = mpsc::channel(1);
+            Ok(rx)
+        }
+
+        async fn exec_result(&self, _exec_id: &str) -> Result<ExecResult> {
+            Ok(ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+
+        async fn kill(&self, _id: &ContainerId, _signal: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn kill_exec(&self, _exec_id: &str, _signal: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&self, id: &ContainerId) -> Result<()> {
+            if self.fail_on == FailOn::Stop {
+                self.stopped.lock().unwrap().push(id.clone());
+                anyhow::bail!("stop failed");
+            }
+            self.stopped.lock().unwrap().push(id.clone());
+            Ok(())
+        }
+
+        async fn remove(&self, id: &ContainerId) -> Result<()> {
+            self.removed.lock().unwrap().push(id.clone());
+            Ok(())
+        }
+
+        async fn copy_from(&self, _id: &ContainerId, _path: &str) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        async fn copy_to(&self, _id: &ContainerId, _path: &str, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn logs(&self, _id: &ContainerId) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn inspect_container(&self, _id: &ContainerId) -> Result<ContainerInspection> {
+            Ok(ContainerInspection::default())
+        }
+
+        async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn create_fails_container_not_tracked() {
+        let mock = FailableMock::new(FailOn::Create);
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let result = coord.setup_container(&config, None).await;
+        assert!(result.is_err());
+        assert_eq!(coord.tracked_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_fails_container_still_tracked() {
+        let mock = FailableMock::new(FailOn::Start);
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let result = coord.setup_container(&config, None).await;
+        assert!(result.is_err());
+        // Container was created (and tracked) before start failed.
+        assert_eq!(coord.tracked_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn stop_fails_remove_still_called_and_untracked() {
+        let mock = FailableMock::new(FailOn::Stop);
+        let mut coord = ContainerCoordinator::new(&mock);
+
+        // Use a normal mock for setup (stop only fails during teardown).
+        // FailOn::Stop still allows create/start to succeed.
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            ..Default::default()
+        };
+
+        let id = coord.setup_container(&config, None).await.unwrap();
+        assert_eq!(coord.tracked_count(), 1);
+
+        // teardown_container should not propagate the stop error.
+        coord.teardown_container(&id).await.unwrap();
+        assert_eq!(coord.tracked_count(), 0);
+
+        // Even though stop failed, remove should have been called.
+        let removed = mock.removed.lock().unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0], "fail-ctr-1");
+    }
 }
