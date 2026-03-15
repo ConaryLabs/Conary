@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-14
-revision: 2
+revision: 3
 summary: Comprehensive overhaul of test infrastructure -- persistence, deployment, unified runner, DX
 ---
 
@@ -397,10 +397,41 @@ service functions.
 - Raw output preserved in `raw_content` for terminal replay
 - `get_logs` endpoint accepts `raw=true` parameter
 
+## Prerequisite: Bootstrap Sandbox PATH Bug
+
+The bootstrap base build fails because `child_setup_and_execute()` in
+`conary-core/src/container/mod.rs` (line 723) sets a hardcoded PATH
+(`/usr/sbin:/usr/bin:/sbin:/bin`) after `env_clear()` but before custom
+environment variables are applied. The toolchain PATH from
+`toolchain.env()` (pointing to `/tmp/conary-bootstrap-v1/stage1/sysroot/usr/bin`)
+should override this, but inside the sandbox's mount namespace the absolute
+host paths may not be accessible at their original locations.
+
+**Root cause:** `container/mod.rs:723` — `env("PATH", "/usr/sbin:...")` sets
+a default PATH that doesn't include the toolchain. Custom env vars are applied
+after (lines 729-730) and should override, but the toolchain sysroot must also
+be mounted at a path that matches what PATH references.
+
+**Fix:** Two changes:
+1. In `child_setup_and_execute()`, skip the hardcoded PATH if the custom env
+   already contains a PATH entry (let the caller's PATH take full precedence)
+2. In `pristine_for_bootstrap()`, ensure the toolchain sysroot is mounted at
+   its original absolute path so the PATH from `toolchain.env()` resolves
+   correctly inside the sandbox
+
+**Files:**
+- `conary-core/src/container/mod.rs:723` — hardcoded PATH
+- `conary-core/src/container/mod.rs:224-240` — `pristine_for_bootstrap()` mounts
+- `conary-core/src/bootstrap/toolchain.rs:305-338` — `env()` builds PATH
+
+This must be fixed before `build_boot_image` can produce QEMU images. It
+blocks T150-T154 QEMU tests.
+
 ## Implementation Order
 
+0. **Prereq: Bootstrap sandbox PATH fix** -- unblocks QEMU image builds
 1. **Layer 1: Remi Test Data API** -- schema, endpoints, MCP tools
-2. **Layer 2: Stateless Executor** -- stream to Remi, per-step logs, tracing,
+2. **Layer 2: Stateless Executor** -- stream to Remi, per-step logs,
    deployment MCP tools
 3. **Layer 3: Phase 1-2 Migration** -- audit manifests, fill gaps, validate,
    delete Python runner
