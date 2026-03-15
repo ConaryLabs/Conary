@@ -43,7 +43,9 @@ configure = """
     --enable-raw \
     --without-python \
     --without-systemd \
-    --with-readline=no
+    --with-readline=no \
+    --disable-liblastlog2 \
+    --without-cryptsetup
 """
 
 make = "make -j%(jobs)s"
