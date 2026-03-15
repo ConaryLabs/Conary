@@ -39,6 +39,7 @@ pub mod rate_limit;
 mod routes;
 pub mod search;
 pub mod security;
+pub mod test_db;
 
 pub use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
