@@ -396,18 +396,25 @@ impl BaseBuilder {
             build_env.insert("PATH".to_string(), paths.join(":"));
         }
 
-        // Standard build flags with target sysroot paths
-        let include_path = format!("-I{}/usr/include", target_root.display());
+        // Standard build flags with target sysroot paths.
+        // The stage1 sysroot has glibc and other libraries that the linker
+        // needs. The target_root starts empty and gets populated as packages
+        // are built; once glibc is installed there, it takes precedence.
+        let sysroot_path = toolchain.path.display();
+        let include_path = format!(
+            "-I{}/usr/include -I{sysroot_path}/usr/include",
+            target_root.display()
+        );
         let lib_path = format!(
-            "-L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
+            "--sysroot={sysroot_path} -L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
             target_root.display(),
             target_root.display(),
             target_root.display()
         );
-        build_env.insert("CFLAGS".to_string(), format!("-O2 -pipe {}", include_path));
+        build_env.insert("CFLAGS".to_string(), format!("-O2 -pipe {include_path}"));
         build_env.insert(
             "CXXFLAGS".to_string(),
-            format!("-O2 -pipe {}", include_path),
+            format!("-O2 -pipe {include_path}"),
         );
         build_env.insert("LDFLAGS".to_string(), lib_path.clone());
 
