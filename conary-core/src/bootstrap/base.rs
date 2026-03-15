@@ -380,6 +380,22 @@ impl BaseBuilder {
         // Set up build environment
         let mut build_env = toolchain.env();
 
+        // The stage0 cross-tools (prefixed binaries like x86_64-conary-linux-gnu-ar)
+        // live in a different directory than stage1's non-prefixed tools. Both
+        // need to be in PATH for configure scripts and makefiles to find them.
+        let stage0_tools = work_dir.join("stage0").join("tools").join("bin");
+        let ct_tools = std::path::Path::new("/conary/bootstrap/tools/bin");
+        if let Some(current_path) = build_env.get("PATH").cloned() {
+            let mut paths = vec![current_path.clone()];
+            if stage0_tools.exists() {
+                paths.insert(0, stage0_tools.display().to_string());
+            }
+            if ct_tools.exists() {
+                paths.insert(0, ct_tools.display().to_string());
+            }
+            build_env.insert("PATH".to_string(), paths.join(":"));
+        }
+
         // Standard build flags with target sysroot paths
         let include_path = format!("-I{}/usr/include", target_root.display());
         let lib_path = format!(
