@@ -154,6 +154,10 @@ pub enum CcsCommands {
         /// Skip dependency checking
         #[arg(long)]
         no_deps: bool,
+
+        /// Allow reinstalling an already-installed package at the same version
+        #[arg(long)]
+        reinstall: bool,
     },
 
     /// Export CCS packages to container image format

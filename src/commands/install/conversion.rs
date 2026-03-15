@@ -565,7 +565,8 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
         None, // policy
         None, // components - install all
         sandbox_mode,
-        true, // deps already handled above; skip redundant check in cmd_ccs_install
+        true,  // deps already handled above; skip redundant check in cmd_ccs_install
+        false, // reinstall - not applicable for conversions
     )
 }
 
