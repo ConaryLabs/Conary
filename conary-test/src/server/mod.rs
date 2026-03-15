@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod handlers;
 pub mod mcp;
+pub mod remi_client;
 pub mod routes;
 pub mod service;
 pub mod state;
