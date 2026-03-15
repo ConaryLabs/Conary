@@ -28,6 +28,7 @@ rationale = "Needs raw packet access"
 
 [capabilities.network]
 outbound = ["any"]
+listen = ["80"]
 
 [capabilities.syscalls]
 profile = "scriptlet"
