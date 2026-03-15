@@ -1,0 +1,747 @@
+# tests/integration/remi/manifests/phase4-group-d.toml
+#
+# Phase 4, Group D: Provenance / Capability / Trust / System / Federation / Automation (T221-T255).
+# Feature validation for security, trust, and system management.
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME},
+#            ${TEST_PACKAGE_1}, ${FIXTURE_V1_CCS}
+
+[suite]
+name = "Phase 4 Group D: Security, Trust, System Ops, Federation, Automation"
+phase = 4
+
+# Setup: initialize DB, add repo, sync, and install a test package
+# so provenance/capability queries have something to work with.
+[[suite.setup]]
+conary = "system init"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[[suite.setup]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[[suite.setup]]
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+
+# ==========================================================================
+# PROVENANCE (T221-T226)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T221: Provenance show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T221"
+name = "provenance_show"
+description = "Show provenance information for an installed package"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "provenance show ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T222: Provenance verify
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T222"
+name = "provenance_verify"
+description = "Verify provenance of an installed package (may report no log entry)"
+timeout = 30
+group = "D"
+
+# Verify may exit non-zero if the package has no transparency log entry,
+# which is expected for packages installed from upstream repos.
+[[test.step]]
+conary = "provenance verify ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+stderr_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T223: Provenance export
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T223"
+name = "provenance_export"
+description = "Export provenance to JSON file"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "provenance export ${TEST_PACKAGE_1} --format spdx --output /tmp/prov-export.json"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "/tmp/prov-export.json"
+
+# Cleanup
+[[test.step]]
+run = "rm -f /tmp/prov-export.json"
+
+# --------------------------------------------------------------------------
+# T224: Provenance audit
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T224"
+name = "provenance_audit"
+description = "Audit all installed packages for provenance completeness"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "provenance audit"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T225: Provenance audit --missing
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T225"
+name = "provenance_audit_missing"
+description = "Show packages missing provenance information"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "provenance audit --missing source"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T226: Provenance diff
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T226"
+name = "provenance_diff"
+description = "Compare provenance between two packages (may fail if only one version exists)"
+timeout = 30
+group = "D"
+
+# diff requires two name@version arguments; use the same package with a
+# made-up version to exercise the code path.  Non-zero exit is acceptable
+# (the second version likely does not exist), but no panic.
+[[test.step]]
+run = "${CONARY_BIN} provenance diff ${TEST_PACKAGE_1}@1.0.0 ${TEST_PACKAGE_1}@2.0.0 --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# ==========================================================================
+# CAPABILITY (T227-T230)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T227: Capability list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T227"
+name = "capability_list"
+description = "List capability declarations for all installed packages"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "capability list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T228: Capability show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T228"
+name = "capability_show"
+description = "Show capabilities for an installed package"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "capability show ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T229: Capability validate
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T229"
+name = "capability_validate"
+description = "Validate capability declaration in a CCS manifest"
+timeout = 30
+group = "D"
+
+# Create a minimal ccs.toml to validate against
+[[test.step]]
+run = """cat > /tmp/cap-validate-test.toml <<'TOML'
+[package]
+name = "cap-test"
+version = "1.0.0"
+description = "test"
+
+[capabilities]
+network = false
+filesystem = ["/var/log"]
+TOML
+"""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} capability validate /tmp/cap-validate-test.toml 2>&1"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# Cleanup
+[[test.step]]
+run = "rm -f /tmp/cap-validate-test.toml"
+
+# --------------------------------------------------------------------------
+# T230: Capability list --missing
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T230"
+name = "capability_list_missing"
+description = "Show packages with undeclared capabilities"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "capability list --missing"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# ==========================================================================
+# TRUST (T231-T235)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T231: Trust keygen
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T231"
+name = "trust_keygen"
+description = "Generate a TUF root key pair"
+timeout = 30
+group = "D"
+
+[[test.step]]
+run = "mkdir -p /tmp/tuf-test-keys"
+
+[[test.step]]
+run = "${CONARY_BIN} trust key-gen root --output /tmp/tuf-test-keys 2>&1"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Cleanup
+[[test.step]]
+run = "rm -rf /tmp/tuf-test-keys"
+
+# --------------------------------------------------------------------------
+# T232: Trust init (requires root.json -- expected failure)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T232"
+name = "trust_init"
+description = "Initialize TUF for a repo (expected failure without root.json)"
+timeout = 30
+group = "D"
+
+# init requires --root pointing to a valid root.json, so this will fail
+# gracefully.  We just verify no panic.
+[[test.step]]
+run = "${CONARY_BIN} trust init ${REPO_NAME} --root /nonexistent/root.json --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T233: Trust status
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T233"
+name = "trust_status"
+description = "Check TUF status for a repo (likely not configured)"
+timeout = 30
+group = "D"
+
+# status may exit non-zero if TUF is not set up; that is expected.
+[[test.step]]
+run = "${CONARY_BIN} trust status ${REPO_NAME} --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T234: Trust enable
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T234"
+name = "trust_enable"
+description = "Enable TUF for a repo (may fail without initial bootstrap)"
+timeout = 30
+group = "D"
+
+# enable may fail if TUF has not been initialized; verify no panic.
+[[test.step]]
+run = "${CONARY_BIN} trust enable ${REPO_NAME} --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T235: Trust disable --force
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T235"
+name = "trust_disable"
+description = "Disable TUF for a repo with --force"
+timeout = 30
+group = "D"
+
+[[test.step]]
+run = "${CONARY_BIN} trust disable ${REPO_NAME} --force --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# ==========================================================================
+# SYSTEM OPERATIONS (T236-T245)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T236: System gc --dry-run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T236"
+name = "system_gc_dry_run"
+description = "CAS garbage collection dry run"
+timeout = 60
+group = "D"
+
+[[test.step]]
+conary = "system gc --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T237: System sbom (CycloneDX default)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T237"
+name = "system_sbom_cyclonedx"
+description = "Generate SBOM in default CycloneDX format"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system sbom ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T238: System sbom --format spdx
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T238"
+name = "system_sbom_spdx"
+description = "Generate SBOM in SPDX format"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system sbom ${TEST_PACKAGE_1} --format spdx"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T239: System restore --dry-run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T239"
+name = "system_restore_dry_run"
+description = "Restore package files from CAS (dry run)"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system restore ${TEST_PACKAGE_1} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T240: System trigger list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T240"
+name = "system_trigger_list"
+description = "List all triggers"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system trigger list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T241: System trigger list --builtin
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T241"
+name = "system_trigger_list_builtin"
+description = "List built-in triggers only"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system trigger list --builtin"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T242: System redirect list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T242"
+name = "system_redirect_list"
+description = "List all package redirects"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system redirect list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T243: System redirect add
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T243"
+name = "system_redirect_add"
+description = "Add a package redirect"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system redirect add old-test-pkg new-test-pkg"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T244: System redirect show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T244"
+name = "system_redirect_show"
+description = "Show details of a redirect"
+timeout = 30
+group = "D"
+depends_on = ["T243"]
+
+[[test.step]]
+conary = "system redirect show old-test-pkg"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "new-test-pkg"
+
+# --------------------------------------------------------------------------
+# T245: System redirect remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T245"
+name = "system_redirect_remove"
+description = "Remove a package redirect"
+timeout = 30
+group = "D"
+depends_on = ["T244"]
+
+[[test.step]]
+conary = "system redirect remove old-test-pkg"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify the redirect is gone
+[[test.step]]
+conary = "system redirect list"
+
+[test.step.assert]
+stdout_not_contains = "old-test-pkg"
+
+# ==========================================================================
+# FEDERATION (T246-T250)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T246: Federation status
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T246"
+name = "federation_status"
+description = "Show federation status"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "federation status"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T247: Federation peers
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T247"
+name = "federation_peers"
+description = "List federation peers"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "federation peers"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T248: Federation stats
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T248"
+name = "federation_stats"
+description = "Show federation statistics"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "federation stats"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T249: Federation test
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T249"
+name = "federation_test"
+description = "Test federation connectivity"
+timeout = 60
+group = "D"
+
+[[test.step]]
+conary = "federation test"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T250: Federation add-peer then remove-peer
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T250"
+name = "federation_add_remove_peer"
+description = "Add a test peer and then remove it"
+timeout = 30
+group = "D"
+
+# Add a fake peer
+[[test.step]]
+conary = "federation add-peer https://example.com:7891 --name test-peer"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify the peer appears in the list
+[[test.step]]
+conary = "federation peers"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "example.com"
+
+# Remove the peer
+[[test.step]]
+conary = "federation remove-peer https://example.com:7891"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify the peer is gone
+[[test.step]]
+conary = "federation peers"
+
+[test.step.assert]
+stdout_not_contains = "example.com"
+
+# ==========================================================================
+# AUTOMATION (T251-T255)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T251: Automation status
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T251"
+name = "automation_status"
+description = "Show automation status"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "automation status"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T252: Automation check
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T252"
+name = "automation_check"
+description = "Check for pending automation actions"
+timeout = 60
+group = "D"
+
+[[test.step]]
+conary = "automation check --quiet"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T253: Automation configure --show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T253"
+name = "automation_configure_show"
+description = "Show current automation configuration"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "automation configure --show"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T254: Automation history
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T254"
+name = "automation_history"
+description = "Show automation history"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "automation history"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T255: Automation apply --dry-run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T255"
+name = "automation_apply_dry_run"
+description = "Dry run of automation apply"
+timeout = 60
+group = "D"
+
+[[test.step]]
+conary = "automation apply --dry-run --yes"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
