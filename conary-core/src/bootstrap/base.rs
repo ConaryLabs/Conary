@@ -397,28 +397,38 @@ impl BaseBuilder {
         }
 
         // Standard build flags with target sysroot paths.
-        // The stage1 sysroot has glibc and other libraries that the linker
-        // needs. The target_root starts empty and gets populated as packages
-        // are built; once glibc is installed there, it takes precedence.
+        // --sysroot is critical for BOTH compilation AND linking:
+        //   - For compilation: tells gcc to use the sysroot's headers as the
+        //     system include directory, preventing host header contamination
+        //   - For linking: tells ld to look for libraries in the sysroot
+        // The target_root starts empty and gets populated as packages are built.
+        // The stage1 sysroot has the initial glibc.
         // toolchain.path is .../sysroot/usr; --sysroot needs .../sysroot
         let sysroot_for_linker = toolchain.path.parent().unwrap_or(&toolchain.path);
         let sysroot_path = sysroot_for_linker.display();
+        let sysroot_flag = format!("--sysroot={sysroot_path}");
         let include_path = format!(
-            "-I{}/usr/include -I{sysroot_path}/usr/include",
+            "-I{}/usr/include",
             target_root.display()
         );
         let lib_path = format!(
-            "--sysroot={sysroot_path} -L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
+            "-L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
             target_root.display(),
             target_root.display(),
             target_root.display()
         );
-        build_env.insert("CFLAGS".to_string(), format!("-O2 -pipe {include_path}"));
+        build_env.insert(
+            "CFLAGS".to_string(),
+            format!("-O2 -pipe {sysroot_flag} {include_path}"),
+        );
         build_env.insert(
             "CXXFLAGS".to_string(),
-            format!("-O2 -pipe {include_path}"),
+            format!("-O2 -pipe {sysroot_flag} {include_path}"),
         );
-        build_env.insert("LDFLAGS".to_string(), lib_path.clone());
+        build_env.insert(
+            "LDFLAGS".to_string(),
+            format!("{sysroot_flag} {lib_path}"),
+        );
 
         // Also set LIBRARY_PATH for static linking and tools that don't use LDFLAGS
         build_env.insert(
