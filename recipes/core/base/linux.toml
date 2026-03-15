@@ -29,9 +29,10 @@ requires = ["linux-headers"]
 makedepends = ["gcc", "binutils", "bison", "flex", "elfutils:devel", "openssl:devel", "perl"]
 
 configure = """
-# Start with a default config for x86_64
-# HOSTCC uses the host's native gcc for building host tools (fixdep, etc.)
-# CROSS_COMPILE is empty when building natively in the bootstrap sysroot
+# The kernel build system manages its own compiler flags. Unset LDFLAGS
+# and CFLAGS that contain --sysroot and cross-sysroot paths — they
+# interfere with host tool compilation (fixdep, objtool, etc.).
+unset LDFLAGS CFLAGS CXXFLAGS
 make ARCH=%(kernel_arch)s defconfig
 
 # Apply Conary-specific options
@@ -72,6 +73,7 @@ make ARCH=%(kernel_arch)s olddefconfig
 """
 
 make = """
+unset LDFLAGS CFLAGS CXXFLAGS
 make ARCH=%(kernel_arch)s -j%(jobs)s bzImage modules
 """
 
