@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-14
-revision: 2
+revision: 3
 summary: Design for fixing 7 integration test failures and implementing capability policy engine
 ---
 
@@ -65,7 +65,7 @@ skip boot file deployment. Output is `"0"` (zero files found).
 
 ### T104/T105: Capability Policy Not Implemented
 
-`src/commands/ccs/install.rs:385-391` hard-rejects CCS packages with
+`src/commands/ccs/install.rs:364-369` hard-rejects CCS packages with
 capability declarations: `"install-time capability enforcement is not yet
 supported"`. Needs a real policy engine.
 
@@ -162,20 +162,30 @@ relying on remove + reinstall.
   `/boot/` and `/lib/modules/` contents
 - Fallback: if QEMU support isn't ready for full test execution, skip T150
   with reason `"requires bare-metal or VM environment"`
+- **Dependency chain:** T151, T153, and T154 in `phase3-group-n-container.toml`
+  have `depends_on = ["T150"]`. These tests (generation BLS entry, generation
+  rollback boot entries, bootloader config paths) also require kernel/boot
+  file deployment. They should move to the QEMU manifest alongside T150, or
+  have their dependency updated if they can run independently.
 
 ### 5. Capability Policy Engine
 
 **Architecture:** Three-tier policy model for install-time Linux capability
 (`CAP_*`) enforcement.
 
-**Relationship to existing module:** The existing `conary-core/src/capability/`
-module handles higher-level runtime capabilities (network ports, filesystem
-paths, syscall profiles) via `CapabilityDeclaration`. The policy engine here
-targets **Linux capabilities** (`CAP_NET_RAW`, `CAP_SYS_ADMIN`, etc.) declared
-in CCS manifests. These are distinct concepts: `CapabilityDeclaration` controls
-sandbox enforcement at runtime, while the policy engine gates installation
-based on privilege requirements. The CCS manifest's `capabilities` field maps
-to Linux `CAP_*` constants; the policy engine evaluates these at install time.
+**Relationship to existing module:** The CCS manifest field gated at
+`install.rs:364-369` is `capabilities: Option<CapabilityDeclaration>`
+(manifest.rs:68). `CapabilityDeclaration` contains `NetworkCapabilities`,
+`FilesystemCapabilities`, and `SyscallCapabilities` -- higher-level
+declarations, not raw Linux `CAP_*` constants.
+
+The policy engine evaluates these declarations and **infers** required Linux
+capabilities. For example: `network.bind_ports` containing ports < 1024 implies
+`CAP_NET_BIND_SERVICE`; raw socket access implies `CAP_NET_RAW`; filesystem
+paths outside the package prefix may imply `CAP_DAC_OVERRIDE`. The inference
+mapping is part of the policy engine implementation. The test fixtures (T104,
+T105) declare capabilities that map to specific Linux `CAP_*` requirements
+which the policy then allows, prompts, or denies.
 
 **Policy tiers:**
 
