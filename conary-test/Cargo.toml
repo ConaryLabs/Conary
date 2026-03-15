@@ -36,8 +36,9 @@ async-stream = "0.3"
 bollard = "0.18"
 bytes = "1"
 
-# HTTP server
+# HTTP server + client
 axum.workspace = true
+reqwest.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 tokio-stream.workspace = true
