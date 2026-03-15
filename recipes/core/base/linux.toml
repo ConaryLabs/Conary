@@ -37,6 +37,10 @@ configure = """
 #    vars override Makefile assignments; env vars don't)
 # 3. The kernel finds the target compiler via its own CC = $(CROSS_COMPILE)gcc
 #    which falls back to "gcc" from PATH (our stage1 gcc is first in PATH)
+# Put /usr/bin first so host tools (ld, ar) resolve to host versions,
+# not the cross-toolchain. The kernel finds its target compiler via
+# the gcc in PATH that matches the architecture.
+export PATH="/usr/bin:/usr/sbin:$PATH"
 unset LDFLAGS CFLAGS CXXFLAGS CC CXX LD AR RANLIB STRIP
 make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar HOSTLDFLAGS= defconfig
 
@@ -78,6 +82,7 @@ make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/b
 """
 
 make = """
+export PATH="/usr/bin:/usr/sbin:$PATH"
 unset LDFLAGS CFLAGS CXXFLAGS CC CXX LD AR RANLIB STRIP
 make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar HOSTLDFLAGS= -j%(jobs)s bzImage modules
 """
