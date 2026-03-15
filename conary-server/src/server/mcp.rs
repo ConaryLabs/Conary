@@ -159,6 +159,57 @@ pub struct PurgeAuditParams {
     pub before: String,
 }
 
+/// Parameters for listing test runs.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestListRunsParams {
+    /// Maximum number of runs to return (default 20, max 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Cursor for pagination (run ID to start after).
+    #[serde(default)]
+    pub cursor: Option<i64>,
+    /// Filter by suite name.
+    #[serde(default)]
+    pub suite: Option<String>,
+    /// Filter by distro name.
+    #[serde(default)]
+    pub distro: Option<String>,
+    /// Filter by status (pending, running, completed, failed, cancelled).
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Parameters for getting a specific test run.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestGetRunParams {
+    /// Numeric run ID.
+    pub run_id: i64,
+}
+
+/// Parameters for getting a specific test result.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestGetTestParams {
+    /// Numeric run ID.
+    pub run_id: i64,
+    /// Test identifier (e.g. "T01").
+    pub test_id: String,
+}
+
+/// Parameters for getting test execution logs.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestGetLogsParams {
+    /// Numeric run ID.
+    pub run_id: i64,
+    /// Test identifier (e.g. "T01").
+    pub test_id: String,
+    /// Filter by log stream: stdout, stderr, or trace.
+    #[serde(default)]
+    pub stream: Option<String>,
+    /// Filter by step index (0-based).
+    #[serde(default)]
+    pub step_index: Option<u32>,
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool definitions
 // ---------------------------------------------------------------------------
@@ -551,6 +602,98 @@ impl RemiMcpServer {
         let text = to_json_text(&result)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    // -----------------------------------------------------------------------
+    // Test data (delegates to admin_service)
+    // -----------------------------------------------------------------------
+
+    /// List recent test runs with optional filtering.
+    #[tool(
+        description = "List recent test runs with optional filtering by suite, distro, and status. Returns newest first with cursor-based pagination."
+    )]
+    async fn test_list_runs(
+        &self,
+        Parameters(params): Parameters<TestListRunsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(20).min(100);
+        let runs = admin_service::list_test_runs(
+            &self.state,
+            limit,
+            params.cursor,
+            params.suite,
+            params.distro,
+            params.status,
+        )
+        .await
+        .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&runs)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get full details for a test run including all test result summaries.
+    #[tool(
+        description = "Get full details for a test run including all test result summaries."
+    )]
+    async fn test_get_run(
+        &self,
+        Parameters(params): Parameters<TestGetRunParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let detail = admin_service::get_test_run_detail(&self.state, params.run_id)
+            .await
+            .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&detail)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get a single test result with all execution steps and their logs.
+    #[tool(
+        description = "Get a single test result with all execution steps and their logs."
+    )]
+    async fn test_get_test(
+        &self,
+        Parameters(params): Parameters<TestGetTestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let detail =
+            admin_service::get_test_detail(&self.state, params.run_id, params.test_id)
+                .await
+                .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&detail)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get test execution logs, optionally filtered by stream and step index.
+    #[tool(
+        description = "Get test execution logs, optionally filtered by stream (stdout/stderr) and step index."
+    )]
+    async fn test_get_logs(
+        &self,
+        Parameters(params): Parameters<TestGetLogsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let logs = admin_service::get_test_logs(
+            &self.state,
+            params.run_id,
+            params.test_id,
+            params.stream,
+            params.step_index,
+        )
+        .await
+        .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&logs)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get aggregate test health: total runs, recent activity, and pass/fail
+    /// summary.
+    #[tool(
+        description = "Get aggregate test health: total runs, recent activity, and pass/fail summary."
+    )]
+    async fn test_health(&self) -> Result<CallToolResult, McpError> {
+        let health = admin_service::test_health(&self.state)
+            .await
+            .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&health)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +708,8 @@ impl ServerHandler for RemiMcpServer {
             "Remi MCP server -- manage CI workflows, inspect runs, \
              trigger builds, sync mirrors, manage admin tokens, \
              list/inspect repositories, manage federation peers, \
-             and query/purge the admin audit log.",
+             query/purge the admin audit log, and inspect test \
+             run data and health.",
         )
     }
 
@@ -615,7 +759,7 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 16, "Expected 16 MCP tools");
+        assert_eq!(tools.len(), 21, "Expected 21 MCP tools");
     }
 
 }
