@@ -1,5 +1,6 @@
 // conary-test/src/server/handlers.rs
 
+use crate::error_taxonomy;
 use crate::server::service;
 use crate::server::state::AppState;
 use axum::Json;
@@ -32,7 +33,7 @@ pub struct StartRunRequest {
 pub async fn start_run(
     State(state): State<AppState>,
     Json(req): Json<StartRunRequest>,
-) -> impl IntoResponse {
+) -> Response {
     match service::start_run(&state, &req.suite, &req.distro, req.phase) {
         Ok(result) => {
             // Spawn the actual test execution in a background task.
@@ -44,11 +45,16 @@ pub async fn start_run(
                     "status": "pending",
                 })),
             )
+                .into_response()
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unknown distro") {
+                error_taxonomy::unknown_distro(&req.distro).into_response()
+            } else {
+                error_taxonomy::unknown_suite(&req.suite).into_response()
+            }
+        }
     }
 }
 
@@ -89,15 +95,15 @@ pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> Resp
             if msg.contains("not found") {
                 (
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "run not found"})),
+                    Json(error_taxonomy::run_not_found(id)),
                 )
                     .into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("report error: {msg}")})),
+                error_taxonomy::StructuredError::infrastructure(
+                    "report_error",
+                    format!("report error: {msg}"),
                 )
-                    .into_response()
+                .into_response()
             }
         }
     }
@@ -196,14 +202,11 @@ pub async fn get_test_logs(
             if msg.contains("not found") {
                 (
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": msg})),
+                    Json(error_taxonomy::test_not_found(id, &test_id)),
                 )
                     .into_response()
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": msg})),
-                )
+                error_taxonomy::StructuredError::infrastructure("log_retrieval_error", msg)
                     .into_response()
             }
         }
@@ -241,16 +244,21 @@ pub struct BuildImageRequest {
 pub async fn build_image(
     State(state): State<AppState>,
     Json(req): Json<BuildImageRequest>,
-) -> impl IntoResponse {
+) -> Response {
     match service::build_image(&state, &req.distro).await {
         Ok(tag) => (
             StatusCode::OK,
             Json(serde_json::json!({"distro": req.distro, "image": tag, "status": "built"})),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unknown distro") || msg.contains("not configured") {
+                error_taxonomy::unknown_distro(&req.distro).into_response()
+            } else {
+                error_taxonomy::container_failed(msg).into_response()
+            }
+        }
     }
 }
 
@@ -364,7 +372,16 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        // Config errors (unknown distro) return 422 with structured error.
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "unknown_distro");
+        assert_eq!(parsed["category"], "config");
+        assert!(!parsed["transient"].as_bool().unwrap());
     }
 
     #[tokio::test]
