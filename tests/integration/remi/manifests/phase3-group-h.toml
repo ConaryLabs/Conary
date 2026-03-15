@@ -93,6 +93,13 @@ group = "H"
 memory_limit_mb = 512
 network_isolated = false
 
+# Reinitialize the DB in case T88's tmpfs left it in a bad state
+[[test.step]]
+conary = "system init"
+
+[test.step.assert]
+exit_code = 0
+
 [[test.step]]
 run = "printf 'corrupt wal' > ${DB_PATH}-wal"
 
