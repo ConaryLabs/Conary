@@ -140,6 +140,9 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     // Intern version sets for dependencies
     provider.intern_all_dependency_version_sets();
 
+    // Build provides index and unfiltered deps for removal analysis
+    provider.load_removal_data()?;
+
     let remove_set: std::collections::HashSet<&str> =
         to_remove.iter().map(String::as_str).collect();
 
@@ -157,7 +160,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
             continue;
         }
 
-        if let Some(deps) = provider.get_dependency_list(sid) {
+        if let Some(deps) = provider.get_removal_dependency_list(sid) {
             for dep in deps {
                 // Extract simple (name, constraint) pairs for removal analysis.
                 // OR groups: if *any* alternative is still installed, the dep is satisfied.
@@ -180,20 +183,16 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                 // For OR groups, the dep is broken only if ALL alternatives are gone
                 if !breaking_set.contains(&pkg.name) {
                     let any_satisfied = singles.iter().any(|&(dep_name, constraint)| {
-                        if !remove_set.contains(dep_name) {
-                            // The dep is not being removed, so it might still satisfy
-                            return (0..solvable_count).any(|j| {
-                                let alt_sid = resolvo::SolvableId(j as u32);
-                                let alt = provider.get_solvable(alt_sid);
-                                alt.trove_id.is_some()
-                                    && alt.name == dep_name
-                                    && super::provider::constraint_matches_package(
-                                        constraint,
-                                        &alt.version,
-                                    )
+                        // 1. Check provides index
+                        let providers = provider.find_providers(dep_name);
+                        if !providers.is_empty() {
+                            return providers.iter().any(|(trove_id, _)| {
+                                provider
+                                    .trove_name(*trove_id)
+                                    .is_some_and(|name| !remove_set.contains(name))
                             });
                         }
-                        // Being removed: check if an alternative provider exists
+                        // 2. Fallback: check by package name with version constraint
                         (0..solvable_count).any(|j| {
                             let alt_sid = resolvo::SolvableId(j as u32);
                             let alt = provider.get_solvable(alt_sid);
