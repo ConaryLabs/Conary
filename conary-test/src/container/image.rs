@@ -122,11 +122,6 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
         root.join("config.toml"),
     )
     .context("failed to copy integration config.toml")?;
-    copy_dir_filtered(
-        &integration_root.join("runner"),
-        &root.join("runner"),
-        &["__pycache__"],
-    )?;
 
     let fixtures_src = project_root.join("tests/fixtures");
     if fixtures_src.is_dir() {
@@ -193,7 +188,6 @@ mod tests {
         let containerfile = remi_root.join("containers/Containerfile.fedora43");
 
         fs::create_dir_all(remi_root.join("containers")).expect("create containers");
-        fs::create_dir_all(remi_root.join("runner")).expect("create runner");
         fs::create_dir_all(project_root.join("tests/fixtures/recipes/simple-hello"))
             .expect("create fixtures");
         fs::create_dir_all(project_root.join("tests/fixtures/conary-test-fixture/v1/output"))
@@ -208,7 +202,6 @@ mod tests {
         fs::write(project_root.join("conary"), "binary").expect("write binary");
         fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
         fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
-        fs::write(remi_root.join("runner/test_runner.py"), "print('ok')\n").expect("write runner");
         fs::write(
             project_root.join("tests/fixtures/recipes/simple-hello/recipe.toml"),
             "name = 'simple-hello'\n",
@@ -234,7 +227,6 @@ mod tests {
                 .is_file()
         );
         assert!(staged.root.join("config.toml").is_file());
-        assert!(staged.root.join("runner/test_runner.py").is_file());
         assert!(
             staged
                 .root
