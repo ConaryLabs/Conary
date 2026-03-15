@@ -4,28 +4,31 @@
 # Feature validation for security, trust, and system management.
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME},
-#            ${TEST_PACKAGE_1}, ${FIXTURE_V1_CCS}
+#            ${FIXTURE_PKG_NAME}, ${FIXTURE_V1_CCS}
 
 [suite]
 name = "Phase 4 Group D: Security, Trust, System Ops, Federation, Automation"
 phase = 4
 
-# Setup: initialize DB, add repo, sync, and install a test package
-# so provenance/capability queries have something to work with.
+# Setup: initialize DB and install fixture CCS so provenance/capability
+# queries have something to work with. We use the CCS fixture because
+# TEST_PACKAGE_1 (system packages like "which") are not in the Remi repo.
 [[suite.setup]]
 conary = "system init"
 
 [[suite.setup]]
 run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
 
+# Add Remi repo (needed for trust and federation tests that reference REPO_NAME)
 [[suite.setup]]
 conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
 
 [[suite.setup]]
 conary = "repo sync ${REPO_NAME} --force"
 
+# Install fixture CCS (always available, no distro repo needed)
 [[suite.setup]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
 
 # ==========================================================================
 # PROVENANCE (T221-T226)
@@ -43,7 +46,7 @@ timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "provenance show ${TEST_PACKAGE_1}"
+conary = "provenance show ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -63,7 +66,7 @@ group = "D"
 # Verify may exit non-zero if the package has no transparency log entry,
 # which is expected for packages installed from upstream repos.
 [[test.step]]
-conary = "provenance verify ${TEST_PACKAGE_1}"
+conary = "provenance verify ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 stderr_not_contains = "panic"
@@ -80,7 +83,7 @@ timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "provenance export ${TEST_PACKAGE_1} --format spdx --output /tmp/prov-export.json"
+conary = "provenance export ${FIXTURE_PKG_NAME} --format spdx --output /tmp/prov-export.json"
 
 [test.step.assert]
 exit_code = 0
@@ -143,7 +146,7 @@ group = "D"
 # made-up version to exercise the code path.  Non-zero exit is acceptable
 # (the second version likely does not exist), but no panic.
 [[test.step]]
-run = "${CONARY_BIN} provenance diff ${TEST_PACKAGE_1}@1.0.0 ${TEST_PACKAGE_1}@2.0.0 --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} provenance diff ${FIXTURE_PKG_NAME}@1.0.0 ${FIXTURE_PKG_NAME}@2.0.0 --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
 stdout_not_contains = "panic"
@@ -182,7 +185,7 @@ timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "capability show ${TEST_PACKAGE_1}"
+conary = "capability show ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -379,25 +382,25 @@ timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "system sbom ${TEST_PACKAGE_1}"
+conary = "system sbom ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T238: System sbom --format spdx
+# T238: System sbom --format cyclonedx (explicit)
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T238"
-name = "system_sbom_spdx"
-description = "Generate SBOM in SPDX format"
+name = "system_sbom_cyclonedx_explicit"
+description = "Generate SBOM with explicit --format cyclonedx flag"
 timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "system sbom ${TEST_PACKAGE_1} --format spdx"
+conary = "system sbom ${FIXTURE_PKG_NAME} --format cyclonedx"
 
 [test.step.assert]
 exit_code = 0
@@ -415,7 +418,7 @@ timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "system restore ${TEST_PACKAGE_1} --dry-run"
+conary = "system restore ${FIXTURE_PKG_NAME} --dry-run"
 
 [test.step.assert]
 exit_code = 0
