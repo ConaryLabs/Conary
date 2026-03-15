@@ -1,0 +1,458 @@
+# tests/integration/remi/manifests/phase4-group-b.toml
+#
+# Phase 4, Group B: Model / Collection / Derive (T177-T195).
+# Feature validation for declarative system management.
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME}
+
+[suite]
+name = "Phase 4 Group B: Model, Collection, Derive"
+phase = 4
+
+# Setup: initialize DB and install a package for derive tests
+[[suite.setup]]
+conary = "system init"
+
+# Remove default repos to avoid slow syncs
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null || true"
+
+# Add Remi repo and sync for install commands
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[[suite.setup]]
+conary = "repo sync ${REPO_NAME} --force"
+
+# Install tree for derive tests (needs a real package in the DB)
+[[suite.setup]]
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+
+# ==========================================================================
+# System Model Tests (T177-T183)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T177: Model check (no model file)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T177"
+name = "model_check_no_model"
+description = "Model check with no model file should fail gracefully"
+timeout = 30
+group = "B"
+
+# Default model path /etc/conary/system.toml does not exist in container
+[[test.step]]
+conary = "model check"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T178: Model diff (no model file)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T178"
+name = "model_diff_no_model"
+description = "Model diff with no model file should fail gracefully"
+timeout = 30
+group = "B"
+
+[[test.step]]
+conary = "model diff"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T179: Model snapshot
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T179"
+name = "model_snapshot"
+description = "Create a model snapshot from current system state"
+timeout = 30
+group = "B"
+fatal = true
+
+[[test.step]]
+conary = "model snapshot --output /tmp/snapshot.toml"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+[[test.step]]
+file_exists = "/tmp/snapshot.toml"
+
+# --------------------------------------------------------------------------
+# T180: Model apply --dry-run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T180"
+name = "model_apply_dry_run"
+description = "Dry-run model apply using the snapshot as model file"
+timeout = 60
+group = "B"
+depends_on = ["T179"]
+
+[[test.step]]
+conary = "model apply --model /tmp/snapshot.toml --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T181: Model lock
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T181"
+name = "model_lock"
+description = "Create a lock file from the snapshot model"
+timeout = 30
+group = "B"
+depends_on = ["T179"]
+
+[[test.step]]
+conary = "model lock --model /tmp/snapshot.toml --output /tmp/lock.toml"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+[[test.step]]
+file_exists = "/tmp/lock.toml"
+
+# --------------------------------------------------------------------------
+# T182: Model update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T182"
+name = "model_update"
+description = "Update lock file for the snapshot model"
+timeout = 30
+group = "B"
+depends_on = ["T179"]
+
+[[test.step]]
+conary = "model update --model /tmp/snapshot.toml"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T183: Model remote-diff
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T183"
+name = "model_remote_diff"
+description = "Compare local state against remote model collections"
+timeout = 60
+group = "B"
+depends_on = ["T179"]
+
+# remote-diff may report no remote includes (exit non-zero) but must not panic
+[[test.step]]
+conary = "model remote-diff --model /tmp/snapshot.toml"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# Model cleanup
+[[test.step]]
+run = "rm -f /tmp/snapshot.toml /tmp/lock.toml"
+
+# ==========================================================================
+# Collection Tests (T184-T189)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T184: Collection create
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T184"
+name = "collection_create"
+description = "Create a new collection with an initial member"
+timeout = 30
+group = "B"
+fatal = true
+
+[[test.step]]
+conary = "collection create test-group --members ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T185: Collection list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T185"
+name = "collection_list"
+description = "List collections and verify test-group appears"
+timeout = 30
+group = "B"
+depends_on = ["T184"]
+
+[[test.step]]
+conary = "collection list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "test-group"
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T186: Collection show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T186"
+name = "collection_show"
+description = "Show collection members and verify initial member"
+timeout = 30
+group = "B"
+depends_on = ["T184"]
+
+[[test.step]]
+conary = "collection show test-group"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_PACKAGE_1}"
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T187: Collection add member
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T187"
+name = "collection_add_member"
+description = "Add a second package to the collection"
+timeout = 30
+group = "B"
+depends_on = ["T184"]
+
+[[test.step]]
+conary = "collection add test-group ${TEST_PACKAGE_2}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Verify the new member appears
+[[test.step]]
+conary = "collection show test-group"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${TEST_PACKAGE_2}"
+
+# --------------------------------------------------------------------------
+# T188: Collection remove member
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T188"
+name = "collection_remove_member"
+description = "Remove the initial member from the collection"
+timeout = 30
+group = "B"
+depends_on = ["T187"]
+
+[[test.step]]
+conary = "collection remove test-group ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Verify the removed member is gone
+[[test.step]]
+conary = "collection show test-group"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "${TEST_PACKAGE_1}"
+
+# --------------------------------------------------------------------------
+# T189: Collection delete
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T189"
+name = "collection_delete"
+description = "Delete the test collection"
+timeout = 30
+group = "B"
+depends_on = ["T188"]
+
+[[test.step]]
+conary = "collection delete test-group"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Verify it no longer appears in list
+[[test.step]]
+conary = "collection list"
+
+[test.step.assert]
+stdout_not_contains = "test-group"
+
+# ==========================================================================
+# Derived Package Tests (T190-T195)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T190: Derive list (empty)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T190"
+name = "derive_list_empty"
+description = "List derived packages when none exist"
+timeout = 30
+group = "B"
+
+[[test.step]]
+conary = "derive list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T191: Derive create
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T191"
+name = "derive_create"
+description = "Create a derived package from an installed package"
+timeout = 30
+group = "B"
+fatal = true
+
+[[test.step]]
+conary = "derive create test-derived --from ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T192: Derive show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T192"
+name = "derive_show"
+description = "Show details of the derived package"
+timeout = 30
+group = "B"
+depends_on = ["T191"]
+
+[[test.step]]
+conary = "derive show test-derived"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "test-derived"
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T193: Derive build
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T193"
+name = "derive_build"
+description = "Build the derived package"
+timeout = 120
+group = "B"
+depends_on = ["T191"]
+
+[[test.step]]
+conary = "derive build test-derived"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T194: Derive stale
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T194"
+name = "derive_stale"
+description = "Check for stale derived packages"
+timeout = 30
+group = "B"
+depends_on = ["T191"]
+
+[[test.step]]
+conary = "derive stale"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T195: Derive delete
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T195"
+name = "derive_delete"
+description = "Delete the derived package"
+timeout = 30
+group = "B"
+depends_on = ["T191"]
+
+[[test.step]]
+conary = "derive delete test-derived"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Verify it no longer appears in list
+[[test.step]]
+conary = "derive list"
+
+[test.step.assert]
+stdout_not_contains = "test-derived"
