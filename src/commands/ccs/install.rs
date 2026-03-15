@@ -372,9 +372,21 @@ pub fn cmd_ccs_install(
         let cap_policy = CapabilityPolicy::load(capability_policy.as_deref())?;
         let required_caps = infer_linux_capabilities(cap_decl);
 
+        // Evaluate all caps, checking denied first (so a denied cap isn't
+        // masked by an earlier prompted cap bailing first).
+        for cap in &required_caps {
+            if let PolicyDecision::Denied(msg) = cap_policy.evaluate(cap) {
+                anyhow::bail!(
+                    "Package {} capability policy rejected: {} -- {}",
+                    ccs_pkg.name(),
+                    cap,
+                    msg,
+                );
+            }
+        }
         for cap in &required_caps {
             match cap_policy.evaluate(cap) {
-                PolicyDecision::Allowed => {}
+                PolicyDecision::Allowed | PolicyDecision::Denied(_) => {}
                 PolicyDecision::Prompt(msg) => {
                     if allow_capabilities {
                         println!("Capability {cap} approved via --allow-capabilities");
@@ -387,14 +399,6 @@ pub fn cmd_ccs_install(
                             msg,
                         );
                     }
-                }
-                PolicyDecision::Denied(msg) => {
-                    anyhow::bail!(
-                        "Package {} capability policy rejected: {} -- {}",
-                        ccs_pkg.name(),
-                        cap,
-                        msg,
-                    );
                 }
             }
         }
