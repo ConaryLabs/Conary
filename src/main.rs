@@ -943,6 +943,8 @@ fn main() -> Result<()> {
                 sandbox,
                 no_deps,
                 reinstall,
+                allow_capabilities,
+                capability_policy,
             } => commands::ccs::cmd_ccs_install(
                 &package,
                 &common.db.db_path,
@@ -954,6 +956,8 @@ fn main() -> Result<()> {
                 sandbox.into(),
                 no_deps,
                 reinstall,
+                allow_capabilities,
+                capability_policy,
             ),
 
             cli::CcsCommands::Export {
