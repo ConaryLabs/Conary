@@ -8,6 +8,7 @@ mod events;
 mod federation;
 mod packages;
 mod repos;
+pub mod test_data;
 mod tokens;
 
 pub use artifacts::*;
