@@ -38,7 +38,7 @@ pub use declaration::{
     CapabilityDeclaration, CapabilityValidationError, FilesystemCapabilities, NetworkCapabilities,
     SyscallCapabilities, SyscallProfile,
 };
-pub use policy::{CapabilityPolicy, PolicyDecision};
+pub use policy::{CapabilityPolicy, PolicyDecision, infer_linux_capabilities};
 pub use resolver::{
     CapabilityProvider, CapabilityRequirement, CapabilityResolver, CapabilitySpec,
     FilesystemCapType, FilesystemCapabilitySpec, NetworkCapType, NetworkCapabilitySpec,
