@@ -148,7 +148,24 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 
     let solvable_count = provider.solvable_count();
 
-    // Single pass: find directly broken packages and build reverse dependency map
+    // Step 1: Collect everything the removed packages provide (capabilities + names).
+    // We only need to check deps that overlap with these — deps on unrelated
+    // capabilities can't be affected by the removal.
+    let mut removed_capabilities: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for i in 0..solvable_count {
+        let sid = resolvo::SolvableId(i as u32);
+        let pkg = provider.get_solvable(sid);
+        if remove_set.contains(pkg.name.as_str()) && pkg.trove_id.is_some() {
+            removed_capabilities.insert(pkg.name.clone());
+            for (cap, _) in &pkg.provided_capabilities {
+                removed_capabilities.insert(cap.clone());
+            }
+        }
+    }
+
+    // Step 2: For each installed package, check only deps that overlap with
+    // what the removed packages provide. Build reverse dep map and breaking set.
     let mut breaking_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut reverse_deps: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
@@ -162,8 +179,6 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 
         if let Some(deps) = provider.get_removal_dependency_list(sid) {
             for dep in deps {
-                // Extract simple (name, constraint) pairs for removal analysis.
-                // OR groups: if *any* alternative is still installed, the dep is satisfied.
                 let singles: Vec<(&str, &super::provider::ConaryConstraint)> = match dep {
                     super::provider::SolverDep::Single(name, constraint) => {
                         vec![(name.as_str(), constraint)]
@@ -180,7 +195,16 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                         .push(pkg.name.clone());
                 }
 
-                // For OR groups, the dep is broken only if ALL alternatives are gone
+                // Only evaluate deps that could be affected by this removal.
+                // A dep is affected if it matches something the removed
+                // packages provide (by capability or by name).
+                let affected = singles
+                    .iter()
+                    .any(|&(dep_name, _)| removed_capabilities.contains(dep_name));
+                if !affected {
+                    continue;
+                }
+
                 if !breaking_set.contains(&pkg.name) {
                     let any_satisfied = singles.iter().any(|&(dep_name, constraint)| {
                         // 1. Check provides index
@@ -192,8 +216,8 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                                     .is_some_and(|name| !remove_set.contains(name))
                             });
                         }
-                        // 2. Fallback: check by package name with version constraint
-                        let name_satisfied = (0..solvable_count).any(|j| {
+                        // 2. Fallback: check by package name
+                        (0..solvable_count).any(|j| {
                             let alt_sid = resolvo::SolvableId(j as u32);
                             let alt = provider.get_solvable(alt_sid);
                             alt.trove_id.is_some()
@@ -203,15 +227,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                                     constraint,
                                     &alt.version,
                                 )
-                        });
-                        if name_satisfied {
-                            return true;
-                        }
-                        // 3. Virtual/soname deps not tracked by conary (e.g.,
-                        // "libc.so.6(GLIBC_2.34)(64bit)") — if no provider
-                        // and no package matches, assume system-satisfied
-                        // rather than flagging as broken.
-                        crate::db::models::ProvideEntry::is_virtual_provide(dep_name)
+                        })
                     });
                     if !any_satisfied {
                         breaking_set.insert(pkg.name.clone());
