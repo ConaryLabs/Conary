@@ -84,7 +84,10 @@
 | `src/engine/qemu.rs` | QEMU boot step support |
 | `src/container/` | ContainerBackend trait, bollard implementation |
 | `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
+| `src/error_taxonomy.rs` | Structured error types with categories |
 | `src/report/` | JSON output, SSE event streaming |
 | `src/server/state.rs` | AppState with DashMap, broadcast channel, cancellation flags |
-| `src/server/` | Axum HTTP API (14 endpoints), MCP server (13 tools via rmcp) |
+| `src/server/remi_client.rs` | HTTP client for pushing results to Remi |
+| `src/server/wal.rs` | Local write-ahead log for Remi unreachability |
+| `src/server/` | Axum HTTP API (14 endpoints), MCP server (24 tools via rmcp) |
 | `src/cli.rs` | Binary entrypoint |
