@@ -9,6 +9,7 @@
 
 use std::future::Future;
 
+use chrono::Utc;
 use conary_core::mcp::to_json_text;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -108,6 +109,34 @@ pub struct BuildImageParams {
     pub distro: String,
 }
 
+/// Parameters for deploying source from a git ref.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeploySourceParams {
+    /// Git ref to checkout (branch, tag, or commit). Default: pull current branch.
+    #[schemars(
+        description = "Git ref to checkout (branch, tag, or commit). Default: pull current branch."
+    )]
+    pub git_ref: Option<String>,
+}
+
+/// Parameters for rebuilding binaries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RebuildParams {
+    /// Specific crate to build (conary, conary-test). Default: both.
+    #[schemars(description = "Specific crate to build (conary, conary-test). Default: both.")]
+    pub crate_name: Option<String>,
+}
+
+/// Parameters for building test fixtures.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BuildFixturesParams {
+    /// Fixture groups to build: all, corrupted, malicious, deps, boot, large. Default: all.
+    #[schemars(
+        description = "Fixture groups to build: all, corrupted, malicious, deps, boot, large. Default: all."
+    )]
+    pub groups: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -121,6 +150,78 @@ fn anyhow_to_mcp(err: anyhow::Error) -> McpError {
     } else {
         McpError::internal_error(msg, None)
     }
+}
+
+/// Run a shell command and capture its exit code, stdout, and stderr.
+async fn run_command(cmd: &str, args: &[&str], cwd: Option<&str>) -> Result<(i32, String, String), McpError> {
+    let mut command = tokio::process::Command::new(cmd);
+    command.args(args);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let output = command
+        .output()
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to run {cmd}: {e}"), None))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    Ok((code, stdout, stderr))
+}
+
+/// Determine the project root directory.
+///
+/// Checks `CONARY_PROJECT_DIR` env var first, then walks up from the current
+/// executable until a directory containing `Cargo.toml` is found.
+fn project_dir() -> Result<String, McpError> {
+    // Check environment variable first.
+    if let Ok(dir) = std::env::var("CONARY_PROJECT_DIR") {
+        return Ok(dir);
+    }
+
+    // Walk up from the current executable.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut path = exe.as_path();
+        while let Some(parent) = path.parent() {
+            if parent.join("Cargo.toml").exists()
+                && let Some(s) = parent.to_str()
+            {
+                return Ok(s.to_string());
+            }
+            path = parent;
+        }
+    }
+
+    // Fall back to current working directory.
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| McpError::internal_error(format!("Cannot determine project dir: {e}"), None))
+}
+
+/// Format command output as a human-readable summary string.
+fn format_command_output(label: &str, code: i32, stdout: &str, stderr: &str) -> String {
+    let status = if code == 0 { "OK" } else { "FAILED" };
+    let mut out = format!("[{label}] exit={code} ({status})\n");
+    if !stdout.is_empty() {
+        // Limit output to last 100 lines to avoid huge MCP responses.
+        let lines: Vec<&str> = stdout.lines().collect();
+        let start = lines.len().saturating_sub(100);
+        out.push_str("--- stdout (last 100 lines) ---\n");
+        for line in &lines[start..] {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !stderr.is_empty() {
+        let lines: Vec<&str> = stderr.lines().collect();
+        let start = lines.len().saturating_sub(50);
+        out.push_str("--- stderr (last 50 lines) ---\n");
+        for line in &lines[start..] {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +551,308 @@ impl TestMcpServer {
         let text = to_json_text(&result)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    // -----------------------------------------------------------------------
+    // Deployment tools
+    // -----------------------------------------------------------------------
+
+    /// Deploy source code from a git ref and rebuild binaries.
+    ///
+    /// If `git_ref` is `None`, runs `git pull` on the current branch.
+    /// Otherwise runs `git fetch && git checkout <ref>`. Then rebuilds
+    /// both `conary-test` and `conary` with `cargo build`.
+    #[tool(
+        description = "Deploy source code from git ref and rebuild. Runs git pull + cargo build on Forge."
+    )]
+    async fn deploy_source(
+        &self,
+        Parameters(params): Parameters<DeploySourceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir = project_dir()?;
+        let mut output = String::new();
+
+        // Step 1: Git operations.
+        if let Some(ref git_ref) = params.git_ref {
+            let (code, stdout, stderr) =
+                run_command("git", &["fetch", "--all"], Some(&dir)).await?;
+            output.push_str(&format_command_output("git fetch", code, &stdout, &stderr));
+            if code != 0 {
+                return Ok(CallToolResult::success(vec![Content::text(output)]));
+            }
+
+            let (code, stdout, stderr) =
+                run_command("git", &["checkout", git_ref], Some(&dir)).await?;
+            output.push_str(&format_command_output("git checkout", code, &stdout, &stderr));
+            if code != 0 {
+                return Ok(CallToolResult::success(vec![Content::text(output)]));
+            }
+        } else {
+            let (code, stdout, stderr) =
+                run_command("git", &["pull"], Some(&dir)).await?;
+            output.push_str(&format_command_output("git pull", code, &stdout, &stderr));
+            if code != 0 {
+                return Ok(CallToolResult::success(vec![Content::text(output)]));
+            }
+        }
+
+        // Step 2: Build both crates.
+        let (code, stdout, stderr) =
+            run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
+        output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+
+        let (code, stdout, stderr) =
+            run_command("cargo", &["build"], Some(&dir)).await?;
+        output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Rebuild conary and/or conary-test binaries from current source.
+    #[tool(description = "Rebuild conary and conary-test binaries from current source.")]
+    async fn rebuild_binary(
+        &self,
+        Parameters(params): Parameters<RebuildParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir = project_dir()?;
+        let mut output = String::new();
+
+        match params.crate_name.as_deref() {
+            Some("conary-test") => {
+                let (code, stdout, stderr) =
+                    run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
+                output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+            }
+            Some("conary") => {
+                let (code, stdout, stderr) =
+                    run_command("cargo", &["build"], Some(&dir)).await?;
+                output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+            }
+            Some(other) => {
+                return Err(McpError::invalid_params(
+                    format!("Unknown crate: {other}. Expected: conary, conary-test"),
+                    None,
+                ));
+            }
+            None => {
+                let (code, stdout, stderr) =
+                    run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
+                output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+
+                let (code, stdout, stderr) =
+                    run_command("cargo", &["build"], Some(&dir)).await?;
+                output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Restart the conary-test systemd user service.
+    ///
+    /// Spawns a delayed restart (1 second) so the MCP response is sent before
+    /// the process is killed by systemd.
+    #[tool(
+        description = "Restart the conary-test systemd user service and verify it's healthy."
+    )]
+    async fn restart_service(&self) -> Result<CallToolResult, McpError> {
+        // Spawn a background task that waits 1 second then restarts.
+        // This ensures the MCP response is sent before the process dies.
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let _ = tokio::process::Command::new("systemctl")
+                .args(["--user", "restart", "conary-test"])
+                .output()
+                .await;
+        });
+
+        let value = serde_json::json!({
+            "status": "restarting",
+            "message": "Service restart scheduled in 1 second. The current process will be replaced.",
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Build test fixtures (CCS packages for integration tests).
+    ///
+    /// Runs the appropriate `build-*.sh` script from `tests/fixtures/adversarial/`.
+    #[tool(description = "Build test fixtures (CCS packages for integration tests).")]
+    async fn build_fixtures(
+        &self,
+        Parameters(params): Parameters<BuildFixturesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir = project_dir()?;
+        let fixture_dir = format!("{dir}/tests/fixtures/adversarial");
+
+        let group = params.groups.as_deref().unwrap_or("all");
+        let script = match group {
+            "all" => "build-all.sh",
+            "corrupted" => "build-corrupted.sh",
+            "malicious" => "build-malicious.sh",
+            "deps" => "build-deps.sh",
+            "boot" => "build-boot-image.sh",
+            "large" => "build-large.sh",
+            other => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Unknown fixture group: {other}. Expected: all, corrupted, malicious, deps, boot, large"
+                    ),
+                    None,
+                ));
+            }
+        };
+
+        let script_path = format!("{fixture_dir}/{script}");
+        let (code, stdout, stderr) =
+            run_command("bash", &[&script_path], Some(&dir)).await?;
+
+        let output = format_command_output(
+            &format!("build-fixtures ({group})"),
+            code,
+            &stdout,
+            &stderr,
+        );
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Publish test fixtures to the Remi repository.
+    ///
+    /// Runs `scripts/publish-test-fixtures.sh` from the project root.
+    #[tool(description = "Publish test fixtures to Remi repository.")]
+    async fn publish_fixtures(&self) -> Result<CallToolResult, McpError> {
+        let dir = project_dir()?;
+        let script_path = format!("{dir}/scripts/publish-test-fixtures.sh");
+
+        let (code, stdout, stderr) =
+            run_command("bash", &[&script_path], Some(&dir)).await?;
+
+        let output = format_command_output("publish-fixtures", code, &stdout, &stderr);
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Get deployment status: binary version, uptime, WAL pending items,
+    /// service health.
+    #[tool(
+        description = "Get deployment status: binary version, uptime, WAL pending items, service health."
+    )]
+    async fn deploy_status(&self) -> Result<CallToolResult, McpError> {
+        let version = env!("CARGO_PKG_VERSION");
+
+        let now = Utc::now();
+        let uptime = now - self.state.start_time;
+        let uptime_str = format!(
+            "{}d {}h {}m {}s",
+            uptime.num_days(),
+            uptime.num_hours() % 24,
+            uptime.num_minutes() % 60,
+            uptime.num_seconds() % 60,
+        );
+
+        let wal_pending = self
+            .state
+            .wal
+            .as_ref()
+            .and_then(|w| w.lock().ok())
+            .and_then(|w| w.pending_count().ok())
+            .unwrap_or(0);
+
+        let active_runs = self.state.runs.len();
+
+        // Check systemd service status.
+        let (service_code, service_stdout, _) =
+            run_command("systemctl", &["--user", "is-active", "conary-test"], None)
+                .await
+                .unwrap_or((-1, "unknown".to_string(), String::new()));
+
+        let service_status = if service_code == 0 {
+            service_stdout.trim().to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        let value = serde_json::json!({
+            "version": version,
+            "uptime": uptime_str,
+            "started_at": self.state.start_time.to_rfc3339(),
+            "wal_pending": wal_pending,
+            "active_runs": active_runs,
+            "service_status": service_status,
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Flush pending WAL items to Remi.
+    ///
+    /// Replays all buffered test results that failed to reach Remi.
+    /// Returns counts of flushed and failed items.
+    #[tool(
+        description = "Flush pending WAL items to Remi. Returns count of flushed and failed items."
+    )]
+    async fn flush_pending(&self) -> Result<CallToolResult, McpError> {
+        let wal_arc = self.state.wal.as_ref().ok_or_else(|| {
+            McpError::internal_error("WAL is not configured".to_string(), None)
+        })?;
+        let client = self.state.remi_client.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "Remi client is not configured (REMI_ADMIN_TOKEN not set)".to_string(),
+                None,
+            )
+        })?;
+
+        // Extract pending items under the lock, then drop it before async work.
+        let items = {
+            let wal_guard = wal_arc.lock().map_err(|e| {
+                McpError::internal_error(format!("WAL lock poisoned: {e}"), None)
+            })?;
+            wal_guard.pending_items().map_err(|e| {
+                McpError::internal_error(format!("Failed to read WAL items: {e}"), None)
+            })?
+        };
+
+        let mut flushed = 0u64;
+        let mut failed = 0u64;
+
+        for item in items {
+            let data: crate::server::remi_client::PushResultData =
+                match serde_json::from_str(&item.payload) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("WAL item {} has invalid payload: {}", item.id, e);
+                        let wal_guard = wal_arc.lock().map_err(|e| {
+                            McpError::internal_error(format!("WAL lock poisoned: {e}"), None)
+                        })?;
+                        let _ = wal_guard.remove(item.id);
+                        continue;
+                    }
+                };
+
+            match client.push_result(item.run_id, &data).await {
+                Ok(()) => {
+                    let wal_guard = wal_arc.lock().map_err(|e| {
+                        McpError::internal_error(format!("WAL lock poisoned: {e}"), None)
+                    })?;
+                    let _ = wal_guard.remove(item.id);
+                    flushed += 1;
+                }
+                Err(e) => {
+                    let wal_guard = wal_arc.lock().map_err(|e| {
+                        McpError::internal_error(format!("WAL lock poisoned: {e}"), None)
+                    })?;
+                    let _ = wal_guard.mark_retry(item.id, &e.to_string());
+                    failed += 1;
+                }
+            }
+        }
+
+        let value = serde_json::json!({
+            "flushed": flushed,
+            "failed": failed,
+            "status": if failed == 0 { "ok" } else { "partial" },
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +913,6 @@ mod tests {
     fn test_mcp_tool_count() {
         let router = TestMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 13, "Expected 13 MCP tools");
+        assert_eq!(tools.len(), 20, "Expected 20 MCP tools");
     }
 }

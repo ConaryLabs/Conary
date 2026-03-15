@@ -5,6 +5,7 @@ use crate::engine::suite::TestSuite;
 use crate::report::stream::TestEvent;
 use crate::server::remi_client::RemiClient;
 use crate::server::wal::Wal;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -54,6 +55,8 @@ pub struct AppState {
     /// Optional write-ahead log for buffering results when Remi is unreachable.
     /// `None` when the WAL database cannot be opened.
     pub wal: Option<Arc<std::sync::Mutex<Wal>>>,
+    /// Timestamp when the server process started, used for uptime reporting.
+    pub start_time: DateTime<Utc>,
 }
 
 impl AppState {
@@ -103,6 +106,7 @@ impl AppState {
             run_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_runs)),
             remi_client,
             wal,
+            start_time: Utc::now(),
         }
     }
 
