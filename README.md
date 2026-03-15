@@ -264,6 +264,8 @@ Conary's native format uses content-addressable chunked storage, CBOR manifests 
 
 ```bash
 conary ccs build .                   # Build from ccs.toml
+conary ccs install package.ccs       # Install a CCS package
+conary ccs install package.ccs --reinstall    # Reinstall same version
 conary ccs sign package.ccs          # Ed25519 signatures
 conary ccs verify package.ccs        # Verify integrity
 conary ccs export package --format oci  # Export to container image
@@ -344,6 +346,30 @@ conary capability audit nginx         # Show declared capabilities
 conary capability enforce nginx       # Apply restrictions
 ```
 
+#### Install-Time Policy
+
+CCS packages declaring capabilities are evaluated against a three-tier policy:
+
+| Tier | Behavior | Default capabilities |
+|------|----------|---------------------|
+| **Allowed** | Install proceeds silently | `cap-dac-read-search`, `cap-chown` |
+| **Prompt** | Requires `--allow-capabilities` | `cap-net-raw`, `cap-sys-ptrace` |
+| **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio` |
+
+```bash
+conary ccs install package.ccs --allow-capabilities    # Approve prompted caps
+conary ccs install package.ccs --capability-policy /path/to/policy.toml
+```
+
+Custom policy file (`/etc/conary/capability-policy.toml`):
+```toml
+[capabilities]
+allowed = ["cap-dac-read-search", "cap-chown"]
+prompt = ["cap-net-raw", "cap-net-bind-service"]
+denied = ["cap-sys-admin"]
+default_tier = "prompt"
+```
+
 </details>
 
 <details>
@@ -419,6 +445,8 @@ A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), TUF supply chain trust, and Prometheus metrics.
 
+- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (21 tools)
+
 ```bash
 # Build with server support
 cargo build --features server
@@ -456,6 +484,22 @@ conary federation add-peer URL --tier cell_hub
 conary federation scan                # mDNS LAN discovery
 conary federation stats --days 7      # Bandwidth savings report
 ```
+
+---
+
+## Test Infrastructure
+
+152 integration tests across 3 phases, executed by the `conary-test` engine:
+
+```bash
+cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
+cargo run -p conary-test -- health    # Service health check
+cargo run -p conary-test -- logs T42  # Retrieve test logs
+```
+
+- TOML manifest-based tests with per-step logging
+- 24 MCP tools for agent-driven testing and deployment
+- Results streamed to Remi for persistent storage
 
 ---
 
