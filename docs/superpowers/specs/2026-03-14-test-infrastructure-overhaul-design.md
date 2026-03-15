@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-14
-revision: 1
+revision: 2
 summary: Comprehensive overhaul of test infrastructure -- persistence, deployment, unified runner, DX
 ---
 
@@ -27,10 +27,10 @@ container-based testing) but the developer experience is fragmented:
 | Area | Decision |
 |------|----------|
 | Python runner | Retire entirely, port all 76 tests to TOML manifests |
-| Deployment trust | Full trust -- MCP can deploy, rebuild, restart, publish |
-| Persistence | Remi is single source of truth, Forge is stateless |
-| Log granularity | Per-step + structured events + conary tracing spans |
-| Migration strategy | Big bang -- all 76 tests converted, delete Python runner |
+| Deployment trust | Full trust with bearer auth -- MCP can deploy, rebuild, restart, publish |
+| Persistence | Remi is single source of truth, Forge has local WAL for resilience |
+| Log granularity | Per-step logs + structured events (tracing integration deferred to Layer 5) |
+| Migration strategy | Incremental validation -- audit manifests, parallel-run, then delete Python |
 | DX persona | Both human and agent, equally |
 | Build order | Bottom-up: Remi API -> stateless executor -> manifests -> DX |
 
@@ -66,7 +66,13 @@ to Remi for any data queries.
 
 ### Database Schema
 
-New tables in Remi's SQLite (alongside existing admin tables):
+**Separate database file:** Test data lives in `/conary/test-data.db`, NOT in
+the main conary package database. This keeps test infrastructure completely
+independent from `conary-core`'s schema (currently v51 with 50+ tables). The
+Remi server opens this database separately via a new `test_db::init()` function
+with its own migration path. The main package DB is never touched.
+
+New tables in `/conary/test-data.db`:
 
 **test_runs:**
 - `id` INTEGER PRIMARY KEY
@@ -74,6 +80,9 @@ New tables in Remi's SQLite (alongside existing admin tables):
 - `distro` TEXT NOT NULL
 - `phase` INTEGER NOT NULL
 - `status` TEXT NOT NULL (pending, running, completed, cancelled, failed)
+  - `completed` = all tests executed (some may have failed)
+  - `failed` = infrastructure failure prevented the run from finishing
+  - Prerequisite: add `RunStatus::Failed` variant to `suite.rs` enum
 - `started_at` TEXT (ISO 8601)
 - `completed_at` TEXT
 - `triggered_by` TEXT (mcp-agent, ci, manual, cli)
@@ -151,6 +160,16 @@ New tools added to the existing remi-admin MCP server:
 - Events are structured JSON extracted by the test runner before pushing.
 - Cursor-based pagination consistent with existing admin API.
 - `triggered_by` field tracks provenance (which agent/CI/human started the run).
+- **Cursor pagination:** `GET /v1/admin/test-runs?cursor=<run_id>&limit=20`.
+  Cursor is the `id` field. Sort order: descending (newest first). Response:
+  `{ "runs": [...], "next_cursor": <id|null> }`.
+- **Log retention:** `raw_content` stored for 30 days, `content` for 90 days,
+  run metadata kept indefinitely. `test_gc(older_than_days?)` MCP tool and
+  `DELETE /v1/admin/test-runs/gc` endpoint for cleanup. `raw_content` is
+  optional — only stored when test manifest sets `capture_raw = true` or
+  via `?raw=true` query param on the push endpoint.
+- **Storage estimate:** ~76 tests x ~5 steps x ~2KB logs = ~760KB per run.
+  At 3 runs/day across 3 distros, ~2.3MB/day, ~70MB/month. Manageable.
 
 ## Layer 2: Stateless Executor
 
@@ -165,7 +184,24 @@ flow:
 4. `get_run`, `get_test`, `get_test_logs` -> proxy to Remi and return response
 
 conary-test still handles: container lifecycle, test execution, log capture,
-event extraction. It just doesn't store anything locally.
+event extraction. It stores nothing permanently, but uses a local write-ahead
+log for resilience.
+
+### Remi Unreachability (Local WAL)
+
+When a POST to Remi fails (network blip, Remi restarting, SQLite locked):
+
+1. Buffer the result to a local SQLite WAL at `/tmp/conary-test-wal.db`
+2. Background reconciliation loop retries buffered results every 30 seconds
+   with exponential backoff (30s, 60s, 120s, max 5 min)
+3. If Remi is down for the entire run, all results survive locally
+4. `flush_pending` MCP tool for explicit retry
+5. `pending_count` field in `deploy_status()` response shows buffered items
+6. After successful flush, local WAL rows are deleted
+
+This ensures no data loss even if Remi is unreachable. The WAL is a thin
+SQLite file with the same schema as Remi's test tables — reconciliation is
+a simple INSERT-or-UPDATE replay.
 
 ### Per-Step Log Capture
 
@@ -176,24 +212,43 @@ Replace concatenated stdout/stderr with per-step capture:
 - After each step, build `TestStep` + `TestLog` structs
 - For conary command steps, parse tracing output into `TestEvent` records
 
-### Conary Tracing Integration
+### Conary Tracing Integration (Deferred — Layer 5)
 
-conary uses the `tracing` crate. Add support for structured trace output:
+conary uses the `tracing` crate. A future enhancement will add structured
+trace output (`CONARY_LOG_FORMAT=json`) to capture spans like
+`PackageInstalled`, `RepoSynced`, `DependencyResolved` as `TestEvent` records.
 
-- New env var `CONARY_LOG_FORMAT=json` switches the tracing subscriber to
-  JSON-formatted output on stderr
-- When conary-test runs a conary command, it sets this env var
-- Parse the JSON spans from stderr into `TestEvent` records:
-  - `PackageInstalled { name, version, duration_ms }`
-  - `RepoSynced { repo, packages_count }`
-  - `DependencyResolved { package, deps_count }`
-  - `FileDeployed { path, hash }`
-  - etc.
-- These events provide deep visibility into what conary did during each step
+This is deferred because it requires modifying conary-core's logging
+subscriber (cross-crate change) and adds parsing complexity. Layer 2 works
+with per-step stdout/stderr capture, which already provides good debugging
+data. The `test_events` table schema is included in Layer 1 so the storage
+is ready when tracing integration lands.
+
+Per-step capture already exists partially in `StepResult` (`executor.rs:32-42`)
+with stdout, stderr, exit_code, and duration per step.
+
+### Authentication for conary-test
+
+Before adding deployment tools, conary-test's MCP/HTTP server gets bearer
+token auth mirroring Remi's external admin router pattern. The token is
+configured via `--token` CLI flag or `CONARY_TEST_TOKEN` env var (already
+partially implemented in `server/auth.rs` and `server/routes.rs`).
+
+Tool scopes:
+- `test:read` — list_runs, get_run, get_test, get_logs, health (query tools)
+- `test:write` — start_run, cancel_run, rerun_test, build_image (test ops)
+- `deploy:*` — deploy_source, rebuild_binary, restart_service, build_fixtures,
+  publish_fixtures, build_boot_image (deployment ops)
+
+All scopes granted by default with a single token (matching "full trust"
+decision). Scope enforcement allows future restriction if needed.
+
+`deploy_source(git_ref?)` validates that the ref resolves to a commit in the
+configured repository remote, not an arbitrary URL.
 
 ### Deployment MCP Tools
 
-New tools on conary-test's MCP server:
+New tools on conary-test's MCP server (require `deploy:*` scope):
 
 | Tool | Purpose |
 |------|---------|
@@ -203,7 +258,7 @@ New tools on conary-test's MCP server:
 | `build_fixtures(groups?)` | Run build scripts (all, corrupted, malicious, deps, boot) |
 | `publish_fixtures()` | Push fixtures to Remi via admin API |
 | `deploy_status()` | Current binary version, last deploy, service health, uptime |
-| `build_boot_image(version?)` | Trigger bootstrap image build on Remi, return progress |
+| `build_boot_image(version?)` | POST to Remi admin API `/v1/admin/bootstrap-image`, which runs the build on Remi (12 cores, KVM). Returns a job ID; poll via `deploy_status()` or Remi's `ci_get_run`. |
 
 ### Deploy Workflow
 
@@ -259,9 +314,15 @@ tests/integration/remi/manifests/
 
 1. Audit existing manifests against Python test functions for parity
 2. Fill gaps (missing assertions, cleanup steps, edge cases)
-3. Validate on Forge -- run via conary-test, compare against Python runner
+3. **Parallel validation** -- for each manifest, run both Python runner and
+   conary-test against the same container image, diff the results. Fix any
+   behavioral differences. This catches subtle issues like assertion order,
+   cleanup timing, or variable expansion differences.
 4. Update CI workflows to use `conary-test run` instead of `run.sh`
 5. Delete `runner/test_runner.py`, `run.sh`, Python-only CI steps
+
+Only delete the Python runner after all 8 manifests produce identical results
+in parallel validation.
 
 ## Layer 4: Developer Experience
 
@@ -288,14 +349,13 @@ Categories:
 
 The `transient` field tells agents whether to retry automatically.
 
-### Config Hot-Reload
+### Config Reload
 
-conary-test watches `manifests/` directory for changes. When a TOML file
-changes:
-- Re-parse and validate
-- Update in-memory suite registry
-- Next `start_run` picks up new manifest
-- `reload_manifests` MCP tool for explicit trigger
+Manifests are loaded at `start_run` time (current behavior — no change).
+A `reload_manifests` MCP tool and CLI command forces a re-parse of all
+manifest files without restarting the server. No filesystem watching —
+manifest changes are infrequent and always intentional, so explicit reload
+avoids race conditions and inotify complexity.
 
 ### Image Lifecycle
 
@@ -311,13 +371,21 @@ Every MCP tool has a corresponding CLI subcommand:
 
 ```
 conary-test run --suite phase1-core --distro fedora43
-conary-test deploy --source . --rebuild --restart
+conary-test deploy source --ref main
+conary-test deploy rebuild
+conary-test deploy restart
+conary-test deploy status
 conary-test fixtures build --all
 conary-test fixtures publish
 conary-test logs T142 --run latest --step 3
 conary-test health
 conary-test images prune --keep 3
+conary-test manifests reload
 ```
+
+CLI subcommand structure matches MCP tool granularity (each MCP tool = one
+CLI subcommand). The combined `deploy source --rebuild --restart` convenience
+form is implemented as orchestration over the individual service functions.
 
 CLI outputs human-friendly tables and colors. MCP/API returns structured JSON.
 Same underlying implementation -- CLI and MCP are thin wrappers over shared
