@@ -193,7 +193,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                             });
                         }
                         // 2. Fallback: check by package name with version constraint
-                        (0..solvable_count).any(|j| {
+                        let name_satisfied = (0..solvable_count).any(|j| {
                             let alt_sid = resolvo::SolvableId(j as u32);
                             let alt = provider.get_solvable(alt_sid);
                             alt.trove_id.is_some()
@@ -203,7 +203,15 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                                     constraint,
                                     &alt.version,
                                 )
-                        })
+                        });
+                        if name_satisfied {
+                            return true;
+                        }
+                        // 3. Virtual/soname deps not tracked by conary (e.g.,
+                        // "libc.so.6(GLIBC_2.34)(64bit)") — if no provider
+                        // and no package matches, assume system-satisfied
+                        // rather than flagging as broken.
+                        crate::db::models::ProvideEntry::is_virtual_provide(dep_name)
                     });
                     if !any_satisfied {
                         breaking_set.insert(pkg.name.clone());
@@ -692,6 +700,29 @@ mod tests {
         assert!(
             breaking.contains(&"consumer".to_string()),
             "Removing all providers should break consumer, got: {breaking:?}"
+        );
+    }
+
+    #[test]
+    fn test_removal_untracked_soname_deps_not_flagged() {
+        // Packages adopted from the system have soname deps like
+        // "libc.so.6(GLIBC_2.34)(64bit)" that conary doesn't track as
+        // provides. Removing any package should NOT flag these as broken.
+        let (_dir, conn) = setup_test_db();
+
+        // "bash" has a soname dep that no conary package provides
+        let _id_bash = insert_trove(
+            &conn,
+            "bash",
+            "5.2",
+            &[("libc.so.6(GLIBC_2.34)(64bit)", None)],
+        );
+        let _id_tree = insert_trove(&conn, "tree", "2.1", &[]);
+
+        let breaking = solve_removal(&conn, &["tree".to_string()]).unwrap();
+        assert!(
+            breaking.is_empty(),
+            "Untracked soname deps should be treated as system-satisfied, got: {breaking:?}"
         );
     }
 
