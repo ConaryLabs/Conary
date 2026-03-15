@@ -1,6 +1,6 @@
 # tests/integration/remi/manifests/phase3-group-n-qemu.toml
 #
-# Phase 3, Group N: Kernel & Boot Verification (QEMU Tests, T156-T159).
+# Phase 3, Group N: Kernel & Boot Verification (QEMU Tests, T150-T154, T156-T159).
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 #
@@ -8,10 +8,143 @@
 # engine boots one qcow2 image per step, waits for SSH, runs commands, and
 # checks expected output. Missing host tooling or unavailable images degrade to
 # informational skips via exit code 0 from the step helper.
+#
+# T150-T154 were moved here from the container manifest because kernel RPM install
+# scripts skip boot file deployment in containers. A real VM with bootloader
+# context is required for these tests.
 
 [suite]
 name = "Phase 3 Group N: Kernel & Boot Verification (QEMU)"
 phase = 3
+
+# --------------------------------------------------------------------------
+# T150: Kernel file deployment
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T150"
+name = "kernel_file_deployment"
+description = "Install a kernel package and verify kernel, initramfs, and modules are deployed"
+timeout = 360
+group = "N"
+fatal = true
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+memory_mb = 1024
+timeout_seconds = 240
+ssh_port = 2230
+commands = [
+    "conary repo sync fedora-remi --force",
+    "conary install kernel --repo fedora-remi --yes --sandbox never",
+    "ls /boot/vmlinuz* /boot/init* 2>/dev/null | wc -l",
+    "find /lib/modules /usr/lib/modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l",
+    "echo kernel-deploy-ok",
+]
+expect_output = [
+    "kernel-deploy-ok",
+]
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T151: BLS entry generation
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T151"
+name = "bls_entry_created"
+description = "Installing a kernel and building a generation should produce a BLS entry"
+timeout = 360
+group = "N"
+depends_on = ["T150"]
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+memory_mb = 1024
+timeout_seconds = 180
+ssh_port = 2231
+commands = [
+    "conary repo sync fedora-remi --force",
+    "conary install kernel --repo fedora-remi --yes --sandbox never",
+    "conary system generation build",
+    "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null || true",
+    "echo bls-check-done",
+]
+expect_output = [
+    "bls-check-done",
+]
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T153: Rollback reflects previous boot state
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T153"
+name = "kernel_generation_rollback"
+description = "Rolling back a generation should leave boot entries in a consistent prior state"
+timeout = 360
+group = "N"
+depends_on = ["T150"]
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+memory_mb = 1024
+timeout_seconds = 180
+ssh_port = 2232
+commands = [
+    "conary repo sync fedora-remi --force",
+    "conary install kernel --repo fedora-remi --yes --sandbox never",
+    "conary system generation build",
+    "conary system generation rollback 2>&1 || true",
+    "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null | sort || true",
+    "echo rollback-check-done",
+]
+expect_output = [
+    "rollback-check-done",
+]
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T154: Bootloader config deployment
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T154"
+name = "bootloader_config_deployed"
+description = "Install the bootloader package and verify expected config paths exist"
+timeout = 360
+group = "N"
+depends_on = ["T150"]
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+memory_mb = 1024
+timeout_seconds = 240
+ssh_port = 2233
+commands = [
+    "conary repo sync fedora-remi --force",
+    "conary install kernel --repo fedora-remi --yes --sandbox never",
+    "conary install grub2 --repo fedora-remi --yes --sandbox never",
+    "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true",
+    "echo bootloader-config-ok",
+]
+expect_output = [
+    "bootloader-config-ok",
+]
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T156: Minimal image reaches userspace

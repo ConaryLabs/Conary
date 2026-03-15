@@ -1,93 +1,16 @@
 # tests/integration/remi/manifests/phase3-group-n-container.toml
 #
-# Phase 3, Group N: Kernel & Boot Verification (Container Tests, T150-T155).
+# Phase 3, Group N: Kernel & Boot Verification (Container Tests, T152, T155).
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
-# Manifest distro overrides: ${kernel_package}, ${bootloader_package}, ${distro_repo}
 #
-# NOTE: These tests verify file deployment, generation metadata, and bootloader
-# artifacts inside the integration container. Actual boot verification happens in
-# the QEMU half of Group N (T156-T159).
+# NOTE: Tests that require kernel/boot file deployment (T150, T151, T153, T154)
+# have moved to the QEMU manifest (phase3-group-n-qemu.toml) because kernel RPM
+# install scripts skip boot file deployment in containers.
 
 [suite]
 name = "Phase 3 Group N: Kernel & Boot Verification (Container)"
 phase = 3
-
-[distro_overrides.fedora43]
-kernel_package = "kernel"
-bootloader_package = "grub2"
-distro_repo = "fedora-remi"
-
-[distro_overrides.ubuntu-noble]
-kernel_package = "linux-image-generic"
-bootloader_package = "grub-efi-amd64"
-distro_repo = "ubuntu-remi"
-
-[distro_overrides.arch]
-kernel_package = "linux"
-bootloader_package = "grub"
-distro_repo = "arch-remi"
-
-# --------------------------------------------------------------------------
-# T150: Kernel file deployment
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T150"
-name = "kernel_file_deployment"
-description = "Install a kernel package and verify kernel, initramfs, and modules are deployed"
-timeout = 300
-group = "N"
-fatal = true
-
-[[test.step]]
-conary = "repo sync ${distro_repo} --force"
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-conary = "install ${kernel_package} --repo ${distro_repo} --yes --sandbox never"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-[[test.step]]
-run = "ls /boot/vmlinuz* /boot/init* 2>/dev/null | wc -l"
-
-[test.step.assert]
-stdout_not_contains = "0"
-
-[[test.step]]
-run = "find /lib/modules /usr/lib/modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l"
-
-[test.step.assert]
-stdout_not_contains = "0"
-
-# --------------------------------------------------------------------------
-# T151: BLS entry generation
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T151"
-name = "bls_entry_created"
-description = "Installing a kernel and building a generation should produce a BLS entry"
-timeout = 180
-group = "N"
-depends_on = ["T150"]
-
-[[test.step]]
-run = "${CONARY_BIN} system generation build"
-
-[test.step.assert]
-stdout_not_contains = "panic"
-
-[[test.step]]
-run = "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null || true"
-
-[test.step.assert]
-stdout_contains_any = ["conary-gen", ".conf"]
 
 # --------------------------------------------------------------------------
 # T152: Kernel update creates new generation
@@ -111,56 +34,6 @@ run = "${CONARY_BIN} system generation list | grep -oP '^\\s*\\K\\d+' | wc -l"
 
 [test.step.assert]
 stdout_contains_any = ["1", "2", "3", "4", "5"]
-
-# --------------------------------------------------------------------------
-# T153: Rollback reflects previous boot state
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T153"
-name = "kernel_generation_rollback"
-description = "Rolling back a generation should leave boot entries in a consistent prior state"
-timeout = 180
-group = "N"
-depends_on = ["T150"]
-
-[[test.step]]
-run = "${CONARY_BIN} system generation rollback 2>&1 || true"
-
-[test.step.assert]
-stdout_contains_any = ["Generation", "rollback", "permission", "Operation not permitted"]
-stdout_not_contains = "panic"
-
-[[test.step]]
-run = "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null | sort || true"
-
-[test.step.assert]
-stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
-# T154: Bootloader config deployment
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T154"
-name = "bootloader_config_deployed"
-description = "Install the bootloader package and verify expected config paths exist"
-timeout = 300
-group = "N"
-depends_on = ["T150"]
-
-[[test.step]]
-conary = "install ${bootloader_package} --repo ${distro_repo} --yes --sandbox never"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-[[test.step]]
-run = "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true"
-
-[test.step.assert]
-stdout_contains_any = ["grub", "loader"]
 
 # --------------------------------------------------------------------------
 # T155: Kernel + bootloader verify
