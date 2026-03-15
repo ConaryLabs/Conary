@@ -258,6 +258,19 @@ impl ContainerConfig {
     ) -> Self {
         let mut config = Self::pristine();
 
+        // Mount host essentials (read-only) so the sandbox has a working
+        // shell, dynamic linker, and basic tools (bash, make, coreutils).
+        // The toolchain gcc is in the sysroot; everything else comes from
+        // the host.
+        for dir in &["/usr/bin", "/usr/lib", "/usr/lib64", "/lib64", "/bin", "/lib"] {
+            let p = std::path::Path::new(dir);
+            if p.exists() {
+                config.add_bind_mount(BindMount::readonly(p, p));
+            }
+        }
+        // /tmp is needed for configure scripts and intermediate files
+        config.add_bind_mount(BindMount::writable("/tmp", "/tmp"));
+
         // Mount the toolchain sysroot (read-only)
         config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
 
