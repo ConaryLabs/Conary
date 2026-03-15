@@ -1011,7 +1011,13 @@ mod tests {
         .unwrap();
 
         assert!(result.failure.is_some());
-        assert!(result.failure.as_ref().unwrap().contains("checksum mismatch"));
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("checksum mismatch")
+        );
     }
 
     #[tokio::test]
@@ -1037,7 +1043,13 @@ mod tests {
         .unwrap();
 
         assert!(result.failure.is_some());
-        assert!(result.failure.as_ref().unwrap().contains("sha256sum failed"));
+        assert!(
+            result
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("sha256sum failed")
+        );
     }
 
     #[tokio::test]

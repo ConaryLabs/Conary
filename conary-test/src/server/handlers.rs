@@ -115,7 +115,13 @@ pub async fn rerun_test(
     match service::rerun_test(&state, id, &test_id) {
         Ok(rerun) => {
             // Spawn execution using the original suite's manifest.
-            service::spawn_run(&state, rerun.run_id, &rerun.suite_name, &rerun.distro, rerun.phase);
+            service::spawn_run(
+                &state,
+                rerun.run_id,
+                &rerun.suite_name,
+                &rerun.distro,
+                rerun.phase,
+            );
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({

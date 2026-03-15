@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
 #[cfg(test)]
@@ -21,6 +21,20 @@ use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 use crate::engine::variables;
 use crate::report::stream::TestEvent;
+use crate::server::remi_client::{PushResultData, PushStepData, RemiClient};
+use crate::server::wal::Wal;
+
+/// Context for streaming test results to the Remi admin API.
+///
+/// When provided to `run_with_cancel`, each completed test is pushed to Remi
+/// as it finishes. On push failure, the payload is buffered to the WAL for
+/// retry.
+pub struct RemiStreamCtx {
+    /// Remi run ID returned by `create_run`.
+    pub remi_run_id: i64,
+    pub client: Arc<RemiClient>,
+    pub wal: Option<Arc<std::sync::Mutex<Wal>>>,
+}
 
 /// Executes tests from a manifest against a container.
 pub struct TestRunner {
@@ -62,15 +76,21 @@ impl TestRunner {
             base_container_config,
             None,
             None,
+            None,
         )
         .await
     }
 
     /// Run all tests with an optional cancellation flag, suite-level timeout
-    /// enforcement, and optional broadcast channel for live event streaming.
+    /// enforcement, optional broadcast channel for live event streaming, and
+    /// optional Remi streaming context for pushing per-test results.
     ///
     /// When `event_tx` is `Some((run_id, sender))`, the runner emits
     /// `TestEvent` variants to the broadcast channel as tests execute.
+    ///
+    /// When `remi_ctx` is `Some`, each completed test result is pushed to the
+    /// Remi admin API. On push failure, the result is buffered to the WAL.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_with_cancel(
         &mut self,
         manifest: &TestManifest,
@@ -79,6 +99,7 @@ impl TestRunner {
         base_container_config: Option<&ContainerConfig>,
         cancel_flag: Option<Arc<AtomicBool>>,
         event_tx: Option<(u64, tokio::sync::broadcast::Sender<TestEvent>)>,
+        remi_ctx: Option<&RemiStreamCtx>,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
 
@@ -245,6 +266,19 @@ impl TestRunner {
                 stderr: last_exec.as_ref().map(|e| e.stderr.clone()),
                 attempts: Vec::new(),
             });
+
+            // Push result to Remi if streaming is configured.
+            if let Some(ctx) = remi_ctx {
+                let push_data = build_push_result(
+                    &test_def.id,
+                    &test_def.name,
+                    status,
+                    elapsed,
+                    message.as_deref(),
+                    last_exec.as_ref(),
+                );
+                push_to_remi(ctx, &push_data).await;
+            }
 
             // Emit test result event.
             if let Some((run_id, ref tx)) = event_tx {
@@ -626,6 +660,81 @@ impl TestRunner {
 
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Remi streaming helpers
+// ---------------------------------------------------------------------------
+
+/// Build a `PushResultData` from a completed test result.
+///
+/// When `last_exec` is available, a single step is included with the raw
+/// stdout/stderr (Remi handles ANSI stripping on insertion).
+fn build_push_result(
+    test_id: &str,
+    name: &str,
+    status: TestStatus,
+    duration_ms: u64,
+    message: Option<&str>,
+    last_exec: Option<&ExecResult>,
+) -> PushResultData {
+    let status_str = match status {
+        TestStatus::Passed => "passed",
+        TestStatus::Failed => "failed",
+        TestStatus::Skipped => "skipped",
+        TestStatus::Cancelled => "cancelled",
+    };
+
+    let steps = if let Some(exec) = last_exec {
+        vec![PushStepData {
+            step_type: "exec".to_string(),
+            command: None,
+            exit_code: Some(exec.exit_code),
+            duration_ms: Some(i64::try_from(duration_ms).unwrap_or(i64::MAX)),
+            stdout: Some(exec.stdout.clone()),
+            stderr: Some(exec.stderr.clone()),
+        }]
+    } else {
+        Vec::new()
+    };
+
+    PushResultData {
+        test_id: test_id.to_string(),
+        name: name.to_string(),
+        status: status_str.to_string(),
+        duration_ms: Some(i64::try_from(duration_ms).unwrap_or(i64::MAX)),
+        message: message.map(String::from),
+        attempt: Some(1),
+        steps,
+    }
+}
+
+/// Push a test result to Remi, falling back to the WAL on failure.
+async fn push_to_remi(ctx: &RemiStreamCtx, data: &PushResultData) {
+    match ctx.client.push_result(ctx.remi_run_id, data).await {
+        Ok(()) => {
+            debug!(
+                test_id = %data.test_id,
+                remi_run_id = ctx.remi_run_id,
+                "pushed result to Remi"
+            );
+        }
+        Err(e) => {
+            warn!(
+                test_id = %data.test_id,
+                remi_run_id = ctx.remi_run_id,
+                error = %e,
+                "failed to push result to Remi, buffering to WAL"
+            );
+            if let Some(ref wal) = ctx.wal
+                && let Ok(json) = serde_json::to_string(data)
+                && let Ok(wal_guard) = wal.lock()
+                && let Err(wal_err) = wal_guard.buffer(ctx.remi_run_id, &json)
+            {
+                warn!(error = %wal_err, "failed to buffer result in WAL");
+            }
+        }
     }
 }
 
@@ -1015,7 +1124,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
-            skip: None,
+                skip: None,
             },
             TestDef {
                 id: "T02".to_string(),
@@ -1030,7 +1139,7 @@ mod tests {
                 depends_on: Some(vec!["T01".to_string()]),
                 fatal: None,
                 group: None,
-            skip: None,
+                skip: None,
             },
         ]);
 
@@ -1287,7 +1396,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
-            skip: None,
+                skip: None,
             }],
             distro_overrides: HashMap::new(),
         };
@@ -1537,7 +1646,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
-            skip: None,
+                skip: None,
             },
             TestDef {
                 id: "T02".to_string(),
@@ -1552,7 +1661,7 @@ mod tests {
                 depends_on: None,
                 fatal: None,
                 group: None,
-            skip: None,
+                skip: None,
             },
         ]);
 
@@ -1568,6 +1677,7 @@ mod tests {
                 &"ctr-1".to_string(),
                 None,
                 Some(cancel_flag),
+                None,
                 None,
             )
             .await
@@ -1605,7 +1715,7 @@ mod tests {
                     depends_on: None,
                     fatal: None,
                     group: None,
-            skip: None,
+                    skip: None,
                 },
                 TestDef {
                     id: "T02".to_string(),
@@ -1620,7 +1730,7 @@ mod tests {
                     depends_on: None,
                     fatal: None,
                     group: None,
-            skip: None,
+                    skip: None,
                 },
             ],
             distro_overrides: HashMap::new(),
@@ -1629,7 +1739,15 @@ mod tests {
         let backend = MockBackend::new(Vec::new());
         let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
         let suite = runner
-            .run_with_cancel(&manifest, &backend, &"ctr-1".to_string(), None, None, None)
+            .run_with_cancel(
+                &manifest,
+                &backend,
+                &"ctr-1".to_string(),
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 

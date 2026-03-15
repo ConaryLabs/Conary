@@ -3,6 +3,8 @@
 use crate::config::distro::GlobalConfig;
 use crate::engine::suite::TestSuite;
 use crate::report::stream::TestEvent;
+use crate::server::remi_client::RemiClient;
+use crate::server::wal::Wal;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +48,12 @@ pub struct AppState {
     pub event_tx: tokio::sync::broadcast::Sender<TestEvent>,
     /// Limits concurrent test run execution to prevent resource exhaustion.
     pub run_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Optional HTTP client for streaming test results to the Remi admin API.
+    /// `None` when `REMI_ADMIN_TOKEN` is not set in the environment.
+    pub remi_client: Option<Arc<RemiClient>>,
+    /// Optional write-ahead log for buffering results when Remi is unreachable.
+    /// `None` when the WAL database cannot be opened.
+    pub wal: Option<Arc<std::sync::Mutex<Wal>>>,
 }
 
 impl AppState {
@@ -59,6 +67,31 @@ impl AppState {
         max_concurrent_runs: usize,
     ) -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
+
+        // Try to create the Remi client from environment variables.
+        let remi_client = match RemiClient::from_env() {
+            Ok(client) => {
+                tracing::info!("Remi client configured for result streaming");
+                Some(Arc::new(client))
+            }
+            Err(_) => {
+                tracing::debug!("Remi client not configured (REMI_ADMIN_TOKEN not set)");
+                None
+            }
+        };
+
+        // Try to open the WAL database for resilient buffering.
+        let wal = match Wal::open("/tmp/conary-test-wal.db") {
+            Ok(w) => {
+                tracing::debug!("WAL database opened at /tmp/conary-test-wal.db");
+                Some(Arc::new(std::sync::Mutex::new(w)))
+            }
+            Err(e) => {
+                tracing::warn!("failed to open WAL database: {e}");
+                None
+            }
+        };
+
         Self {
             config,
             manifest_dir,
@@ -68,6 +101,8 @@ impl AppState {
             cancellation_flags: Arc::new(DashMap::new()),
             event_tx,
             run_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_runs)),
+            remi_client,
+            wal,
         }
     }
 

@@ -61,7 +61,10 @@ mod tests {
     const TEST_TOKEN: &str = "test-secret-token";
 
     fn authed_router() -> axum::Router {
-        routes::create_router(test_fixtures::test_app_state(), Some(TEST_TOKEN.to_string()))
+        routes::create_router(
+            test_fixtures::test_app_state(),
+            Some(TEST_TOKEN.to_string()),
+        )
     }
 
     #[tokio::test]

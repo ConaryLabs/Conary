@@ -4,6 +4,8 @@
 //! Handlers and MCP tools are thin wrappers that delegate to these
 //! functions, converting the results into their respective response types.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
@@ -157,7 +159,7 @@ async fn execute_run(
     phase: u32,
 ) -> Result<()> {
     use crate::container::{BollardBackend, ContainerBackend, ContainerConfig, VolumeMount};
-    use crate::engine::runner::TestRunner;
+    use crate::engine::runner::{RemiStreamCtx, TestRunner};
 
     tracing::info!(run_id, suite_name, distro, phase, "starting test run");
 
@@ -165,6 +167,25 @@ async fn execute_run(
     if let Some(mut entry) = state.runs.get_mut(&run_id) {
         entry.status = RunStatus::Running;
     }
+
+    // Create a Remi run if the client is configured.
+    let remi_run_id = if let Some(ref client) = state.remi_client {
+        match client
+            .create_run(suite_name, distro, phase, None, None)
+            .await
+        {
+            Ok(id) => {
+                tracing::info!(run_id, remi_run_id = id, "created Remi run");
+                Some(id)
+            }
+            Err(e) => {
+                tracing::warn!(run_id, error = %e, "failed to create Remi run, continuing without streaming");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Register cancellation flag.
     let cancel_flag = state.register_cancel_flag(run_id);
@@ -215,6 +236,16 @@ async fn execute_run(
         std::path::PathBuf::from(&state.manifest_dir).join(format!("{suite_name}.toml"));
     let manifest = crate::config::load_manifest(&manifest_path)?;
 
+    // Build the Remi streaming context if we have both a client and a run ID.
+    let remi_ctx = match (&state.remi_client, remi_run_id) {
+        (Some(client), Some(rid)) => Some(RemiStreamCtx {
+            remi_run_id: rid,
+            client: Arc::clone(client),
+            wal: state.wal.clone(),
+        }),
+        _ => None,
+    };
+
     // Run the tests.
     let mut runner = TestRunner::new(state.config.clone(), distro.to_string());
     let suite = runner
@@ -225,14 +256,90 @@ async fn execute_run(
             Some(&container_config),
             Some(cancel_flag),
             Some((run_id, state.event_tx.clone())),
+            remi_ctx.as_ref(),
         )
         .await?;
+
+    // Capture counts before moving results into state.
+    let suite_status = suite.status;
+    let suite_total = u32::try_from(suite.total()).unwrap_or(u32::MAX);
+    let suite_passed = u32::try_from(suite.passed()).unwrap_or(u32::MAX);
+    let suite_failed = u32::try_from(suite.failed()).unwrap_or(u32::MAX);
+    let suite_skipped = u32::try_from(suite.skipped()).unwrap_or(u32::MAX);
 
     // Update the suite in state with results.
     if let Some(mut entry) = state.runs.get_mut(&run_id) {
         entry.status = suite.status;
         entry.results = suite.results;
         entry.finished_at = suite.finished_at;
+    }
+
+    // Update the Remi run with final status and flush any buffered results.
+    if let (Some(client), Some(rid)) = (&state.remi_client, remi_run_id) {
+        let status_str = suite_status.as_str();
+
+        if let Err(e) = client
+            .update_run(
+                rid,
+                status_str,
+                suite_total,
+                suite_passed,
+                suite_failed,
+                suite_skipped,
+            )
+            .await
+        {
+            tracing::warn!(run_id, remi_run_id = rid, error = %e, "failed to update Remi run status");
+        } else {
+            tracing::debug!(run_id, remi_run_id = rid, "updated Remi run status");
+        }
+
+        // Flush any WAL-buffered results that failed during the run.
+        // We extract pending items under the lock, then process them
+        // outside the lock to avoid holding a std::sync::Mutex across
+        // async awaits.
+        if let Some(ref wal_arc) = state.wal {
+            let items = wal_arc
+                .lock()
+                .ok()
+                .and_then(|w| w.pending_items().ok())
+                .unwrap_or_default();
+
+            let mut flushed = 0u64;
+            let mut wal_failed = 0u64;
+            for item in items {
+                let data: crate::server::remi_client::PushResultData =
+                    match serde_json::from_str(&item.payload) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!("WAL item {} has invalid payload: {e}", item.id);
+                            if let Ok(w) = wal_arc.lock() {
+                                let _ = w.remove(item.id);
+                            }
+                            continue;
+                        }
+                    };
+
+                match client.push_result(item.run_id, &data).await {
+                    Ok(()) => {
+                        if let Ok(w) = wal_arc.lock() {
+                            let _ = w.remove(item.id);
+                        }
+                        flushed += 1;
+                    }
+                    Err(e) => {
+                        if let Ok(w) = wal_arc.lock() {
+                            let _ = w.mark_retry(item.id, &e.to_string());
+                        }
+                        wal_failed += 1;
+                    }
+                }
+            }
+
+            if flushed > 0 || wal_failed > 0 {
+                tracing::info!(run_id, flushed, failed = wal_failed, "WAL flush completed");
+            }
+        }
     }
 
     // Cleanup.
