@@ -32,8 +32,12 @@ configure = """
 # The kernel build system manages its own compiler flags. Unset LDFLAGS
 # and CFLAGS that contain --sysroot and cross-sysroot paths — they
 # interfere with host tool compilation (fixdep, objtool, etc.).
+# Unset bootstrap flags — the kernel manages its own.
+# HOSTCC must be passed on the make command line (not env) because the
+# kernel Makefile sets HOSTCC=gcc which overrides environment variables.
+# Only make command-line variables take precedence over Makefile assignments.
 unset LDFLAGS CFLAGS CXXFLAGS
-make ARCH=%(kernel_arch)s defconfig
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= defconfig
 
 # Apply Conary-specific options
 scripts/config --enable CONFIG_IKCONFIG
@@ -69,12 +73,12 @@ scripts/config --enable CONFIG_NETFILTER
 scripts/config --enable CONFIG_NF_CONNTRACK
 
 # Refresh config with new options
-make ARCH=%(kernel_arch)s olddefconfig
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= olddefconfig
 """
 
 make = """
 unset LDFLAGS CFLAGS CXXFLAGS
-make ARCH=%(kernel_arch)s -j%(jobs)s bzImage modules
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= -j%(jobs)s bzImage modules
 """
 
 install = """
@@ -82,7 +86,7 @@ install = """
 install -Dm644 arch/%(kernel_arch)s/boot/bzImage %(destdir)s/boot/vmlinuz-%(version)s-conary
 
 # Install modules
-make ARCH=%(kernel_arch)s INSTALL_MOD_PATH=%(destdir)s modules_install
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTLD=/usr/bin/ld HOSTLDFLAGS= INSTALL_MOD_PATH=%(destdir)s modules_install
 
 # Install System.map
 install -Dm644 System.map %(destdir)s/boot/System.map-%(version)s-conary
@@ -98,10 +102,10 @@ rm -f %(destdir)s/lib/modules/%(version)s*/source
 
 [build.environment]
 ARCH = "%(kernel_arch)s"
-HOSTCC = "/usr/bin/gcc"
-HOSTCXX = "/usr/bin/g++"
-HOSTLD = "/usr/bin/ld"
-HOSTAR = "/usr/bin/ar"
+# HOSTCC/HOSTCXX/HOSTLD are passed on the make command line, not here.
+# GNU make ignores env vars when the Makefile sets them directly
+# (HOSTCC = gcc in the kernel Makefile overrides HOSTCC=/usr/bin/gcc from env).
+# Only command-line variables (make HOSTCC=...) take precedence.
 
 [variables]
 kernel_arch = "x86_64"
