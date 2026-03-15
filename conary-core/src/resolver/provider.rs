@@ -17,7 +17,7 @@ use resolvo::{
 
 use crate::db::models::{
     DependencyEntry, ProvideEntry, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup, Trove,
+    RepositoryRequirementGroup, Trove, generate_capability_variations,
 };
 use crate::error::Result;
 use crate::repository::versioning::{
@@ -121,6 +121,18 @@ pub struct ConaryProvider<'db> {
     /// Pre-loaded dependencies for each solvable, keyed by `SolvableId` index.
     dependencies: HashMap<u32, Vec<SolverDep>>,
 
+    /// Index of capability name -> list of (trove_id, optional version) providers.
+    /// Built by `load_removal_data()` from already-loaded solvable provides.
+    provides_index: HashMap<String, Vec<(i64, Option<String>)>>,
+
+    /// Reverse map from trove_id to package name, for quick lookup during removal.
+    trove_id_to_name: HashMap<i64, String>,
+
+    /// Unfiltered dependencies for each solvable, including virtual provides
+    /// (soname, perl, python, etc.) that `dependencies` strips out.
+    /// Keyed by `SolvableId` index.
+    removal_deps: HashMap<u32, Vec<SolverDep>>,
+
     // --- Data source ---
     conn: &'db rusqlite::Connection,
 }
@@ -137,6 +149,9 @@ impl<'db> ConaryProvider<'db> {
             version_set_unions: Vec::new(),
             strings: Vec::new(),
             dependencies: HashMap::new(),
+            provides_index: HashMap::new(),
+            trove_id_to_name: HashMap::new(),
+            removal_deps: HashMap::new(),
             conn,
         }
     }
@@ -593,6 +608,144 @@ impl<'db> ConaryProvider<'db> {
             .enumerate()
             .find(|(_, s)| s.name == *name && s.trove_id.is_some())
             .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+    }
+
+    /// Build the provides index, trove-id-to-name map, and unfiltered dependency
+    /// list used by `solve_removal()`.
+    ///
+    /// Must be called after `load_installed_packages()`.  All data comes from
+    /// already-loaded solvables and a single extra DB query per trove for the
+    /// unfiltered dependency rows (the regular `dependencies` map strips
+    /// virtual provides via `is_virtual_provide`).
+    pub fn load_removal_data(&mut self) -> Result<()> {
+        // 1. Build trove_id_to_name from loaded solvables.
+        for solvable in &self.solvables {
+            if let Some(tid) = solvable.trove_id {
+                self.trove_id_to_name.insert(tid, solvable.name.clone());
+            }
+        }
+
+        // 2. Build provides_index from already-loaded provided_capabilities.
+        for solvable in &self.solvables {
+            let Some(tid) = solvable.trove_id else {
+                continue;
+            };
+            for (capability, prov_version) in &solvable.provided_capabilities {
+                let version_str = prov_version.as_ref().map(|v| match v {
+                    ConaryProvidedVersion::Installed(rpm) => rpm.to_string(),
+                    ConaryProvidedVersion::Repository { raw, .. } => raw.clone(),
+                });
+
+                // Index exact capability name.
+                self.provides_index
+                    .entry(capability.clone())
+                    .or_default()
+                    .push((tid, version_str.clone()));
+
+                // Also index variations so that fuzzy lookups hit.
+                for variation in generate_capability_variations(capability) {
+                    self.provides_index
+                        .entry(variation)
+                        .or_default()
+                        .push((tid, version_str.clone()));
+                }
+            }
+        }
+
+        // 3. Load UNFILTERED dependencies for each installed solvable.
+        //    Same logic as `load_installed_packages` lines 298-326 but
+        //    WITHOUT the `.filter(|d| !ProvideEntry::is_virtual_provide(...))`.
+        for (idx, solvable) in self.solvables.iter().enumerate() {
+            let Some(tid) = solvable.trove_id else {
+                continue;
+            };
+            let effective_scheme = match &solvable.version {
+                ConaryPackageVersion::Installed(_) => VersionScheme::Rpm,
+                ConaryPackageVersion::InstalledNative { scheme, .. } => *scheme,
+                ConaryPackageVersion::Repository { scheme, .. } => {
+                    scheme.unwrap_or(VersionScheme::Rpm)
+                }
+            };
+
+            let deps = DependencyEntry::find_by_trove(self.conn, tid)?;
+            let dep_list: Vec<SolverDep> = deps
+                .into_iter()
+                .map(|d| {
+                    let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
+                        (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
+                            VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
+                        ),
+                        (VersionScheme::Rpm, None) => {
+                            ConaryConstraint::Legacy(VersionConstraint::Any)
+                        }
+                        (native, Some(s)) => ConaryConstraint::Repository {
+                            scheme: native,
+                            constraint: parse_repo_constraint(native, s)
+                                .unwrap_or(RepoVersionConstraint::Any),
+                            raw: Some(s.to_string()),
+                        },
+                        (native, None) => ConaryConstraint::Repository {
+                            scheme: native,
+                            constraint: RepoVersionConstraint::Any,
+                            raw: None,
+                        },
+                    };
+                    SolverDep::Single(d.depends_on_name, constraint)
+                })
+                .collect();
+
+            let sid_index = u32::try_from(idx).expect("resolver solvable pool overflow");
+            self.removal_deps.insert(sid_index, dep_list);
+        }
+
+        Ok(())
+    }
+
+    /// Look up which troves provide a given capability.
+    ///
+    /// Returns `(trove_id, optional_version)` pairs.  Tries an exact match
+    /// first, then falls back to `generate_capability_variations()` and
+    /// deduplicates by trove id.
+    pub fn find_providers(&self, capability: &str) -> Vec<(i64, Option<String>)> {
+        let mut results: Vec<(i64, Option<String>)> = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        // Exact match.
+        if let Some(providers) = self.provides_index.get(capability) {
+            for &(tid, ref ver) in providers {
+                if seen_ids.insert(tid) {
+                    results.push((tid, ver.clone()));
+                }
+            }
+        }
+
+        // If no exact match, try variations of the dep name.
+        if results.is_empty() {
+            for variation in generate_capability_variations(capability) {
+                if let Some(providers) = self.provides_index.get(&variation) {
+                    for &(tid, ref ver) in providers {
+                        if seen_ids.insert(tid) {
+                            results.push((tid, ver.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Map a trove id back to its package name.
+    pub fn trove_name(&self, trove_id: i64) -> Option<&str> {
+        self.trove_id_to_name.get(&trove_id).map(String::as_str)
+    }
+
+    /// Get the unfiltered dependency list for a solvable (if loaded).
+    ///
+    /// Unlike `get_dependency_list()` this includes virtual provides such as
+    /// soname deps, perl modules, etc. that the regular list strips out.
+    pub fn get_removal_dependency_list(&self, id: SolvableId) -> Option<&[SolverDep]> {
+        self.removal_deps.get(&id.0).map(Vec::as_slice)
     }
 }
 

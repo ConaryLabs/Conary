@@ -611,6 +611,29 @@ mod tests {
 
     use crate::db::models::{RepositoryProvide, RepositoryRequirementGroup};
 
+    fn insert_provide(conn: &Connection, trove_id: i64, capability: &str, version: Option<&str>) {
+        use crate::db::models::ProvideEntry;
+        let mut provide =
+            ProvideEntry::new(trove_id, capability.to_string(), version.map(String::from));
+        provide.insert_or_ignore(conn).unwrap();
+    }
+
+    #[test]
+    fn test_removal_checks_provides_not_just_names() {
+        let (_dir, conn) = setup_test_db();
+        let id_a = insert_trove(&conn, "provider-a", "1.0.0", &[]);
+        insert_provide(&conn, id_a, "virtual-cap", Some("1.0.0"));
+        let id_b = insert_trove(&conn, "provider-b", "1.0.0", &[]);
+        insert_provide(&conn, id_b, "virtual-cap", Some("1.0.0"));
+        let _id_c = insert_trove(&conn, "consumer", "1.0.0", &[("virtual-cap", None)]);
+
+        let breaking = solve_removal(&conn, &["provider-a".to_string()]).unwrap();
+        assert!(
+            breaking.is_empty(),
+            "Should be safe (provider-b still provides virtual-cap), got: {breaking:?}"
+        );
+    }
+
     /// Helper: insert a trove with version_scheme and its dependencies
     fn insert_native_trove(
         conn: &Connection,
