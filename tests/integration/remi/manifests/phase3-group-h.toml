@@ -93,9 +93,9 @@ group = "H"
 memory_limit_mb = 512
 network_isolated = false
 
-# Reinitialize the DB in case T88's tmpfs left it in a bad state
+# Clean up DB files from T88's tmpfs, then reinitialize
 [[test.step]]
-conary = "system init"
+run = "rm -f ${DB_PATH} ${DB_PATH}-wal ${DB_PATH}-shm && ${CONARY_BIN} system init --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
