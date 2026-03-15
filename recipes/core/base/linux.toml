@@ -32,7 +32,7 @@ configure = """
 # Start with a default config for x86_64
 # HOSTCC uses the host's native gcc for building host tools (fixdep, etc.)
 # CROSS_COMPILE is empty when building natively in the bootstrap sysroot
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc defconfig
+make ARCH=%(kernel_arch)s defconfig
 
 # Apply Conary-specific options
 scripts/config --enable CONFIG_IKCONFIG
@@ -68,11 +68,11 @@ scripts/config --enable CONFIG_NETFILTER
 scripts/config --enable CONFIG_NF_CONNTRACK
 
 # Refresh config with new options
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc olddefconfig
+make ARCH=%(kernel_arch)s olddefconfig
 """
 
 make = """
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc -j%(jobs)s bzImage modules
+make ARCH=%(kernel_arch)s -j%(jobs)s bzImage modules
 """
 
 install = """
@@ -80,7 +80,7 @@ install = """
 install -Dm644 arch/%(kernel_arch)s/boot/bzImage %(destdir)s/boot/vmlinuz-%(version)s-conary
 
 # Install modules
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc INSTALL_MOD_PATH=%(destdir)s modules_install
+make ARCH=%(kernel_arch)s INSTALL_MOD_PATH=%(destdir)s modules_install
 
 # Install System.map
 install -Dm644 System.map %(destdir)s/boot/System.map-%(version)s-conary
@@ -96,6 +96,10 @@ rm -f %(destdir)s/lib/modules/%(version)s*/source
 
 [build.environment]
 ARCH = "%(kernel_arch)s"
+HOSTCC = "/usr/bin/gcc"
+HOSTCXX = "/usr/bin/g++"
+HOSTLD = "/usr/bin/ld"
+HOSTAR = "/usr/bin/ar"
 
 [variables]
 kernel_arch = "x86_64"
