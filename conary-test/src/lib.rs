@@ -4,6 +4,7 @@ pub mod config;
 pub mod container;
 pub mod engine;
 pub mod error;
+pub mod error_taxonomy;
 pub mod report;
 pub mod server;
 
