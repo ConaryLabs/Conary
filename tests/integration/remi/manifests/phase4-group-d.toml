@@ -52,7 +52,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
