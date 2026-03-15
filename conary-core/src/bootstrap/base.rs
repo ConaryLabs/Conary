@@ -417,13 +417,16 @@ impl BaseBuilder {
             target_root.display(),
             target_root.display()
         );
+        // -std=gnu17: GCC 15+ defaults to C23 (gnu23) which changes how
+        // glibc declares functions like bsearch (using _Generic). Many
+        // packages (coreutils, etc.) with gnulib wrappers expect C17.
         build_env.insert(
             "CFLAGS".to_string(),
-            format!("-O2 -pipe {sysroot_flag} {include_path}"),
+            format!("-O2 -pipe -std=gnu17 {sysroot_flag} {include_path}"),
         );
         build_env.insert(
             "CXXFLAGS".to_string(),
-            format!("-O2 -pipe {sysroot_flag} {include_path}"),
+            format!("-O2 -pipe -std=gnu++17 {sysroot_flag} {include_path}"),
         );
         build_env.insert(
             "LDFLAGS".to_string(),
