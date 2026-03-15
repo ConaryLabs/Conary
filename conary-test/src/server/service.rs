@@ -198,10 +198,24 @@ async fn execute_run(
             tracing::info!(run_id, image = %tag, "reusing cached image");
             tag.clone()
         } else {
-            tracing::info!(run_id, distro, "building image (first run for this distro)");
-            let tag = build_image(state, distro).await?;
-            *cached = Some(tag.clone());
-            tag
+            // Check if image already exists via podman CLI (bollard can't
+            // reliably list Podman images). This avoids rebuilding on
+            // every service restart when the image is already cached.
+            let expected_tag = format!("conary-test-{distro}:latest");
+            let check = tokio::process::Command::new("podman")
+                .args(["image", "exists", &expected_tag])
+                .output()
+                .await;
+            if check.is_ok_and(|o| o.status.success()) {
+                tracing::info!(run_id, image = %expected_tag, "found existing image via podman CLI");
+                *cached = Some(expected_tag.clone());
+                expected_tag
+            } else {
+                tracing::info!(run_id, distro, "building image (first run for this distro)");
+                let tag = build_image(state, distro).await?;
+                *cached = Some(tag.clone());
+                tag
+            }
         }
     };
     tracing::info!(run_id, image = %image_tag, "image ready");
