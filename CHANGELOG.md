@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] - 2026-03-15
+
+### Added
+- Three-tier capability policy engine (allowed/prompt/denied) for CCS install
+- `--reinstall` flag for `conary ccs install`
+- `--allow-capabilities` and `--capability-policy` flags for CCS install
+- Capability inference from CapabilityDeclaration (network/filesystem/syscall to Linux CAP_*)
+- Remi test data API: separate SQLite DB (`/conary/test-data.db`) with 9 HTTP endpoints and 5 MCP tools
+- conary-test Remi HTTP client for streaming results to Remi
+- Local WAL (`/tmp/conary-test-wal.db`) for buffering results when Remi is unreachable
+- 7 deployment MCP tools for conary-test (deploy_source, rebuild_binary, restart_service, build_fixtures, publish_fixtures, deploy_status, flush_pending)
+- 3 image/manifest MCP tools (reload_manifests, prune_images, image_info)
+- 14 CLI subcommands matching MCP tools for human/agent parity
+- Structured error taxonomy with categories (infrastructure/assertion/config/deployment/validation)
+- Podman CLI fallback for image existence check (bollard compatibility)
+- Bootstrap qcow2 image generation (31 packages, EFI bootable)
+
+### Fixed
+- `solve_removal()` now checks provides table, not just package names
+- `solve_removal()` only evaluates deps affected by the removal (prevents false positives from adopted packages)
+- Untracked soname deps treated as system-satisfied in removal check
+- CCS install checks denied capabilities before prompted ones
+- Bootstrap sandbox respects custom PATH from caller env
+- Bootstrap base builds skip sandbox (trusted recipes, need host tools)
+- Toolchain tool() falls back to unprefixed binaries in stage1 sysroot
+- Bootstrap LDFLAGS/CFLAGS include --sysroot for header/library isolation
+- Bootstrap adds -std=gnu17 for GCC 15 compatibility
+- Kernel recipe: HOSTCC/HOSTLD on make command line (GNU make precedence)
+- Kernel recipe: unset CC/LD env vars, prepend /usr/bin to PATH
+- zlib source URL updated to GitHub releases
+- Coreutils updated to 9.10 for GCC 15 gnulib compatibility
+- util-linux: disable liblastlog2/raw (unavailable in bootstrap)
+- systemd-repart: remove invalid --defer-partitions=no
+
+### Changed
+- CI workflows switched from Python runner to conary-test Rust engine
+- Phase 1-2 test manifests audited and gap-filled against Python runner
+- T150 + kernel dependents moved from container to QEMU manifest
+- T104/T105 capability policy tests enabled with updated fixtures
+- conary-test query handlers proxy to Remi with local DashMap fallback
+
+### Removed
+- Python test runner (`tests/integration/remi/runner/test_runner.py`, 1701 lines)
+- Shell orchestrator (`tests/integration/remi/run.sh`, 307 lines)
+
 ## [test-v0.2.0] - 2026-03-13
 
 ### Other
