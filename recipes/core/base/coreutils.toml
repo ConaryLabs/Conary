@@ -28,6 +28,9 @@ requires = ["glibc"]
 makedepends = ["gcc", "gettext", "libcap:devel"]
 
 configure = """
+# --disable-gcc-warnings: GCC 15 + gnulib generates _Generic wrappers
+# for bsearch/etc that trigger errors with -Werror. Disabling -Werror
+# lets these compile as warnings instead.
 ./configure \
     --prefix=/usr \
     --enable-no-install-program=kill,uptime \
@@ -35,6 +38,7 @@ configure = """
     --disable-acl \
     --disable-xattr \
     --without-selinux \
+    --disable-gcc-warnings \
     HELP2MAN=true
 """
 
