@@ -259,7 +259,16 @@ impl Toolchain {
             // Host tools don't have prefix
             self.bin_dir().join(name)
         } else {
-            self.bin_dir().join(format!("{}-{}", self.target, name))
+            // Prefer prefixed tool (e.g., x86_64-conary-linux-gnu-ar) but
+            // fall back to unprefixed (e.g., ar) if the prefixed version
+            // doesn't exist. Stage1 sysroots typically have unprefixed tools
+            // while stage0 crosstool-ng output has prefixed ones.
+            let prefixed = self.bin_dir().join(format!("{}-{}", self.target, name));
+            if prefixed.exists() {
+                prefixed
+            } else {
+                self.bin_dir().join(name)
+            }
         }
     }
 
