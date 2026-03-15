@@ -158,6 +158,14 @@ pub enum CcsCommands {
         /// Allow reinstalling an already-installed package at the same version
         #[arg(long)]
         reinstall: bool,
+
+        /// Allow packages with capabilities that would normally require confirmation
+        #[arg(long)]
+        allow_capabilities: bool,
+
+        /// Path to capability policy TOML file (default: /etc/conary/capability-policy.toml)
+        #[arg(long)]
+        capability_policy: Option<String>,
     },
 
     /// Export CCS packages to container image format

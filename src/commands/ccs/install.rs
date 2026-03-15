@@ -293,6 +293,8 @@ pub fn cmd_ccs_install(
     sandbox: crate::commands::SandboxMode,
     no_deps: bool,
     reinstall: bool,
+    allow_capabilities: bool,
+    capability_policy: Option<String>,
 ) -> Result<()> {
     let package_path = Path::new(package);
 
@@ -362,11 +364,40 @@ pub fn cmd_ccs_install(
         ccs_pkg.files().len()
     );
 
-    if ccs_pkg.manifest().capabilities.is_some() {
-        anyhow::bail!(
-            "Package capability policy rejected {}: install-time capability enforcement is not yet supported",
-            ccs_pkg.name()
-        );
+    if let Some(ref cap_decl) = ccs_pkg.manifest().capabilities {
+        use conary_core::capability::policy::{
+            CapabilityPolicy, PolicyDecision, infer_linux_capabilities,
+        };
+
+        let cap_policy = CapabilityPolicy::load(capability_policy.as_deref())?;
+        let required_caps = infer_linux_capabilities(cap_decl);
+
+        for cap in &required_caps {
+            match cap_policy.evaluate(cap) {
+                PolicyDecision::Allowed => {}
+                PolicyDecision::Prompt(msg) => {
+                    if allow_capabilities {
+                        println!("Capability {cap} approved via --allow-capabilities");
+                    } else {
+                        anyhow::bail!(
+                            "Package {} requires capability {}: {}. \
+                             Use --allow-capabilities to approve.",
+                            ccs_pkg.name(),
+                            cap,
+                            msg,
+                        );
+                    }
+                }
+                PolicyDecision::Denied(msg) => {
+                    anyhow::bail!(
+                        "Package {} capability policy rejected: {} -- {}",
+                        ccs_pkg.name(),
+                        cap,
+                        msg,
+                    );
+                }
+            }
+        }
     }
 
     // Step 3: Check for existing installation
