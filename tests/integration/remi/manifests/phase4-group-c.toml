@@ -10,46 +10,57 @@
 name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
 phase = 4
 
-# Setup: initialize DB and install fixture CCS for query tests.
-# We use the CCS fixture because TEST_PACKAGE_1 (system packages like "which")
-# are not in the Remi repo.
-[[suite.setup]]
-conary = "system init"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
-
-# Add Remi repo (needed for repo enable/disable tests)
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
-
-[[suite.setup]]
-conary = "repo sync ${REPO_NAME} --force"
-
-# Install fixture CCS (always available, no distro repo needed)
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
-
 # ==========================================================================
 #  CCS NON-INSTALL OPERATIONS (T196-T204)
 # ==========================================================================
 
 # --------------------------------------------------------------------------
-# T196: CCS init
+# T196: Setup + CCS init
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T196"
-name = "ccs_init"
-description = "Initialize a CCS project directory"
-timeout = 30
+name = "setup_and_ccs_init"
+description = "Setup: init DB, add repo, install fixture, then initialize a CCS project directory"
+timeout = 120
 group = "C"
 fatal = true
 
-# Create stage directory with a test binary
+# Setup: init DB
+[[test.step]]
+conary = "system init"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: remove default repos to avoid slow syncs
+[[test.step]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
+
+# Setup: add Remi repo (needed for repo enable/disable tests)
+[[test.step]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[test.step]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: install fixture CCS (always available, no distro repo needed)
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# Actual test: Create stage directory with a test binary
 [[test.step]]
 run = "rm -rf /tmp/test-ccs && mkdir -p /tmp/test-ccs/stage/usr/bin && printf '#!/bin/sh\\necho hello\\n' > /tmp/test-ccs/stage/usr/bin/test-hello && chmod +x /tmp/test-ccs/stage/usr/bin/test-hello"
 

@@ -10,35 +10,41 @@
 name = "Phase 4 Group B: Model, Collection, Derive"
 phase = 4
 
-# Setup: initialize DB and install fixture package for derive/collection tests.
-# We use the CCS fixture because TEST_PACKAGE_1 (system packages like "which")
-# are not in the Remi repo.
-[[suite.setup]]
-conary = "system init"
-
-# Remove default repos to avoid slow syncs
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
-
-# Install fixture CCS (always available, no repo sync needed)
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
-
 # ==========================================================================
 # System Model Tests (T177-T183)
 # ==========================================================================
 
 # --------------------------------------------------------------------------
-# T177: Model check (no model file)
+# T177: Setup + Model check (no model file)
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T177"
-name = "model_check_no_model"
-description = "Model check with no model file should fail gracefully"
-timeout = 30
+name = "setup_and_model_check"
+description = "Setup: install fixture, then test model check without model file"
+timeout = 120
 group = "B"
+fatal = true
 
+# Setup: init DB
+[[test.step]]
+conary = "system init"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: remove default repos to avoid slow syncs
+[[test.step]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
+
+# Setup: install fixture CCS (always available, no repo sync needed)
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# Actual test: model check without model file should fail gracefully
 # Default model path /etc/conary/system.toml does not exist in container
 [[test.step]]
 conary = "model check"

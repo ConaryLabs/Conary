@@ -10,41 +10,54 @@
 name = "Phase 4 Group D: Security, Trust, System Ops, Federation, Automation"
 phase = 4
 
-# Setup: initialize DB and install fixture CCS so provenance/capability
-# queries have something to work with. We use the CCS fixture because
-# TEST_PACKAGE_1 (system packages like "which") are not in the Remi repo.
-[[suite.setup]]
-conary = "system init"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
-
-# Add Remi repo (needed for trust and federation tests that reference REPO_NAME)
-[[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
-
-[[suite.setup]]
-conary = "repo sync ${REPO_NAME} --force"
-
-# Install fixture CCS (always available, no distro repo needed)
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
-
 # ==========================================================================
 # PROVENANCE (T221-T226)
 # ==========================================================================
 
 # --------------------------------------------------------------------------
-# T221: Provenance show
+# T221: Setup + Provenance show
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T221"
-name = "provenance_show"
-description = "Show provenance information for an installed package"
-timeout = 30
+name = "setup_and_provenance_show"
+description = "Setup: init DB, add repo, install fixture, then show provenance"
+timeout = 120
 group = "D"
+fatal = true
 
+# Setup: init DB
+[[test.step]]
+conary = "system init"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: remove default repos to avoid slow syncs
+[[test.step]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
+
+# Setup: add Remi repo (needed for trust and federation tests that reference REPO_NAME)
+[[test.step]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: install fixture CCS (always available, no distro repo needed)
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+# Actual test: show provenance information
 [[test.step]]
 conary = "provenance show ${FIXTURE_PKG_NAME}"
 
