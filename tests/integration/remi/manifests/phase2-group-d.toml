@@ -46,12 +46,10 @@ group = "D"
 depends_on = ["T62"]
 
 [[test.step]]
-run = "ls /tmp/conary-recipe-output/*.ccs 2>/dev/null | wc -l"
+run = "test $(ls /tmp/conary-recipe-output/*.ccs 2>/dev/null | wc -l) -gt 0 && echo 'CCS files found' || (echo 'No CCS files found'; exit 1)"
 
 [test.step.assert]
 exit_code = 0
-# Output should be at least "1" (not "0")
-stdout_not_contains = "0"
 
 # --------------------------------------------------------------------------
 # T64: PKGBUILD conversion
@@ -112,3 +110,7 @@ run = "${CONARY_BIN} cook ${FIXTURE_DIR}/recipes/simple-hello/recipe.toml --outp
 exit_code_not = 0
 # Output should mention isolation-related keywords, not an unrelated crash
 stdout_contains_any = ["pristine", "sandbox", "hermetic", "no such file", "not found", "failed to execute", "error"]
+
+# Cleanup step: remove recipe temp directories
+[[test.step]]
+run = "rm -rf /tmp/conary-recipe-output /tmp/conary-recipe-cache /tmp/conary-hermetic-output /tmp/conary-converted-recipe.toml"

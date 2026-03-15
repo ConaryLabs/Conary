@@ -72,7 +72,7 @@ run = "ls /tmp/conary-bootstrap-test/stage0 2>/dev/null || echo 'stage0 dir does
 id = "T61"
 name = "bootstrap_stage1_starts"
 description = "Verify bootstrap stage1 starts without panicking (timeout acceptable)"
-timeout = 120
+timeout = 60
 group = "C"
 
 # Stage1 may timeout (expected behavior -- proof of life that it started).
@@ -82,3 +82,7 @@ run = "timeout 30 ${CONARY_BIN} --db-path ${DB_PATH} bootstrap stage1 --work-dir
 
 [test.step.assert]
 stdout_not_contains = "panic"
+
+# Cleanup step: remove bootstrap temp directories
+[[test.step]]
+run = "rm -rf /tmp/conary-bootstrap-test /tmp/conary-bootstrap-recipes"

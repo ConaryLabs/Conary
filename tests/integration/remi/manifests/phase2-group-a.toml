@@ -246,6 +246,13 @@ conary = "unpin ${FIXTURE_PKG_NAME}"
 [test.step.assert]
 exit_code = 0
 
+# Verify unpin took effect
+[[test.step]]
+conary = "list ${FIXTURE_PKG_NAME} --info"
+
+[test.step.assert]
+stdout_not_contains = "Pinned      : yes"
+
 # --------------------------------------------------------------------------
 # T50: Orphan detection
 # --------------------------------------------------------------------------
