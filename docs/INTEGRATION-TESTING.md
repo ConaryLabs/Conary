@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-07
-revision: 2
-summary: Add Group F self-update tests (T72-T76)
+last_updated: 2026-03-14
+revision: 3
+summary: Switch to conary-test runner, remove Python runner references
 ---
 
 # Integration Testing
@@ -13,27 +13,26 @@ Conary uses Podman containers to run integration tests on real Linux distributio
 - **Podman** (rootless works, but tests run as root inside containers)
 - **Network access** to `packages.conary.io` (Remi server)
 - A built conary binary (`cargo build`)
+- The conary-test crate (`cargo build -p conary-test`)
 
 ## Running Tests
 
 ```bash
-# Build + run Phase 1 tests on Fedora 43
-./tests/integration/remi/run.sh --build --distro fedora43
+# Run Phase 1 core tests on Fedora 43
+cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
 
-# Run with Phase 2 (deep E2E) tests
-./tests/integration/remi/run.sh --build --distro fedora43 --phase2
+# Run all Phase 1 tests
+cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
+cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phase 1
 
-# Use a pre-built binary
-./tests/integration/remi/run.sh --binary target/debug/conary --distro fedora43
+# Run Phase 2 (deep E2E) tests
+cargo run -p conary-test -- run --suite phase2-group-a --distro fedora43 --phase 2
 
-# Test a native package
-./tests/integration/remi/run.sh --package packaging/rpm/output/conary.rpm --distro fedora43
+# Run all tests for a phase
+cargo run -p conary-test -- run --distro fedora43 --phase 1
 
-# Rebuild container from scratch
-./tests/integration/remi/run.sh --build --distro fedora43 --no-cache
-
-# Keep results volume after run
-./tests/integration/remi/run.sh --build --distro fedora43 --keep
+# List available suites
+cargo run -p conary-test -- list
 ```
 
 ### Available Distros
@@ -68,7 +67,7 @@ Always runs. Tests basic conary operations against a live Remi server:
 
 ### Phase 2: Deep E2E (T38-T76)
 
-Runs with `--phase2` flag. Requires test fixture packages published to Remi.
+Requires test fixture packages published to Remi.
 
 | Group | Range | Category |
 |-------|-------|----------|
@@ -78,6 +77,16 @@ Runs with `--phase2` flag. Requires test fixture packages published to Remi.
 | D | T62-T66 | Recipe & build (cook, PKGBUILD convert, hermetic build) |
 | E | T67-T71 | Remi client (sparse index, chunk fetch, OCI manifests) |
 | F | T72-T76 | Self-update (channel get/set/reset, version check, mock server) |
+
+### Phase 3: Adversarial (Groups G-N)
+
+Adversarial and stress tests.
+
+| Group | Category |
+|-------|----------|
+| G-M | Container-based adversarial tests |
+| N (container) | Container-based adversarial tests |
+| N (QEMU) | QEMU boot tests |
 
 ## Configuration
 
@@ -139,7 +148,7 @@ Tests run automatically on the Forge server (`forge.conarylabs.com`):
 |----------|---------|-------|
 | `ci.yaml` | Every push to main | Build + unit tests + clippy |
 | `integration.yaml` | Every push to main | Phase 1, all 3 distros |
-| `e2e.yaml` | Daily + manual | Phase 1 + Phase 2, all 3 distros |
+| `e2e.yaml` | Daily + manual | Phase 1 + Phase 2 + Phase 3, all 3 distros |
 | `remi-health.yaml` | Every 6 hours | Remi endpoint health |
 
 Trigger manually via Forgejo API:
@@ -151,12 +160,9 @@ curl -X POST "http://forge.conarylabs.com:3000/api/v1/repos/peter/Conary/actions
 
 ## Adding Tests
 
-1. Edit `tests/integration/remi/runner/test_runner.py`
-2. Add your test function inside the appropriate `run_phase*` or `run_group_*` function
-3. Register it with `suite.run_test("TXX", "test_name", test_fn, timeout=N)`
-4. Use `conary(cfg, ...)` to run conary (auto-appends `--db-path`)
-5. Use `no_db=True` for generation subcommands that don't accept `--db-path`
-6. Use assertion helpers: `assert_contains`, `assert_file_exists`, `assert_file_checksum`
+1. Create or edit a TOML manifest in `tests/integration/remi/manifests/`
+2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
+3. Run with `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
 
 ## Adding Distros
 
@@ -169,12 +175,8 @@ curl -X POST "http://forge.conarylabs.com:3000/api/v1/repos/peter/Conary/actions
 **"cannot start a transaction within a transaction"** during repo sync:
 Fixed in commit 942c4b2. If seen again, check that `batch_insert()` doesn't nest transactions.
 
-**ANSI escape codes in assertions:**
-`run_cmd()` strips ANSI codes automatically. If a new code pattern breaks through, update `_ANSI_RE` in `test_runner.py`.
-
 **"unexpected argument '--db-path'":**
-The subcommand doesn't accept `--db-path`. Use `no_db=True` in the `conary()` call.
-Check `src/cli/` to see which subcommands have `DbArgs`.
+The subcommand doesn't accept `--db-path`. Check `src/cli/` to see which subcommands have `DbArgs`.
 
 **Phase 2 tests fail with "package not found":**
 Test fixture packages need to be published to Remi first:

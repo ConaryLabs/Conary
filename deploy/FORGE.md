@@ -47,7 +47,8 @@ The Forgejo Runner runs natively on the host (not in a container) with label `li
 
 ```bash
 # Run integration tests locally (on Forge):
-./tests/integration/remi/run.sh --build --distro fedora43
+cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
+cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phase 1
 
 # Run Remi health check:
 ./scripts/remi-health.sh --smoke   # Quick (~5s)

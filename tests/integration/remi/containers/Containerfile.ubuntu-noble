@@ -55,11 +55,9 @@ RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1
         echo "No conary binary or package found in build context" >&2; exit 1; \
     fi && rm -rf /tmp/install
 
-COPY runner/ /opt/remi-tests/runner/
 COPY config.toml /opt/remi-tests/config.toml
 # Phase 2 test fixtures (recipes, PKGBUILD)
 COPY fixtures/ /opt/remi-tests/fixtures/
-RUN chmod +x /opt/remi-tests/runner/*.sh 2>/dev/null || true
 
 RUN mkdir -p /var/lib/conary /results
 
@@ -68,4 +66,4 @@ ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
 ENV CONARY_BIN=/usr/bin/conary
 
-CMD ["python3", "/opt/remi-tests/runner/test_runner.py"]
+CMD ["sleep", "infinity"]

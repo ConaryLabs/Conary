@@ -102,15 +102,13 @@ End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and
 
 ## Integration Tests
 
-- **Location:** `tests/integration/remi/` (76 tests: T01-T37 Phase 1, T38-T76 Phase 2)
-- **Runner:** Python 3.11+ (`runner/test_runner.py`), stdlib-only
+- **Location:** `tests/integration/remi/` (T01-T76 Phase 1+2, Phase 3 adversarial)
+- **Runner:** `conary-test` crate with TOML manifests in `tests/integration/remi/manifests/`
 - **Config:** `tests/integration/remi/config.toml` (single source of truth)
-- **Run on Forge:** `./tests/integration/remi/run.sh --build --distro fedora43`
-- **Phase 2:** `./tests/integration/remi/run.sh --build --distro fedora43 --phase2`
+- **Run:** `cargo run -p conary-test -- run --distro fedora43 --phase 1`
+- **Run suite:** `cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1`
 - **Containers:** `tests/integration/remi/containers/Containerfile.{fedora43,ubuntu-noble,arch}`
 - **Output:** JSON results in `tests/integration/remi/results/`
-- **New Rust engine:** `conary-test` crate with TOML manifests in `tests/integration/remi/manifests/`
-- **Run via:** `cargo run -p conary-test -- run --distro fedora43 --phase 1`
 - **Full docs:** See `.claude/rules/integration-tests.md` and `docs/INTEGRATION-TESTING.md`
 
 ## Version Groups

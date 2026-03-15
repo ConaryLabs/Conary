@@ -1,5 +1,5 @@
 # .forgejo/workflows/e2e.yaml
-# Phase 2 + Phase 3 E2E validation -- daily + manual
+# Full E2E validation (Phase 1 + 2 + 3) -- daily + manual
 name: E2E Validation
 
 on:
@@ -8,6 +8,34 @@ on:
   workflow_dispatch:
 
 jobs:
+  e2e-phase1:
+    runs-on: linux-native
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora43, ubuntu-noble, arch]
+    name: E2E Phase 1 (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build conary
+        run: cargo build
+
+      - name: Build conary-test
+        run: cargo build -p conary-test
+
+      - name: Run Phase 1 tests
+        run: |
+          cargo run -p conary-test -- run --suite phase1-core --distro ${{ matrix.distro }} --phase 1
+          cargo run -p conary-test -- run --suite phase1-advanced --distro ${{ matrix.distro }} --phase 1
+
+      - name: Upload Phase 1 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-phase1-results-${{ matrix.distro }}
+          path: tests/integration/remi/results/${{ matrix.distro }}.json
+
   e2e-phase2:
     runs-on: linux-native
     strategy:
@@ -21,10 +49,19 @@ jobs:
       - name: Build conary
         run: cargo build
 
-      - name: Run Phase 2 E2E tests (${{ matrix.distro }})
-        run: ./tests/integration/remi/run.sh --distro ${{ matrix.distro }} --phase2
+      - name: Build conary-test
+        run: cargo build -p conary-test
 
-      - name: Upload results
+      - name: Run Phase 2 tests
+        run: |
+          cargo run -p conary-test -- run --suite phase2-group-a --distro ${{ matrix.distro }} --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-b --distro ${{ matrix.distro }} --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-c --distro ${{ matrix.distro }} --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-d --distro ${{ matrix.distro }} --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-e --distro ${{ matrix.distro }} --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-f --distro ${{ matrix.distro }} --phase 2
+
+      - name: Upload Phase 2 results
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -44,8 +81,16 @@ jobs:
       - name: Build conary-test
         run: cargo build -p conary-test
 
-      - name: Run Phase 3 adversarial tests (${{ matrix.distro }})
-        run: cargo run -p conary-test -- run --distro ${{ matrix.distro }} --phase 3
+      - name: Run Phase 3 tests
+        run: |
+          cargo run -p conary-test -- run --suite phase3-group-g --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-h --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-i --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-j --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-k --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-l --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-m --distro ${{ matrix.distro }} --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-n-container --distro ${{ matrix.distro }} --phase 3
 
       - name: Upload Phase 3 results
         if: always()
