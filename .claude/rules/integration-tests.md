@@ -112,6 +112,25 @@ test packages, distro mappings, or fixture checksums, edit this file.
 3. Add distro name to the `remove_default_repos` list in `[setup]`
 4. Add to CI matrix in `.forgejo/workflows/integration.yaml` and `e2e.yaml`
 
+## CLI Subcommands
+
+```bash
+conary-test run --suite phase1-core --distro fedora43 --phase 1
+conary-test serve --port 9090
+conary-test list
+conary-test deploy source --ref main
+conary-test deploy rebuild
+conary-test deploy restart
+conary-test deploy status
+conary-test fixtures build --all
+conary-test fixtures publish
+conary-test logs T142 --run latest --step 3
+conary-test health
+conary-test images prune --keep 3
+conary-test images info conary-test-fedora43
+conary-test manifests reload
+```
+
 ## Gotchas
 
 - Container runs as root (required for system operations)
