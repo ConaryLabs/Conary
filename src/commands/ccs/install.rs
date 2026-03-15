@@ -292,6 +292,7 @@ pub fn cmd_ccs_install(
     _components: Option<Vec<String>>,
     sandbox: crate::commands::SandboxMode,
     no_deps: bool,
+    reinstall: bool,
 ) -> Result<()> {
     let package_path = Path::new(package);
 
@@ -375,11 +376,23 @@ pub fn cmd_ccs_install(
     if !existing.is_empty() {
         let old = &existing[0];
         if old.version == ccs_pkg.version() {
-            anyhow::bail!(
-                "Package {} version {} is already installed",
-                ccs_pkg.name(),
-                ccs_pkg.version()
-            );
+            if reinstall {
+                println!(
+                    "Reinstalling {} {} (--reinstall)",
+                    ccs_pkg.name(),
+                    ccs_pkg.version()
+                );
+                // Delete existing trove so install can proceed cleanly
+                if let Some(id) = old.id {
+                    conary_core::db::models::Trove::delete(&conn, id)?;
+                }
+            } else {
+                anyhow::bail!(
+                    "Package {} version {} is already installed",
+                    ccs_pkg.name(),
+                    ccs_pkg.version()
+                );
+            }
         }
         println!(
             "Upgrading {} from {} to {}",
