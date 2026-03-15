@@ -445,8 +445,9 @@ exit_code = 0
 [[test.step]]
 file_exists = "${FIXTURE_FILE}"
 
+# Use --reinstall in case repo already has v2 (avoids "already installed")
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
