@@ -61,9 +61,7 @@ impl Wal {
     pub fn pending_count(&self) -> Result<u64> {
         let count: u64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM pending_results", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT COUNT(*) FROM pending_results", [], |row| row.get(0))
             .context("failed to count pending WAL items")?;
         Ok(count)
     }
@@ -181,8 +179,7 @@ mod tests {
     #[test]
     fn test_buffer_and_retrieve() {
         let wal = Wal::open(":memory:").unwrap();
-        wal.buffer(1, r#"{"test_id":"T01","name":"test"}"#)
-            .unwrap();
+        wal.buffer(1, r#"{"test_id":"T01","name":"test"}"#).unwrap();
         assert_eq!(wal.pending_count().unwrap(), 1);
 
         let items = wal.pending_items().unwrap();

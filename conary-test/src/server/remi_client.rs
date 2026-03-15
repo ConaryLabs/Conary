@@ -331,12 +331,7 @@ mod tests {
         }
         let result = RemiClient::from_env();
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("REMI_ADMIN_TOKEN"),
-        );
+        assert!(result.unwrap_err().to_string().contains("REMI_ADMIN_TOKEN"),);
     }
 
     #[test]
