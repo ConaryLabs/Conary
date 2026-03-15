@@ -3,45 +3,26 @@
 # Phase 4, Group B: Model / Collection / Derive (T177-T195).
 # Feature validation for declarative system management.
 #
-# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME}
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME},
+#            ${FIXTURE_PKG_NAME}, ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS}
 
 [suite]
 name = "Phase 4 Group B: Model, Collection, Derive"
 phase = 4
 
-# Setup: initialize DB and install a package for derive tests
+# Setup: initialize DB and install fixture package for derive/collection tests.
+# We use the CCS fixture because TEST_PACKAGE_1 (system packages like "which")
+# are not in the Remi repo.
 [[suite.setup]]
 conary = "system init"
 
 # Remove default repos to avoid slow syncs
 [[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
 
+# Install fixture CCS (always available, no repo sync needed)
 [[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null || true"
-
-# Add Remi repo and sync for install commands
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
-
-[[suite.setup]]
-conary = "repo sync ${REPO_NAME} --force"
-
-# Install tree for derive tests (needs a real package in the DB)
-[[suite.setup]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
 
 # ==========================================================================
 # System Model Tests (T177-T183)
@@ -213,7 +194,7 @@ group = "B"
 fatal = true
 
 [[test.step]]
-conary = "collection create test-group --members ${TEST_PACKAGE_1}"
+conary = "collection create test-group --members ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -256,7 +237,7 @@ conary = "collection show test-group"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_PACKAGE_1}"
+stdout_contains = "${FIXTURE_PKG_NAME}"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -272,7 +253,7 @@ group = "B"
 depends_on = ["T184"]
 
 [[test.step]]
-conary = "collection add test-group ${TEST_PACKAGE_2}"
+conary = "collection add test-group test-extra-pkg"
 
 [test.step.assert]
 exit_code = 0
@@ -284,7 +265,7 @@ conary = "collection show test-group"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${TEST_PACKAGE_2}"
+stdout_contains = "test-extra-pkg"
 
 # --------------------------------------------------------------------------
 # T188: Collection remove member
@@ -299,7 +280,7 @@ group = "B"
 depends_on = ["T187"]
 
 [[test.step]]
-conary = "collection remove test-group ${TEST_PACKAGE_1}"
+conary = "collection remove test-group ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -311,7 +292,7 @@ conary = "collection show test-group"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "${TEST_PACKAGE_1}"
+stdout_not_contains = "${FIXTURE_PKG_NAME}"
 
 # --------------------------------------------------------------------------
 # T189: Collection delete
@@ -374,7 +355,7 @@ group = "B"
 fatal = true
 
 [[test.step]]
-conary = "derive create test-derived --from ${TEST_PACKAGE_1}"
+conary = "derive create test-derived --from ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0

@@ -4,31 +4,22 @@
 # Feature validation for package tooling and querying.
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME},
-#            ${REMI_DISTRO}, ${TEST_PACKAGE_1}, ${FIXTURE_V1_CCS}
+#            ${REMI_DISTRO}, ${FIXTURE_PKG_NAME}, ${FIXTURE_V1_CCS}
 
 [suite]
 name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
 phase = 4
 
-# Setup: initialize DB, add & sync repo, install test package for query tests
+# Setup: initialize DB and install fixture CCS for query tests.
+# We use the CCS fixture because TEST_PACKAGE_1 (system packages like "which")
+# are not in the Remi repo.
 [[suite.setup]]
 conary = "system init"
 
 [[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null || true"
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
 
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null || true"
-
-[[suite.setup]]
-run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null || true"
-
+# Add Remi repo (needed for repo enable/disable tests)
 [[suite.setup]]
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
 
@@ -38,8 +29,9 @@ conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-
 [[suite.setup]]
 conary = "repo sync ${REPO_NAME} --force"
 
+# Install fixture CCS (always available, no distro repo needed)
 [[suite.setup]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
 
 # ==========================================================================
 #  CCS NON-INSTALL OPERATIONS (T196-T204)
@@ -232,7 +224,7 @@ group = "C"
 
 # Export the package installed during setup (already in DB)
 [[test.step]]
-run = "rm -rf /tmp/oci-export && ${CONARY_BIN} ccs export ${TEST_PACKAGE_1} --format oci --output /tmp/oci-export --db-path ${DB_PATH}"
+run = "rm -rf /tmp/oci-export && ${CONARY_BIN} ccs export ${FIXTURE_PKG_NAME} --format oci --output /tmp/oci-export --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -253,7 +245,7 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-conary = "query depends ${TEST_PACKAGE_1}"
+conary = "query depends ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 stdout_not_contains = "panic"
@@ -270,7 +262,7 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-conary = "query rdepends ${TEST_PACKAGE_1}"
+conary = "query rdepends ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -288,7 +280,7 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-conary = "query whatprovides ${TEST_PACKAGE_1}"
+conary = "query whatprovides ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -324,7 +316,7 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-conary = "query repquery ${TEST_PACKAGE_1}"
+conary = "query repquery ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 exit_code = 0
@@ -343,7 +335,7 @@ group = "C"
 
 # Use package:runtime as a plausible component spec
 [[test.step]]
-conary = "query component ${TEST_PACKAGE_1}:runtime"
+conary = "query component ${FIXTURE_PKG_NAME}:runtime"
 
 [test.step.assert]
 # May fail if component doesn't exist, but must not panic
@@ -361,7 +353,7 @@ timeout = 30
 group = "C"
 
 [[test.step]]
-conary = "query components ${TEST_PACKAGE_1}"
+conary = "query components ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
 stdout_not_contains = "panic"
