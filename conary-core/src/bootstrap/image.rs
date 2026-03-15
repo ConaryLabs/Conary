@@ -464,7 +464,6 @@ impl ImageBuilder {
             .arg(format!("--definitions={}", repart_dir.display()))
             .arg(format!("--root={}", self.sysroot.display()))
             .arg("--discard=no")
-            .arg("--defer-partitions=no")
             .arg(&self.output)
             .output()
             .map_err(|e| ImageError::CommandFailed(format!("systemd-repart: {e}")))?;
