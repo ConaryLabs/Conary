@@ -400,7 +400,9 @@ impl BaseBuilder {
         // The stage1 sysroot has glibc and other libraries that the linker
         // needs. The target_root starts empty and gets populated as packages
         // are built; once glibc is installed there, it takes precedence.
-        let sysroot_path = toolchain.path.display();
+        // toolchain.path is .../sysroot/usr; --sysroot needs .../sysroot
+        let sysroot_for_linker = toolchain.path.parent().unwrap_or(&toolchain.path);
+        let sysroot_path = sysroot_for_linker.display();
         let include_path = format!(
             "-I{}/usr/include -I{sysroot_path}/usr/include",
             target_root.display()
