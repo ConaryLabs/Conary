@@ -93,9 +93,9 @@ group = "H"
 memory_limit_mb = 512
 network_isolated = false
 
-# Clean up DB files from T88's tmpfs, then reinitialize
+# Unmount any lingering tmpfs from T88, then reinitialize DB
 [[test.step]]
-run = "rm -f ${DB_PATH} ${DB_PATH}-wal ${DB_PATH}-shm && ${CONARY_BIN} system init --db-path ${DB_PATH}"
+run = "umount /var/lib/conary 2>/dev/null; rm -f ${DB_PATH} ${DB_PATH}-wal ${DB_PATH}-shm; ${CONARY_BIN} system init --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
