@@ -7,7 +7,7 @@
 
 [package]
 name = "coreutils"
-version = "9.9"
+version = "9.10"
 release = "1"
 summary = "GNU core utilities"
 description = """
@@ -20,7 +20,7 @@ homepage = "https://www.gnu.org/software/coreutils/"
 
 [source]
 archive = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz"
-checksum = "sha256:19bcb6ca867183c57d77155eae946c5eced88183143b45ca51ad7d26c628ca75"
+checksum = "sha256:16535a9adf0b10037364e2d612aad3d9f4eca3a344949ced74d12faf4bd51d25"
 signature = "https://ftp.gnu.org/gnu/coreutils/coreutils-%(version)s.tar.xz.sig"
 
 [build]
