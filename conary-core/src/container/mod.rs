@@ -526,11 +526,17 @@ impl Sandbox {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
             .env("HOME", "/root")
             .env("TERM", "dumb")
             .env("LANG", "C.UTF-8")
             .env("SHELL", "/bin/sh");
+
+        // Set PATH fallback only if the caller didn't provide one.
+        // Bootstrap builds need the toolchain PATH to take precedence.
+        let has_custom_path = env.iter().any(|(k, _)| *k == "PATH");
+        if !has_custom_path {
+            cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        }
 
         for (key, value) in env {
             cmd.env(*key, *value);
@@ -720,11 +726,17 @@ impl Sandbox {
             .args(args)
             .stdin(Stdio::null())
             .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
             .env("HOME", "/root")
             .env("TERM", "dumb")
             .env("LANG", "C.UTF-8")
             .env("SHELL", "/bin/sh");
+
+        // Set PATH fallback only if the caller didn't provide one.
+        // Bootstrap builds need the toolchain PATH to take precedence.
+        let has_custom_path = env.iter().any(|(k, _)| *k == "PATH");
+        if !has_custom_path {
+            cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        }
 
         for (key, value) in env {
             cmd.env(*key, *value);
