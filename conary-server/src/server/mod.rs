@@ -214,6 +214,8 @@ pub struct ServerState {
     pub forgejo_token: Option<String>,
     /// Broadcast channel for admin events (SSE stream)
     pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
+    /// Path to the separate test data database (test_db module)
+    pub test_db_path: Option<String>,
 }
 
 impl ServerState {
@@ -300,6 +302,10 @@ impl ServerState {
             forgejo_url: None,
             forgejo_token: None,
             admin_events,
+            test_db_path: Some(
+                std::env::var("CONARY_TEST_DB_PATH")
+                    .unwrap_or_else(|_| "/conary/test-data.db".to_string()),
+            ),
         }
     }
 }
