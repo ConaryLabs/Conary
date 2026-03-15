@@ -29,15 +29,16 @@ requires = ["linux-headers"]
 makedepends = ["gcc", "binutils", "bison", "flex", "elfutils:devel", "openssl:devel", "perl"]
 
 configure = """
-# The kernel build system manages its own compiler flags. Unset LDFLAGS
-# and CFLAGS that contain --sysroot and cross-sysroot paths — they
-# interfere with host tool compilation (fixdep, objtool, etc.).
-# Unset bootstrap flags — the kernel manages its own.
-# HOSTCC must be passed on the make command line (not env) because the
-# kernel Makefile sets HOSTCC=gcc which overrides environment variables.
-# Only make command-line variables take precedence over Makefile assignments.
-unset LDFLAGS CFLAGS CXXFLAGS
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= defconfig
+# The kernel build system manages its own compiler flags and tools.
+# We must:
+# 1. Unset ALL bootstrap env vars (CC, LD, LDFLAGS, etc.) so they don't
+#    leak into the kernel's tools/ sub-builds (objtool uses CC/LD from env)
+# 2. Pass HOSTCC/HOSTLD on the make command line (GNU make command-line
+#    vars override Makefile assignments; env vars don't)
+# 3. The kernel finds the target compiler via its own CC = $(CROSS_COMPILE)gcc
+#    which falls back to "gcc" from PATH (our stage1 gcc is first in PATH)
+unset LDFLAGS CFLAGS CXXFLAGS CC CXX LD AR RANLIB STRIP
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar HOSTLDFLAGS= defconfig
 
 # Apply Conary-specific options
 scripts/config --enable CONFIG_IKCONFIG
@@ -73,12 +74,12 @@ scripts/config --enable CONFIG_NETFILTER
 scripts/config --enable CONFIG_NF_CONNTRACK
 
 # Refresh config with new options
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= olddefconfig
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar HOSTLDFLAGS= olddefconfig
 """
 
 make = """
-unset LDFLAGS CFLAGS CXXFLAGS
-make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTLDFLAGS= -j%(jobs)s bzImage modules
+unset LDFLAGS CFLAGS CXXFLAGS CC CXX LD AR RANLIB STRIP
+make ARCH=%(kernel_arch)s HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar HOSTLDFLAGS= -j%(jobs)s bzImage modules
 """
 
 install = """
