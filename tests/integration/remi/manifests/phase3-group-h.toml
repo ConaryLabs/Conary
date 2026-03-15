@@ -59,7 +59,6 @@ name = "disk_full_rollback"
 description = "Disk-full during install should fail cleanly without leaving partial state"
 timeout = 60
 group = "H"
-skip = "tmpfs constraint not effective in container environment"
 
 [test.resources]
 tmpfs_size_mb = 50
