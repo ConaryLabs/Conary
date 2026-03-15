@@ -184,6 +184,23 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<GetRunParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Try Remi first if configured.
+        if let Some(ref client) = self.state.remi_client {
+            match client.get_run(params.run_id as i64).await {
+                Ok(data) => {
+                    let text = to_json_text(&data)?;
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Remi proxy failed for get_run {}, falling back to local: {e}",
+                        params.run_id
+                    );
+                }
+            }
+        }
+
+        // Fall back to in-memory DashMap.
         // MCP get_run returns the full JSON report as text (not a Value),
         // so we use to_json_report here for the string representation.
         match self.state.runs.get(&params.run_id) {
@@ -210,6 +227,26 @@ impl TestMcpServer {
         Parameters(params): Parameters<ListRunsParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(20).min(100);
+
+        // Try Remi first if configured.
+        if let Some(ref client) = self.state.remi_client {
+            match client
+                .list_runs(u32::try_from(limit).unwrap_or(u32::MAX), None, None, None, None)
+                .await
+            {
+                Ok(data) => {
+                    let text = to_json_text(&data)?;
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Remi proxy failed for list_runs, falling back to local: {e}"
+                    );
+                }
+            }
+        }
+
+        // Fall back to in-memory DashMap.
         let summaries = service::list_runs(&self.state, limit);
 
         let text = to_json_text(&summaries)?;
@@ -222,6 +259,24 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<GetTestParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Try Remi first if configured.
+        if let Some(ref client) = self.state.remi_client {
+            match client.get_test(params.run_id as i64, &params.test_id).await {
+                Ok(data) => {
+                    let text = to_json_text(&data)?;
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Remi proxy failed for get_test {}/{}, falling back to local: {e}",
+                        params.run_id,
+                        params.test_id
+                    );
+                }
+            }
+        }
+
+        // Fall back to in-memory DashMap.
         let entry = self.state.runs.get(&params.run_id).ok_or_else(|| {
             McpError::invalid_params(format!("Run {} not found", params.run_id), None)
         })?;
@@ -312,6 +367,27 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<GetTestParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Try Remi first if configured.
+        if let Some(ref client) = self.state.remi_client {
+            match client
+                .get_logs(params.run_id as i64, &params.test_id, None, None)
+                .await
+            {
+                Ok(data) => {
+                    let text = to_json_text(&data)?;
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Remi proxy failed for get_test_logs {}/{}, falling back to local: {e}",
+                        params.run_id,
+                        params.test_id
+                    );
+                }
+            }
+        }
+
+        // Fall back to in-memory DashMap.
         let logs = service::get_test_logs(&self.state, params.run_id, &params.test_id)
             .map_err(anyhow_to_mcp)?;
 

@@ -5,7 +5,7 @@ use crate::server::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 pub async fn health() -> &'static str {
@@ -52,17 +52,38 @@ pub async fn start_run(
     }
 }
 
-pub async fn list_runs(State(state): State<AppState>) -> impl IntoResponse {
-    let summaries = service::list_runs(&state, usize::MAX);
+pub async fn list_runs(State(state): State<AppState>) -> Response {
+    // Try Remi first if configured.
+    if let Some(ref client) = state.remi_client {
+        match client.list_runs(100, None, None, None, None).await {
+            Ok(data) => return (StatusCode::OK, Json(data)).into_response(),
+            Err(e) => {
+                tracing::debug!("Remi proxy failed for list_runs, falling back to local: {e}");
+            }
+        }
+    }
+
+    // Fall back to in-memory DashMap.
+    let mut summaries = service::list_runs(&state, usize::MAX);
     // HTTP handler sorts ascending by run_id for backwards compatibility.
-    let mut summaries = summaries;
     summaries.sort_by_key(|s| s.run_id);
-    Json(serde_json::json!(summaries))
+    Json(serde_json::json!(summaries)).into_response()
 }
 
-pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> impl IntoResponse {
+pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
+    // Try Remi first if configured.
+    if let Some(ref client) = state.remi_client {
+        match client.get_run(id as i64).await {
+            Ok(data) => return (StatusCode::OK, Json(data)).into_response(),
+            Err(e) => {
+                tracing::debug!("Remi proxy failed for get_run {id}, falling back to local: {e}");
+            }
+        }
+    }
+
+    // Fall back to in-memory DashMap.
     match service::get_run(&state, id) {
-        Ok(value) => (StatusCode::OK, Json(value)),
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
@@ -70,11 +91,13 @@ pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> impl
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({"error": "run not found"})),
                 )
+                    .into_response()
             } else {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": format!("report error: {msg}")})),
                 )
+                    .into_response()
             }
         }
     }
@@ -152,9 +175,22 @@ pub async fn rerun_test(
 pub async fn get_test_logs(
     State(state): State<AppState>,
     Path((id, test_id)): Path<(u64, String)>,
-) -> impl IntoResponse {
+) -> Response {
+    // Try Remi first if configured.
+    if let Some(ref client) = state.remi_client {
+        match client.get_logs(id as i64, &test_id, None, None).await {
+            Ok(data) => return (StatusCode::OK, Json(data)).into_response(),
+            Err(e) => {
+                tracing::debug!(
+                    "Remi proxy failed for get_test_logs {id}/{test_id}, falling back to local: {e}"
+                );
+            }
+        }
+    }
+
+    // Fall back to in-memory DashMap.
     match service::get_test_logs(&state, id, &test_id) {
-        Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))),
+        Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
@@ -162,11 +198,13 @@ pub async fn get_test_logs(
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({"error": msg})),
                 )
+                    .into_response()
             } else {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": msg})),
                 )
+                    .into_response()
             }
         }
     }
