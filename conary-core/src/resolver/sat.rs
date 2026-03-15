@@ -633,6 +633,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_removal_blocked_when_sole_provider() {
+        let (_dir, conn) = setup_test_db();
+        let id_a = insert_trove(&conn, "provider-a", "1.0.0", &[]);
+        insert_provide(&conn, id_a, "virtual-cap", Some("1.0.0"));
+        let _id_c = insert_trove(&conn, "consumer", "1.0.0", &[("virtual-cap", None)]);
+
+        let breaking = solve_removal(&conn, &["provider-a".to_string()]).unwrap();
+        assert!(
+            breaking.contains(&"consumer".to_string()),
+            "Removing sole provider should break consumer, got: {breaking:?}"
+        );
+    }
+
+    #[test]
+    fn test_removal_with_soname_provides() {
+        let (_dir, conn) = setup_test_db();
+        let id_glibc = insert_trove(&conn, "glibc", "2.38", &[]);
+        insert_provide(&conn, id_glibc, "libc.so.6", Some("2.38"));
+        let _id_consumer = insert_trove(&conn, "curl", "8.0", &[("libc.so.6", None)]);
+        let _id_other = insert_trove(&conn, "tree", "2.1", &[("libc.so.6", None)]);
+
+        let breaking = solve_removal(&conn, &["tree".to_string()]).unwrap();
+        assert!(
+            breaking.is_empty(),
+            "Removing tree should not break curl (glibc provides libc.so.6), got: {breaking:?}"
+        );
+    }
+
+    #[test]
+    fn test_removal_name_fallback_still_works() {
+        let (_dir, conn) = setup_test_db();
+        insert_trove(&conn, "B", "1.0.0", &[]);
+        let _id_a = insert_trove(&conn, "A", "1.0.0", &[("B", None)]);
+
+        let breaking = solve_removal(&conn, &["B".to_string()]).unwrap();
+        assert!(
+            breaking.contains(&"A".to_string()),
+            "Removing B should break A (name-based dep), got: {breaking:?}"
+        );
+    }
+
+    #[test]
+    fn test_removal_both_providers_breaks_consumer() {
+        let (_dir, conn) = setup_test_db();
+        let id_a = insert_trove(&conn, "provider-a", "1.0.0", &[]);
+        insert_provide(&conn, id_a, "virtual-cap", Some("1.0.0"));
+        let id_b = insert_trove(&conn, "provider-b", "1.0.0", &[]);
+        insert_provide(&conn, id_b, "virtual-cap", Some("1.0.0"));
+        let _id_c = insert_trove(&conn, "consumer", "1.0.0", &[("virtual-cap", None)]);
+
+        let breaking = solve_removal(
+            &conn,
+            &["provider-a".to_string(), "provider-b".to_string()],
+        )
+        .unwrap();
+        assert!(
+            breaking.contains(&"consumer".to_string()),
+            "Removing all providers should break consumer, got: {breaking:?}"
+        );
+    }
+
     /// Helper: insert a trove with version_scheme and its dependencies
     fn insert_native_trove(
         conn: &Connection,
