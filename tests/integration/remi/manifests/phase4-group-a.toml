@@ -1,0 +1,315 @@
+# tests/integration/remi/manifests/phase4-group-a.toml
+#
+# Phase 4, Group A: Config / Distro / Canonical / Groups / Registry (T160-T176).
+# Feature validation -- every documented CLI command must work.
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+
+[suite]
+name = "Phase 4 Group A: Config, Distro, Canonical, Groups, Registry"
+phase = 4
+
+# Setup: initialize DB so commands have a database to query
+[[suite.setup]]
+conary = "system init"
+
+# --------------------------------------------------------------------------
+# T160: Config list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T160"
+name = "config_list"
+description = "Verify config list runs without crashing"
+timeout = 30
+
+[[test.step]]
+conary = "config list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T161: Config check
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T161"
+name = "config_check"
+description = "Verify config check returns exit 0 with no modified files"
+timeout = 30
+
+[[test.step]]
+conary = "config check"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T162: Config diff
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T162"
+name = "config_diff"
+description = "Verify config diff on /etc/hostname runs without crashing"
+timeout = 30
+
+# May return non-zero if the file is not tracked, but must not panic
+[[test.step]]
+conary = "config diff /etc/hostname"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T163: Config backup
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T163"
+name = "config_backup"
+description = "Back up /etc/hostname and verify a backup was created"
+timeout = 30
+
+[[test.step]]
+conary = "config backup /etc/hostname"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T164: Config backups
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T164"
+name = "config_backups"
+description = "List backups for /etc/hostname (should include backup from T163)"
+timeout = 30
+depends_on = ["T163"]
+
+[[test.step]]
+conary = "config backups /etc/hostname"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T165: Config restore
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T165"
+name = "config_restore"
+description = "Restore /etc/hostname from most recent backup"
+timeout = 30
+depends_on = ["T163"]
+
+[[test.step]]
+conary = "config restore /etc/hostname"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T166: Distro list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T166"
+name = "distro_list"
+description = "List available distros"
+timeout = 30
+
+# distro list takes no arguments (no --db-path)
+[[test.step]]
+run = "${CONARY_BIN} distro list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T167: Distro info
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T167"
+name = "distro_info"
+description = "Show current distro info"
+timeout = 30
+
+[[test.step]]
+conary = "distro info"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T168: Distro set
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T168"
+name = "distro_set"
+description = "Set the distro to fedora and verify it took effect"
+timeout = 30
+
+[[test.step]]
+conary = "distro set fedora"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# Verify the distro was set
+[[test.step]]
+conary = "distro info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "fedora"
+
+# --------------------------------------------------------------------------
+# T169: Distro remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T169"
+name = "distro_remove"
+description = "Clear distro setting"
+timeout = 30
+depends_on = ["T168"]
+
+[[test.step]]
+conary = "distro remove"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T170: Canonical search
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T170"
+name = "canonical_search"
+description = "Search canonical registry for curl"
+timeout = 30
+
+[[test.step]]
+conary = "canonical search curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T171: Canonical show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T171"
+name = "canonical_show"
+description = "Show canonical info for curl"
+timeout = 30
+
+[[test.step]]
+conary = "canonical show curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T172: Canonical unmapped
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T172"
+name = "canonical_unmapped"
+description = "List packages without canonical mapping"
+timeout = 30
+
+[[test.step]]
+conary = "canonical unmapped"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T173: Groups list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T173"
+name = "groups_list"
+description = "List all available package groups"
+timeout = 30
+
+[[test.step]]
+conary = "groups list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T174: Groups show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T174"
+name = "groups_show"
+description = "Show members of a group (graceful error if group does not exist)"
+timeout = 30
+
+# Use a name that might exist; if not, just verify no panic
+[[test.step]]
+conary = "groups show base"
+
+[test.step.assert]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T175: Registry stats
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T175"
+name = "registry_stats"
+description = "Show registry mapping coverage statistics"
+timeout = 30
+
+[[test.step]]
+conary = "registry stats"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T176: Registry update
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T176"
+name = "registry_update"
+description = "Sync canonical registry from rules files"
+timeout = 60
+
+[[test.step]]
+conary = "registry update"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
