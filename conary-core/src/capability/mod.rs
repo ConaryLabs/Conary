@@ -31,12 +31,14 @@
 mod declaration;
 pub mod enforcement;
 pub mod inference;
+pub mod policy;
 pub mod resolver;
 
 pub use declaration::{
     CapabilityDeclaration, CapabilityValidationError, FilesystemCapabilities, NetworkCapabilities,
     SyscallCapabilities, SyscallProfile,
 };
+pub use policy::{CapabilityPolicy, PolicyDecision};
 pub use resolver::{
     CapabilityProvider, CapabilityRequirement, CapabilityResolver, CapabilitySpec,
     FilesystemCapType, FilesystemCapabilitySpec, NetworkCapType, NetworkCapabilitySpec,
