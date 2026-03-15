@@ -28,6 +28,9 @@ description = "Build a composefs generation from current package state"
 timeout = 120
 group = "B"
 fatal = true
+# Skip condition: requires EROFS kernel support (/proc/filesystems must contain "erofs").
+# The engine does not yet support skip_if conditions; this must be checked at runtime
+# or by a setup step that aborts the suite if EROFS is unavailable.
 
 # Generation commands do not accept --db-path
 [[test.step]]
