@@ -1,0 +1,595 @@
+# tests/integration/remi/manifests/phase4-group-c.toml
+#
+# Phase 4, Group C: CCS Operations / Query / Repo Management (T196-T220).
+# Feature validation for package tooling and querying.
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}, ${REPO_NAME},
+#            ${REMI_DISTRO}, ${TEST_PACKAGE_1}, ${FIXTURE_V1_CCS}
+
+[suite]
+name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
+phase = 4
+
+# Setup: initialize DB, add & sync repo, install test package for query tests
+[[suite.setup]]
+conary = "system init"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[[suite.setup]]
+conary = "repo sync ${REPO_NAME} --force"
+
+[[suite.setup]]
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+
+# ==========================================================================
+#  CCS NON-INSTALL OPERATIONS (T196-T204)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T196: CCS init
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T196"
+name = "ccs_init"
+description = "Initialize a CCS project directory"
+timeout = 30
+group = "C"
+fatal = true
+
+# Create stage directory with a test binary
+[[test.step]]
+run = "rm -rf /tmp/test-ccs && mkdir -p /tmp/test-ccs/stage/usr/bin && printf '#!/bin/sh\\necho hello\\n' > /tmp/test-ccs/stage/usr/bin/test-hello && chmod +x /tmp/test-ccs/stage/usr/bin/test-hello"
+
+[test.step.assert]
+exit_code = 0
+
+# ccs init does not accept --db-path
+[[test.step]]
+run = "${CONARY_BIN} ccs init /tmp/test-ccs --name test-pkg --version 1.0.0"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify ccs.toml was created
+[[test.step]]
+file_exists = "/tmp/test-ccs/ccs.toml"
+
+# --------------------------------------------------------------------------
+# T197: CCS build
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T197"
+name = "ccs_build"
+description = "Build a CCS package from initialized project"
+timeout = 60
+group = "C"
+depends_on = ["T196"]
+fatal = true
+
+[[test.step]]
+run = "mkdir -p /tmp/test-ccs-output && ${CONARY_BIN} ccs build /tmp/test-ccs --output /tmp/test-ccs-output --source /tmp/test-ccs/stage"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify at least one .ccs file was produced
+[[test.step]]
+run = "test $(ls /tmp/test-ccs-output/*.ccs 2>/dev/null | wc -l) -gt 0 && echo 'CCS file found' || (echo 'No CCS output'; exit 1)"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "CCS file found"
+
+# --------------------------------------------------------------------------
+# T198: CCS inspect (metadata)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T198"
+name = "ccs_inspect_metadata"
+description = "Inspect a CCS package metadata"
+timeout = 30
+group = "C"
+depends_on = ["T197"]
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs inspect $CCS_FILE"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["test-pkg", "1.0.0"]
+
+# --------------------------------------------------------------------------
+# T199: CCS inspect --files
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T199"
+name = "ccs_inspect_files"
+description = "Inspect CCS package file listing"
+timeout = 30
+group = "C"
+depends_on = ["T197"]
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs inspect $CCS_FILE --files"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "test-hello"
+
+# --------------------------------------------------------------------------
+# T200: CCS inspect --deps
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T200"
+name = "ccs_inspect_deps"
+description = "Inspect CCS package dependencies"
+timeout = 30
+group = "C"
+depends_on = ["T197"]
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs inspect $CCS_FILE --deps"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T201: CCS verify (unsigned)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T201"
+name = "ccs_verify_unsigned"
+description = "Verify an unsigned CCS package with --allow-unsigned"
+timeout = 30
+group = "C"
+depends_on = ["T197"]
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs verify $CCS_FILE --allow-unsigned"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T202: CCS keygen
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T202"
+name = "ccs_keygen"
+description = "Generate an Ed25519 signing key pair"
+timeout = 30
+group = "C"
+
+[[test.step]]
+run = "rm -f /tmp/test-key /tmp/test-key.pub && ${CONARY_BIN} ccs keygen --output /tmp/test-key --force"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify key files were created
+[[test.step]]
+file_exists = "/tmp/test-key"
+
+# --------------------------------------------------------------------------
+# T203: CCS sign
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T203"
+name = "ccs_sign"
+description = "Sign a CCS package with generated key"
+timeout = 30
+group = "C"
+depends_on = ["T197", "T202"]
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs sign $CCS_FILE --key /tmp/test-key --output /tmp/signed.ccs"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_exists = "/tmp/signed.ccs"
+
+# --------------------------------------------------------------------------
+# T204: CCS export to OCI
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T204"
+name = "ccs_export_oci"
+description = "Export an installed package to OCI format"
+timeout = 60
+group = "C"
+depends_on = ["T197"]
+
+# Install the built CCS first, then export it
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} ccs install $CCS_FILE --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "rm -rf /tmp/oci-export && ${CONARY_BIN} ccs export test-pkg --format oci --output /tmp/oci-export --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+# Cleanup: remove the test package
+[[test.step]]
+conary = "remove test-pkg --no-scripts"
+
+# ==========================================================================
+#  QUERY COMMANDS (T205-T215)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T205: query depends
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T205"
+name = "query_depends"
+description = "Show dependencies for an installed package"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query depends ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T206: query rdepends
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T206"
+name = "query_rdepends"
+description = "Show reverse dependencies for an installed package"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query rdepends ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T207: query whatprovides
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T207"
+name = "query_whatprovides"
+description = "Find which package provides a capability"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query whatprovides ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T208: query reason
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T208"
+name = "query_reason"
+description = "Show install reason for a package"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query reason"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T209: query repquery
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T209"
+name = "query_repquery"
+description = "Query packages available in repositories"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query repquery ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T210: query component
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T210"
+name = "query_component"
+description = "Query files in a specific component"
+timeout = 30
+group = "C"
+
+# Use package:runtime as a plausible component spec
+[[test.step]]
+conary = "query component ${TEST_PACKAGE_1}:runtime"
+
+[test.step.assert]
+# May fail if component doesn't exist, but must not panic
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T211: query components
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T211"
+name = "query_components"
+description = "List components of an installed package"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query components ${TEST_PACKAGE_1}"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T212: query scripts
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T212"
+name = "query_scripts"
+description = "Show package scripts from a CCS file"
+timeout = 30
+group = "C"
+depends_on = ["T197"]
+
+# query scripts takes a file path, no --db-path
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/test-ccs-output/*.ccs | head -1) && ${CONARY_BIN} query scripts $CCS_FILE"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T213: query delta-stats
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T213"
+name = "query_delta_stats"
+description = "Show delta update statistics"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query delta-stats"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T214: query conflicts
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T214"
+name = "query_conflicts"
+description = "Check for file conflicts and ownership issues"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query conflicts"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T215: query label list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T215"
+name = "query_label_list"
+description = "List all labels"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "query label list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# ==========================================================================
+#  REPO ENABLE/DISABLE/KEYS (T216-T220)
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# T216: repo disable
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T216"
+name = "repo_disable"
+description = "Disable a repository and verify it is disabled"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "repo disable ${REPO_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify disabled repo does not appear in default list (only enabled)
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "${REPO_NAME}"
+
+# But it should appear with --all
+[[test.step]]
+conary = "repo list --all"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}"
+
+# --------------------------------------------------------------------------
+# T217: repo enable
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T217"
+name = "repo_enable"
+description = "Re-enable a repository and verify it appears again"
+timeout = 30
+group = "C"
+depends_on = ["T216"]
+
+[[test.step]]
+conary = "repo enable ${REPO_NAME}"
+
+[test.step.assert]
+exit_code = 0
+
+# Verify re-enabled repo appears in default list
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}"
+
+# --------------------------------------------------------------------------
+# T218: repo key-list
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T218"
+name = "repo_key_list"
+description = "List GPG keys (may be empty)"
+timeout = 30
+group = "C"
+
+[[test.step]]
+conary = "repo key-list"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T219: repo key-import
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T219"
+name = "repo_key_import"
+description = "Import a GPG key for a repository"
+timeout = 30
+group = "C"
+
+# Generate a minimal PGP-like key file for import testing.
+# The command should accept the file even if the key format is unusual.
+[[test.step]]
+run = "echo 'mDMEZwAAAAEEALqK9tVBTWXzNzKmp5sF1RGjd7ve4y3N2K8+placeholder+test+key' > /tmp/test-gpg.key"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "repo key-import ${REPO_NAME} /tmp/test-gpg.key"
+
+[test.step.assert]
+# Import may reject the key format, but must not panic
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T220: repo key-remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T220"
+name = "repo_key_remove"
+description = "Remove GPG keys for a repository"
+timeout = 30
+group = "C"
+depends_on = ["T219"]
+
+[[test.step]]
+conary = "repo key-remove ${REPO_NAME}"
+
+[test.step.assert]
+# May fail if no key was imported, but must not panic
+stdout_not_contains = "panic"
+
+# ==========================================================================
+#  CLEANUP
+# ==========================================================================
+
+[[test]]
+id = "T220-cleanup"
+name = "cleanup_temp_files"
+description = "Clean up temporary files created during CCS tests"
+timeout = 10
+group = "C"
+depends_on = ["T204"]
+
+[[test.step]]
+run = "rm -rf /tmp/test-ccs /tmp/test-ccs-output /tmp/signed.ccs /tmp/test-key /tmp/test-key.pub /tmp/oci-export /tmp/test-gpg.key"
