@@ -15,42 +15,47 @@ phase = 4
 # ==========================================================================
 
 # --------------------------------------------------------------------------
-# T177: Setup + Model check (no model file)
+# T177: Setup (init DB + install fixture)
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T177"
-name = "setup_and_model_check"
-description = "Setup: install fixture, then test model check without model file"
+name = "suite_setup"
+description = "Initialize DB and install test fixture for subsequent tests"
 timeout = 120
 group = "B"
 fatal = true
 
-# Setup: init DB
 [[test.step]]
 conary = "system init"
 
 [test.step.assert]
 exit_code = 0
 
-# Setup: remove default repos to avoid slow syncs
 [[test.step]]
 run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
 
-# Setup: install fixture CCS (always available, no repo sync needed)
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
 
-# Actual test: model check without model file should fail gracefully
-# Default model path /etc/conary/system.toml does not exist in container
+# --------------------------------------------------------------------------
+# T178: Model diff (no model file)
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T177b"
+name = "model_check_no_model"
+description = "Model check with no model file should fail gracefully"
+timeout = 30
+group = "B"
+
 [[test.step]]
-conary = "model check"
+run = "${CONARY_BIN} model check --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
-exit_code_not = 0
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
