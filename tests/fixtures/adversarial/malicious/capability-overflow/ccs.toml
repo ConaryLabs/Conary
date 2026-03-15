@@ -36,3 +36,4 @@ write = ["/", "/etc", "/var", "/tmp"]
 
 [capabilities.syscalls]
 profile = "scriptlet"
+allow = ["mount", "reboot"]

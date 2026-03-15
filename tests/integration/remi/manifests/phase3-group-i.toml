@@ -164,7 +164,6 @@ name = "package_capabilities_require_privilege"
 description = "Installing a package with Linux capabilities should enforce privilege requirements"
 timeout = 30
 group = "I"
-skip = "install-time capability policy gate not implemented (see ROADMAP)"
 
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned"
@@ -183,7 +182,6 @@ name = "capabilities_exceed_policy_rejected"
 description = "Packages requesting capabilities beyond policy allowance should be rejected"
 timeout = 30
 group = "I"
-skip = "install-time capability policy gate not implemented (see ROADMAP)"
 
 [[test.step]]
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --allow-unsigned"
