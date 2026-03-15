@@ -693,6 +693,29 @@ pub fn create_external_admin_router(
             "/v1/admin/federation/config",
             put(admin::update_federation_config),
         )
+        // Test data endpoints (order matters: specific before parameterized)
+        .route("/v1/admin/test-runs/gc", delete(admin::test_data::test_gc))
+        .route("/v1/admin/test-health", get(admin::test_data::test_health))
+        .route(
+            "/v1/admin/test-runs",
+            post(admin::test_data::create_test_run).get(admin::test_data::list_test_runs),
+        )
+        .route(
+            "/v1/admin/test-runs/:id",
+            get(admin::test_data::get_test_run).put(admin::test_data::update_test_run),
+        )
+        .route(
+            "/v1/admin/test-runs/:id/results",
+            post(admin::test_data::push_test_result),
+        )
+        .route(
+            "/v1/admin/test-runs/:id/tests/:test_id",
+            get(admin::test_data::get_test_detail),
+        )
+        .route(
+            "/v1/admin/test-runs/:id/tests/:test_id/logs",
+            get(admin::test_data::get_test_logs),
+        )
         // Audit log
         .route(
             "/v1/admin/audit",
