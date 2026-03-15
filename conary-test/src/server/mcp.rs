@@ -102,6 +102,26 @@ pub struct RerunTestParams {
     pub test_id: String,
 }
 
+/// Parameters for reloading manifests (no arguments required).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReloadManifestsParams {}
+
+/// Parameters for pruning old container images.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PruneImagesParams {
+    /// Number of most recent images to keep per distro (default 3).
+    #[schemars(description = "Number of most recent images to keep per distro (default 3)")]
+    pub keep: Option<u32>,
+}
+
+/// Parameters for inspecting a container image.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImageInfoParams {
+    /// Image name or tag to inspect.
+    #[schemars(description = "Image name or tag to inspect")]
+    pub image: String,
+}
+
 /// Parameters for building a container image.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BuildImageParams {
@@ -153,7 +173,11 @@ fn anyhow_to_mcp(err: anyhow::Error) -> McpError {
 }
 
 /// Run a shell command and capture its exit code, stdout, and stderr.
-async fn run_command(cmd: &str, args: &[&str], cwd: Option<&str>) -> Result<(i32, String, String), McpError> {
+async fn run_command(
+    cmd: &str,
+    args: &[&str],
+    cwd: Option<&str>,
+) -> Result<(i32, String, String), McpError> {
     let mut command = tokio::process::Command::new(cmd);
     command.args(args);
     if let Some(dir) = cwd {
@@ -332,7 +356,13 @@ impl TestMcpServer {
         // Try Remi first if configured.
         if let Some(ref client) = self.state.remi_client {
             match client
-                .list_runs(u32::try_from(limit).unwrap_or(u32::MAX), None, None, None, None)
+                .list_runs(
+                    u32::try_from(limit).unwrap_or(u32::MAX),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
             {
                 Ok(data) => {
@@ -340,9 +370,7 @@ impl TestMcpServer {
                     return Ok(CallToolResult::success(vec![Content::text(text)]));
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "Remi proxy failed for list_runs, falling back to local: {e}"
-                    );
+                    tracing::debug!("Remi proxy failed for list_runs, falling back to local: {e}");
                 }
             }
         }
@@ -553,6 +581,174 @@ impl TestMcpServer {
     }
 
     // -----------------------------------------------------------------------
+    // Manifest & image lifecycle tools
+    // -----------------------------------------------------------------------
+
+    /// Reload all TOML test manifests from disk without restarting the server.
+    ///
+    /// Re-reads the manifest directory and reports which manifests were found,
+    /// including any newly added or modified ones.
+    #[tool(
+        description = "Reload all TOML test manifests from disk without restarting the server. Pick up changes to existing manifests or newly added ones."
+    )]
+    async fn reload_manifests(
+        &self,
+        Parameters(_params): Parameters<ReloadManifestsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let suites = service::list_suites(&self.state).map_err(|e| {
+            McpError::internal_error(format!("Failed to reload manifests: {e}"), None)
+        })?;
+
+        let value = serde_json::json!({
+            "status": "reloaded",
+            "manifest_dir": self.state.manifest_dir,
+            "manifests_found": suites.len(),
+            "suites": suites,
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Remove old container images, keeping the N most recent per distro.
+    ///
+    /// Lists all `conary-test-*` images, groups them by distro, sorts by
+    /// creation date, and removes all except the N newest per distro.
+    #[tool(
+        description = "Remove old container images, keeping the N most recent per distro. Frees disk space on the test server."
+    )]
+    async fn prune_images(
+        &self,
+        Parameters(params): Parameters<PruneImagesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let keep = params.keep.unwrap_or(3) as usize;
+
+        // List conary-test images with creation timestamps via podman.
+        let (code, stdout, _stderr) = run_command(
+            "podman",
+            &[
+                "image",
+                "ls",
+                "--format",
+                "{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}",
+                "--filter",
+                "reference=conary-test-*",
+                "--no-trunc",
+            ],
+            None,
+        )
+        .await?;
+
+        if code != 0 {
+            return Err(McpError::internal_error(
+                "Failed to list podman images".to_string(),
+                None,
+            ));
+        }
+
+        // Group images by distro (extracted from the tag pattern conary-test-{distro}:...).
+        let mut by_distro: std::collections::HashMap<String, Vec<(String, String, String)>> =
+            std::collections::HashMap::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let tag = parts[0];
+            let id = parts[1];
+            let created = parts[2];
+
+            // Extract distro name from tag like "conary-test-fedora43:latest".
+            let distro = tag
+                .strip_prefix("conary-test-")
+                .and_then(|rest| rest.split(':').next())
+                .unwrap_or("unknown");
+
+            by_distro.entry(distro.to_string()).or_default().push((
+                tag.to_string(),
+                id.to_string(),
+                created.to_string(),
+            ));
+        }
+
+        let mut removed = 0u32;
+        let mut errors = Vec::new();
+
+        for (_distro, mut images) in by_distro {
+            // Sort by creation date descending (newest first).
+            images.sort_by(|a, b| b.2.cmp(&a.2));
+
+            // Skip the first `keep` images; remove the rest.
+            for (_tag, id, _created) in images.into_iter().skip(keep) {
+                let (code, _stdout, stderr) =
+                    run_command("podman", &["image", "rm", "--force", &id], None).await?;
+                if code == 0 {
+                    removed += 1;
+                } else {
+                    errors.push(format!(
+                        "failed to remove {}: {}",
+                        &id[..12.min(id.len())],
+                        stderr.trim()
+                    ));
+                }
+            }
+        }
+
+        let value = serde_json::json!({
+            "removed": removed,
+            "kept_per_distro": keep,
+            "errors": errors,
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Get details about a container image: tag, creation date, size, and labels.
+    #[tool(
+        description = "Get details about a container image: tag, creation date, size, and labels."
+    )]
+    async fn image_info(
+        &self,
+        Parameters(params): Parameters<ImageInfoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (code, stdout, stderr) = run_command(
+            "podman",
+            &["image", "inspect", "--format", "{{json .}}", &params.image],
+            None,
+        )
+        .await?;
+
+        if code != 0 {
+            return Err(McpError::invalid_params(
+                format!("Image '{}' not found: {}", params.image, stderr.trim()),
+                None,
+            ));
+        }
+
+        // Parse the JSON output and extract relevant fields.
+        let inspect: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
+            McpError::internal_error(format!("Failed to parse inspect output: {e}"), None)
+        })?;
+
+        let value = serde_json::json!({
+            "image": params.image,
+            "id": inspect.get("Id").and_then(|v| v.as_str()).unwrap_or(""),
+            "created": inspect.get("Created").and_then(|v| v.as_str()).unwrap_or(""),
+            "size": inspect.get("Size").and_then(|v| v.as_u64()).unwrap_or(0),
+            "labels": inspect
+                .pointer("/Config/Labels")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
+            "repo_tags": inspect
+                .get("RepoTags")
+                .cloned()
+                .unwrap_or(serde_json::json!([])),
+        });
+        let text = to_json_text(&value)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // -----------------------------------------------------------------------
     // Deployment tools
     // -----------------------------------------------------------------------
 
@@ -582,13 +778,17 @@ impl TestMcpServer {
 
             let (code, stdout, stderr) =
                 run_command("git", &["checkout", git_ref], Some(&dir)).await?;
-            output.push_str(&format_command_output("git checkout", code, &stdout, &stderr));
+            output.push_str(&format_command_output(
+                "git checkout",
+                code,
+                &stdout,
+                &stderr,
+            ));
             if code != 0 {
                 return Ok(CallToolResult::success(vec![Content::text(output)]));
             }
         } else {
-            let (code, stdout, stderr) =
-                run_command("git", &["pull"], Some(&dir)).await?;
+            let (code, stdout, stderr) = run_command("git", &["pull"], Some(&dir)).await?;
             output.push_str(&format_command_output("git pull", code, &stdout, &stderr));
             if code != 0 {
                 return Ok(CallToolResult::success(vec![Content::text(output)]));
@@ -598,11 +798,20 @@ impl TestMcpServer {
         // Step 2: Build both crates.
         let (code, stdout, stderr) =
             run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
-        output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+        output.push_str(&format_command_output(
+            "cargo build conary-test",
+            code,
+            &stdout,
+            &stderr,
+        ));
 
-        let (code, stdout, stderr) =
-            run_command("cargo", &["build"], Some(&dir)).await?;
-        output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+        let (code, stdout, stderr) = run_command("cargo", &["build"], Some(&dir)).await?;
+        output.push_str(&format_command_output(
+            "cargo build conary",
+            code,
+            &stdout,
+            &stderr,
+        ));
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
@@ -620,12 +829,21 @@ impl TestMcpServer {
             Some("conary-test") => {
                 let (code, stdout, stderr) =
                     run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
-                output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+                output.push_str(&format_command_output(
+                    "cargo build conary-test",
+                    code,
+                    &stdout,
+                    &stderr,
+                ));
             }
             Some("conary") => {
-                let (code, stdout, stderr) =
-                    run_command("cargo", &["build"], Some(&dir)).await?;
-                output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+                let (code, stdout, stderr) = run_command("cargo", &["build"], Some(&dir)).await?;
+                output.push_str(&format_command_output(
+                    "cargo build conary",
+                    code,
+                    &stdout,
+                    &stderr,
+                ));
             }
             Some(other) => {
                 return Err(McpError::invalid_params(
@@ -636,11 +854,20 @@ impl TestMcpServer {
             None => {
                 let (code, stdout, stderr) =
                     run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
-                output.push_str(&format_command_output("cargo build conary-test", code, &stdout, &stderr));
+                output.push_str(&format_command_output(
+                    "cargo build conary-test",
+                    code,
+                    &stdout,
+                    &stderr,
+                ));
 
-                let (code, stdout, stderr) =
-                    run_command("cargo", &["build"], Some(&dir)).await?;
-                output.push_str(&format_command_output("cargo build conary", code, &stdout, &stderr));
+                let (code, stdout, stderr) = run_command("cargo", &["build"], Some(&dir)).await?;
+                output.push_str(&format_command_output(
+                    "cargo build conary",
+                    code,
+                    &stdout,
+                    &stderr,
+                ));
             }
         }
 
@@ -651,9 +878,7 @@ impl TestMcpServer {
     ///
     /// Spawns a delayed restart (1 second) so the MCP response is sent before
     /// the process is killed by systemd.
-    #[tool(
-        description = "Restart the conary-test systemd user service and verify it's healthy."
-    )]
+    #[tool(description = "Restart the conary-test systemd user service and verify it's healthy.")]
     async fn restart_service(&self) -> Result<CallToolResult, McpError> {
         // Spawn a background task that waits 1 second then restarts.
         // This ensures the MCP response is sent before the process dies.
@@ -703,15 +928,10 @@ impl TestMcpServer {
         };
 
         let script_path = format!("{fixture_dir}/{script}");
-        let (code, stdout, stderr) =
-            run_command("bash", &[&script_path], Some(&dir)).await?;
+        let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
 
-        let output = format_command_output(
-            &format!("build-fixtures ({group})"),
-            code,
-            &stdout,
-            &stderr,
-        );
+        let output =
+            format_command_output(&format!("build-fixtures ({group})"), code, &stdout, &stderr);
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -723,8 +943,7 @@ impl TestMcpServer {
         let dir = project_dir()?;
         let script_path = format!("{dir}/scripts/publish-test-fixtures.sh");
 
-        let (code, stdout, stderr) =
-            run_command("bash", &[&script_path], Some(&dir)).await?;
+        let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
 
         let output = format_command_output("publish-fixtures", code, &stdout, &stderr);
         Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -790,9 +1009,10 @@ impl TestMcpServer {
         description = "Flush pending WAL items to Remi. Returns count of flushed and failed items."
     )]
     async fn flush_pending(&self) -> Result<CallToolResult, McpError> {
-        let wal_arc = self.state.wal.as_ref().ok_or_else(|| {
-            McpError::internal_error("WAL is not configured".to_string(), None)
-        })?;
+        let wal_arc =
+            self.state.wal.as_ref().ok_or_else(|| {
+                McpError::internal_error("WAL is not configured".to_string(), None)
+            })?;
         let client = self.state.remi_client.as_ref().ok_or_else(|| {
             McpError::internal_error(
                 "Remi client is not configured (REMI_ADMIN_TOKEN not set)".to_string(),
@@ -802,9 +1022,9 @@ impl TestMcpServer {
 
         // Extract pending items under the lock, then drop it before async work.
         let items = {
-            let wal_guard = wal_arc.lock().map_err(|e| {
-                McpError::internal_error(format!("WAL lock poisoned: {e}"), None)
-            })?;
+            let wal_guard = wal_arc
+                .lock()
+                .map_err(|e| McpError::internal_error(format!("WAL lock poisoned: {e}"), None))?;
             wal_guard.pending_items().map_err(|e| {
                 McpError::internal_error(format!("Failed to read WAL items: {e}"), None)
             })?
@@ -913,6 +1133,6 @@ mod tests {
     fn test_mcp_tool_count() {
         let router = TestMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 20, "Expected 20 MCP tools");
+        assert_eq!(tools.len(), 23, "Expected 23 MCP tools");
     }
 }
