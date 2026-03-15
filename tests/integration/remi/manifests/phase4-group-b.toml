@@ -39,7 +39,7 @@ run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${C
 
 # Setup: install fixture CCS (always available, no repo sync needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
