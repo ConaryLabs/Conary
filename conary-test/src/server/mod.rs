@@ -7,6 +7,7 @@ pub mod remi_client;
 pub mod routes;
 pub mod service;
 pub mod state;
+pub mod wal;
 
 pub use routes::create_router;
 pub use state::AppState;
