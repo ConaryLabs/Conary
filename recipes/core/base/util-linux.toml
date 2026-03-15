@@ -40,7 +40,7 @@ configure = """
     --enable-usrdir-path \
     --enable-write \
     --enable-mesg \
-    --enable-raw \
+    --disable-raw \
     --without-python \
     --without-systemd \
     --with-readline=no \
