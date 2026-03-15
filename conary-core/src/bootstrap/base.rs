@@ -20,7 +20,7 @@
 use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
-use crate::container::{ContainerConfig, Sandbox};
+
 use crate::recipe::{Recipe, RecipeGraph, parse_recipe_file};
 use std::collections::HashMap;
 use std::fs;
@@ -910,30 +910,15 @@ impl BaseBuilder {
             all_env.push((key.as_str(), value.clone()));
         }
 
-        // Try sandboxed execution on Linux
-        #[cfg(target_os = "linux")]
-        let sandbox_result = {
-            let build_dir = self.work_dir.join("build").join(&pkg_name);
-            let container_config = ContainerConfig::pristine_for_bootstrap(
-                &self.toolchain.path,
-                workdir,
-                &build_dir,
-                &self.target_root,
-            );
-            let mut sandbox = Sandbox::new(container_config);
-
-            let env_refs: Vec<(&str, &str)> =
-                all_env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-
-            sandbox.execute("bash", cmd, &[], &env_refs)
-        };
-
-        #[cfg(not(target_os = "linux"))]
+        // Base builds run without sandbox — like stage1, we control the
+        // recipes and need host tools (bash, make, find, coreutils) that
+        // aren't in the cross-toolchain sysroot. Sandboxing is applied in
+        // stage2+ where untrusted recipes are built.
         let sandbox_result: std::result::Result<
             (i32, String, String),
             crate::error::Error,
         > = Err(crate::error::Error::ScriptletError(
-            "Sandbox not available on non-Linux".to_string(),
+            "Bootstrap base builds skip sandbox (trusted recipes)".to_string(),
         ));
 
         match sandbox_result {
