@@ -26,7 +26,7 @@ Before execution, scripts are analyzed for dangerous patterns:
 | Medium | `chmod u+s`, `crontab`, `/etc/shadow`, `/etc/sudoers` | Privilege escalation |
 | Low | `nc`, `/dev/tcp/`, `base64 -d` | Network backdoors, obfuscation |
 
-Risk analysis is performed by `analyze_script()` in `src/container/mod.rs`.
+Risk analysis is performed by `analyze_script()` in `conary-core/src/container/mod.rs`.
 
 ### 2. Sandbox Modes
 
@@ -175,10 +175,10 @@ Full namespace isolation requires root privileges. When running as non-root:
 
 | File | Purpose |
 |------|---------|
-| `src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
-| `src/container/mod.rs` | Container isolation, risk analysis |
-| `src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
-| `src/db/models/scriptlet.rs` | Scriptlet database storage |
+| `conary-core/src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
+| `conary-core/src/container/mod.rs` | Container isolation, risk analysis |
+| `conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
+| `conary-core/src/db/models/scriptlet.rs` | Scriptlet database storage |
 
 ## Implemented Since Initial Design
 

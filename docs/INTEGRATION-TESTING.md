@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-14
-revision: 3
-summary: Switch to conary-test runner, remove Python runner references
+last_updated: 2026-03-15
+revision: 4
+summary: Add CLI subcommands, QEMU tests, error taxonomy, WAL persistence
 ---
 
 # Integration Testing
@@ -34,6 +34,26 @@ cargo run -p conary-test -- run --distro fedora43 --phase 1
 # List available suites
 cargo run -p conary-test -- list
 ```
+
+## CLI Subcommands
+
+Every MCP tool has a CLI equivalent for human use:
+
+| Command | Purpose |
+|---------|---------|
+| `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
+| `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
+| `conary-test deploy restart` | Restart the test service |
+| `conary-test deploy status` | Show version, uptime, WAL pending |
+| `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
+| `conary-test fixtures publish` | Publish fixtures to Remi |
+| `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
+| `conary-test health` | Service health summary |
+| `conary-test images prune [--keep <N>]` | Remove old container images |
+| `conary-test images info <image>` | Inspect container image |
+| `conary-test manifests reload` | Reload TOML manifests without restart |
+
+Add `--json` to any command for machine-readable output.
 
 ### Available Distros
 
@@ -88,6 +108,23 @@ Adversarial and stress tests.
 | N (container) | Container-based adversarial tests |
 | N (QEMU) | QEMU boot tests |
 
+## QEMU Boot Tests
+
+Tests requiring kernel/boot file deployment use the `qemu_boot` step type:
+
+```toml
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v1"
+memory_mb = 2048
+timeout_seconds = 240
+ssh_port = 2222
+commands = ["uname -r", "ls /boot/vmlinuz*"]
+expect_output = ["vmlinuz"]
+```
+
+QEMU images are downloaded from `https://packages.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
+
 ## Configuration
 
 All test parameters live in `tests/integration/remi/config.toml`:
@@ -139,6 +176,26 @@ Test results are written as JSON to `tests/integration/remi/results/<distro>.jso
   ]
 }
 ```
+
+## Error Responses
+
+API and MCP errors include structured fields for programmatic handling:
+
+```json
+{
+  "error": "test_timeout",
+  "category": "infrastructure",
+  "message": "Test T142 timed out after 300s",
+  "transient": true,
+  "hint": "Try reducing concurrency or increasing timeout."
+}
+```
+
+Categories: `infrastructure` (transient), `assertion` (test logic), `config` (manifest/distro), `deployment` (build/service), `validation` (request).
+
+## Result Persistence
+
+Test results are streamed to Remi's admin API as each test completes. If Remi is unreachable, results are buffered in a local SQLite write-ahead log (`/tmp/conary-test-wal.db`) and retried automatically with exponential backoff.
 
 ## CI Integration
 

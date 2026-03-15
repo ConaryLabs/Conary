@@ -1,6 +1,7 @@
-last_updated: 2026-03-12
-revision: 4
-summary: Document current ccs.toml schema and CCS module architecture
+---
+last_updated: 2026-03-15
+revision: 5
+summary: Add install section with --reinstall flag documentation
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -73,6 +74,22 @@ CCS sits at the center of Conary's format pipeline. All package formats
 (RPM, DEB, Arch) convert to CCS before installation. The builder produces
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
+
+## Install
+
+CCS packages are installed via `conary ccs install`. The installer verifies
+signatures, evaluates capability policy, deploys files to CAS, and runs
+declarative hooks.
+
+```bash
+conary ccs install package.ccs               # Standard install
+conary ccs install package.ccs --reinstall   # Reinstall same version (replaces files in CAS)
+conary ccs install package.ccs --dry-run     # Preview without applying
+```
+
+The `--reinstall` flag forces reinstallation even when the same version is
+already present. This is useful for repairing corrupted files or re-running
+hooks without bumping the version.
 
 ## Phase 3 Follow-Ups
 
