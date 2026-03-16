@@ -19,8 +19,30 @@ use tracing::{debug, info, warn};
 
 use super::metadata::RepositoryMetadata;
 
-/// Default timeout for HTTP requests (30 seconds)
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout configuration for different operation types.
+///
+/// Metadata operations (repo index, package info) use a shorter timeout
+/// since they transfer small payloads. File downloads use a longer timeout
+/// to accommodate large packages over slow connections.
+#[derive(Debug, Clone)]
+pub struct TimeoutConfig {
+    /// Timeout for metadata requests (default 30s)
+    pub metadata: Duration,
+    /// Timeout for file/package downloads (default 300s)
+    pub download: Duration,
+    /// Connection establishment timeout (default 30s)
+    pub connect: Duration,
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            metadata: Duration::from_secs(30),
+            download: Duration::from_secs(300),
+            connect: Duration::from_secs(30),
+        }
+    }
+}
 
 /// Buffer size for streaming downloads (8 KB)
 const STREAM_BUFFER_SIZE: usize = 8192;
@@ -166,19 +188,26 @@ fn is_transient_error(status: reqwest::StatusCode) -> bool {
 pub struct RepositoryClient {
     client: Client,
     retry_policy: RetryPolicy,
+    timeouts: TimeoutConfig,
 }
 
 impl RepositoryClient {
-    /// Create a new repository client
+    /// Create a new repository client with default timeouts
     pub fn new() -> Result<Self> {
+        Self::with_timeouts(TimeoutConfig::default())
+    }
+
+    /// Create a new repository client with custom timeouts
+    pub fn with_timeouts(timeouts: TimeoutConfig) -> Result<Self> {
         let client = Client::builder()
-            .timeout(HTTP_TIMEOUT)
+            .connect_timeout(timeouts.connect)
             .build()
             .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self {
             client,
             retry_policy: RetryPolicy::default(),
+            timeouts,
         })
     }
 
@@ -208,7 +237,7 @@ impl RepositoryClient {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.client.get(&metadata_url).send() {
+            match self.client.get(&metadata_url).timeout(self.timeouts.metadata).send() {
                 Ok(response) => {
                     let status = response.status();
 
@@ -270,6 +299,7 @@ impl RepositoryClient {
         let response = self
             .client
             .get(url)
+            .timeout(self.timeouts.metadata)
             .send()
             .map_err(|e| Error::DownloadError(format!("Failed to fetch {}: {}", url, e)))?;
 
@@ -412,7 +442,7 @@ impl RepositoryClient {
             // Check for existing partial download
             let existing_len = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
 
-            let mut request = self.client.get(url);
+            let mut request = self.client.get(url).timeout(self.timeouts.download);
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",
