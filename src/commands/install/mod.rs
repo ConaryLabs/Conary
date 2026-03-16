@@ -452,15 +452,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         repo.as_deref(),
         &progress,
         &policy_opts,
-    )? {
-        ResolutionOutcome::AlreadyInstalled { name, version } => {
+    ) {
+        Err(e) => {
+            print_package_suggestions(&conn, &package_name);
+            return Err(e);
+        }
+        Ok(ResolutionOutcome::AlreadyInstalled { name, version }) => {
             println!(
                 "{} {} is already installed (skipping download)",
                 name, version
             );
             return Ok(());
         }
-        ResolutionOutcome::Resolved(pkg) => pkg,
+        Ok(ResolutionOutcome::Resolved(pkg)) => pkg,
     };
 
     // If resolved from Remi, it's already CCS format - install directly
@@ -1415,6 +1419,107 @@ fn scheme_to_string(scheme: VersionScheme) -> String {
         VersionScheme::Rpm => "rpm".to_string(),
         VersionScheme::Debian => "debian".to_string(),
         VersionScheme::Arch => "arch".to_string(),
+    }
+}
+
+/// Search canonical packages and repository packages for names similar to the
+/// given query. Returns up to 5 `(name, distros)` pairs suitable for "did you
+/// mean?" suggestions.
+fn find_package_suggestions(
+    conn: &rusqlite::Connection,
+    name: &str,
+) -> std::result::Result<Vec<(String, String)>, rusqlite::Error> {
+    use std::collections::HashMap;
+
+    let mut hits: HashMap<String, Vec<String>> = HashMap::new();
+
+    // 1. Search canonical_packages by substring
+    {
+        let mut stmt = conn.prepare(
+            "SELECT cp.name, pi.distro
+             FROM canonical_packages cp
+             LEFT JOIN package_implementations pi ON pi.canonical_id = cp.id
+             WHERE cp.name LIKE '%' || ?1 || '%'
+             LIMIT 10",
+        )?;
+        let rows = stmt.query_map([name], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?;
+        for row in rows {
+            let (pkg_name, distro) = row?;
+            let entry = hits.entry(pkg_name).or_default();
+            if let Some(d) = distro
+                && !entry.contains(&d)
+            {
+                entry.push(d);
+            }
+        }
+    }
+
+    // 2. Search repository_packages by prefix
+    {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT rp.name, r.name
+             FROM repository_packages rp
+             JOIN repositories r ON r.id = rp.repository_id
+             WHERE rp.name LIKE ?1 || '%'
+             LIMIT 10",
+        )?;
+        let rows = stmt.query_map([name], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (pkg_name, repo_name) = row?;
+            let entry = hits.entry(pkg_name).or_default();
+            if !entry.contains(&repo_name) {
+                entry.push(repo_name);
+            }
+        }
+    }
+
+    // Remove exact match (the user already tried it)
+    hits.remove(name);
+
+    // Collect, sort by name, and take top 5
+    let mut results: Vec<(String, String)> = hits
+        .into_iter()
+        .map(|(pkg, distros)| {
+            let info = if distros.is_empty() {
+                String::new()
+            } else {
+                distros.join(", ")
+            };
+            (pkg, info)
+        })
+        .collect();
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    results.truncate(5);
+    Ok(results)
+}
+
+/// Print "did you mean?" suggestions when a package is not found.
+///
+/// Silently does nothing if the DB query fails (don't make a bad error worse).
+fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
+    if let Ok(suggestions) = find_package_suggestions(conn, package_name)
+        && !suggestions.is_empty()
+    {
+        eprintln!("\nDid you mean:");
+        for (name, distros) in suggestions.iter().take(5) {
+            if distros.is_empty() {
+                eprintln!("  {name}");
+            } else {
+                eprintln!("  {name:<20} ({distros})");
+            }
+        }
+        let stem = package_name.split('-').next().unwrap_or(package_name);
+        eprintln!(
+            "\nUse 'conary canonical search {}' for more options.",
+            stem
+        );
     }
 }
 
