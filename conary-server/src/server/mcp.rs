@@ -210,6 +210,14 @@ pub struct TestGetLogsParams {
     pub step_index: Option<u32>,
 }
 
+/// Parameters for the chunk garbage collection tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChunkGcParams {
+    /// Show what would be deleted without deleting (default false).
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool definitions
 // ---------------------------------------------------------------------------
@@ -694,6 +702,57 @@ impl RemiMcpServer {
     // Canonical mapping
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Chunk garbage collection
+    // -----------------------------------------------------------------------
+
+    /// Garbage collect orphaned chunks from local disk and R2.
+    ///
+    /// Finds chunks not referenced by any converted package and deletes
+    /// them.  Use `dry_run = true` to preview without deleting.
+    #[tool(
+        description = "Garbage collect orphaned chunks from local disk and R2. Finds chunks not referenced by any converted package and deletes them. Use dry_run=true to preview."
+    )]
+    async fn chunk_gc(
+        &self,
+        Parameters(params): Parameters<ChunkGcParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dry_run = params.dry_run.unwrap_or(false);
+        let grace_period_secs: u64 = 3600; // 1 hour grace period
+
+        let state = self.state.read().await;
+        let db_path = state.config.db_path.clone();
+        let objects_dir = state.config.chunk_dir.join("objects");
+        let r2_store = state.r2_store.clone();
+        drop(state);
+
+        let gc_result = crate::server::chunk_gc::run_chunk_gc(
+            &db_path,
+            &objects_dir,
+            r2_store,
+            dry_run,
+            grace_period_secs,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let text = to_json_text(&serde_json::json!({
+            "dry_run": dry_run,
+            "referenced": gc_result.referenced,
+            "local_scanned": gc_result.local_scanned,
+            "r2_scanned": gc_result.r2_scanned,
+            "local_deleted": gc_result.local_deleted,
+            "r2_deleted": gc_result.r2_deleted,
+            "local_bytes_freed": gc_result.local_bytes_freed,
+            "r2_bytes_freed": gc_result.r2_bytes_freed,
+        }))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // -----------------------------------------------------------------------
+    // Canonical mapping
+    // -----------------------------------------------------------------------
+
     /// Rebuild the canonical package mapping from all indexed distros.
     ///
     /// Runs auto-discovery and curated rules to create cross-distro name
@@ -786,6 +845,6 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 22, "Expected 22 MCP tools");
+        assert_eq!(tools.len(), 23, "Expected 23 MCP tools");
     }
 }
