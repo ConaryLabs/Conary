@@ -133,6 +133,10 @@ pub struct ConaryProvider<'db> {
     /// Keyed by `SolvableId` index.
     removal_deps: HashMap<u32, Vec<SolverDep>>,
 
+    /// distro_name -> Vec<equivalent distro_name> for canonical cross-distro resolution.
+    /// Pre-loaded as a HashMap for O(1) lookup in the hot path.
+    canonical_equivalents: HashMap<String, Vec<String>>,
+
     // --- Data source ---
     conn: &'db rusqlite::Connection,
 }
@@ -152,6 +156,7 @@ impl<'db> ConaryProvider<'db> {
             provides_index: HashMap::new(),
             trove_id_to_name: HashMap::new(),
             removal_deps: HashMap::new(),
+            canonical_equivalents: HashMap::new(),
             conn,
         }
     }
@@ -747,6 +752,45 @@ impl<'db> ConaryProvider<'db> {
     pub fn get_removal_dependency_list(&self, id: SolvableId) -> Option<&[SolverDep]> {
         self.removal_deps.get(&id.0).map(Vec::as_slice)
     }
+
+    /// Load canonical equivalents from the local DB.
+    ///
+    /// For each distro-specific name, finds all other names that map to the
+    /// same canonical package. This enables cross-distro fallback: when the
+    /// solver can't find `libssl3`, it can discover `openssl` as an equivalent.
+    ///
+    /// The index is pre-loaded as a `HashMap` for O(1) lookups -- no DB calls
+    /// happen during the solver's hot path.
+    pub fn load_canonical_index(&mut self) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT pi1.distro_name, pi2.distro_name
+             FROM package_implementations pi1
+             JOIN package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
+             WHERE pi1.distro_name != pi2.distro_name",
+        )?;
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let from: String = row.get(0)?;
+            let to: String = row.get(1)?;
+            self.canonical_equivalents
+                .entry(from)
+                .or_default()
+                .push(to);
+        }
+        Ok(())
+    }
+
+    /// Find canonical equivalents for a package name.
+    ///
+    /// Returns all other distro-specific names that map to the same canonical
+    /// package. Returns an empty slice when no mapping exists.
+    pub fn canonical_equivalents(&self, name: &str) -> &[String] {
+        self.canonical_equivalents
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 fn load_repo_dependency_requests(
@@ -1037,6 +1081,26 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
             candidates.extend(self.solvables_for_provide(name_str));
+
+            // Canonical fallback: check cross-distro equivalents when all
+            // other lookup strategies fail. E.g. 'libssl3' -> 'openssl'.
+            if candidates.is_empty() {
+                for equiv in self.canonical_equivalents(name_str) {
+                    if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
+                        let equiv_candidates = self.solvables_for_name(equiv_name_id);
+                        if !equiv_candidates.is_empty() {
+                            tracing::debug!(
+                                "Canonical fallback: {} -> {}",
+                                name_str,
+                                equiv
+                            );
+                            candidates.extend(equiv_candidates);
+                            break;
+                        }
+                    }
+                }
+            }
+
             if candidates.is_empty() {
                 return None;
             }
@@ -2156,5 +2220,70 @@ mod tests {
         // Legacy VersionConstraint should still work
         let constraint = ConaryConstraint::Legacy(VersionConstraint::parse(">= 5.2.0").unwrap());
         assert!(constraint_matches_package(&constraint, &solvable.version));
+    }
+
+    #[test]
+    fn canonical_index_loads_cross_distro_equivalents() {
+        use crate::db::models::{CanonicalPackage, PackageImplementation};
+
+        let (_dir, conn) = setup_test_db();
+
+        // Create a canonical package with three distro implementations
+        let mut pkg = CanonicalPackage::new("openssl".to_string(), "package".to_string());
+        let can_id = pkg.insert(&conn).unwrap();
+
+        let mut impl_fed = PackageImplementation::new(
+            can_id,
+            "fedora".to_string(),
+            "openssl".to_string(),
+            "auto".to_string(),
+        );
+        impl_fed.insert(&conn).unwrap();
+
+        let mut impl_deb = PackageImplementation::new(
+            can_id,
+            "debian".to_string(),
+            "libssl3".to_string(),
+            "auto".to_string(),
+        );
+        impl_deb.insert(&conn).unwrap();
+
+        let mut impl_arch = PackageImplementation::new(
+            can_id,
+            "arch".to_string(),
+            "openssl".to_string(),
+            "auto".to_string(),
+        );
+        impl_arch.insert(&conn).unwrap();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider.load_canonical_index().unwrap();
+
+        // "libssl3" should map to "openssl" (both fedora and arch share the name)
+        let equivs = provider.canonical_equivalents("libssl3");
+        assert!(
+            equivs.contains(&"openssl".to_string()),
+            "libssl3 should have openssl as equivalent, got: {equivs:?}"
+        );
+
+        // "openssl" should map to "libssl3"
+        let equivs = provider.canonical_equivalents("openssl");
+        assert!(
+            equivs.contains(&"libssl3".to_string()),
+            "openssl should have libssl3 as equivalent, got: {equivs:?}"
+        );
+
+        // Unknown name returns empty
+        assert!(provider.canonical_equivalents("nonexistent").is_empty());
+    }
+
+    #[test]
+    fn canonical_index_empty_when_no_mappings() {
+        let (_dir, conn) = setup_test_db();
+
+        let mut provider = ConaryProvider::new(&conn);
+        provider.load_canonical_index().unwrap();
+
+        assert!(provider.canonical_equivalents("anything").is_empty());
     }
 }
