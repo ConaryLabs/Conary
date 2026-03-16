@@ -17,6 +17,7 @@
 pub mod admin_service;
 pub mod analytics;
 pub mod audit;
+pub mod chunk_gc;
 pub mod auth;
 mod bloom;
 mod cache;
