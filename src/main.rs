@@ -307,7 +307,8 @@ fn run() -> Result<()> {
                 objects_dir,
                 keep_days,
                 dry_run,
-            } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run),
+                chunks,
+            } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run, chunks),
 
             cli::SystemCommands::Sbom {
                 package_name,
