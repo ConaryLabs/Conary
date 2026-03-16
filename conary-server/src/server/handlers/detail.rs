@@ -400,23 +400,17 @@ fn query_reverse_dependencies(
         None => return Ok(Vec::new()),
     };
 
-    // Find packages whose dependencies contain this package name.
-    // Escape LIKE metacharacters to prevent wildcard injection.
-    let escaped = name
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    let pattern = format!("%{}%", escaped);
     let mut stmt = conn.prepare(
         "SELECT DISTINCT rp.name
          FROM repository_packages rp
-         WHERE rp.repository_id = ?1
-           AND rp.dependencies LIKE ?2 ESCAPE '\\'
+         JOIN repository_requirements rr ON rr.repository_package_id = rp.id
+         WHERE rr.capability = ?1
+           AND rp.repository_id = ?2
            AND rp.name != ?3
          ORDER BY rp.name",
     )?;
 
-    let rows = stmt.query_map(rusqlite::params![repo_id, pattern, name], |row| {
+    let rows = stmt.query_map(rusqlite::params![name, repo_id, name], |row| {
         row.get::<_, String>(0)
     })?;
 
