@@ -56,7 +56,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Changeset**: Atomic transaction (install/remove/rollback)
 - **Flavor**: Build variations (arch, features)
 - **CAS**: Content-addressable storage for files
-- **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (24 tools)
+- **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
 Database schema is currently **v51** (50+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
 
@@ -76,7 +76,7 @@ Two MCP servers are configured for direct infrastructure interaction:
 | **remi-admin** | `packages.conary.io:8082/mcp` | Remi production server management |
 | **conary-test** | `forge.conarylabs.com:9090/mcp` | Test infrastructure on Forge |
 
-**remi-admin** tools: CI workflows (`ci_dispatch`, `ci_list_runs`, `ci_get_run`, `ci_get_logs`), mirror sync, token management, repo inspection, federation peers, audit log, test data (`test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`).
+**remi-admin** tools: CI workflows (`ci_dispatch`, `ci_list_runs`, `ci_get_run`, `ci_get_logs`), mirror sync, token management, repo inspection, federation peers, audit log, test data (`test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`), canonical mapping (`canonical_rebuild`), chunk GC (`chunk_gc`).
 
 **conary-test** tools: Start/monitor test runs (`start_run`, `get_run`, `list_runs`), inspect results (`get_test`, `get_test_logs`), rerun failures (`rerun_test`), manage images (`build_image`, `list_images`, `prune_images`, `image_info`), cleanup containers, reload manifests, deployment ops (`deploy_source`, `rebuild_binary`, `restart_service`, `deploy_status`, `build_fixtures`, `publish_fixtures`, `flush_pending`).
 

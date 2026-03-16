@@ -445,7 +445,7 @@ A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), TUF supply chain trust, and Prometheus metrics.
 
-- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (21 remi-admin tools + 24 conary-test tools)
+- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (23 remi-admin tools + 23 conary-test tools)
 
 ```bash
 # Build with server support
@@ -498,7 +498,7 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 ```
 
 - TOML manifest-based tests with per-step logging
-- 24 MCP tools for agent-driven testing and deployment
+- 23 MCP tools for agent-driven testing and deployment
 - Results streamed to Remi for persistent storage
 
 ---
@@ -525,7 +525,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.5.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 260+ unit tests and 249 integration tests (248 passing, 1 environment skip) across 3 distros (schema v51). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 21 MCP tools for LLM agent integration).
+**Version 0.6.0** -- Core architecture is complete and tested. The codebase has 190,000+ lines of Rust with 2,600+ unit tests and 249 integration tests (248 passing, 1 environment skip) across 3 distros (schema v51). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 23 MCP tools for LLM agent integration).
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
