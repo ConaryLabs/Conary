@@ -13,30 +13,20 @@ use conary_core::capability::inference::{
 use std::fs;
 use std::time::Instant;
 
-/// Benchmark result for a single inference run (kept for future detailed reporting)
-#[allow(dead_code)]
-struct BenchmarkResult {
-    package_name: String,
-    tier_used: u8,
-    elapsed_ms: f64,
-    confidence: Confidence,
-    detected_network: bool,
-    detected_ports: Vec<String>,
-}
-
 /// Load a system binary if it exists
 fn load_binary(path: &str) -> Option<Vec<u8>> {
     fs::read(path).ok()
 }
 
 /// Known packages with expected capabilities for accuracy testing
-#[allow(dead_code)]
 struct ExpectedCapabilities {
     name: &'static str,
     binary_path: &'static str,
     expected_needs_network: bool,
-    expected_ports: &'static [&'static str], // Reserved for future port detection tests
-    expected_syscall_profile: Option<&'static str>, // Reserved for future syscall profile tests
+    #[allow(dead_code)] // Reserved for future port detection tests
+    expected_ports: &'static [&'static str],
+    #[allow(dead_code)] // Reserved for future syscall profile tests
+    expected_syscall_profile: Option<&'static str>,
 }
 
 const KNOWN_PACKAGES: &[ExpectedCapabilities] = &[

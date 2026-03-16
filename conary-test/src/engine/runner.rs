@@ -792,7 +792,7 @@ mod tests {
             self
         }
 
-        #[allow(dead_code)]
+        #[allow(dead_code)] // Intended for future exec-call assertions in container tests
         fn calls(&self) -> Vec<Vec<String>> {
             self.exec_calls.lock().unwrap().clone()
         }

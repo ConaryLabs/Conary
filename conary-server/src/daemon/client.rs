@@ -90,7 +90,7 @@ pub struct UpdateOptions {
 /// HTTP response from daemon
 struct HttpResponse {
     status_code: u16,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Parsed but not yet consumed; reserved for content-type checks
     headers: Vec<(String, String)>,
     body: String,
 }

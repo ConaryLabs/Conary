@@ -390,7 +390,7 @@ pub fn cmd_derive_stale(db_path: &str) -> Result<()> {
 
 /// Mark all derived packages from a parent as stale
 /// (Called internally when parent packages are updated)
-#[allow(dead_code)]
+#[allow(dead_code)] // TODO: wire into the update pipeline
 pub fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 

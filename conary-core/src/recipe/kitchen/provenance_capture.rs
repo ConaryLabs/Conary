@@ -50,7 +50,6 @@ pub struct ProvenanceCapture {
 }
 
 /// A patch captured during the build
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CapturedPatch {
     /// URL or path to the patch file
@@ -58,6 +57,7 @@ pub struct CapturedPatch {
     /// Hash of the patch content
     pub hash: String,
     /// Strip level used when applying (-p N)
+    #[allow(dead_code)] // Set during capture; will be used for patch reproducibility checks
     pub strip_level: u32,
     /// Author if known
     pub author: Option<String>,
@@ -83,7 +83,7 @@ impl ProvenanceCapture {
     }
 
     /// Initialize with recipe file hash (streams the file instead of reading all into memory)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for recipe builders to set provenance hash
     pub fn with_recipe_hash(mut self, recipe_path: &Path) -> Self {
         if let Ok(file) = fs::File::open(recipe_path) {
             let mut reader = std::io::BufReader::new(file);
@@ -130,7 +130,7 @@ impl ProvenanceCapture {
     }
 
     /// Record a git commit if building from git
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: call from git-source recipe builds
     pub fn record_git_commit(&mut self, commit: &str) {
         self.git_commit = Some(commit.to_string());
     }
@@ -155,7 +155,7 @@ impl ProvenanceCapture {
     }
 
     /// Record build dependencies
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Bulk setter; see add_build_dep() for incremental use
     pub fn record_build_deps(&mut self, deps: Vec<CapturedDep>) {
         self.build_deps = deps;
     }

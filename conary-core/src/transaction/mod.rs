@@ -357,7 +357,7 @@ pub enum OperationType {
 pub struct TransactionEngine {
     config: TransactionConfig,
     cas: CasStore,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved: will be used when TransactionEngine performs file deployment directly
     deployer: FileDeployer,
 }
 
@@ -549,7 +549,7 @@ pub struct Transaction<'a> {
     state: TransactionState,
     plan: Option<TransactionPlan>,
     start_time: DateTime<Utc>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved for journal/log output
     description: String,
     lock_file: Option<File>,
     /// Options for controlling execution (cancel, progress)
