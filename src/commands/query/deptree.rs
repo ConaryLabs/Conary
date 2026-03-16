@@ -28,15 +28,8 @@ pub fn cmd_deptree(
     let conn = open_db(db_path)?;
 
     // Verify package exists
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
-    if troves.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Package '{}' is not installed",
-            package_name
-        ));
-    }
-
-    let trove = &troves[0];
+    let trove = conary_core::db::models::Trove::find_one_by_name(&conn, package_name)?
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' is not installed", package_name))?;
     println!(
         "{} {} ({})",
         trove.name,

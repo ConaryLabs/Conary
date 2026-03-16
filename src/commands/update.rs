@@ -244,10 +244,7 @@ fn trove_version_scheme(trove: &Trove) -> VersionScheme {
 }
 
 fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Result<(Trove, i64)> {
-    let troves = Trove::find_by_name(conn, package_name)?;
-    let trove = troves
-        .into_iter()
-        .next()
+    let trove = Trove::find_one_by_name(conn, package_name)?
         .ok_or_else(|| anyhow::anyhow!("Package '{}' is not installed", package_name))?;
     let trove_id = trove
         .id
