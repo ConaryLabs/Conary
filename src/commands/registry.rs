@@ -41,11 +41,23 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
                 },
             };
 
-            // Insert the implementation mapping if this rule has a concrete name + repo
+            // Insert the implementation mapping if this rule has a concrete name + repo.
+            // StringOrVec can hold one or many repos; take the first for the mapping.
             if !rule.name.is_empty()
                 && let Some(ref repo) = rule.repo
             {
-                let distro = repo_to_distro(repo).unwrap_or_else(|| repo.replace('_', "-"));
+                let repo_str = match repo {
+                    conary_core::canonical::rules::StringOrVec::Single(s) => s.as_str(),
+                    conary_core::canonical::rules::StringOrVec::Multiple(v) => {
+                        if let Some(first) = v.first() {
+                            first.as_str()
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                let distro =
+                    repo_to_distro(repo_str).unwrap_or_else(|| repo_str.replace('_', "-"));
                 let mut imp = PackageImplementation::new(
                     canonical_id,
                     distro,
