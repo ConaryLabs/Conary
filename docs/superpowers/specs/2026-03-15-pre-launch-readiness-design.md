@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-15
-revision: 1
+revision: 2
 summary: Fix all readiness gaps before public announcement -- failing tests, missing commands, UX, consistency
 ---
 
@@ -16,7 +16,7 @@ discovered by new users, contributors, or reviewers.
 
 ### Block 1: Showstoppers
 
-**1. Five failing unit tests**
+**1. Six failing unit tests (5 in conary-core + 1 integration)**
 
 These fail on a clean `cargo test` run:
 
@@ -28,51 +28,52 @@ These fail on a clean `cargo test` run:
 - `container::tests::test_container_config_pristine_for_bootstrap` -- the
   pristine_for_bootstrap() function now mounts host essentials (/usr/bin,
   /lib64, /tmp). The test asserts an empty bind_mounts list. Update to
-  expect the new mounts.
-- `filesystem::vfs::tests::test_remove_directory_with_children` -- edge
-  case in VFS directory removal. Debug and fix.
-- `db::tests::test_open_rejects_corrupt_wal_sidecar` -- WAL corruption
-  detection test is fragile. Fix the test setup or assertion.
+  expect the new mounts. Also update `is_pristine()` (line 303) to accept
+  these specific host paths as valid for "pristine bootstrap" containers.
+  **Also fix the integration test** in `tests/target_root.rs:154` which
+  fails for the same reason.
+- `filesystem::vfs::tests::test_remove_directory_with_children` --
+  **Production bug**, not just a test issue. The `remove()` method at
+  `conary-core/src/filesystem/vfs/mod.rs:427-460` processes the
+  `to_remove` vector sequentially, setting `parent = None` on each node.
+  Later `get_path(id)` calls for descendant nodes fail because the parent
+  chain is already broken. **Fix:** collect all paths via `get_path()`
+  BEFORE mutating any nodes, then remove them from the path_index.
+- `db::tests::test_open_rejects_corrupt_wal_sidecar` -- **Production bug**
+  in `validate_wal_file()` at `conary-core/src/db/mod.rs:43`. For files
+  without an extension (e.g., `/foo/bar`), the function constructs the WAL
+  path as `/foo/bar.-wal` instead of `/foo/bar-wal`. The test writes
+  corruption to `*.db-wal` but validation looks for `*.-wal` — they never
+  match. **Fix the path construction** in `validate_wal_file()` to handle
+  extensionless files, then verify the test passes.
 
-**2. `conary capability enforce` command missing**
+**2. `conary capability enforce` and `audit` commands hidden**
 
-README shows `conary capability enforce nginx` as a feature. The command
-does not exist in the CLI. Two options:
+README shows `conary capability enforce nginx` and `conary capability audit
+nginx` as features. Both commands **already exist and are fully implemented**
+at `src/commands/capability.rs:307-526`, but are hidden from --help via
+`#[command(hide = true)]` in `src/cli/capability.rs:86-108`.
 
-- **(A) Implement it**: Wire the existing `CapabilityDeclaration` +
-  `CapabilityPolicy` into a CLI command that loads a package's declared
-  capabilities and evaluates them against the policy. Output: which caps
-  are allowed/prompted/denied.
-- **(B) Remove from README**: Mark capability enforcement as
-  "install-time only" and remove the `enforce` example.
-
-Decision: **(A) Implement it** -- the policy engine exists, this is just a
-thin CLI wrapper. The `capability audit` command (also in README) should
-work similarly: run the package in audit mode and report what capabilities
-it actually uses.
-
-Implementation:
-- `conary capability enforce <package>` -- loads package's
-  CapabilityDeclaration from DB, evaluates against CapabilityPolicy,
-  prints tier for each capability.
-- `conary capability audit <package>` -- if the hidden `audit` command
-  exists in CLI definition, verify it works. If stub, implement basic
-  version that shows declared capabilities + policy evaluation.
+**Fix:**
+- Un-hide both `audit` and `run` commands in the CLI definition
+- Add `enforce` as a visible alias for `run` (or rename `run` to `enforce`
+  and keep `run` as a hidden alias for backwards compatibility)
+- Verify both commands work end-to-end with an installed package
 
 **3. First-run UX: "Database not found" error**
 
 When a user runs `conary install foo` without `conary system init`, they
 get: `"Database not found at path: /var/lib/conary/conary.db"`
 
-Fix: detect the missing-DB case and print:
+Fix: add a centralized error mapping in `src/main.rs` (or the top-level
+error handler) that catches `Error::DatabaseNotFound` and enhances it:
 ```
 Error: Database not initialized.
 Run 'conary system init' to set up the package database.
 ```
 
-Location: `conary-core/src/db/mod.rs` in the `open()` or `open_fast()`
-function. Check if file exists before attempting to open; if not, return a
-typed error that the CLI layer can catch and enhance with the hint.
+Do NOT scatter this across 50+ call sites. Handle it once at the top-level
+error handler where anyhow errors are formatted for the user.
 
 **4. Duplicate repo add: raw SQLite error**
 
@@ -93,9 +94,11 @@ user-friendly message.
 
 **5. Version sync**
 
-- `conary-server/Cargo.toml` is at 0.4.0 -- bump to 0.5.0
-- `conary-test/Cargo.toml` is at 0.2.0 -- this is fine (separate version
-  track per CLAUDE.md), but add a comment in the TOML explaining why
+- `conary-server/Cargo.toml` is at 0.4.0 -- leave at 0.4.0 (separate
+  version track per CLAUDE.md, `server-v` tag prefix). Bumping without a
+  server-specific change would violate semver. Add a comment in the TOML
+  explaining the separate version track.
+- `conary-test/Cargo.toml` is at 0.2.0 -- same rationale, add comment.
 
 **6. ROADMAP update**
 
@@ -110,16 +113,21 @@ Update ROADMAP.md to reflect:
 - Mark system generations as "functional but limited real-world testing"
 - Mark bootstrap as "working (31 packages built from source, qcow2 image
   generation), full distro bootstrap in progress"
-- Ensure capability section accurately describes install-time policy (not
-  runtime enforcement, which is aspirational)
-- Add a "Project Status" section or badge showing test count (249 tests,
-  248 passing)
+- Update capability section to use `conary capability enforce` (not just
+  install-time policy) and `conary capability audit` — both are real
+  commands once un-hidden
+- Add a "Project Status" section showing: 249 integration tests (248
+  passing, 1 environment skip), plus ~1500 unit tests
 
 ### Block 3: Polish
 
 **8. Error messages**
 
-Beyond the two specific fixes above, do a sweep of common error paths:
+Systematic approach: grep for raw `rusqlite::Error` propagation in
+`src/commands/` (any `.context("...")?` or bare `?` on DB operations).
+Also check for `.unwrap()` in command handlers.
+
+Specific paths to verify:
 - `conary repo sync` with no repos configured
 - `conary remove <not-installed-package>`
 - `conary ccs install <nonexistent-file>`
@@ -130,32 +138,40 @@ errors, no panics, no "No such file or directory" without context.
 
 **9. `cargo test` fully green**
 
-After fixing the 5 specific failures, run the full suite and fix any
-other failures or warnings. Target: `cargo test` exits 0 with no
-failures.
+After fixing the 6 specific failures (5 unit + 1 integration), run:
+- `cargo test` (all unit + integration tests)
+- `cargo test --features server` (server-only tests)
+- `cargo test -p conary-test` (test infrastructure tests)
+
+Target: all exit 0 with no failures. The 249 integration tests are
+separate (run on Forge), but unit tests must pass locally.
 
 **10. Site content check**
 
-Read `site/src/` to verify that any marketing copy on conary.io matches
-the current feature set. Flag aspirational claims.
+Review `site/src/app.html` and any route components to verify marketing
+copy matches current features. Flag aspirational claims.
 
 ## Implementation Order
 
-1. Fix 5 failing unit tests (unblocks "cargo test passes")
-2. Fix first-run UX (DB not found hint)
+1. Fix 6 failing tests (VFS bug is production code, WAL bug is production
+   code, rest are test updates)
+2. Fix first-run UX (DB not found hint -- centralized)
 3. Fix duplicate repo add error
-4. Implement `capability enforce` command
-5. Version sync + ROADMAP update
+4. Un-hide capability enforce/audit commands
+5. Version comments + ROADMAP update
 6. README accuracy sweep
 7. Error message polish sweep
 8. Site content check
-9. Final `cargo test && cargo clippy` verification
+9. Final `cargo test && cargo test --features server && cargo clippy`
 
 ## Success Criteria
 
 - `cargo test` exits 0 with no failures
+- `cargo test --features server` exits 0
 - `cargo clippy -- -D warnings` passes
 - A new user can: `cargo build`, `conary system init`, `conary repo sync`,
   `conary install tree` without hitting any confusing errors
+- `conary capability enforce <pkg>` and `conary capability audit <pkg>`
+  appear in --help and produce meaningful output
 - README makes no claims the code can't back up
 - ROADMAP reflects actual project state
