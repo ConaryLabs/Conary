@@ -60,6 +60,9 @@ pub fn solve_install(
     // Load all installed packages as solvables
     provider.load_installed_packages()?;
 
+    // Pre-load canonical equivalents for cross-distro fallback (O(1) lookups).
+    provider.load_canonical_index()?;
+
     // Load repo packages transitively to fixed point: keep discovering new
     // dependency names and loading their repo candidates until no new names appear.
     let mut loaded_names: std::collections::HashSet<String> =
@@ -70,11 +73,20 @@ pub fn solve_install(
         provider.load_repo_packages_for_names(&to_load)?;
 
         // Discover new dependency names that we haven't loaded yet
-        let new_names: Vec<String> = provider
+        let mut new_names: Vec<String> = provider
             .dependency_names()
             .into_iter()
             .filter(|n| loaded_names.insert(n.clone()))
             .collect();
+
+        // Also load canonical equivalents of any new names so the solver
+        // has candidates available when the fallback fires.
+        let equiv_names: Vec<String> = new_names
+            .iter()
+            .flat_map(|n| provider.canonical_equivalents(n).to_vec())
+            .filter(|n| loaded_names.insert(n.clone()))
+            .collect();
+        new_names.extend(equiv_names);
 
         to_load = new_names;
     }
@@ -1141,5 +1153,171 @@ mod tests {
             .find(|p| p.name == "bash")
             .unwrap();
         assert_eq!(bash.source, SatSource::Installed);
+    }
+
+    // ==========================================================================
+    // Canonical fallback tests
+    // ==========================================================================
+
+    use crate::db::models::{CanonicalPackage, PackageImplementation};
+
+    /// Helper: insert a canonical package with distro-specific implementations.
+    fn insert_canonical(
+        conn: &Connection,
+        canonical_name: &str,
+        impls: &[(&str, &str)], // (distro, distro_name)
+    ) {
+        let mut pkg = CanonicalPackage::new(canonical_name.to_string(), "package".to_string());
+        let can_id = pkg.insert(conn).unwrap();
+
+        for (distro, distro_name) in impls {
+            let mut pi = PackageImplementation::new(
+                can_id,
+                distro.to_string(),
+                distro_name.to_string(),
+                "auto".to_string(),
+            );
+            pi.insert(conn).unwrap();
+        }
+    }
+
+    #[test]
+    fn canonical_fallback_resolves_cross_distro_dep() {
+        // App depends on "libssl3" (Debian name), but only "openssl" (Fedora)
+        // is available in repos. Canonical mapping links them.
+        let (_dir, conn) = setup_test_db();
+
+        insert_canonical(
+            &conn,
+            "openssl",
+            &[("fedora", "openssl"), ("debian", "libssl3")],
+        );
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "openssl",
+            "3.2.0-1.fc43",
+            "https://mirror.fedora.invalid/openssl.rpm",
+            &[],
+        );
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "myapp",
+            "1.0-1.fc43",
+            "https://mirror.fedora.invalid/myapp.rpm",
+            &[("libssl3", None)],
+        );
+
+        let result =
+            solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
+
+        assert!(
+            result.conflict_message.is_none(),
+            "Canonical fallback should resolve libssl3 -> openssl: {:?}",
+            result.conflict_message,
+        );
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert!(names.contains(&"myapp"));
+        assert!(
+            names.contains(&"openssl"),
+            "openssl should be pulled in via canonical fallback for libssl3"
+        );
+    }
+
+    #[test]
+    fn canonical_fallback_not_used_when_exact_match_exists() {
+        // When the exact name exists in repos, canonical fallback should not
+        // interfere -- the direct candidate should be used.
+        let (_dir, conn) = setup_test_db();
+
+        insert_canonical(
+            &conn,
+            "kernel",
+            &[("fedora", "kernel"), ("arch", "linux")],
+        );
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "kernel",
+            "6.19.6-200.fc43",
+            "https://mirror.fedora.invalid/kernel.rpm",
+            &[],
+        );
+
+        // Also add "linux" in case it leaks through
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "linux",
+            "6.19.6-1",
+            "https://mirror.fedora.invalid/linux.rpm",
+            &[],
+        );
+
+        let result =
+            solve_install(&conn, &[("kernel".to_string(), VersionConstraint::Any)]).unwrap();
+
+        assert!(result.conflict_message.is_none());
+        let names: Vec<&str> = result
+            .install_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert!(names.contains(&"kernel"));
+        // "linux" should NOT appear -- exact name matched first
+        assert!(
+            !names.contains(&"linux"),
+            "Canonical fallback should not fire when exact name exists"
+        );
+    }
+
+    #[test]
+    fn canonical_fallback_with_no_mapping_still_fails() {
+        // When no canonical mapping exists and the name is absent, the
+        // solver should still report a conflict.
+        let (_dir, conn) = setup_test_db();
+
+        let mut repo = Repository::new(
+            "fedora-main".to_string(),
+            "https://mirror.fedora.invalid".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        insert_repo_pkg_with_reqs(
+            &conn,
+            repo_id,
+            "myapp",
+            "1.0-1",
+            "https://mirror.fedora.invalid/myapp.rpm",
+            &[("nonexistent-lib", None)],
+        );
+
+        let result =
+            solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
+
+        assert!(
+            result.conflict_message.is_some(),
+            "Should report conflict when dep has no candidates and no canonical mapping"
+        );
     }
 }
