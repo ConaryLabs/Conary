@@ -557,18 +557,19 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
 
     // Count distinct distro families from enabled repositories.
     // Multiple repos can serve the same distro (e.g., arch-core, arch-extra,
-    // arch-multilib are all "Arch Linux"). Normalize by stripping suffixes
-    // like -core, -extra, -multilib, and version numbers.
+    // arch-multilib are all "Arch Linux"). Normalize by grouping related
+    // repos into families. The remi repo is Conary's native CCS format,
+    // not a distro — exclude it from the distro count.
     let total_distros: i64 = conn.query_row(
         "SELECT COUNT(DISTINCT
             CASE
+                WHEN name = 'remi' THEN NULL
                 WHEN name LIKE 'arch-%' THEN 'arch'
                 WHEN name LIKE 'fedora-%' THEN 'fedora'
                 WHEN name LIKE 'ubuntu-%' THEN 'ubuntu'
-                WHEN default_strategy_distro IS NOT NULL THEN default_strategy_distro
                 ELSE name
             END
-         ) FROM repositories WHERE enabled = 1",
+         ) FROM repositories WHERE enabled = 1 AND name != 'remi'",
         [],
         |row| row.get(0),
     )?;
