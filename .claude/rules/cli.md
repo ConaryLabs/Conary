@@ -33,7 +33,19 @@ conary-core -- no business logic lives in the CLI layer.
 - No business logic in CLI -- all logic lives in conary-core
 - Output formatting follows consistent patterns (use `progress` module)
 - Feature-gated commands: `cmd_ai_*` require `--features experimental`
-- Commands open DB via `db::open()` and pass `Connection` to core functions
+- Commands open DB via `open_db()` helper (defined in `mod.rs`) -- never bare `db::open()`
+- Lookup installed troves via `Trove::find_one_by_name()` -- not manual `find_by_name()` + `.first()`
+
+## Output Standards
+- `println!()` for user-facing results only
+- `tracing::info!()` / `warn!()` for diagnostics and progress
+- `eprintln!()` only for usage errors
+- Never use `dbg!()` or `print!()` in committed code
+
+## Function Size
+- Command handlers should be < 300 lines
+- Extract sub-functions for logical sections (resolution, validation, execution)
+- Long orchestration functions should delegate to well-named helpers
 
 ## Gotchas
 - `SandboxMode` is re-exported from `conary_core::scriptlet` at module level
@@ -43,7 +55,7 @@ conary-core -- no business logic lives in the CLI layer.
 - `cook.rs` wraps `conary_core::recipe::Cook`
 
 ## Files
-- `mod.rs` -- re-exports all `cmd_*` functions
+- `mod.rs` -- re-exports all `cmd_*` functions, defines `open_db()` helper
 - `install/` -- install command with `batch.rs` for multi-package
 - `adopt/` -- system adoption with `conflicts.rs`, `convert.rs`
 - `generation/` -- generation management with `switch.rs`
