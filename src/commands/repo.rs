@@ -50,7 +50,16 @@ pub fn cmd_repo_add(
     repo.default_strategy_endpoint = remi_endpoint;
     repo.default_strategy_distro = remi_distro;
 
-    repo.insert(&conn)?;
+    if let Err(e) = repo.insert(&conn) {
+        let msg = e.to_string();
+        if msg.contains("UNIQUE constraint failed") {
+            anyhow::bail!(
+                "Repository '{}' already exists.\nUse 'conary repo list' to see configured repositories.",
+                name
+            );
+        }
+        return Err(e.into());
+    }
 
     println!("Added repository: {}", repo.name);
     println!("  Metadata URL: {}", repo.url);
