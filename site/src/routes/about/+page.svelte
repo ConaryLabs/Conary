@@ -114,7 +114,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (48 migrations)</span>
+					<span class="tech-value">SQLite (50+ migrations)</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>
@@ -139,7 +139,7 @@
 			<h2>Contributing</h2>
 			<p>
 				Conary is open source and welcomes contributions. The codebase is well-structured
-				with 270+ tests (unit + integration across 3 distros), comprehensive CI (clippy, test,
+				with 2,600+ tests (unit + integration across 3 distros), comprehensive CI (clippy, test,
 				and release workflows), and good-first-issue labels for newcomers.
 			</p>
 			<div class="about-links">
