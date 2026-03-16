@@ -73,8 +73,9 @@ pub fn solve_install(
         provider.load_repo_packages_for_names(&to_load)?;
 
         // Discover new dependency names that we haven't loaded yet
+        // (only allocates strings for names not already in loaded_names)
         let mut new_names: Vec<String> = provider
-            .dependency_names()
+            .new_dependency_names(&loaded_names)
             .into_iter()
             .filter(|n| loaded_names.insert(n.clone()))
             .collect();

@@ -167,8 +167,9 @@ impl<'db> ConaryProvider<'db> {
             return id;
         }
         let id = NameId(u32::try_from(self.names.len()).expect("resolver name pool overflow"));
-        self.names.push(name.to_string());
-        self.name_to_id.insert(name.to_string(), id);
+        let owned = name.to_string();
+        self.names.push(owned.clone());
+        self.name_to_id.insert(owned, id);
         id
     }
 
@@ -186,7 +187,7 @@ impl<'db> ConaryProvider<'db> {
         let id = VersionSetId(
             u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"),
         );
-        self.version_sets.push((name_id, constraint.clone()));
+        self.version_sets.push((name_id, constraint));
         self.version_set_cache.insert(cache_key, id);
         id
     }
@@ -489,35 +490,43 @@ impl<'db> ConaryProvider<'db> {
 
     /// Collect all unique dependency names from loaded packages.
     pub fn dependency_names(&self) -> Vec<String> {
-        let mut names = std::collections::HashSet::new();
+        self.new_dependency_names(&std::collections::HashSet::new())
+    }
+
+    /// Collect dependency names not already in `known`, avoiding redundant allocations.
+    pub fn new_dependency_names(
+        &self,
+        known: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
         for dep_list in self.dependencies.values() {
             for dep in dep_list {
                 match dep {
                     SolverDep::Single(name, _) => {
-                        names.insert(name.clone());
+                        if !known.contains(name.as_str()) {
+                            seen.insert(name.clone());
+                        }
                     }
                     SolverDep::OrGroup(alternatives) => {
                         for (name, _) in alternatives {
-                            names.insert(name.clone());
+                            if !known.contains(name.as_str()) {
+                                seen.insert(name.clone());
+                            }
                         }
                     }
                 }
             }
         }
-        names.into_iter().collect()
+        seen.into_iter().collect()
     }
 
     /// Intern version sets for all loaded dependencies so that `get_dependencies`
     /// can find them when the solver queries.
     pub fn intern_all_dependency_version_sets(&mut self) {
-        // Collect all dependencies first to avoid borrowing issues
-        let all_deps: Vec<(u32, Vec<SolverDep>)> = self
-            .dependencies
-            .iter()
-            .map(|(&sid, deps)| (sid, deps.clone()))
-            .collect();
+        // Temporarily take ownership to avoid borrow conflict with self.intern_*()
+        let all_deps = std::mem::take(&mut self.dependencies);
 
-        for (_sid, deps) in &all_deps {
+        for deps in all_deps.values() {
             for dep in deps {
                 match dep {
                     SolverDep::Single(dep_name, constraint) => {
@@ -541,6 +550,9 @@ impl<'db> ConaryProvider<'db> {
                 }
             }
         }
+
+        // Restore the dependencies map
+        self.dependencies = all_deps;
     }
 
     /// Intern a single constraint, creating a version set for it.
