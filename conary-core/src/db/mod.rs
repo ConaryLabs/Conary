@@ -41,12 +41,15 @@ fn configure(conn: &Connection) -> Result<()> {
 }
 
 fn validate_wal_file(path: &Path) -> Result<()> {
-    let wal_path = path.with_extension(format!(
-        "{}-wal",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default()
-    ));
+    // Construct WAL path: "foo.db" -> "foo.db-wal", "foo" -> "foo-wal"
+    let wal_path = match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => path.with_extension(format!("{ext}-wal")),
+        None => {
+            let mut p = path.as_os_str().to_os_string();
+            p.push("-wal");
+            std::path::PathBuf::from(p)
+        }
+    };
     if !wal_path.exists() {
         return Ok(());
     }
@@ -260,7 +263,11 @@ mod tests {
         let db_path = temp_file.path().to_path_buf();
 
         init(&db_path).unwrap();
-        std::fs::write(db_path.with_extension("db-wal"), b"corrupt wal").unwrap();
+
+        // Write corruption to the actual WAL sidecar path
+        let mut wal_path = db_path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        std::fs::write(std::path::PathBuf::from(&wal_path), b"corrupt wal").unwrap();
 
         let err = open(&db_path).unwrap_err().to_string();
         assert!(err.contains("WAL appears corrupted") || err.contains("WAL"));
