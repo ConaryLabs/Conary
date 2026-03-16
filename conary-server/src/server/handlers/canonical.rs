@@ -210,6 +210,80 @@ pub async fn groups_list(State(state): State<Arc<RwLock<ServerState>>>) -> Respo
     }
 }
 
+/// A single entry in the canonical map response.
+#[derive(Debug, Serialize)]
+pub struct CanonicalMapEntry {
+    pub canonical: String,
+    pub implementations: std::collections::BTreeMap<String, String>,
+}
+
+/// Full canonical map response returned by `GET /v1/canonical/map`.
+#[derive(Debug, Serialize)]
+pub struct CanonicalMapResponse {
+    pub version: u32,
+    pub generated_at: String,
+    pub entries: Vec<CanonicalMapEntry>,
+}
+
+/// GET /v1/canonical/map -- returns the full canonical package map as JSON.
+///
+/// Groups all canonical packages with their distro implementations into a
+/// single document suitable for client-side caching during repo sync.
+/// Response is cached for 5 minutes via `Cache-Control`.
+pub async fn canonical_map(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> Result<Response, Response> {
+    let db_path = state.read().await.config.db_path.clone();
+
+    let response = super::run_blocking("canonical_map", move || {
+        let conn = conary_core::db::open(&db_path)?;
+
+        let mut stmt = conn.prepare(
+            "SELECT cp.name, pi.distro, pi.distro_name
+             FROM canonical_packages cp
+             JOIN package_implementations pi ON pi.canonical_id = cp.id
+             ORDER BY cp.name, pi.distro",
+        )?;
+
+        let mut entries_map: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
+            std::collections::BTreeMap::new();
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (canonical, distro, distro_name) = row?;
+            entries_map
+                .entry(canonical)
+                .or_default()
+                .insert(distro, distro_name);
+        }
+
+        let entries: Vec<CanonicalMapEntry> = entries_map
+            .into_iter()
+            .map(|(canonical, implementations)| CanonicalMapEntry {
+                canonical,
+                implementations,
+            })
+            .collect();
+
+        Ok(CanonicalMapResponse {
+            version: 1,
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            entries,
+        })
+    })
+    .await?;
+
+    let json = super::serialize_json(&response, "canonical map")?;
+    Ok(super::json_response(json, 300))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +340,37 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("orphan-pkg"));
         assert!(json.contains("\"implementations\":[]"));
+    }
+
+    #[test]
+    fn test_canonical_map_response_serialization() {
+        let mut impls = std::collections::BTreeMap::new();
+        impls.insert("fedora".to_string(), "openssl".to_string());
+        impls.insert("ubuntu".to_string(), "libssl3".to_string());
+
+        let response = CanonicalMapResponse {
+            version: 1,
+            generated_at: "2026-03-16T00:00:00Z".to_string(),
+            entries: vec![CanonicalMapEntry {
+                canonical: "openssl".to_string(),
+                implementations: impls,
+            }],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"canonical\":\"openssl\""));
+        assert!(json.contains("\"fedora\":\"openssl\""));
+        assert!(json.contains("\"ubuntu\":\"libssl3\""));
+    }
+
+    #[test]
+    fn test_canonical_map_empty_entries() {
+        let response = CanonicalMapResponse {
+            version: 1,
+            generated_at: "2026-03-16T00:00:00Z".to_string(),
+            entries: vec![],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"entries\":[]"));
     }
 }
