@@ -447,10 +447,12 @@ impl VfsTree {
         let parent = self.get_node_mut(parent_id);
         parent.children.retain(|&id| id != node_id);
 
-        // Remove all paths from index and mark nodes as orphaned
-        for &id in &to_remove {
-            let node_path = self.get_path(id);
-            self.path_index.remove(&node_path);
+        // Collect all paths BEFORE mutating (get_path needs parent chain intact)
+        let paths_to_remove: Vec<PathBuf> = to_remove.iter().map(|&id| self.get_path(id)).collect();
+
+        // Now safely remove from index and orphan nodes
+        for (i, &id) in to_remove.iter().enumerate() {
+            self.path_index.remove(&paths_to_remove[i]);
             // Mark as orphaned so iter() skips these nodes
             self.get_node_mut(id).parent = None;
             self.get_node_mut(id).children.clear();
