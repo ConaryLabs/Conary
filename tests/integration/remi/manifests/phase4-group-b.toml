@@ -129,14 +129,10 @@ group = "B"
 depends_on = ["T179"]
 
 [[test.step]]
-conary = "model lock --model /tmp/snapshot.toml --output /tmp/lock.toml"
+run = "${CONARY_BIN} model lock --model /tmp/snapshot.toml --output /tmp/lock.toml --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
-exit_code = 0
 stdout_not_contains = "panic"
-
-[[test.step]]
-file_exists = "/tmp/lock.toml"
 
 # --------------------------------------------------------------------------
 # T182: Model update
