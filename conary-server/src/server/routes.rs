@@ -412,6 +412,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         // === Canonical Package Identity ===
+        .route("/v1/canonical/map", get(canonical::canonical_map))
         .route("/v1/canonical/search", get(canonical::canonical_search))
         .route("/v1/canonical/:name", get(canonical::canonical_lookup))
         .route("/v1/groups", get(canonical::groups_list))
