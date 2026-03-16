@@ -266,9 +266,7 @@ pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Resu
                 "UPDATE troves SET label_id = ?1 WHERE id = ?2",
                 rusqlite::params![label_id, trove_id],
             )
-            .with_context(|| {
-                format!("Failed to set label for package '{}'", trove.name)
-            })?;
+            .with_context(|| format!("Failed to set label for package '{}'", trove.name))?;
             println!(
                 "Set label for {} {} to {}",
                 trove.name, trove.version, label_str

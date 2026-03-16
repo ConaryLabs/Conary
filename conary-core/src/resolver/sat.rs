@@ -708,11 +708,8 @@ mod tests {
         insert_provide(&conn, id_b, "virtual-cap", Some("1.0.0"));
         let _id_c = insert_trove(&conn, "consumer", "1.0.0", &[("virtual-cap", None)]);
 
-        let breaking = solve_removal(
-            &conn,
-            &["provider-a".to_string(), "provider-b".to_string()],
-        )
-        .unwrap();
+        let breaking =
+            solve_removal(&conn, &["provider-a".to_string(), "provider-b".to_string()]).unwrap();
         assert!(
             breaking.contains(&"consumer".to_string()),
             "Removing all providers should break consumer, got: {breaking:?}"

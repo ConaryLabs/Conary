@@ -88,21 +88,17 @@ impl CapabilityPolicy {
         }
 
         if self.prompt.iter().any(|c| c == capability) {
-            return PolicyDecision::Prompt(format!(
-                "{capability} requires user confirmation"
-            ));
+            return PolicyDecision::Prompt(format!("{capability} requires user confirmation"));
         }
 
         // Capability not in any explicit list -- fall back to default tier
         match self.default_tier.as_str() {
             "allowed" => PolicyDecision::Allowed,
-            "denied" => PolicyDecision::Denied(format!(
-                "{capability} requires explicit policy override"
-            )),
+            "denied" => {
+                PolicyDecision::Denied(format!("{capability} requires explicit policy override"))
+            }
             // "prompt" or any unrecognized value defaults to prompt
-            _ => PolicyDecision::Prompt(format!(
-                "{capability} requires user confirmation"
-            )),
+            _ => PolicyDecision::Prompt(format!("{capability} requires user confirmation")),
         }
     }
 
@@ -160,12 +156,11 @@ pub fn infer_linux_capabilities(decl: &super::CapabilityDeclaration) -> Vec<Stri
 
     // Filesystem: writing outside standard paths may need CAP_DAC_OVERRIDE
     let standard_prefixes = ["/usr/", "/etc/", "/var/", "/opt/"];
-    if decl
-        .filesystem
-        .write
-        .iter()
-        .any(|path| !standard_prefixes.iter().any(|prefix| path.starts_with(prefix)))
-    {
+    if decl.filesystem.write.iter().any(|path| {
+        !standard_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+    }) {
         caps.push("cap-dac-override".into());
     }
 

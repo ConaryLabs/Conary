@@ -286,8 +286,7 @@ pub fn download_update_with_progress(
     }
 
     // Use content-length from response header if not provided, fall back to spinner
-    let total = content_length
-        .or_else(|| response.content_length());
+    let total = content_length.or_else(|| response.content_length());
 
     let pb = if let Some(size) = total {
         let bar = ProgressBar::new(size);

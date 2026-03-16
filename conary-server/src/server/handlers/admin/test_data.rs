@@ -173,7 +173,16 @@ pub async fn list_test_runs(
 
     let limit = query.limit.unwrap_or(20).min(100);
 
-    match admin_service::list_test_runs(&state, limit, query.cursor, query.suite, query.distro, query.status).await {
+    match admin_service::list_test_runs(
+        &state,
+        limit,
+        query.cursor,
+        query.suite,
+        query.distro,
+        query.status,
+    )
+    .await
+    {
         Ok(runs) => Json(runs).into_response(),
         Err(e) => {
             tracing::error!("Failed to list test runs: {e}");
