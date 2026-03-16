@@ -2416,6 +2416,20 @@ pub fn migrate_v51(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub fn migrate_v52(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_provides_trove_cap
+            ON provides(trove_id, capability);
+        CREATE INDEX IF NOT EXISTS idx_repo_req_pkg_kind
+            ON repository_requirements(repository_package_id, kind);
+        ",
+    )?;
+
+    info!("Schema version 52 applied successfully (composite indexes for resolver and sync)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2434,7 +2448,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 51);
+        assert_eq!(version, 52);
 
         // Insert into canonical_packages
         conn.execute(
