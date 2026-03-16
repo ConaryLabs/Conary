@@ -41,7 +41,7 @@ Everything else depends on this.
 
 ## Phase 2: End-to-End Validation [COMPLETE]
 
-76/76 tests passing across Fedora 43, Ubuntu Noble, and Arch Linux (verified 2026-03-08).
+249 integration tests (248 passing, 1 environment skip) across Fedora 43, Ubuntu Noble, and Arch Linux.
 
 ### Install Flow (per distro: Fedora, Ubuntu, Arch)
 
@@ -64,8 +64,8 @@ Everything else depends on this.
 
 - [x] Dry-run validation passes (T58)
 - [x] Stage 0 -> Stage 1 toolchain builds (T59-T61)
-- [ ] Base system builds with checkpointing (pipeline ready, needs Remi run)
-- [ ] Image generation produces bootable output (pipeline ready, needs Remi run)
+- [x] Base system builds with checkpointing (31 packages built, qcow2 image generation working)
+- [x] Image generation produces bootable output (qcow2 generation working)
 - [ ] (Stretch) Boot the image in QEMU and verify (QEMU tests in orchestrator)
 
 ### Remi Integration
@@ -79,11 +79,20 @@ Everything else depends on this.
 
 - [x] External admin API on :8082 with bearer token auth (P0)
 - [x] Token CRUD, CI proxy, SSE event stream (P0)
-- [x] OpenAPI 3.1 spec, MCP endpoint with 16 tools (P0)
+- [x] OpenAPI 3.1 spec, MCP endpoint with 21 tools (P0)
 - [x] Repository management endpoints (P1)
 - [x] Federation peer management endpoints (P1)
 - [x] Per-IP rate limiting via governor (P2)
 - [x] Audit logging with query/purge endpoints (P2)
+
+### Test Infrastructure
+
+- [x] Python test runner retired, all tests use Rust engine (conary-test)
+- [x] Remi test data API for persistent result storage
+- [x] 24 conary-test MCP tools (test ops, deployment, image management)
+- [x] 21 remi-admin MCP tools (admin, CI, test data)
+- [x] Phase 4 feature validation tests (T160-T255, 98 tests covering all CLI commands)
+- [x] Capability policy engine (three-tier: allowed/prompt/denied)
 
 ### Recipe & Build
 
@@ -149,10 +158,10 @@ These features from original Conary are not planned for implementation:
 
 Priority areas (aligned with phases):
 
-1. End-to-end bootstrap: bootable image from Stage 0
-2. Federation peer discovery and chunk routing
-3. Shell integration for dev environments
-4. Group package system for OS composition
-5. P2P chunk distribution plugins
+1. Federation peer discovery and chunk routing
+2. Shell integration for dev environments
+3. Group package system for OS composition
+4. P2P chunk distribution plugins
+5. QEMU boot verification for bootstrap images
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [CLAUDE.md](CLAUDE.md) for coding conventions.

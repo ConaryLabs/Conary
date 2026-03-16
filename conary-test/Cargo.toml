@@ -1,6 +1,7 @@
 [package]
 name = "conary-test"
 version = "0.2.0"
+# Separate version track (test-v* tags). See CLAUDE.md "Version Groups".
 edition = "2024"
 rust-version = "1.94"
 description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"
