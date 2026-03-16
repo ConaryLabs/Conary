@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-15
-revision: 2
+revision: 3
 summary: Fix all readiness gaps before public announcement -- failing tests, missing commands, UX, consistency
 ---
 
@@ -151,6 +151,60 @@ separate (run on Forge), but unit tests must pass locally.
 Review `site/src/app.html` and any route components to verify marketing
 copy matches current features. Flag aspirational claims.
 
+### Block 4: Progress Bar Coverage
+
+**11. Add progress feedback to long-running operations**
+
+The `indicatif`-based progress system exists (`src/commands/progress.rs`)
+with 4 progress types (`InstallProgress`, `RemoveProgress`,
+`UpdateProgress`, `AdoptProgress`). These are wired into install, remove,
+update, and adopt — but NOT into many other operations that can run for
+seconds to hours with zero user feedback.
+
+**Operations that need progress bars (prioritized by user visibility):**
+
+| Command | Duration | Current UX | Fix |
+|---------|----------|-----------|-----|
+| `repo sync` | 5-60s | Silent until done | Spinner + package count |
+| `ccs build` | 10s-5min | Prints final result only | Phase spinner (parse, compress, write) |
+| `self-update --check` + download | 5-30s | Silent | Download progress bar |
+| `system takeover` | 30s-5min | Prints at end | Phase spinner + package counter |
+| `bootstrap stage0/1/2/base` | 30min-4hr | Log lines only | Overall progress bar + per-package status |
+| `cook` | 10s-10min | Silent until done | Phase spinner (fetch, configure, build, install) |
+| `model apply` | 10s-5min | Silent | Reuse InstallProgress/RemoveProgress |
+| `system adopt --system` | 10s-60s | Has AdoptProgress | Already done (verify) |
+
+**Implementation approach:**
+
+- `repo sync`: Add `SyncProgress` with spinner showing repo name + package
+  count as metadata downloads. The sync operation already iterates packages
+  — wrap in progress updates.
+- `ccs build`: Add phase status prints: "Parsing manifest...",
+  "Compressing files...", "Writing CCS package...". Lightweight — just
+  `println!` at key points, no full progress bar needed.
+- `self-update`: Add download progress bar using `indicatif` with
+  content-length from HTTP response.
+- `system takeover`: Add phase spinner (scanning, converting, recording).
+- `bootstrap`: The bootstrap already prints `[1/12] Building zlib...`
+  style output via `tracing::info!`. Add an overall progress bar wrapping
+  the per-package logs.
+- `cook`: Add phase prints at fetch/configure/build/install boundaries.
+- `model apply`: Delegate to existing InstallProgress/RemoveProgress for
+  the package operations it triggers.
+
+**Also add lightweight feedback to "instant" commands:**
+
+Even fast operations should confirm what happened. No progress bar needed,
+but consistent status output:
+- `pin`/`unpin`: "Pinned tree v2.1" / "Unpinned tree"
+- `repo add`: "Added repository 'fedora-remi'" (already prints this)
+- `config backup`: "Backed up /etc/hostname -> backup #3"
+- `system gc`: "Garbage collection: freed 12MB (45 orphaned objects)"
+- `collection create`: "Created collection 'base-server' with 3 members"
+
+The pattern: every mutating command prints a one-line confirmation of what
+it did. Read-only commands (list, search, query) just output their results.
+
 ## Implementation Order
 
 1. Fix 6 failing tests (VFS bug is production code, WAL bug is production
@@ -161,14 +215,17 @@ copy matches current features. Flag aspirational claims.
 5. Version comments + ROADMAP update
 6. README accuracy sweep
 7. Error message polish sweep
-8. Site content check
-9. Final `cargo test && cargo test --features server && cargo clippy`
+8. Progress bars for repo sync, ccs build, self-update, takeover, cook
+9. Site content check
+10. Final `cargo test && cargo test --features server && cargo clippy`
 
 ## Success Criteria
 
 - `cargo test` exits 0 with no failures
 - `cargo test --features server` exits 0
 - `cargo clippy -- -D warnings` passes
+- Every long-running command shows progress feedback (spinner or bar)
+- Every mutating command prints a confirmation of what it did
 - A new user can: `cargo build`, `conary system init`, `conary repo sync`,
   `conary install tree` without hitting any confusing errors
 - `conary capability enforce <pkg>` and `conary capability audit <pkg>`
