@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.0] - 2026-03-16
+
+### Fixed
+- resolve clippy and fmt warnings across workspace
+
+### Other
+- fix(container): update is_pristine() and integration test for bootstrap mounts
+- fix(cli): improve error messages for common mistake paths
+- feat(cli): add progress feedback to repo sync, ccs build, self-update, cook, takeover
+- fix(cli): show helpful hint when database is not initialized
+- fix(cli): show friendly error when adding duplicate repository
+- fix(vfs): collect paths before mutating nodes in remove()
+- fix(db): handle extensionless files in WAL path construction
+- fix(bootstrap): remove invalid --defer-partitions=no from systemd-repart
+- fix(bootstrap): add -std=gnu17 to CFLAGS for GCC 15 compatibility
+- fix(bootstrap): add --sysroot to CFLAGS for header isolation
+- fix(bootstrap): use parent of toolchain path for --sysroot
+- fix(bootstrap): add --sysroot to LDFLAGS for stage1 libc
+- fix(bootstrap): fall back to unprefixed tools in stage1 sysroot
+- fix(bootstrap): include stage0 cross-tools in base build PATH
+- fix(bootstrap): skip sandbox for base builds (trusted recipes)
+- fix(container): mount host essentials in bootstrap sandbox
+- fix(container): respect custom PATH in sandbox instead of hardcoding
+- fix(ccs): check denied capabilities before prompted ones
+- fix(resolver): only check deps affected by the removal, not all deps
+- feat(ccs): replace capability hard-reject with policy evaluation
+- fix(resolver): treat untracked soname deps as system-satisfied in removal check
+- feat(capability): infer Linux capabilities from CapabilityDeclaration
+- feat(capability): add three-tier capability policy types and defaults
+- feat(ccs): add --reinstall flag to ccs install command
+- test(resolver): add removal tests for provides, sonames, name fallback, dual removal
+- fix(resolver): check provides table in solve_removal, not just package names
+- feat(resolver): add provides index and unfiltered deps to ConaryProvider
+- refactor(core): extract shared MCP helpers into conary-core
+
 ## [Unreleased] - 2026-03-15
 
 ### Added
