@@ -6,7 +6,7 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 260+ tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 100K+ lines of Rust, 260+ unit tests and 249 integration tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**100K+ lines of Rust, 260+ tests, database schema v51.** This is not a prototype.
+**100K+ lines of Rust, 260+ unit tests, 249 integration tests, database schema v51.** This is not a prototype.
 
 ---
 
@@ -445,7 +445,7 @@ A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), TUF supply chain trust, and Prometheus metrics.
 
-- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (21 tools)
+- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (21 remi-admin tools + 24 conary-test tools)
 
 ```bash
 # Build with server support
@@ -489,7 +489,7 @@ conary federation stats --days 7      # Bandwidth savings report
 
 ## Test Infrastructure
 
-152 integration tests across 3 phases, executed by the `conary-test` engine:
+249 integration tests across 4 phases, executed by the `conary-test` Rust engine:
 
 ```bash
 cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
@@ -525,7 +525,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.5.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 260+ tests passing across 3 distros (schema v51). System generations (EROFS + composefs), system takeover, the bootstrap pipeline, and cross-distro repository capability resolution are implemented. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 16 MCP tools for LLM agent integration).
+**Version 0.5.0** -- Core architecture is complete and tested. The codebase has 100,000+ lines of Rust with 260+ unit tests and 249 integration tests (248 passing, 1 environment skip) across 3 distros (schema v51). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 21 MCP tools for LLM agent integration).
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -533,10 +533,9 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 ## What's Next
 
-- CI & validation infrastructure (Forgejo, Podman test matrix)
-- End-to-end testing across Fedora, Ubuntu, Arch
 - Shell integration (direnv-style dev environments)
 - Composable systems (group packages, OS composition)
+- Federation peer discovery and chunk routing
 - P2P chunk distribution plugins
 
 ---
