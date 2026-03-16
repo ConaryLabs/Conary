@@ -143,6 +143,36 @@ impl R2Store {
         Ok(self.bucket.presign_get(&key, expiry_secs, None).await?)
     }
 
+    /// List all chunk hashes stored in R2.
+    ///
+    /// Paginates through all objects under the configured prefix,
+    /// stripping the prefix to return bare hash strings.
+    pub async fn list_chunks(&self) -> Result<Vec<String>> {
+        let results = self
+            .bucket
+            .list(self.prefix.clone(), None)
+            .await
+            .context("R2 list objects failed")?;
+
+        let mut hashes = Vec::new();
+        for page in &results {
+            for object in &page.contents {
+                if let Some(hash) = object.key.strip_prefix(&self.prefix)
+                    && !hash.is_empty()
+                {
+                    hashes.push(hash.to_string());
+                }
+            }
+        }
+
+        Ok(hashes)
+    }
+
+    /// Return the configured prefix (e.g., `"chunks/"`).
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     /// Build the full object key for a chunk hash.
     fn chunk_key(&self, hash: &str) -> String {
         format!("{}{}", self.prefix, hash)
@@ -201,6 +231,29 @@ mod tests {
         assert_eq!(config.bucket, "my-bucket");
         assert_eq!(config.prefix, "prod/chunks/");
         assert_eq!(config.region, "us-east-1");
+    }
+
+    #[test]
+    fn test_list_chunks_prefix_stripping() {
+        // Verify the prefix-stripping logic used in list_chunks
+        let prefix = "chunks/";
+        let keys = vec![
+            "chunks/abc123def456",
+            "chunks/",       // empty hash after strip
+            "chunks/xyz789",
+            "other/notchunk", // different prefix
+        ];
+
+        let mut hashes = Vec::new();
+        for key in keys {
+            if let Some(hash) = key.strip_prefix(prefix) {
+                if !hash.is_empty() {
+                    hashes.push(hash.to_string());
+                }
+            }
+        }
+
+        assert_eq!(hashes, vec!["abc123def456", "xyz789"]);
     }
 
     #[test]
