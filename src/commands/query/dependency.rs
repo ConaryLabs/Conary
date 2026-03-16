@@ -14,9 +14,7 @@ pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
-    let trove = troves
-        .first()
+    let trove = conary_core::db::models::Trove::find_one_by_name(&conn, package_name)?
         .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
@@ -84,9 +82,7 @@ pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
     );
     let conn = open_db(db_path)?;
 
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
-    troves
-        .first()
+    conary_core::db::models::Trove::find_one_by_name(&conn, package_name)?
         .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
 
     let resolver = conary_core::resolver::Resolver::new(&conn)?;

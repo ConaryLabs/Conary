@@ -34,15 +34,8 @@ pub fn cmd_restore(
     let conn = open_db(db_path)?;
 
     // Find the package
-    let troves = Trove::find_by_name(&conn, package_name)?;
-    if troves.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Package '{}' not found in database",
-            package_name
-        ));
-    }
-
-    let trove = &troves[0];
+    let trove = Trove::find_one_by_name(&conn, package_name)?
+        .ok_or_else(|| anyhow::anyhow!("Package '{}' not found in database", package_name))?;
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
     println!("Package: {} {}", trove.name, trove.version);
