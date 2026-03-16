@@ -2330,13 +2330,12 @@ src/server/
 
 ## 6.1 Architecture Overview
 
-Remi runs three Axum HTTP servers concurrently:
+Remi runs two Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Internal Admin API** (default `127.0.0.1:8081`): Conversion triggers, cache management, Bloom filter rebuild, recipe builds (SSRF-sensitive). Always bound to localhost -- access via SSH tunnel only, no auth required.
-- **External Admin API** (default `0.0.0.0:8082`): Bearer token authentication, per-IP rate limiting, audit logging. Token management, CI proxy, federation config, SSE events, MCP endpoint.
+- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external): Internal routes (conversion triggers, cache management, Bloom filter rebuild) on localhost-only :8081 without auth. External routes (token management, CI proxy, federation config, SSE events, MCP endpoint with 23 tools) on :8082 with bearer token auth, per-IP rate limiting, and audit logging.
 
-All three servers share a single `ServerState` behind `Arc<RwLock<>>`:
+Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
 ```rust
 // src/server/mod.rs
