@@ -95,6 +95,38 @@ impl DependencyEntry {
         Ok(deps)
     }
 
+    /// Batch-load dependencies for multiple troves in a single query.
+    ///
+    /// Returns a map from trove_id to its dependencies. Trove IDs with no
+    /// dependencies are absent from the map (use `.get(&id).unwrap_or(&vec![])`)`.
+    /// Handles SQLite's variable limit by chunking at 500 IDs.
+    pub fn find_by_troves(
+        conn: &Connection,
+        trove_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, Vec<Self>>> {
+        use std::collections::HashMap;
+
+        let mut result: HashMap<i64, Vec<Self>> = HashMap::new();
+        if trove_ids.is_empty() {
+            return Ok(result);
+        }
+
+        for chunk in trove_ids.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT {DEP_COLUMNS} FROM dependencies WHERE trove_id IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), Self::from_row)?;
+            for row in rows {
+                let dep = row?;
+                result.entry(dep.trove_id).or_default().push(dep);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Find all troves that depend on a given package name (reverse dependencies)
     pub fn find_dependents(conn: &Connection, package_name: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
