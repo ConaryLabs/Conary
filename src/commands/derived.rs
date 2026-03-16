@@ -5,7 +5,7 @@
 //! Commands for creating and managing derived packages - custom versions
 //! of existing packages with patches and file overrides.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
@@ -203,7 +203,8 @@ pub fn cmd_derive_patch(
         .ok_or_else(|| anyhow::anyhow!("Derived package '{}' has no database id", name))?;
 
     // Read patch content
-    let patch_content = std::fs::read(patch_file)?;
+    let patch_content = std::fs::read(patch_file)
+        .with_context(|| format!("Failed to read patch file '{}'", patch_file))?;
     let patch_hash = conary_core::hash::sha256(&patch_content);
     let patch_name = Path::new(patch_file)
         .file_name()
@@ -261,7 +262,8 @@ pub fn cmd_derive_override(
 
     if let Some(source) = source_file {
         // Replace file
-        let content = std::fs::read(source)?;
+        let content = std::fs::read(source)
+            .with_context(|| format!("Failed to read override source file '{}'", source))?;
         let source_hash = conary_core::hash::sha256(&content);
 
         // Store content in CAS

@@ -204,7 +204,9 @@ pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> 
         id
     } else {
         let mut stmt = conn.prepare("SELECT id FROM changesets ORDER BY id DESC LIMIT 1")?;
-        stmt.query_row([], |row| row.get(0))?
+        stmt.query_row([], |row| row.get(0)).map_err(|_| {
+            anyhow::anyhow!("No changesets found. Install or remove a package first.")
+        })?
     };
 
     println!("Running triggers for changeset {}...", cs_id);

@@ -60,7 +60,7 @@ pub fn cmd_repo_add(
                 name
             );
         }
-        return Err(e.into());
+        return Err(anyhow::anyhow!("Failed to add repository '{}': {}", name, e));
     }
 
     println!("Added repository: {}", repo.name);

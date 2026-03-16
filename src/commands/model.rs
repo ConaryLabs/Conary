@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::process;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use conary_core::db;
 use conary_core::db::models::{
     CollectionMember, RemoteCollection, Repository, SystemAffinity, Trove, TroveType,
@@ -377,7 +377,8 @@ fn build_lock_from_data(
         .map(|(n, l, d)| (n.clone(), l.clone(), d))
         .collect();
     let mut lock = conary_core::model::lockfile::ModelLock::from_resolved(&refs);
-    let model_bytes = std::fs::read(model_path)?;
+    let model_bytes = std::fs::read(model_path)
+        .with_context(|| format!("Failed to read model file '{}'", model_path.display()))?;
     lock.metadata.model_hash = format!("sha256:{}", conary_core::hash::sha256(&model_bytes));
     Ok(lock)
 }
@@ -435,7 +436,8 @@ fn create_derived_from_model(
             ));
         }
 
-        let patch_content = std::fs::read(&full_path)?;
+        let patch_content = std::fs::read(&full_path)
+            .with_context(|| format!("Failed to read patch file '{}'", full_path.display()))?;
         let patch_hash = sha256(&patch_content);
         let patch_name = Path::new(patch_path)
             .file_name()
@@ -467,7 +469,12 @@ fn create_derived_from_model(
                 ));
             }
 
-            let content = std::fs::read(&full_source)?;
+            let content = std::fs::read(&full_source).with_context(|| {
+                format!(
+                    "Failed to read override source file '{}'",
+                    full_source.display()
+                )
+            })?;
             let source_hash = sha256(&content);
 
             let mut ov = DerivedOverride::new_replace(derived_id, target_path.clone(), source_hash);
