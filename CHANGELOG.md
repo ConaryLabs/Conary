@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [erofs-v0.1.3] - 2026-03-16
+
+### Fixed
+- resolve clippy and fmt warnings across workspace
+
 ## [v0.6.0] - 2026-03-16
 
 ### Fixed
