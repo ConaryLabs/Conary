@@ -5,13 +5,14 @@
 //! Functions for querying package dependencies, reverse dependencies,
 //! what would break on removal, and what provides a capability.
 
+use super::super::open_db;
 use anyhow::Result;
 use tracing::info;
 
 /// Show dependencies for a package
 pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing dependencies for package: {}", package_name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
     let trove = troves
@@ -42,7 +43,7 @@ pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
 /// Show reverse dependencies
 pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing reverse dependencies for package: {}", package_name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let dependents =
         conary_core::db::models::DependencyEntry::find_dependents(&conn, package_name)?;
@@ -81,7 +82,7 @@ pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
         "Checking what would break if '{}' is removed...",
         package_name
     );
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
     troves
@@ -118,7 +119,7 @@ pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
 /// - A file path (e.g., /usr/bin/python3)
 /// - A shared library (e.g., libssl.so.3)
 pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // First try exact match
     let mut providers =

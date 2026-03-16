@@ -14,6 +14,7 @@
 //!    c. Try strategies in order (binary, remi, recipe, delegate, legacy)
 //! 4. Return local path to downloaded/built package
 
+use super::super::open_db;
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary_core::db::models::{ProvideEntry, Redirect};
@@ -142,7 +143,7 @@ pub fn resolve_package_path_with_policy(
     info!("Searching repositories for package: {}", package);
     progress.set_status("Searching repositories...");
 
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     // Check for package redirects (renames, obsoletes, etc.)
     let resolved_name = resolve_redirects(&conn, package, version);

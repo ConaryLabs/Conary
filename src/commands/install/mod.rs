@@ -19,6 +19,7 @@ pub use dep_mode::DepMode;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 
+use super::open_db;
 use conversion::{
     ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs,
 };
@@ -251,7 +252,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Open the database once for all pre-install checks (canonical resolution,
     // adoption check, promotion check). This connection is later promoted to `mut`
     // for the main install transaction.
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     // Build resolution policy from CLI flags.
     // --from-distro constrains the root request to a specific distro flavor;
@@ -1443,10 +1444,7 @@ fn find_package_suggestions(
              LIMIT 10",
         )?;
         let rows = stmt.query_map([name], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })?;
         for row in rows {
             let (pkg_name, distro) = row?;
@@ -1516,10 +1514,7 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
             }
         }
         let stem = package_name.split('-').next().unwrap_or(package_name);
-        eprintln!(
-            "\nUse 'conary canonical search {}' for more options.",
-            stem
-        );
+        eprintln!("\nUse 'conary canonical search {}' for more options.", stem);
     }
 }
 

@@ -2,6 +2,7 @@
 
 //! Command implementations for automation system.
 
+use super::open_db;
 use anyhow::Result;
 use conary_core::automation::{
     AutomationManager, AutomationSummary,
@@ -15,7 +16,7 @@ use conary_core::model::{
 
 /// Show automation status
 pub fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Load model to get automation config
     let config = if model_exists(None) {
@@ -104,7 +105,7 @@ pub fn cmd_automation_check(
     categories: Option<Vec<String>>,
     quiet: bool,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;
@@ -194,7 +195,7 @@ pub fn cmd_automation_apply(
     dry_run: bool,
     no_scripts: bool,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;
@@ -411,7 +412,7 @@ pub fn cmd_automation_daemon(
     foreground: bool,
     pidfile: &str,
 ) -> Result<()> {
-    let _conn = conary_core::db::open(db_path)?;
+    let _conn = open_db(db_path)?;
 
     let config = if model_exists(None) {
         let model = load_model(None)?;

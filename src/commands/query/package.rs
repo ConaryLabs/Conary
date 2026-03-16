@@ -5,12 +5,13 @@
 //! Functions for querying installed packages, showing package info,
 //! and listing package files.
 
+use super::super::open_db;
 use super::QueryOptions;
 use anyhow::Result;
 
 /// Query installed packages
 pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Path query mode: find package containing a file
     if let Some(file_path) = &options.path {

@@ -5,6 +5,7 @@
 //! Commands for ephemeral environments, running commands with packages,
 //! and exporting to container formats.
 
+use super::super::open_db;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -46,7 +47,7 @@ pub fn cmd_ccs_shell(
         packages.join(", ")
     );
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -190,7 +191,7 @@ pub fn cmd_ccs_run(
         );
     }
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let objects_dir = Path::new(db_path)
         .parent()
         .unwrap_or(Path::new("."))

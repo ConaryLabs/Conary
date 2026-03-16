@@ -4,6 +4,7 @@
 //!
 //! Functions for generating SBOM in CycloneDX format.
 
+use super::super::open_db;
 use anyhow::Result;
 use std::fs::File;
 use std::io::Write;
@@ -84,7 +85,7 @@ pub fn cmd_sbom(
         ));
     }
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Get packages to include
     let troves = if package_name == "all" {

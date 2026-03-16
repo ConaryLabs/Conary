@@ -5,6 +5,7 @@
 //! Handles converting legacy packages (RPM, DEB, Arch) to CCS format
 //! during installation when --convert-to-ccs is specified.
 
+use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, prepare_package_for_batch};
 use super::dep_mode::DepMode;
@@ -219,7 +220,7 @@ pub fn try_convert_to_ccs(
     };
 
     // Open database early to check for existing conversion
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     // Check if already converted (skip re-conversion)
     if let Some(existing) =
@@ -364,7 +365,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
     } = opts;
 
     if !no_deps {
-        let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+        let conn = open_db(db_path)?;
         let ccs_pkg =
             CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
         let missing: Vec<MissingDependency> = ccs_pkg

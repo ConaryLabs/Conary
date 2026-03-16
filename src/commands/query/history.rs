@@ -4,11 +4,12 @@
 //!
 //! Functions for displaying changeset/transaction history.
 
+use super::super::open_db;
 use anyhow::Result;
 
 /// Show changeset history
 pub fn cmd_history(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let changesets = conary_core::db::models::Changeset::list_all(&conn)?;
 
     if changesets.is_empty() {

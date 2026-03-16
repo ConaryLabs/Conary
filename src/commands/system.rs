@@ -2,6 +2,7 @@
 //! System management commands (init, verify, rollback)
 
 use super::TroveSnapshot;
+use super::open_db;
 use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use std::io::Write;
@@ -15,7 +16,7 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
     conary_core::db::init(db_path)?;
     println!("Database initialized successfully at: {}", db_path);
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     info!("Adding default repositories...");
 
     let mut remi_repo = conary_core::db::models::Repository::new(
@@ -93,7 +94,7 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
         std::thread::sleep(Duration::from_millis(delay_ms));
     }
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let objects_dir = objects_dir(db_path);
     let install_root = PathBuf::from(root);
@@ -554,7 +555,7 @@ fn rollback_upgrade(
 pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: bool) -> Result<()> {
     info!("Verifying installed files...");
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // If --rpm flag, verify adopted packages against RPM database
     if use_rpm {
@@ -746,7 +747,13 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
 ///
 /// This removes files from the content-addressable store that are no longer
 /// referenced by any installed package or recent file history (for rollback).
-pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool, chunks: bool) -> Result<()> {
+pub fn cmd_gc(
+    db_path: &str,
+    objects_dir: &str,
+    keep_days: u32,
+    dry_run: bool,
+    chunks: bool,
+) -> Result<()> {
     use std::collections::HashSet;
     use std::fs;
 
@@ -755,7 +762,7 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool, c
         keep_days, dry_run
     );
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let objects_path = Path::new(objects_dir);
 
     if !objects_path.exists() {
@@ -934,11 +941,7 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool, c
 ///
 /// Scans the CAS objects directory for chunk files that are not referenced by
 /// any converted package (`chunk_hashes_json`) or protected in `chunk_access`.
-fn gc_orphaned_chunks(
-    conn: &rusqlite::Connection,
-    db_path: &str,
-    dry_run: bool,
-) -> Result<()> {
+fn gc_orphaned_chunks(conn: &rusqlite::Connection, db_path: &str, dry_run: bool) -> Result<()> {
     use std::collections::HashSet;
 
     let objects_dir = conary_core::db::paths::objects_dir(db_path);

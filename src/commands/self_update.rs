@@ -2,8 +2,8 @@
 
 //! Self-update command: update the conary binary itself
 
+use super::open_db;
 use anyhow::Result;
-use conary_core::db;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
@@ -17,7 +17,7 @@ pub fn cmd_self_update(
     version: Option<String>,
 ) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let channel_url = get_update_channel(&conn)?;
 
     println!("Current version: {current_version}");

@@ -128,7 +128,7 @@ pub use update_channel::{
     cmd_update_channel_get, cmd_update_channel_reset, cmd_update_channel_set,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
@@ -175,6 +175,14 @@ pub(crate) struct FileSnapshot {
     pub sha256_hash: String,
     pub size: i64,
     pub permissions: i32,
+}
+
+/// Open the package database with a standard error context.
+///
+/// Wraps `conary_core::db::open()` with a consistent error message so that
+/// every command handler reports the same diagnostic on failure.
+pub(crate) fn open_db(path: &str) -> Result<rusqlite::Connection> {
+    conary_core::db::open(path).context("Failed to open package database")
 }
 
 /// Detect package format from file path and magic bytes

@@ -5,6 +5,7 @@
 //! Commands for installing CCS packages with signature verification,
 //! dependency checking, and hook execution.
 
+use super::super::open_db;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
 use conary_core::db::models::generate_capability_variations;
@@ -405,7 +406,7 @@ pub fn cmd_ccs_install(
     }
 
     // Step 3: Check for existing installation
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     let existing = conary_core::db::models::Trove::find_by_name(&conn, ccs_pkg.name())?;
     if !existing.is_empty() {

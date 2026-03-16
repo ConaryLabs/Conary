@@ -2,10 +2,10 @@
 
 //! TUF trust management command implementations
 
+use super::open_db;
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "server")]
 use conary_core::ccs::signing::SigningKeyPair;
-use conary_core::db;
 use conary_core::db::models::Repository;
 use conary_core::trust::ceremony;
 use conary_core::trust::client::TufClient;
@@ -48,7 +48,7 @@ pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
 
 /// Bootstrap TUF for a repository with initial root metadata
 pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     // Read root.json
@@ -73,7 +73,7 @@ pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result
 
 /// Enable TUF verification for a repository
 pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     // Check that TUF has been bootstrapped
@@ -108,7 +108,7 @@ pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<
         anyhow::bail!("Disabling TUF removes supply chain protection. Use --force to confirm.");
     }
 
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     conn.execute(
@@ -124,7 +124,7 @@ pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<
 
 /// Show TUF metadata status for a repository
 pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     println!("Repository: {repo_name}");
@@ -189,7 +189,7 @@ pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
 
 /// Verify all TUF metadata for a repository
 pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     if !repo.tuf_enabled {
@@ -225,7 +225,7 @@ pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
 /// Sign targets metadata (server-side operation)
 #[cfg(feature = "server")]
 pub fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (_repo, _repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     let _key = SigningKeyPair::load_from_file(Path::new(key_path))
@@ -249,7 +249,7 @@ pub fn cmd_trust_rotate_key(
     repo_name: &str,
     db_path: &str,
 ) -> Result<()> {
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
     let old_key = SigningKeyPair::load_from_file(Path::new(old_key_path))

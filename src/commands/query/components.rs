@@ -4,11 +4,12 @@
 //!
 //! Functions for querying package components and their files.
 
+use super::super::open_db;
 use anyhow::Result;
 
 /// List components of an installed package
 pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the package
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
@@ -67,7 +68,7 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
 
 /// Query files in a specific component
 pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Parse the component spec (e.g., "nginx:lib")
     let (package_name, component_name) =

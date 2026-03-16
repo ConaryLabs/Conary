@@ -2,6 +2,7 @@
 //! Update, pinning, and delta statistics commands
 
 use super::install::DepMode;
+use super::open_db;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{SandboxMode, cmd_install};
 use anyhow::Result;
@@ -257,7 +258,7 @@ fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Resu
 /// Pin a package to prevent updates and removal
 pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", package_name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
     if trove.pinned {
@@ -278,7 +279,7 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 /// Unpin a package to allow updates and removal
 pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", package_name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
 
     if !trove.pinned {
@@ -300,7 +301,7 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
 pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
     info!("Listing pinned packages");
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let pinned = Trove::find_pinned(&conn)?;
 
     if pinned.is_empty() {
@@ -339,7 +340,7 @@ pub fn cmd_update(
         info!("Checking for package updates");
     }
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     if package.is_none() {
         let current_pin = DistroPin::get_current(&conn)?;
@@ -810,7 +811,7 @@ pub fn cmd_update(
 pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
     info!("Showing delta update statistics");
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let total_stats = DeltaStats::get_total_stats(&conn)?;
 
     let all_stats = {
@@ -895,7 +896,7 @@ pub fn cmd_update_group(
     yes: bool,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the collection
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;

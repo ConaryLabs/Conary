@@ -4,6 +4,7 @@
 //! Adopts all system packages into Conary tracking, builds an initial
 //! generation, writes a boot entry, and performs a live switch.
 
+use super::super::open_db;
 use super::boot::write_boot_entry;
 use super::builder::build_generation;
 use super::metadata::generations_dir;
@@ -128,7 +129,7 @@ pub fn cmd_system_takeover(
     // can operate on a fresh connection. This prevents stale DB state after
     // bulk adoption.
     let plan = {
-        let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+        let conn = open_db(db_path)?;
         plan_takeover(&conn)?
     };
 
@@ -184,8 +185,7 @@ pub fn cmd_system_takeover(
 
     // Step 2: Build generation (reopen DB to see all adopted packages)
     println!("[2/4] Building initial generation ...");
-    let conn =
-        conary_core::db::open(db_path).context("Failed to open database for generation build")?;
+    let conn = open_db(db_path).context("Failed to open database for generation build")?;
     let gen_number = build_generation(&conn, db_path, "System takeover -- initial generation")?;
     info!("Built generation {gen_number}");
 

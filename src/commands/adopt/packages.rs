@@ -5,6 +5,7 @@
 //! Adopts individual packages into Conary tracking.
 
 use super::super::create_state_snapshot;
+use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
@@ -36,7 +37,7 @@ pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
     }
     let source_identity = pkg_mgr.detect_source_identity();
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Determine install source based on mode
     let install_source = if full {

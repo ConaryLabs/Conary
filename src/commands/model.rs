@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::process;
 
+use super::open_db;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db;
 use conary_core::db::models::{
@@ -44,7 +45,7 @@ fn load_model_and_diff(
     announce_includes: bool,
 ) -> Result<(SystemModel, Connection, ModelDiff)> {
     let model = load_model(model_path)?;
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let state = capture_current_state(&conn)?;
     let diff = compute_model_diff(&model, &state, &conn, offline, announce_includes)?;
     Ok((model, conn, diff))
@@ -962,7 +963,7 @@ pub fn cmd_model_snapshot(
     description: Option<&str>,
 ) -> Result<()> {
     // Open database and capture current state
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let state = capture_current_state(&conn)?;
 
     // Create model from state
@@ -1013,7 +1014,7 @@ pub fn cmd_model_snapshot(
 pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let state = capture_current_state(&conn)?;
 
     if !model.has_includes() {
@@ -1171,7 +1172,7 @@ fn format_version_info(conn: &Connection, name: &str, label: &str) -> String {
 pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     if !model.has_includes() {
         println!("No remote includes to lock");
@@ -1214,7 +1215,7 @@ pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> 
 pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
-    let conn = db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let model_dir = model_path.parent().unwrap_or(Path::new("."));
     let lock_path = model_dir.join("model.lock");
@@ -1305,7 +1306,7 @@ pub fn cmd_model_publish(
     println!("Publishing model as collection '{}'...", group_name);
 
     // Open database
-    let mut conn = db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Get repository
     let repo = Repository::find_by_name(&conn, repo_name)?

@@ -5,6 +5,7 @@
 //! Adopts all installed system packages into Conary tracking.
 
 use super::super::create_state_snapshot;
+use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use anyhow::Result;
 use conary_core::db::models::{
@@ -66,7 +67,7 @@ pub fn cmd_adopt_system(
     println!("Detected package manager: {:?}", pkg_mgr);
     let source_identity = pkg_mgr.detect_source_identity();
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Get list of already-tracked packages to avoid duplicates
     let tracked_packages: std::collections::HashSet<String> = Trove::list_all(&conn)?
