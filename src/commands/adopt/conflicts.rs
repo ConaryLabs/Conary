@@ -5,13 +5,14 @@
 //! Checks for file ownership conflicts, adoption conflicts,
 //! and stale file entries.
 
+use super::super::open_db;
 use anyhow::Result;
 use conary_core::packages::rpm_query;
 use tracing::info;
 
 /// Check for conflicts between tracked packages and files
 pub fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     println!("Checking for conflicts...\n");
 

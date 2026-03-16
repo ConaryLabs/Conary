@@ -4,13 +4,14 @@
 //!
 //! Functions for querying packages available in repositories (not installed).
 
+use super::super::open_db;
 use anyhow::Result;
 
 /// Query packages available in repositories (not installed)
 ///
 /// This is similar to `dnf repoquery` or `apt-cache search`.
 pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let packages = if let Some(pattern) = pattern {
         conary_core::db::models::RepositoryPackage::search(&conn, pattern)?

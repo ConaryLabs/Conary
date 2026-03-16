@@ -1,6 +1,7 @@
 // src/commands/collection.rs
 //! Collection management commands
 
+use super::open_db;
 use anyhow::{Context, Result};
 use conary_core::scriptlet::SandboxMode;
 use tracing::info;
@@ -13,7 +14,7 @@ pub fn cmd_collection_create(
     db_path: &str,
 ) -> Result<()> {
     info!("Creating collection: {}", name);
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Check if collection already exists
     let existing = conary_core::db::models::Trove::find_by_name(&conn, name)?;
@@ -57,7 +58,7 @@ pub fn cmd_collection_create(
 
 /// List all collections
 pub fn cmd_collection_list(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find all troves with type 'collection'
     let mut stmt = conn.prepare(
@@ -95,7 +96,7 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
 
 /// Show details of a collection
 pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
@@ -140,7 +141,7 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 /// Add members to a collection
 pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
@@ -175,7 +176,7 @@ pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Resu
 /// Remove members from a collection
 pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Removing members from collection: {}", name);
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
@@ -212,7 +213,7 @@ pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &st
 /// Delete a collection
 pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
@@ -244,7 +245,7 @@ pub fn cmd_collection_install(
     sandbox_mode: SandboxMode,
 ) -> Result<()> {
     info!("Installing collection: {}", name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
     let trove = troves
@@ -302,7 +303,7 @@ pub fn cmd_collection_install(
 
     for member in &members_to_install {
         // Re-check if installed (connection was dropped)
-        let conn = conary_core::db::open(db_path)?;
+        let conn = open_db(db_path)?;
         let installed = conary_core::db::models::Trove::find_by_name(&conn, &member.member_name)?;
         drop(conn);
 

@@ -6,6 +6,7 @@
 //! updates any that have drifted (version changed, package removed, etc.).
 
 use super::super::create_state_snapshot;
+use super::super::open_db;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary_core::db::models::{
@@ -51,7 +52,7 @@ pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool)
         ));
     }
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Collect all adopted troves
     let all_troves = Trove::list_all(&conn)?;

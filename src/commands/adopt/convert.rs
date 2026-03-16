@@ -7,6 +7,7 @@
 //! packaged via CcsBuilder, and tracked via ConvertedPackage records.
 
 use super::super::create_state_snapshot;
+use super::super::open_db;
 use super::super::progress::AdoptProgress;
 use anyhow::Result;
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
@@ -108,7 +109,7 @@ pub fn cmd_adopt_convert(
     no_chunking: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
     let source_identity =
         conary_core::packages::SystemPackageManager::detect().detect_source_identity();
 

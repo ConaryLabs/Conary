@@ -2,6 +2,7 @@
 //! Package removal commands
 
 use super::create_state_snapshot;
+use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
 use super::{FileSnapshot, TroveSnapshot};
 use anyhow::{Context, Result};
@@ -37,7 +38,7 @@ pub fn cmd_remove(
     // Create progress tracker for removal
     let progress = RemoveProgress::new(package_name);
 
-    let mut conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let mut conn = open_db(db_path)?;
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)
         .with_context(|| format!("Failed to query package '{}'", package_name))?;
 
@@ -396,7 +397,7 @@ pub fn cmd_autoremove(
 ) -> Result<()> {
     info!("Finding orphaned packages...");
 
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
 
@@ -430,7 +431,7 @@ pub fn cmd_autoremove(
     for iteration in 0..MAX_ITERATIONS {
         if iteration > 0 {
             // Re-query orphans after previous round of removals
-            let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+            let conn = open_db(db_path)?;
             current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
             if current_orphans.is_empty() {
                 break;

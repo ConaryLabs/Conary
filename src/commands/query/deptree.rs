@@ -5,6 +5,7 @@
 //! Functions for displaying full dependency trees in a tree format,
 //! supporting both forward and reverse dependency traversal.
 
+use super::super::open_db;
 use anyhow::Result;
 use std::collections::HashSet;
 use tracing::info;
@@ -24,7 +25,7 @@ pub fn cmd_deptree(
         if reverse { "reverse" } else { "forward" },
         package_name
     );
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Verify package exists
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;

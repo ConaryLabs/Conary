@@ -1,7 +1,8 @@
 // src/commands/ccs/enhance.rs
 //! Enhancement command for retroactive CCS feature addition
 
-use anyhow::{Context, Result};
+use super::super::open_db;
+use anyhow::Result;
 use conary_core::ccs::enhancement::context::ConvertedPackageInfo;
 use conary_core::ccs::enhancement::runner::EnhancementOptions;
 use conary_core::ccs::enhancement::{
@@ -22,8 +23,7 @@ pub fn cmd_ccs_enhance(
     dry_run: bool,
     install_root: &str,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)
-        .with_context(|| format!("Failed to open database: {}", db_path))?;
+    let conn = open_db(db_path)?;
 
     // Parse enhancement types
     let enhancement_types: Vec<EnhancementType> = if let Some(ref type_strs) = types {

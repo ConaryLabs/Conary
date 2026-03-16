@@ -1,6 +1,7 @@
 // src/commands/repo.rs
 //! Repository management commands
 
+use super::open_db;
 use anyhow::Result;
 use conary_core::db::paths::keyring_dir;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -38,7 +39,7 @@ pub fn cmd_repo_add(
         }
     }
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Create the repository with all settings
     let mut repo = conary_core::db::models::Repository::new(name.to_string(), url.to_string());
@@ -107,7 +108,7 @@ pub fn cmd_repo_add(
 /// List repositories
 pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
     info!("Listing repositories");
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let repos = if all {
         conary_core::db::models::Repository::list_all(&conn)?
     } else {
@@ -141,7 +142,7 @@ pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
 /// Remove a repository
 pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
     info!("Removing repository: {}", name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     conary_core::repository::remove_repository(&conn, name)?;
     println!("Removed repository: {}", name);
     Ok(())
@@ -160,7 +161,7 @@ pub fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
 fn set_repo_enabled(name: &str, db_path: &str, enabled: bool) -> Result<()> {
     let action = if enabled { "Enabling" } else { "Disabling" };
     info!("{} repository: {}", action, name);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     conary_core::repository::set_repository_enabled(&conn, name, enabled)?;
     let past = if enabled { "Enabled" } else { "Disabled" };
     println!("{} repository: {}", past, name);
@@ -171,7 +172,7 @@ fn set_repo_enabled(name: &str, db_path: &str, enabled: bool) -> Result<()> {
 pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result<()> {
     info!("Synchronizing repository metadata");
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let repos_to_sync = if let Some(repo_name) = name {
         let repo = conary_core::db::models::Repository::find_by_name(&conn, &repo_name)?
@@ -283,7 +284,7 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
 /// Search for packages
 pub fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
     info!("Searching for packages matching: {}", pattern);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let packages = conary_core::repository::search_packages(&conn, pattern)?;
 
     if packages.is_empty() {
@@ -346,7 +347,7 @@ pub fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -> Resu
     info!("Importing GPG key for repository: {}", repository);
 
     // Verify repository exists
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let repo = conary_core::db::models::Repository::find_by_name(&conn, repository)?
         .ok_or_else(|| anyhow::anyhow!("Repository '{}' not found", repository))?;
 

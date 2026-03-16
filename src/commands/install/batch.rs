@@ -14,6 +14,7 @@
 //! 4. **Single DB commit** - All troves inserted in one transaction
 //! 5. **Scriptlet ordering** - Pre-scripts in topo order before FS changes, post-scripts after
 
+use super::super::open_db;
 use super::execute::convert_extracted_files;
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::scriptlets::{
@@ -177,8 +178,7 @@ impl<'a> BatchInstaller<'a> {
         );
 
         // Open database connection
-        let mut conn = conary_core::db::open(self.db_path)
-            .context("Failed to open package database for batch install")?;
+        let mut conn = open_db(self.db_path)?;
 
         // Create transaction engine
         let db_path_buf = PathBuf::from(self.db_path);
@@ -615,7 +615,7 @@ impl<'a> BatchInstaller<'a> {
 
         // For upgrades, run old package pre-remove first
         if let Some(ref old_trove) = pkg.old_trove {
-            let conn = conary_core::db::open(self.db_path)?;
+            let conn = open_db(self.db_path)?;
             let old_scriptlets = get_old_package_scriptlets(&conn, old_trove.id)?;
             run_old_pre_remove(
                 Path::new(self.root),
@@ -731,7 +731,7 @@ pub fn prepare_package_for_batch(
     let pkg = parse_package(package_path, format)?;
 
     // Open database
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     // Check for existing installation
     let (is_upgrade, old_trove) =
@@ -801,7 +801,7 @@ pub fn prepare_from_parsed(
     allow_downgrade: bool,
     component_filter: Option<&[ComponentType]>,
 ) -> Result<PreparedPackage> {
-    let conn = conary_core::db::open(db_path).context("Failed to open package database")?;
+    let conn = open_db(db_path)?;
 
     // Check for existing installation
     let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg, format, allow_downgrade)? {

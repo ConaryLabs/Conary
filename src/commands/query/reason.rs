@@ -5,6 +5,7 @@
 //! Functions for querying packages by their installation reason
 //! (explicit, dependency, collection, etc.).
 
+use super::super::open_db;
 use anyhow::Result;
 use tracing::info;
 
@@ -17,7 +18,7 @@ use tracing::info;
 /// - Custom pattern with * wildcard - e.g., "Required by nginx"
 pub fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
     info!("Querying packages by reason: {:?}", pattern);
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let (troves, filter_desc) = match pattern {
         Some("explicit") | Some("explicitly") => (

@@ -1,10 +1,11 @@
 // src/commands/registry.rs
 //! Registry management command implementations
 
+use super::open_db;
 use anyhow::Result;
 
 pub fn cmd_registry_update(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     println!("Syncing canonical registry...");
     let rules_dir = std::path::Path::new("/usr/share/conary/canonical-rules");
     let local_dir = std::path::Path::new("data/canonical-rules");
@@ -56,8 +57,7 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
                         }
                     }
                 };
-                let distro =
-                    repo_to_distro(repo_str).unwrap_or_else(|| repo_str.replace('_', "-"));
+                let distro = repo_to_distro(repo_str).unwrap_or_else(|| repo_str.replace('_', "-"));
                 let mut imp = PackageImplementation::new(
                     canonical_id,
                     distro,
@@ -78,7 +78,7 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
 }
 
 pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     let canonical_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM canonical_packages", [], |row| {
             row.get(0)

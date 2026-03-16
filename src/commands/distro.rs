@@ -1,6 +1,7 @@
 // src/commands/distro.rs
 //! Distro pinning command implementations
 
+use super::open_db;
 use anyhow::Result;
 use conary_core::db::models::{DistroPin, SystemAffinity};
 use conary_core::model::parser::SourcePinConfig;
@@ -9,7 +10,7 @@ pub fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
     if !["strict", "guarded", "permissive"].contains(&mixing) {
         anyhow::bail!("Invalid mixing policy: {mixing}. Use strict, guarded, or permissive.");
     }
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     DistroPin::set_from_source_pin(
         &conn,
         &SourcePinConfig {
@@ -22,14 +23,14 @@ pub fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
 }
 
 pub fn cmd_distro_remove(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     DistroPin::remove(&conn)?;
     println!("Distro pin removed. System is now distro-agnostic.");
     Ok(())
 }
 
 pub fn cmd_distro_info(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     match DistroPin::get_current(&conn)? {
         Some(pin) => {
             println!("Distro: {}", pin.distro);
@@ -70,7 +71,7 @@ pub fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
     if !["strict", "guarded", "permissive"].contains(&policy) {
         anyhow::bail!("Invalid mixing policy: {policy}. Use strict, guarded, or permissive.");
     }
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
     if DistroPin::get_current(&conn)?.is_none() {
         anyhow::bail!(
             "No distro pin set. Use 'conary distro set <distro>' before changing mixing policy."

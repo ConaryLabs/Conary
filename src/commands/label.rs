@@ -5,13 +5,14 @@
 //! Commands for managing Conary-style labels (repository@namespace:tag)
 //! for package provenance tracking.
 
+use super::open_db;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use tracing::info;
 
 /// List all labels
 pub fn cmd_label_list(db_path: &str, verbose: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let labels = conary_core::db::models::LabelEntry::list_all(&conn)?;
 
@@ -58,7 +59,7 @@ pub fn cmd_label_add(
     parent: Option<&str>,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Parse the label
     let spec = conary_core::Label::parse(label_str)
@@ -109,7 +110,7 @@ pub fn cmd_label_add(
 
 /// Remove a label
 pub fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the label
     let label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?
@@ -159,7 +160,7 @@ pub fn cmd_label_path(
     remove: Option<&str>,
     priority: Option<i32>,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Handle modifications
     if let Some(label_str) = add {
@@ -212,7 +213,7 @@ pub fn cmd_label_path(
 
 /// Show label for a package
 pub fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
     if troves.is_empty() {
@@ -241,7 +242,7 @@ pub fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
 
 /// Set the label for a package
 pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the package
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
@@ -279,7 +280,7 @@ pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Resu
 
 /// Find packages by label
 pub fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the label
     let label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?
@@ -322,7 +323,7 @@ pub fn cmd_label_link(
     unlink: bool,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the label
     let mut label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?
@@ -370,7 +371,7 @@ pub fn cmd_label_delegate(
     undelegate: bool,
     db_path: &str,
 ) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Find the source label
     let mut label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?

@@ -7,6 +7,7 @@
 //! about the package.
 
 use super::super::create_state_snapshot;
+use super::super::open_db;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove};
@@ -46,7 +47,7 @@ pub fn cmd_adopt_takeover(
         ));
     }
 
-    let mut conn = conary_core::db::open(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     // Collect target packages
     println!("Scanning installed packages...");

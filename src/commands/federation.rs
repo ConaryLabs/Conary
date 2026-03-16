@@ -2,12 +2,13 @@
 //! Command implementations for federation management
 
 use super::format_bytes;
+use super::open_db;
 use anyhow::Result;
 use tracing::info;
 
 /// Show federation status
 pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Get peer count by tier
     let mut stmt = conn.prepare(
@@ -135,7 +136,7 @@ pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
 
 /// List federation peers
 pub fn cmd_federation_peers(db_path: &str, tier: Option<&str>, enabled_only: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let base_query = "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
                              failure_count, consecutive_failures, is_enabled, last_seen
@@ -254,7 +255,7 @@ pub fn cmd_federation_add_peer(
         anyhow::bail!("Invalid tier: {}. Use: region_hub, cell_hub, leaf", tier);
     }
 
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Generate peer ID
     let id = conary_core::hash::sha256(url.as_bytes());
@@ -277,7 +278,7 @@ pub fn cmd_federation_add_peer(
 
 /// Remove a peer
 pub fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     // Try to match by URL or ID
     let deleted = conn.execute(
@@ -297,7 +298,7 @@ pub fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
 
 /// Show federation statistics
 pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let mut stmt = conn.prepare(
         "SELECT date, bytes_from_peers, bytes_from_upstream, chunks_from_peers,
@@ -380,7 +381,7 @@ pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
 
 /// Enable or disable a peer
 pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let enabled_val: i32 = if enable { 1 } else { 0 };
     let updated = conn.execute(
@@ -401,7 +402,7 @@ pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Re
 
 /// Test connectivity to peers
 pub fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let endpoints: Vec<String> = if let Some(p) = peer {
         vec![p.to_string()]
@@ -515,7 +516,7 @@ pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -
     println!("Found {} peer(s)", peers.len());
 
     if add_peers {
-        let conn = conary_core::db::open(db_path)?;
+        let conn = open_db(db_path)?;
         let mut added = 0;
 
         for discovered in &peers {

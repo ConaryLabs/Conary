@@ -4,6 +4,7 @@
 //!
 //! Shows statistics about adopted and tracked packages.
 
+use super::super::open_db;
 use anyhow::Result;
 use conary_core::db::models::{InstallReason, InstallSource, Trove};
 use conary_core::packages::SystemPackageManager;
@@ -13,7 +14,7 @@ use crate::commands::format_bytes;
 
 /// Show adoption status
 pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_db(db_path)?;
 
     let troves = Trove::list_all(&conn)?;
 
