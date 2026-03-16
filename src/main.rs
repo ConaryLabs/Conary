@@ -15,7 +15,7 @@ use cli::{Cli, Commands};
 // Main Entry Point
 // =============================================================================
 
-fn main() -> Result<()> {
+fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -23,6 +23,19 @@ fn main() -> Result<()> {
         )
         .init();
 
+    if let Err(err) = run() {
+        let msg = format!("{err:#}");
+        if msg.contains("Database not found") {
+            eprintln!("Error: Database not initialized.");
+            eprintln!("Run 'conary system init' to set up the package database.");
+            std::process::exit(1);
+        }
+        eprintln!("Error: {msg}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
