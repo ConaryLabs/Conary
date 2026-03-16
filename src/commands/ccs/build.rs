@@ -39,6 +39,7 @@ pub fn cmd_ccs_build(
     }
 
     // Parse the manifest
+    println!("Parsing manifest...");
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
 
     println!(
@@ -72,6 +73,13 @@ pub fn cmd_ccs_build(
     let build_result = if !dry_run {
         println!("Scanning source directory: {}", source_dir.display());
 
+        let file_count = walkdir::WalkDir::new(&source_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .count();
+        println!("Scanning {} files...", file_count);
+
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir);
         if no_classify {
             builder_instance = builder_instance.no_classify();
@@ -82,6 +90,7 @@ pub fn cmd_ccs_build(
             println!("CDC chunking disabled (use default for delta-efficient updates)");
         }
 
+        println!("Compressing...");
         let result = builder_instance
             .build()
             .context("Failed to build package")?;

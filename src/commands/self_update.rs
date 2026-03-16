@@ -6,8 +6,8 @@ use anyhow::Result;
 use conary_core::db;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
-    LatestVersionInfo, VersionCheckResult, apply_update, check_for_update, download_update,
-    extract_binary, get_update_channel, verify_binary,
+    LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
+    download_update_with_progress, extract_binary, get_update_channel, verify_binary,
 };
 
 pub fn cmd_self_update(
@@ -82,7 +82,12 @@ pub fn cmd_self_update(
     let temp_dir = tempfile::tempdir_in(target_dir)?;
 
     println!("Downloading v{expected_version}...");
-    let ccs_path = download_update(&download_url, &sha256, temp_dir.path())?;
+    let download_size = match &result {
+        VersionCheckResult::UpdateAvailable { size, .. } => Some(*size),
+        VersionCheckResult::UpToDate { .. } => None,
+    };
+    let ccs_path =
+        download_update_with_progress(&download_url, &sha256, temp_dir.path(), download_size)?;
 
     println!("Extracting binary...");
     let new_binary = extract_binary(&ccs_path, target_dir)?;

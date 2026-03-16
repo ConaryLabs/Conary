@@ -49,6 +49,7 @@ pub fn cmd_adopt_takeover(
     let mut conn = conary_core::db::open(db_path)?;
 
     // Collect target packages
+    println!("Scanning installed packages...");
     let targets: Vec<Trove> = if system_wide {
         let all = Trove::list_all(&conn)?;
         all.into_iter()
@@ -213,6 +214,8 @@ pub fn cmd_adopt_takeover(
     // Step 2: DB transaction — mark as Taken, insert CAS files from pre-captured data.
     // This happens BEFORE PM removal so that if the transaction fails, the PM
     // metadata is untouched and the system is in a consistent state.
+    println!("Converting {} packages...", actionable_count);
+    println!("Recording in database...");
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 

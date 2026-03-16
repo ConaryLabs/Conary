@@ -3,7 +3,9 @@
 
 use anyhow::Result;
 use conary_core::db::paths::keyring_dir;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
+use std::time::Duration;
 use tracing::info;
 
 /// Add a new repository
@@ -192,19 +194,29 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
 
     let keyring_dir = keyring_dir(db_path);
 
+    let spinner_style = ProgressStyle::default_spinner()
+        .template("  {spinner:.cyan} {msg}")
+        .expect("Invalid spinner template");
+
     use rayon::prelude::*;
     let results: Vec<(String, conary_core::Result<usize>, Option<String>)> = repos_needing_sync
         .par_iter()
         .map(|repo| {
-            println!("Syncing repository: {} ...", repo.name);
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_style(spinner_style.clone());
+            spinner.enable_steady_tick(Duration::from_millis(100));
+            spinner.set_message(format!("Syncing {}...", repo.name));
 
             // Try to fetch GPG key if configured and gpg_check is enabled
             let gpg_result = if repo.gpg_check {
+                spinner.set_message(format!("Fetching GPG key for {}...", repo.name));
                 match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir) {
                     Ok(Some(fingerprint)) => Some(fingerprint),
                     Ok(None) => None,
                     Err(e) => {
-                        println!("  Warning: GPG key fetch failed: {}", e);
+                        spinner.suspend(|| {
+                            println!("  Warning: GPG key fetch failed for {}: {}", repo.name, e);
+                        });
                         None
                     }
                 }
@@ -212,11 +224,22 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
                 None
             };
 
+            spinner.set_message(format!("Syncing metadata for {}...", repo.name));
             let sync_result = (|| -> conary_core::Result<usize> {
                 let conn = conary_core::db::open(db_path)?;
                 let mut repo_mut = repo.clone();
                 conary_core::repository::sync_repository(&conn, &mut repo_mut)
             })();
+
+            match &sync_result {
+                Ok(count) => {
+                    spinner.finish_with_message(format!("{}: {} packages", repo.name, count));
+                }
+                Err(e) => {
+                    spinner.finish_with_message(format!("{}: FAILED ({})", repo.name, e));
+                }
+            }
+
             (repo.name.clone(), sync_result, gpg_result)
         })
         .collect();
