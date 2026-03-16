@@ -13,12 +13,6 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, EnumString};
 
-/// Column list for DerivedPackage SELECT queries
-const DERIVED_COLUMNS: &str = "id, name, parent_trove_id, parent_name, parent_version, \
-    version_policy, version_suffix, specific_version, \
-    description, status, built_trove_id, model_source, \
-    error_message, created_at, updated_at";
-
 /// Version policy for derived packages
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionPolicy {
@@ -209,26 +203,39 @@ impl DerivedPackage {
 
     /// Find a derived package by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!("SELECT {DERIVED_COLUMNS} FROM derived_packages WHERE id = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_trove_id, parent_name, parent_version, \
+             version_policy, version_suffix, specific_version, \
+             description, status, built_trove_id, model_source, \
+             error_message, created_at, updated_at \
+             FROM derived_packages WHERE id = ?1",
+        )?;
         let pkg = stmt.query_row([id], Self::from_row).optional()?;
         Ok(pkg)
     }
 
     /// Find a derived package by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
-        let sql = format!("SELECT {DERIVED_COLUMNS} FROM derived_packages WHERE name = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_trove_id, parent_name, parent_version, \
+             version_policy, version_suffix, specific_version, \
+             description, status, built_trove_id, model_source, \
+             error_message, created_at, updated_at \
+             FROM derived_packages WHERE name = ?1",
+        )?;
         let pkg = stmt.query_row([name], Self::from_row).optional()?;
         Ok(pkg)
     }
 
     /// Find all derived packages from a parent
     pub fn find_by_parent(conn: &Connection, parent_name: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {DERIVED_COLUMNS} FROM derived_packages WHERE parent_name = ?1 ORDER BY name"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_trove_id, parent_name, parent_version, \
+             version_policy, version_suffix, specific_version, \
+             description, status, built_trove_id, model_source, \
+             error_message, created_at, updated_at \
+             FROM derived_packages WHERE parent_name = ?1 ORDER BY name",
+        )?;
         let packages = stmt
             .query_map([parent_name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -238,10 +245,13 @@ impl DerivedPackage {
 
     /// Find all derived packages by status
     pub fn find_by_status(conn: &Connection, status: DerivedStatus) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {DERIVED_COLUMNS} FROM derived_packages WHERE status = ?1 ORDER BY name"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_trove_id, parent_name, parent_version, \
+             version_policy, version_suffix, specific_version, \
+             description, status, built_trove_id, model_source, \
+             error_message, created_at, updated_at \
+             FROM derived_packages WHERE status = ?1 ORDER BY name",
+        )?;
         let packages = stmt
             .query_map([status.as_str()], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -251,8 +261,13 @@ impl DerivedPackage {
 
     /// List all derived packages
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {DERIVED_COLUMNS} FROM derived_packages ORDER BY name");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_trove_id, parent_name, parent_version, \
+             version_policy, version_suffix, specific_version, \
+             description, status, built_trove_id, model_source, \
+             error_message, created_at, updated_at \
+             FROM derived_packages ORDER BY name",
+        )?;
         let packages = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

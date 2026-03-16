@@ -13,10 +13,6 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
 
-/// Column list for Redirect SELECT queries (avoids repetition across methods)
-const REDIRECT_COLUMNS: &str = "id, source_name, source_version, target_name, target_version, \
-    redirect_type, message, created_at";
-
 /// Type of redirect operation
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]
@@ -126,8 +122,11 @@ impl Redirect {
 
     /// Find a redirect by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!("SELECT {REDIRECT_COLUMNS} FROM redirects WHERE id = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_name, source_version, target_name, target_version, \
+             redirect_type, message, created_at \
+             FROM redirects WHERE id = ?1",
+        )?;
         let redirect = stmt.query_row([id], Self::from_row).optional()?;
         Ok(redirect)
     }
@@ -143,11 +142,11 @@ impl Redirect {
     ) -> Result<Option<Self>> {
         // First try to find a version-specific redirect
         if let Some(ver) = version {
-            let sql = format!(
-                "SELECT {REDIRECT_COLUMNS} FROM redirects \
-                 WHERE source_name = ?1 AND source_version = ?2"
-            );
-            let mut stmt = conn.prepare(&sql)?;
+            let mut stmt = conn.prepare(
+                "SELECT id, source_name, source_version, target_name, target_version, \
+                 redirect_type, message, created_at \
+                 FROM redirects WHERE source_name = ?1 AND source_version = ?2",
+            )?;
             if let Some(redirect) = stmt
                 .query_row([source_name, ver], Self::from_row)
                 .optional()?
@@ -157,22 +156,22 @@ impl Redirect {
         }
 
         // Fall back to unversioned redirect
-        let sql = format!(
-            "SELECT {REDIRECT_COLUMNS} FROM redirects \
-             WHERE source_name = ?1 AND source_version IS NULL"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_name, source_version, target_name, target_version, \
+             redirect_type, message, created_at \
+             FROM redirects WHERE source_name = ?1 AND source_version IS NULL",
+        )?;
         let redirect = stmt.query_row([source_name], Self::from_row).optional()?;
         Ok(redirect)
     }
 
     /// Find all redirects pointing to a target package
     pub fn find_by_target(conn: &Connection, target_name: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {REDIRECT_COLUMNS} FROM redirects \
-             WHERE target_name = ?1 ORDER BY source_name"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_name, source_version, target_name, target_version, \
+             redirect_type, message, created_at \
+             FROM redirects WHERE target_name = ?1 ORDER BY source_name",
+        )?;
         let redirects = stmt
             .query_map([target_name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -181,10 +180,11 @@ impl Redirect {
 
     /// List all redirects
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {REDIRECT_COLUMNS} FROM redirects ORDER BY source_name, source_version"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_name, source_version, target_name, target_version, \
+             redirect_type, message, created_at \
+             FROM redirects ORDER BY source_name, source_version",
+        )?;
         let redirects = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -193,11 +193,11 @@ impl Redirect {
 
     /// List redirects by type
     pub fn list_by_type(conn: &Connection, redirect_type: RedirectType) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {REDIRECT_COLUMNS} FROM redirects \
-             WHERE redirect_type = ?1 ORDER BY source_name"
-        );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_name, source_version, target_name, target_version, \
+             redirect_type, message, created_at \
+             FROM redirects WHERE redirect_type = ?1 ORDER BY source_name",
+        )?;
         let redirects = stmt
             .query_map([redirect_type.as_str()], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
