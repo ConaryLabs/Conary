@@ -1,0 +1,315 @@
+# Critical cross-distro canonical mappings
+# Covers the most important packages that differ between Fedora, Arch, and Ubuntu.
+# Format: Repology-compatible rules (evaluated in order, first match wins).
+
+rules:
+  # Kernel
+  - setname: linux-kernel
+    name: kernel
+    repo: fedora
+  - setname: linux-kernel
+    name: linux
+    repo: arch
+  - setname: linux-kernel
+    name: linux-image-generic
+    repo: ubuntu
+
+  # SSL/TLS runtime
+  - setname: openssl
+    name: openssl
+    repo: [fedora, arch]
+  - setname: openssl
+    name: libssl3
+    repo: ubuntu
+
+  # SSL/TLS development
+  - setname: openssl-devel
+    name: openssl-devel
+    repo: fedora
+  - setname: openssl-devel
+    name: openssl
+    repo: arch
+  - setname: openssl-devel
+    name: libssl-dev
+    repo: ubuntu
+
+  # Python
+  - setname: python
+    name: python3
+    repo: [fedora, ubuntu]
+  - setname: python
+    name: python
+    repo: arch
+
+  # zlib
+  - setname: zlib
+    name: zlib
+    repo: [fedora, arch]
+  - setname: zlib
+    name: zlib1g
+    repo: ubuntu
+
+  # zlib development
+  - setname: zlib-devel
+    name: zlib-devel
+    repo: fedora
+  - setname: zlib-devel
+    name: zlib
+    repo: arch
+  - setname: zlib-devel
+    name: zlib1g-dev
+    repo: ubuntu
+
+  # glibc
+  - setname: glibc
+    name: glibc
+    repo: [fedora, arch]
+  - setname: glibc
+    name: libc6
+    repo: ubuntu
+
+  # ncurses
+  - setname: ncurses
+    name: ncurses
+    repo: [fedora, arch]
+  - setname: ncurses
+    name: libncurses6
+    repo: ubuntu
+
+  # ncurses development
+  - setname: ncurses-devel
+    name: ncurses-devel
+    repo: fedora
+  - setname: ncurses-devel
+    name: ncurses
+    repo: arch
+  - setname: ncurses-devel
+    name: libncurses-dev
+    repo: ubuntu
+
+  # readline
+  - setname: readline
+    name: readline
+    repo: [fedora, arch]
+  - setname: readline
+    name: libreadline8
+    repo: ubuntu
+
+  # readline development
+  - setname: readline-devel
+    name: readline-devel
+    repo: fedora
+  - setname: readline-devel
+    name: readline
+    repo: arch
+  - setname: readline-devel
+    name: libreadline-dev
+    repo: ubuntu
+
+  # systemd
+  - setname: systemd
+    name: systemd
+    repo: [fedora, arch, ubuntu]
+
+  # dbus
+  - setname: dbus
+    name: dbus
+    repo: [fedora, arch, ubuntu]
+
+  # HTTP servers
+  - setname: apache-httpd
+    name: httpd
+    repo: fedora
+  - setname: apache-httpd
+    name: apache
+    repo: arch
+  - setname: apache-httpd
+    name: apache2
+    repo: ubuntu
+
+  # nginx
+  - setname: nginx
+    name: nginx
+    repo: [fedora, arch, ubuntu]
+
+  # PostgreSQL
+  - setname: postgresql
+    name: postgresql
+    repo: [fedora, arch, ubuntu]
+
+  # PostgreSQL development
+  - setname: postgresql-devel
+    name: libpq-devel
+    repo: fedora
+  - setname: postgresql-devel
+    name: postgresql-libs
+    repo: arch
+  - setname: postgresql-devel
+    name: libpq-dev
+    repo: ubuntu
+
+  # SQLite
+  - setname: sqlite
+    name: sqlite
+    repo: [fedora, arch]
+  - setname: sqlite
+    name: sqlite3
+    repo: ubuntu
+
+  # SQLite development
+  - setname: sqlite-devel
+    name: sqlite-devel
+    repo: fedora
+  - setname: sqlite-devel
+    name: sqlite
+    repo: arch
+  - setname: sqlite-devel
+    name: libsqlite3-dev
+    repo: ubuntu
+
+  # util-linux
+  - setname: util-linux
+    name: util-linux
+    repo: [fedora, arch, ubuntu]
+
+  # shadow (user/group management)
+  - setname: shadow
+    name: shadow-utils
+    repo: fedora
+  - setname: shadow
+    name: shadow
+    repo: [arch, ubuntu]
+
+  # PAM
+  - setname: pam
+    name: pam
+    repo: [fedora, arch]
+  - setname: pam
+    name: libpam0g
+    repo: ubuntu
+
+  # PAM development
+  - setname: pam-devel
+    name: pam-devel
+    repo: fedora
+  - setname: pam-devel
+    name: pam
+    repo: arch
+  - setname: pam-devel
+    name: libpam0g-dev
+    repo: ubuntu
+
+  # sudo
+  - setname: sudo
+    name: sudo
+    repo: [fedora, arch, ubuntu]
+
+  # bash
+  - setname: bash
+    name: bash
+    repo: [fedora, arch, ubuntu]
+
+  # coreutils
+  - setname: coreutils
+    name: coreutils
+    repo: [fedora, arch, ubuntu]
+
+  # grep
+  - setname: grep
+    name: grep
+    repo: [fedora, arch, ubuntu]
+
+  # sed
+  - setname: sed
+    name: sed
+    repo: [fedora, arch, ubuntu]
+
+  # gawk
+  - setname: gawk
+    name: gawk
+    repo: [fedora, arch, ubuntu]
+
+  # findutils
+  - setname: findutils
+    name: findutils
+    repo: [fedora, arch, ubuntu]
+
+  # tar
+  - setname: tar
+    name: tar
+    repo: [fedora, arch, ubuntu]
+
+  # gzip
+  - setname: gzip
+    name: gzip
+    repo: [fedora, arch, ubuntu]
+
+  # xz
+  - setname: xz
+    name: xz
+    repo: [fedora, arch]
+  - setname: xz
+    name: xz-utils
+    repo: ubuntu
+
+  # bzip2
+  - setname: bzip2
+    name: bzip2
+    repo: [fedora, arch, ubuntu]
+
+  # file
+  - setname: file
+    name: file
+    repo: [fedora, arch, ubuntu]
+
+  # less
+  - setname: less
+    name: less
+    repo: [fedora, arch, ubuntu]
+
+  # man-db
+  - setname: man-db
+    name: man-db
+    repo: [fedora, arch, ubuntu]
+
+  # curl
+  - setname: curl
+    name: curl
+    repo: [fedora, arch, ubuntu]
+
+  # curl development
+  - setname: curl-devel
+    name: libcurl-devel
+    repo: fedora
+  - setname: curl-devel
+    name: curl
+    repo: arch
+  - setname: curl-devel
+    name: libcurl4-openssl-dev
+    repo: ubuntu
+
+  # wget
+  - setname: wget
+    name: wget
+    repo: [fedora, arch, ubuntu]
+
+  # git
+  - setname: git
+    name: git
+    repo: [fedora, arch, ubuntu]
+
+  # openssh
+  - setname: openssh
+    name: openssh
+    repo: [fedora, arch]
+  - setname: openssh
+    name: openssh-client
+    repo: ubuntu
+
+  # openssh server
+  - setname: openssh-server
+    name: openssh-server
+    repo: [fedora, ubuntu]
+  - setname: openssh-server
+    name: openssh
+    repo: arch
