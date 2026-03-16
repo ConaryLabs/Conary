@@ -245,6 +245,11 @@ impl<'db> ConaryProvider<'db> {
     /// Bulk-load all installed troves as solvables.
     pub fn load_installed_packages(&mut self) -> Result<()> {
         let troves = Trove::list_all(self.conn)?;
+
+        // Batch-load all dependencies in one query instead of N per-trove queries
+        let trove_ids: Vec<i64> = troves.iter().filter_map(|t| t.id).collect();
+        let all_deps = DependencyEntry::find_by_troves(self.conn, &trove_ids)?;
+
         for trove in troves {
             let trove_id = trove.id;
             let scheme = parse_stored_version_scheme(trove.version_scheme.as_deref());
@@ -299,11 +304,12 @@ impl<'db> ConaryProvider<'db> {
             };
             let solvable_id = self.add_solvable(pkg);
 
-            // Load dependencies for this installed trove
+            // Use batch-loaded dependencies
             if let Some(tid) = trove_id {
-                let deps = DependencyEntry::find_by_trove(self.conn, tid)?;
+                let empty = Vec::new();
+                let deps = all_deps.get(&tid).unwrap_or(&empty);
                 let dep_list: Vec<SolverDep> = deps
-                    .into_iter()
+                    .iter()
                     .filter(|d| !ProvideEntry::is_virtual_provide(&d.depends_on_name))
                     .map(|d| {
                         let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
@@ -325,7 +331,7 @@ impl<'db> ConaryProvider<'db> {
                                 raw: None,
                             },
                         };
-                        SolverDep::Single(d.depends_on_name, constraint)
+                        SolverDep::Single(d.depends_on_name.clone(), constraint)
                     })
                     .collect();
                 self.dependencies.insert(solvable_id.0, dep_list);
@@ -658,8 +664,17 @@ impl<'db> ConaryProvider<'db> {
         }
 
         // 3. Load UNFILTERED dependencies for each installed solvable.
-        //    Same logic as `load_installed_packages` lines 298-326 but
-        //    WITHOUT the `.filter(|d| !ProvideEntry::is_virtual_provide(...))`.
+        //    Same logic as `load_installed_packages` but WITHOUT the
+        //    `.filter(|d| !ProvideEntry::is_virtual_provide(...))`.
+        //    Batch-load all deps in one query instead of N per-solvable queries.
+        let removal_trove_ids: Vec<i64> = self
+            .solvables
+            .iter()
+            .filter_map(|s| s.trove_id)
+            .collect();
+        let all_removal_deps =
+            DependencyEntry::find_by_troves(self.conn, &removal_trove_ids)?;
+
         for (idx, solvable) in self.solvables.iter().enumerate() {
             let Some(tid) = solvable.trove_id else {
                 continue;
@@ -672,9 +687,10 @@ impl<'db> ConaryProvider<'db> {
                 }
             };
 
-            let deps = DependencyEntry::find_by_trove(self.conn, tid)?;
+            let empty = Vec::new();
+            let deps = all_removal_deps.get(&tid).unwrap_or(&empty);
             let dep_list: Vec<SolverDep> = deps
-                .into_iter()
+                .iter()
                 .map(|d| {
                     let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
                         (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
@@ -695,7 +711,7 @@ impl<'db> ConaryProvider<'db> {
                             raw: None,
                         },
                     };
-                    SolverDep::Single(d.depends_on_name, constraint)
+                    SolverDep::Single(d.depends_on_name.clone(), constraint)
                 })
                 .collect();
 

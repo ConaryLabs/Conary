@@ -185,6 +185,10 @@ impl DependencyGraph {
         // Load all installed troves
         let troves = Trove::list_all(conn)?;
 
+        // Batch-load all dependencies in one query instead of N queries
+        let trove_ids: Vec<i64> = troves.iter().filter_map(|t| t.id).collect();
+        let all_deps = DependencyEntry::find_by_troves(conn, &trove_ids)?;
+
         for trove in troves {
             // Get trove ID - required for database operations
             let trove_id = trove
@@ -198,8 +202,9 @@ impl DependencyGraph {
 
             graph.add_node(node);
 
-            // Load dependencies for this trove
-            let deps = DependencyEntry::find_by_trove(conn, trove_id)?;
+            // Use pre-loaded dependencies
+            let empty = Vec::new();
+            let deps = all_deps.get(&trove_id).unwrap_or(&empty);
 
             for dep in deps {
                 let constraint = if let Some(ref constraint_str) = dep.version_constraint {
