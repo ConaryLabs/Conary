@@ -254,86 +254,301 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // for the main install transaction.
     let conn = open_db(db_path)?;
 
-    // Build resolution policy from CLI flags.
-    // --from-distro constrains the root request to a specific distro flavor;
-    // --repo constrains to a specific repository.  Both apply to the root
-    // request only (transitive deps are governed by the mixing policy).
-    let policy = {
-        use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+    // --- Phase 1: Canonical resolution + policy ---
+    let policy = build_resolution_policy(&conn, from_distro.as_deref(), repo.as_deref())?;
+    let resolved_name = resolve_canonical_name(&conn, package, from_distro.as_deref(), &policy)?;
+    let package = resolved_name.as_deref().unwrap_or(package);
 
-        let scope = if let Some(ref target_distro) = from_distro {
-            // Map distro name to the correct flavor for request-scope filtering
-            let flavor = distro_name_to_flavor(target_distro);
-            if let Some(f) = flavor {
-                RequestScope::DistroFlavor(f)
-            } else {
-                // Unknown flavor -- use repo scope as a fallback
-                RequestScope::Repository(target_distro.clone())
-            }
-        } else if let Some(ref r) = repo {
-            RequestScope::Repository(r.clone())
-        } else {
-            RequestScope::Any
-        };
+    // --- Phase 2: Component parsing + pre-install validation ---
+    let (package_name, component_selection) = parse_component_and_validate(
+        &conn, package, dep_mode, force,
+    )?;
 
-        // Read mixing policy from distro pin (if set)
-        let mixing = {
-            use conary_core::db::models::DistroPin;
-            use conary_core::repository::resolution_policy::DependencyMixingPolicy;
-            match DistroPin::get_current(&conn) {
-                Ok(Some(pin)) => match pin.mixing_policy.as_str() {
-                    "strict" => DependencyMixingPolicy::Strict,
-                    "guarded" => DependencyMixingPolicy::Guarded,
-                    "permissive" => DependencyMixingPolicy::Permissive,
-                    _ => DependencyMixingPolicy::Strict,
-                },
-                _ => DependencyMixingPolicy::Strict,
-            }
-        };
+    // --- Phase 3: Dependency-as-explicit promotion check ---
+    if try_promote_existing_dep(&conn, &package_name, version.as_deref(), selection_reason)? {
+        return Ok(());
+    }
 
-        ResolutionPolicy::new()
-            .with_scope(scope)
-            .with_mixing(mixing)
+    // --- Phase 4: Package resolution + format detection ---
+    let ccs_install_opts = CcsInstallParams {
+        db_path,
+        root,
+        dry_run,
+        sandbox_mode,
+        no_deps,
+        no_scripts,
+        allow_downgrade,
+        dep_mode,
+        yes,
     };
 
-    // If --from <distro> was specified, resolve the canonical name to that distro's package name.
-    // Otherwise, use canonical expansion to find the best implementation for the
-    // current system (canonical expansion applies only to root requests, never deps).
-    let resolved_name: Option<String> = if let Some(ref target_distro) = from_distro {
+    let (pkg, format) = resolve_and_parse_package(
+        &conn,
+        &package_name,
+        package,
+        db_path,
+        version.as_deref(),
+        repo.as_deref(),
+        convert_to_ccs,
+        no_capture,
+        &policy,
+        &ccs_install_opts,
+    )?;
+
+    // Promote the pre-install connection to mutable for the main install transaction
+    let mut conn = conn;
+
+    // --- Phase 5: Dependency analysis ---
+    let dep_ctx = DepAnalysisContext {
+        conn: &conn,
+        pkg: pkg.as_ref(),
+        format,
+        no_deps,
+        dry_run,
+        dep_mode,
+        yes,
+        allow_downgrade,
+        db_path,
+        root,
+        sandbox_mode,
+        no_scripts,
+    };
+    handle_dependencies(&dep_ctx)?;
+
+    // --- Phase 6: Dry run summary ---
+    if dry_run {
+        show_dry_run_summary(pkg.as_ref(), &component_selection);
+        return Ok(());
+    }
+
+    // --- Phase 7: File extraction + component classification ---
+    let progress = InstallProgress::single("Installing");
+    let extraction = extract_and_classify_files(
+        pkg.as_ref(),
+        &component_selection,
+        &progress,
+    )?;
+
+    // --- Phase 8: Scriptlet execution (pre-install) ---
+    let old_trove_to_upgrade =
+        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
+            UpgradeCheck::FreshInstall => None,
+            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
+        };
+
+    let scriptlet_ctx = ScriptletContext {
+        root,
+        no_scripts,
+        sandbox_mode,
+        format,
+        old_trove: old_trove_to_upgrade.as_deref(),
+    };
+    let pre_scriptlet_state = run_pre_install_phase(
+        &conn,
+        pkg.as_ref(),
+        &extraction.installed_component_types,
+        &scriptlet_ctx,
+        &progress,
+    )?;
+
+    // --- Phase 9: Transaction execution ---
+    let tx_ctx = TransactionContext {
+        db_path,
+        root,
+        format,
+        selection_reason,
+        old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
+    };
+    let tx_result = execute_install_transaction(
+        &mut conn,
+        pkg.as_ref(),
+        &extraction,
+        &tx_ctx,
+        &progress,
+    )?;
+
+    // --- Phase 10: Post-install finalization ---
+    finalize_install(
+        &conn,
+        pkg.as_ref(),
+        &extraction,
+        &scriptlet_ctx,
+        &pre_scriptlet_state,
+        &tx_result,
+        &progress,
+    )?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Parameter grouping structs for extracted functions
+// ---------------------------------------------------------------------------
+
+/// Parameters for CCS direct-install that are forwarded from `InstallOptions`.
+struct CcsInstallParams<'a> {
+    db_path: &'a str,
+    root: &'a str,
+    dry_run: bool,
+    sandbox_mode: SandboxMode,
+    no_deps: bool,
+    no_scripts: bool,
+    allow_downgrade: bool,
+    dep_mode: DepMode,
+    yes: bool,
+}
+
+/// Context for the dependency analysis phase.
+struct DepAnalysisContext<'a> {
+    conn: &'a rusqlite::Connection,
+    pkg: &'a dyn conary_core::packages::PackageFormat,
+    format: PackageFormatType,
+    no_deps: bool,
+    dry_run: bool,
+    dep_mode: DepMode,
+    yes: bool,
+    allow_downgrade: bool,
+    db_path: &'a str,
+    root: &'a str,
+    sandbox_mode: SandboxMode,
+    no_scripts: bool,
+}
+
+/// Context for scriptlet execution phases.
+struct ScriptletContext<'a> {
+    root: &'a str,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    format: PackageFormatType,
+    old_trove: Option<&'a conary_core::db::models::Trove>,
+}
+
+/// State captured during pre-install scriptlet phase, needed for post-install.
+struct PreScriptletState {
+    scriptlet_format: conary_core::scriptlet::PackageFormat,
+    execution_mode: conary_core::scriptlet::ExecutionMode,
+    old_package_scriptlets: Vec<conary_core::db::models::ScriptletEntry>,
+    run_scriptlets: bool,
+}
+
+/// Result of file extraction and component classification.
+struct ExtractionResult {
+    extracted_files: Vec<conary_core::packages::traits::ExtractedFile>,
+    classified: HashMap<ComponentType, Vec<String>>,
+    installed_component_types: Vec<ComponentType>,
+    skipped_components: Vec<&'static str>,
+    language_provides: Vec<conary_core::dependencies::LanguageDep>,
+}
+
+/// Context for the transaction execution phase.
+struct TransactionContext<'a> {
+    db_path: &'a str,
+    root: &'a str,
+    format: PackageFormatType,
+    selection_reason: Option<&'a str>,
+    old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
+}
+
+/// Result from a successful transaction execution.
+struct InstallTransactionResult {
+    changeset_id: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Extracted helper functions
+// ---------------------------------------------------------------------------
+
+/// Build the resolution policy from CLI flags (`--from-distro`, `--repo`).
+///
+/// The `--from-distro` flag constrains the root request to a specific distro
+/// flavor; `--repo` constrains to a specific repository.  Both apply to the
+/// root request only (transitive deps are governed by the mixing policy).
+fn build_resolution_policy(
+    conn: &rusqlite::Connection,
+    from_distro: Option<&str>,
+    repo: Option<&str>,
+) -> Result<conary_core::repository::resolution_policy::ResolutionPolicy> {
+    use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+
+    let scope = if let Some(target_distro) = from_distro {
+        // Map distro name to the correct flavor for request-scope filtering
+        let flavor = distro_name_to_flavor(target_distro);
+        if let Some(f) = flavor {
+            RequestScope::DistroFlavor(f)
+        } else {
+            // Unknown flavor -- use repo scope as a fallback
+            RequestScope::Repository(target_distro.to_string())
+        }
+    } else if let Some(r) = repo {
+        RequestScope::Repository(r.to_string())
+    } else {
+        RequestScope::Any
+    };
+
+    // Read mixing policy from distro pin (if set)
+    let mixing = {
+        use conary_core::db::models::DistroPin;
+        use conary_core::repository::resolution_policy::DependencyMixingPolicy;
+        match DistroPin::get_current(conn) {
+            Ok(Some(pin)) => match pin.mixing_policy.as_str() {
+                "strict" => DependencyMixingPolicy::Strict,
+                "guarded" => DependencyMixingPolicy::Guarded,
+                "permissive" => DependencyMixingPolicy::Permissive,
+                _ => DependencyMixingPolicy::Strict,
+            },
+            _ => DependencyMixingPolicy::Strict,
+        }
+    };
+
+    Ok(ResolutionPolicy::new()
+        .with_scope(scope)
+        .with_mixing(mixing))
+}
+
+/// Resolve the canonical name for a package.
+///
+/// If `--from <distro>` was specified, resolve the canonical name to that
+/// distro's package name.  Otherwise, use canonical expansion to find the best
+/// implementation for the current system (canonical expansion applies only to
+/// root requests, never deps).
+fn resolve_canonical_name(
+    conn: &rusqlite::Connection,
+    package: &str,
+    from_distro: Option<&str>,
+    policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
+) -> Result<Option<String>> {
+    if let Some(target_distro) = from_distro {
         if let Some(canonical) =
-            conary_core::db::models::CanonicalPackage::resolve_name(&conn, package)?
+            conary_core::db::models::CanonicalPackage::resolve_name(conn, package)?
         {
             let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
-                &conn,
+                conn,
                 canonical
                     .id
                     .ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
             )?;
-            if let Some(imp) = impls.iter().find(|i| &i.distro == target_distro) {
+            if let Some(imp) = impls.iter().find(|i| i.distro == target_distro) {
                 info!(
                     "Resolved canonical '{}' -> '{}' for {}",
                     package, imp.distro_name, target_distro
                 );
-                Some(imp.distro_name.clone())
-            } else {
-                warn!(
-                    "No implementation of '{}' found for distro '{}'",
-                    package, target_distro
-                );
-                None
+                return Ok(Some(imp.distro_name.clone()));
             }
-        } else {
-            None
+            warn!(
+                "No implementation of '{}' found for distro '{}'",
+                package, target_distro
+            );
         }
+        Ok(None)
     } else {
         // No explicit --from-distro: use canonical resolver to expand and rank
         // implementations by pin/affinity/override.  This only applies to root
         // requests -- deps are never canonically expanded.
         use conary_core::resolver::canonical::CanonicalResolver;
-        let canonical_resolver = CanonicalResolver::new(&conn);
+        let canonical_resolver = CanonicalResolver::new(conn);
         let candidates = canonical_resolver.expand(package)?;
         if candidates.len() > 1 {
-            let ranked = canonical_resolver.rank_candidates_with_policy(&candidates, &policy)?;
+            let ranked = canonical_resolver.rank_candidates_with_policy(&candidates, policy)?;
             info!(
                 "Canonical expansion for '{}': {} implementations, best = '{}' ({})",
                 package,
@@ -342,16 +557,26 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 ranked[0].distro,
             );
             // Use the top-ranked implementation
-            Some(ranked[0].distro_name.clone())
+            Ok(Some(ranked[0].distro_name.clone()))
         } else if candidates.len() == 1 {
-            Some(candidates[0].distro_name.clone())
+            Ok(Some(candidates[0].distro_name.clone()))
         } else {
             // No canonical mapping -- use the name as-is
-            None
+            Ok(None)
         }
-    };
-    let package = resolved_name.as_deref().unwrap_or(package);
+    }
+}
 
+/// Parse a component spec from the package argument and run pre-install
+/// validation checks (blocklist, adoption).
+///
+/// Returns `(package_name, component_selection)`.
+fn parse_component_and_validate(
+    conn: &rusqlite::Connection,
+    package: &str,
+    dep_mode: DepMode,
+    force: bool,
+) -> Result<(String, ComponentSelection)> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
     let (package_name, component_selection) = if let Some((pkg, comp)) =
         parse_component_spec(package)
@@ -388,7 +613,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     }
 
     // Check if the package is adopted from the system PM
-    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(conn, &package_name)?
         && existing.install_source.is_adopted()
     {
         if !force {
@@ -407,23 +632,34 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         );
     }
 
+    Ok((package_name, component_selection))
+}
+
+/// Check if the package is already installed as a dependency and promote it
+/// to explicit.  Returns `true` if no further work is needed (same version).
+fn try_promote_existing_dep(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+    version: Option<&str>,
+    selection_reason: Option<&str>,
+) -> Result<bool> {
     // Check if the package is already installed as a dependency - if so, promote it
     // This must happen before we try to download, as we may not need to do anything else
-    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(&conn, &package_name)?
+    if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(conn, package_name)?
         && existing.install_reason == conary_core::db::models::InstallReason::Dependency
     {
         // Check if we're requesting a specific version that differs
-        let needs_version_change = version.as_ref().is_some_and(|v| v != &existing.version);
+        let needs_version_change = version.is_some_and(|v| v != existing.version);
 
         // Promote to explicit
         let reason = selection_reason.unwrap_or("Explicitly installed by user");
-        conary_core::db::models::Trove::promote_to_explicit(&conn, &package_name, Some(reason))?;
+        conary_core::db::models::Trove::promote_to_explicit(conn, package_name, Some(reason))?;
         println!("Promoted {} from dependency to explicit", package_name);
 
         // If same version (or no version specified), we're done
         if !needs_version_change {
             println!("{} {} is already installed", package_name, existing.version);
-            return Ok(());
+            return Ok(true);
         }
         // Otherwise continue with version upgrade
         info!(
@@ -431,39 +667,59 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             existing.version, version
         );
     }
+    Ok(false)
+}
 
+/// Resolve a package path, detect its format, and parse it.
+///
+/// Handles early returns for CCS packages (from Remi, by extension, or via
+/// conversion).  Returns the parsed legacy package and its format type.
+#[allow(clippy::too_many_arguments)]
+fn resolve_and_parse_package(
+    conn: &rusqlite::Connection,
+    package_name: &str,
+    package: &str,
+    db_path: &str,
+    version: Option<&str>,
+    repo: Option<&str>,
+    convert_to_ccs: bool,
+    no_capture: bool,
+    policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
+    ccs_opts: &CcsInstallParams<'_>,
+) -> Result<(Box<dyn conary_core::packages::PackageFormat>, PackageFormatType)> {
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
-    progress.set_phase(&package_name, InstallPhase::Downloading);
+    progress.set_phase(package_name, InstallPhase::Downloading);
 
     // Build policy options for resolution.  The root request carries the
     // full policy; transitive deps will inherit the mixing policy but not
     // the request scope (that is handled inside the resolver).
     let policy_opts = PolicyOptions {
-        policy: Some(policy),
+        policy: Some(policy.clone()),
         is_root: true,
         primary_flavor: None, // Will be inferred from the pinned distro inside selector
     };
 
     // Resolve package path (download if needed)
     let resolved = match resolve_package_path_with_policy(
-        &package_name,
+        package_name,
         db_path,
-        version.as_deref(),
-        repo.as_deref(),
+        version,
+        repo,
         &progress,
         &policy_opts,
     ) {
         Err(e) => {
-            print_package_suggestions(&conn, &package_name);
+            print_package_suggestions(conn, package_name);
             return Err(e);
         }
         Ok(ResolutionOutcome::AlreadyInstalled { name, version }) => {
-            println!(
-                "{} {} is already installed (skipping download)",
-                name, version
-            );
-            return Ok(());
+            // Use a specific error type that the caller handles as a clean exit
+            return Err(anyhow::anyhow!(
+                "ALREADY_INSTALLED:{} {} is already installed (skipping download)",
+                name,
+                version
+            ));
         }
         Ok(ResolutionOutcome::Resolved(pkg)) => pkg,
     };
@@ -475,18 +731,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
             .path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
-        return install_converted_ccs(ConvertedCcsInstallOptions {
+        install_converted_ccs(ConvertedCcsInstallOptions {
             ccs_path,
-            db_path,
-            root,
-            dry_run,
-            sandbox_mode,
-            no_deps,
-            no_scripts,
-            allow_downgrade,
-            dep_mode,
-            yes,
-        });
+            db_path: ccs_opts.db_path,
+            root: ccs_opts.root,
+            dry_run: ccs_opts.dry_run,
+            sandbox_mode: ccs_opts.sandbox_mode,
+            no_deps: ccs_opts.no_deps,
+            no_scripts: ccs_opts.no_scripts,
+            allow_downgrade: ccs_opts.allow_downgrade,
+            dep_mode: ccs_opts.dep_mode,
+            yes: ccs_opts.yes,
+        })?;
+        return Err(anyhow::anyhow!("CCS_INSTALLED"));
     }
 
     let path_str = resolved
@@ -497,18 +754,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Check if it's a CCS package by extension (from update command or local file)
     if path_str.ends_with(".ccs") {
         info!("Detected CCS package from path extension, installing directly");
-        return install_converted_ccs(ConvertedCcsInstallOptions {
+        install_converted_ccs(ConvertedCcsInstallOptions {
             ccs_path: path_str,
-            db_path,
-            root,
-            dry_run,
-            sandbox_mode,
-            no_deps,
-            no_scripts,
-            allow_downgrade,
-            dep_mode,
-            yes,
-        });
+            db_path: ccs_opts.db_path,
+            root: ccs_opts.root,
+            dry_run: ccs_opts.dry_run,
+            sandbox_mode: ccs_opts.sandbox_mode,
+            no_deps: ccs_opts.no_deps,
+            no_scripts: ccs_opts.no_scripts,
+            allow_downgrade: ccs_opts.allow_downgrade,
+            dep_mode: ccs_opts.dep_mode,
+            yes: ccs_opts.yes,
+        })?;
+        return Err(anyhow::anyhow!("CCS_INSTALLED"));
     }
 
     // Detect format and parse legacy packages
@@ -529,18 +787,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
                 temp_dir: _temp_dir,
             } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
-                return install_converted_ccs(ConvertedCcsInstallOptions {
+                install_converted_ccs(ConvertedCcsInstallOptions {
                     ccs_path: &ccs_path,
-                    db_path,
-                    root,
-                    dry_run,
-                    sandbox_mode,
-                    no_deps,
-                    no_scripts,
-                    allow_downgrade,
-                    dep_mode,
-                    yes,
-                });
+                    db_path: ccs_opts.db_path,
+                    root: ccs_opts.root,
+                    dry_run: ccs_opts.dry_run,
+                    sandbox_mode: ccs_opts.sandbox_mode,
+                    no_deps: ccs_opts.no_deps,
+                    no_scripts: ccs_opts.no_scripts,
+                    allow_downgrade: ccs_opts.allow_downgrade,
+                    dep_mode: ccs_opts.dep_mode,
+                    yes: ccs_opts.yes,
+                })?;
+                return Err(anyhow::anyhow!("CCS_INSTALLED"));
             }
             ConversionResult::Skipped => {
                 // Already converted - fall through to regular install path
@@ -548,367 +807,417 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
     }
 
-    // Promote the pre-install connection to mutable for the main install transaction
-    let mut conn = conn;
+    Ok((pkg, format))
+}
 
+/// Handle dependency analysis: resolve, prompt, adopt, install deps.
+fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
     // Build dependency edges from the package
-    let dependency_edges = build_dependency_edges(pkg.as_ref());
+    let dependency_edges = build_dependency_edges(ctx.pkg);
 
-    if no_deps && !dependency_edges.is_empty() {
+    if ctx.no_deps && !dependency_edges.is_empty() {
         info!("Skipping dependency check (--no-deps specified)");
         println!(
             "Skipping {} dependencies (--no-deps specified)",
             dependency_edges.len()
         );
-    } else if !dependency_edges.is_empty() {
-        progress.set_phase(pkg.name(), InstallPhase::ResolvingDeps);
-        info!(
-            "Resolving {} dependencies with constraint validation...",
-            dependency_edges.len()
-        );
-        println!("Checking dependencies for {}...", pkg.name());
+        return Ok(());
+    }
 
-        // Build resolver from current system state
-        let mut resolver =
-            Resolver::new(&conn).context("Failed to initialize dependency resolver")?;
+    if dependency_edges.is_empty() {
+        return Ok(());
+    }
 
-        // Resolve with the new package
-        let plan = resolver
-            .resolve_install_native(
-                pkg.name().to_string(),
-                pkg.version().to_string(),
-                version_scheme_for_format(format),
-                dependency_edges,
-            )
-            .with_context(|| format!("Failed to resolve dependencies for '{}'", pkg.name()))?;
+    let progress = InstallProgress::single("Installing");
+    progress.set_phase(ctx.pkg.name(), InstallPhase::ResolvingDeps);
+    info!(
+        "Resolving {} dependencies with constraint validation...",
+        dependency_edges.len()
+    );
+    println!("Checking dependencies for {}...", ctx.pkg.name());
 
-        // Check for conflicts (fail on any conflict)
-        if !plan.conflicts.is_empty() {
-            eprintln!("\nDependency conflicts detected:");
-            for conflict in &plan.conflicts {
-                eprintln!("  {}", conflict);
-            }
-            return Err(anyhow::anyhow!(
-                "Cannot install {}: {} dependency conflict(s) detected",
-                pkg.name(),
-                plan.conflicts.len()
-            ));
+    // Build resolver from current system state
+    let mut resolver =
+        Resolver::new(ctx.conn).context("Failed to initialize dependency resolver")?;
+
+    // Resolve with the new package
+    let plan = resolver
+        .resolve_install_native(
+            ctx.pkg.name().to_string(),
+            ctx.pkg.version().to_string(),
+            version_scheme_for_format(ctx.format),
+            dependency_edges,
+        )
+        .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
+
+    // Check for conflicts (fail on any conflict)
+    if !plan.conflicts.is_empty() {
+        eprintln!("\nDependency conflicts detected:");
+        for conflict in &plan.conflicts {
+            eprintln!("  {}", conflict);
         }
+        return Err(anyhow::anyhow!(
+            "Cannot install {}: {} dependency conflict(s) detected",
+            ctx.pkg.name(),
+            plan.conflicts.len()
+        ));
+    }
 
-        // Handle missing dependencies with dep-mode awareness
-        if !plan.missing.is_empty() {
-            info!("Found {} missing dependencies", plan.missing.len());
+    // Handle missing dependencies with dep-mode awareness
+    if plan.missing.is_empty() {
+        println!("All dependencies already satisfied");
+        return Ok(());
+    }
 
-            // Dep-mode-aware resolution -- use policy-aware variant so the
-            // system model convergence intent provides a default when the
-            // user has not explicitly set --dep-mode.
-            let convergence_intent = if conary_core::model::model_exists(None) {
-                conary_core::model::load_model(None)
-                    .ok()
-                    .map(|m| m.system.convergence.clone())
-                    .unwrap_or_default()
-            } else {
-                conary_core::model::ConvergenceIntent::default()
-            };
-            let dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
-                &conn,
-                &plan.missing,
-                Some(dep_mode),
-                &convergence_intent,
-            );
+    info!("Found {} missing dependencies", plan.missing.len());
 
-            // Report blocked packages
-            if !dep_plan.blocked.is_empty() {
-                println!(
-                    "  Blocked (critical system packages): {}",
-                    dep_plan.blocked.join(", ")
-                );
-            }
+    // Dep-mode-aware resolution -- use policy-aware variant so the
+    // system model convergence intent provides a default when the
+    // user has not explicitly set --dep-mode.
+    let convergence_intent = if conary_core::model::model_exists(None) {
+        conary_core::model::load_model(None)
+            .ok()
+            .map(|m| m.system.convergence.clone())
+            .unwrap_or_default()
+    } else {
+        conary_core::model::ConvergenceIntent::default()
+    };
+    let dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
+        ctx.conn,
+        &plan.missing,
+        Some(ctx.dep_mode),
+        &convergence_intent,
+    );
 
-            // Report satisfied packages
-            for (name, reason) in &dep_plan.satisfied {
-                debug!("Dependency {} satisfied: {}", name, reason);
-            }
-            if !dep_plan.satisfied.is_empty() {
-                println!(
-                    "  {} dependencies satisfied by system",
-                    dep_plan.satisfied.len()
-                );
-            }
+    // Report blocked packages
+    if !dep_plan.blocked.is_empty() {
+        println!(
+            "  Blocked (critical system packages): {}",
+            dep_plan.blocked.join(", ")
+        );
+    }
 
-            // Confirmation prompt for non-trivial dependency installs
-            let total_changes = dep_plan.to_install.len() + dep_plan.to_adopt.len();
-            if total_changes > 0 && !dry_run && !yes {
-                println!();
-                print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
-                use std::io::Write;
-                std::io::stdout().flush()?;
+    // Report satisfied packages
+    for (name, reason) in &dep_plan.satisfied {
+        debug!("Dependency {} satisfied: {}", name, reason);
+    }
+    if !dep_plan.satisfied.is_empty() {
+        println!(
+            "  {} dependencies satisfied by system",
+            dep_plan.satisfied.len()
+        );
+    }
 
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                let input = input.trim().to_lowercase();
-                if input == "n" || input == "no" {
-                    println!("Cancelled.");
-                    return Ok(());
-                }
-            }
+    // Confirmation prompt for non-trivial dependency installs
+    let total_changes = dep_plan.to_install.len() + dep_plan.to_adopt.len();
+    if total_changes > 0 && !ctx.dry_run && !ctx.yes {
+        println!();
+        print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
+        use std::io::Write;
+        std::io::stdout().flush()?;
 
-            // Handle auto-adoption (adopt mode)
-            if !dep_plan.to_adopt.is_empty() && !dry_run {
-                println!(
-                    "  Auto-adopting {} system dependencies:",
-                    dep_plan.to_adopt.len()
-                );
-                for name in &dep_plan.to_adopt {
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if input == "n" || input == "no" {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    handle_dep_adoptions(&dep_plan, ctx.dry_run, ctx.db_path);
+
+    handle_dep_installs(ctx, &dep_plan, &progress)?;
+
+    // Check for unresolvable dependencies
+    check_unresolvable_deps(ctx, &dep_plan, &convergence_intent)?;
+
+    Ok(())
+}
+
+/// Handle auto-adoption of dependencies (adopt mode).
+fn handle_dep_adoptions(
+    dep_plan: &dep_resolution::DepResolutionPlan,
+    dry_run: bool,
+    db_path: &str,
+) {
+    if dep_plan.to_adopt.is_empty() {
+        return;
+    }
+
+    if dry_run {
+        println!(
+            "  Would auto-adopt {} system dependencies:",
+            dep_plan.to_adopt.len()
+        );
+        for name in &dep_plan.to_adopt {
+            println!("    {}", name);
+        }
+    } else {
+        println!(
+            "  Auto-adopting {} system dependencies:",
+            dep_plan.to_adopt.len()
+        );
+        for name in &dep_plan.to_adopt {
+            println!("    {}", name);
+        }
+        // Use the adopt subsystem
+        if let Err(e) = crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false) {
+            warn!("Failed to auto-adopt dependencies: {}", e);
+            // Non-fatal -- deps are still on the system
+        }
+    }
+}
+
+/// Handle packages that need to be installed from repos.
+fn handle_dep_installs(
+    ctx: &DepAnalysisContext<'_>,
+    dep_plan: &dep_resolution::DepResolutionPlan,
+    progress: &InstallProgress,
+) -> Result<()> {
+    if dep_plan.to_install.is_empty() {
+        return Ok(());
+    }
+
+    // Build full request tuples preserving version constraints from the
+    // resolution plan.  The old name-only path dropped constraints,
+    // causing the SAT solver to pick arbitrary versions.
+    let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> = dep_plan
+        .to_install
+        .iter()
+        .map(|d| {
+            let constraint = d
+                .version
+                .as_ref()
+                .and_then(|v| conary_core::version::VersionConstraint::parse(v).ok())
+                .unwrap_or(conary_core::version::VersionConstraint::Any);
+            (d.name.clone(), constraint)
+        })
+        .collect();
+
+    if ctx.dry_run {
+        println!(
+            "  Would install {} dependencies from Remi:",
+            dep_requests.len()
+        );
+        // Validate that deps are actually resolvable even in dry-run
+        match repository::resolve_dependencies_transitive_requests(
+            ctx.conn,
+            &dep_requests,
+            10,
+        ) {
+            Ok(to_download) => {
+                for (name, _) in &dep_requests {
                     println!("    {}", name);
                 }
-                // Use the adopt subsystem
-                if let Err(e) =
-                    crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)
-                {
-                    warn!("Failed to auto-adopt dependencies: {}", e);
-                    // Non-fatal -- deps are still on the system
-                }
-            } else if !dep_plan.to_adopt.is_empty() {
-                println!(
-                    "  Would auto-adopt {} system dependencies:",
-                    dep_plan.to_adopt.len()
-                );
-                for name in &dep_plan.to_adopt {
-                    println!("    {}", name);
+                if to_download.is_empty() {
+                    println!("  (all dependencies already available locally)");
                 }
             }
+            Err(e) => {
+                for (name, _) in &dep_requests {
+                    println!("    {} (resolution pending)", name);
+                }
+                println!("  [WARN] Dependency resolution check failed: {}", e);
+            }
+        }
+        return Ok(());
+    }
 
-            // Handle packages that need to be installed from repos
-            if !dep_plan.to_install.is_empty() {
-                // Build full request tuples preserving version constraints from the
-                // resolution plan.  The old name-only path dropped constraints,
-                // causing the SAT solver to pick arbitrary versions.
-                let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> = dep_plan
-                    .to_install
-                    .iter()
-                    .map(|d| {
-                        let constraint = d
-                            .version
-                            .as_ref()
-                            .and_then(|v| conary_core::version::VersionConstraint::parse(v).ok())
-                            .unwrap_or(conary_core::version::VersionConstraint::Any);
-                        (d.name.clone(), constraint)
-                    })
-                    .collect();
+    println!("  Installing {} dependencies:", dep_requests.len());
+    for (name, _) in &dep_requests {
+        println!("    {}", name);
+    }
 
-                if dry_run {
-                    println!(
-                        "  Would install {} dependencies from Remi:",
-                        dep_requests.len()
-                    );
-                    // Validate that deps are actually resolvable even in dry-run
-                    match repository::resolve_dependencies_transitive_requests(
-                        &conn,
-                        &dep_requests,
-                        10,
+    // Use transitive resolution with full version constraints
+    match repository::resolve_dependencies_transitive_requests(
+        ctx.conn,
+        &dep_requests,
+        10,
+    ) {
+        Ok(to_download) => {
+            if !to_download.is_empty() {
+                progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
+                let temp_dir = TempDir::new()?;
+                let keyring_dir = keyring_dir(ctx.db_path);
+                let downloaded = repository::download_dependencies(
+                    &to_download,
+                    temp_dir.path(),
+                    Some(&keyring_dir),
+                )?;
+
+                let parent_name = ctx.pkg.name().to_string();
+                let mut prepared_packages = Vec::with_capacity(downloaded.len());
+
+                for (dep_name, dep_path) in &downloaded {
+                    progress
+                        .set_status(&format!("Preparing dependency: {}", dep_name));
+                    let reason = format!("Required by {}", parent_name);
+                    match prepare_package_for_batch(
+                        dep_path,
+                        ctx.db_path,
+                        &reason,
+                        ctx.allow_downgrade,
                     ) {
-                        Ok(to_download) => {
-                            for (name, _) in &dep_requests {
-                                println!("    {}", name);
-                            }
-                            if to_download.is_empty() {
-                                println!("  (all dependencies already available locally)");
-                            }
+                        Ok(prepared) => {
+                            prepared_packages.push(prepared);
                         }
                         Err(e) => {
-                            for (name, _) in &dep_requests {
-                                println!("    {} (resolution pending)", name);
+                            if e.to_string().contains("already installed") {
+                                info!(
+                                    "Dependency {} already installed, skipping",
+                                    dep_name
+                                );
+                                continue;
                             }
-                            println!("  [WARN] Dependency resolution check failed: {}", e);
-                        }
-                    }
-                } else {
-                    println!("  Installing {} dependencies:", dep_requests.len());
-                    for (name, _) in &dep_requests {
-                        println!("    {}", name);
-                    }
-
-                    // Use transitive resolution with full version constraints
-                    match repository::resolve_dependencies_transitive_requests(
-                        &conn,
-                        &dep_requests,
-                        10,
-                    ) {
-                        Ok(to_download) => {
-                            if !to_download.is_empty() {
-                                progress.set_phase(pkg.name(), InstallPhase::InstallingDeps);
-                                let temp_dir = TempDir::new()?;
-                                let keyring_dir = keyring_dir(db_path);
-                                let downloaded = repository::download_dependencies(
-                                    &to_download,
-                                    temp_dir.path(),
-                                    Some(&keyring_dir),
-                                )?;
-
-                                let parent_name = pkg.name().to_string();
-                                let mut prepared_packages = Vec::with_capacity(downloaded.len());
-
-                                for (dep_name, dep_path) in &downloaded {
-                                    progress
-                                        .set_status(&format!("Preparing dependency: {}", dep_name));
-                                    let reason = format!("Required by {}", parent_name);
-                                    match prepare_package_for_batch(
-                                        dep_path,
-                                        db_path,
-                                        &reason,
-                                        allow_downgrade,
-                                    ) {
-                                        Ok(prepared) => {
-                                            prepared_packages.push(prepared);
-                                        }
-                                        Err(e) => {
-                                            if e.to_string().contains("already installed") {
-                                                info!(
-                                                    "Dependency {} already installed, skipping",
-                                                    dep_name
-                                                );
-                                                continue;
-                                            }
-                                            return Err(anyhow::anyhow!(
-                                                "Failed to prepare dependency {}: {}",
-                                                dep_name,
-                                                e
-                                            ));
-                                        }
-                                    }
-                                }
-
-                                if !prepared_packages.is_empty() {
-                                    let installer = BatchInstaller::new(
-                                        db_path,
-                                        root,
-                                        sandbox_mode,
-                                        no_scripts,
-                                    );
-                                    installer.install_batch(prepared_packages)?;
-                                    println!("  [OK] Installed {} dependencies", downloaded.len());
-                                }
-                            }
-                        }
-                        Err(e) => {
                             return Err(anyhow::anyhow!(
-                                "Failed to resolve dependencies from repositories: {}",
+                                "Failed to prepare dependency {}: {}",
+                                dep_name,
                                 e
                             ));
                         }
                     }
                 }
-            }
 
-            // Check for unresolvable dependencies
-            if !dep_plan.unresolvable.is_empty() {
-                // Last resort: check provides table
-                let (satisfied, still_missing) =
-                    check_provides_dependencies(&conn, &dep_plan.unresolvable);
-                if !satisfied.is_empty() {
-                    for (name, provider, _) in &satisfied {
-                        println!("  {} provided by {}", name, provider);
-                    }
-                }
-                if !still_missing.is_empty() {
-                    eprintln!("\nUnresolvable dependencies:");
-                    for dep in &still_missing {
-                        eprintln!(
-                            "  {} {} (type: {}, required by: {})",
-                            dep.name,
-                            dep.constraint,
-                            classify_dep_type(&dep.name),
-                            dep.required_by.join(", ")
-                        );
-                    }
-                    eprintln!(
-                        "\nResolution context: dep-mode={}, convergence={}",
-                        dep_mode,
-                        convergence_intent.display_name(),
+                if !prepared_packages.is_empty() {
+                    let installer = BatchInstaller::new(
+                        ctx.db_path,
+                        ctx.root,
+                        ctx.sandbox_mode,
+                        ctx.no_scripts,
                     );
-                    // List repos that were searched
-                    if let Ok(repos) = conary_core::db::models::Repository::list_all(&conn) {
-                        let repo_names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
-                        if !repo_names.is_empty() {
-                            eprintln!("Repositories searched: {}", repo_names.join(", "));
-                        } else {
-                            eprintln!("No repositories configured (run 'conary repo add' first)");
-                        }
-                    }
-                    return Err(anyhow::anyhow!(
-                        "Cannot install {}: {} unresolvable dependencies\n\
-                         Hint: Use --dep-mode adopt to auto-adopt system packages\n\
-                         Hint: Use --dep-mode takeover to install CCS versions from Remi\n\
-                         Hint: Use --no-deps to skip dependency checking",
-                        pkg.name(),
-                        still_missing.len()
-                    ));
+                    installer.install_batch(prepared_packages)?;
+                    println!("  [OK] Installed {} dependencies", downloaded.len());
                 }
             }
-        } else {
-            println!("All dependencies already satisfied");
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to resolve dependencies from repositories: {}",
+                e
+            ));
         }
     }
 
-    if dry_run {
-        // For dry run, classify files to show component info
-        let dry_run_paths: Vec<String> = pkg.files().iter().map(|f| f.path.clone()).collect();
-        let dry_run_classified = ComponentClassifier::classify_all(&dry_run_paths);
-        let dry_run_available: Vec<_> = dry_run_classified.keys().collect();
-        let dry_run_selected: Vec<_> = dry_run_available
-            .iter()
-            .filter(|c| component_selection.should_install(***c))
-            .collect();
-        let dry_run_skipped: Vec<_> = dry_run_available
-            .iter()
-            .filter(|c| !component_selection.should_install(***c))
-            .collect();
+    Ok(())
+}
 
-        let selected_file_count: usize = dry_run_classified
-            .iter()
-            .filter(|(c, _)| component_selection.should_install(**c))
-            .map(|(_, files)| files.len())
-            .sum();
+/// Check for unresolvable dependencies and report them.
+fn check_unresolvable_deps(
+    ctx: &DepAnalysisContext<'_>,
+    dep_plan: &dep_resolution::DepResolutionPlan,
+    convergence_intent: &conary_core::model::ConvergenceIntent,
+) -> Result<()> {
+    if dep_plan.unresolvable.is_empty() {
+        return Ok(());
+    }
 
-        println!(
-            "\nWould install package: {} version {}",
-            pkg.name(),
-            pkg.version()
+    // Last resort: check provides table
+    let (satisfied, still_missing) =
+        check_provides_dependencies(ctx.conn, &dep_plan.unresolvable);
+    if !satisfied.is_empty() {
+        for (name, provider, _) in &satisfied {
+            println!("  {} provided by {}", name, provider);
+        }
+    }
+    if !still_missing.is_empty() {
+        eprintln!("\nUnresolvable dependencies:");
+        for dep in &still_missing {
+            eprintln!(
+                "  {} {} (type: {}, required by: {})",
+                dep.name,
+                dep.constraint,
+                classify_dep_type(&dep.name),
+                dep.required_by.join(", ")
+            );
+        }
+        eprintln!(
+            "\nResolution context: dep-mode={}, convergence={}",
+            ctx.dep_mode,
+            convergence_intent.display_name(),
         );
-        println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+        // List repos that were searched
+        if let Ok(repos) = conary_core::db::models::Repository::list_all(ctx.conn) {
+            let repo_names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+            if !repo_names.is_empty() {
+                eprintln!("Repositories searched: {}", repo_names.join(", "));
+            } else {
+                eprintln!("No repositories configured (run 'conary repo add' first)");
+            }
+        }
+        return Err(anyhow::anyhow!(
+            "Cannot install {}: {} unresolvable dependencies\n\
+             Hint: Use --dep-mode adopt to auto-adopt system packages\n\
+             Hint: Use --dep-mode takeover to install CCS versions from Remi\n\
+             Hint: Use --no-deps to skip dependency checking",
+            ctx.pkg.name(),
+            still_missing.len()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Display a dry-run summary showing what would be installed.
+fn show_dry_run_summary(
+    pkg: &dyn conary_core::packages::PackageFormat,
+    component_selection: &ComponentSelection,
+) {
+    // For dry run, classify files to show component info
+    let dry_run_paths: Vec<String> = pkg.files().iter().map(|f| f.path.clone()).collect();
+    let dry_run_classified = ComponentClassifier::classify_all(&dry_run_paths);
+    let dry_run_available: Vec<_> = dry_run_classified.keys().collect();
+    let dry_run_selected: Vec<_> = dry_run_available
+        .iter()
+        .filter(|c| component_selection.should_install(***c))
+        .collect();
+    let dry_run_skipped: Vec<_> = dry_run_available
+        .iter()
+        .filter(|c| !component_selection.should_install(***c))
+        .collect();
+
+    let selected_file_count: usize = dry_run_classified
+        .iter()
+        .filter(|(c, _)| component_selection.should_install(**c))
+        .map(|(_, files)| files.len())
+        .sum();
+
+    println!(
+        "\nWould install package: {} version {}",
+        pkg.name(),
+        pkg.version()
+    );
+    println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+    println!(
+        "  Components to install: {} ({} files)",
+        dry_run_selected
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        selected_file_count
+    );
+    if !dry_run_skipped.is_empty() {
         println!(
-            "  Components to install: {} ({} files)",
-            dry_run_selected
+            "  Components skipped: {} (use {}:all to include)",
+            dry_run_skipped
                 .iter()
                 .map(|c| c.as_str())
                 .collect::<Vec<_>>()
                 .join(", "),
-            selected_file_count
+            pkg.name()
         );
-        if !dry_run_skipped.is_empty() {
-            println!(
-                "  Components skipped: {} (use {}:all to include)",
-                dry_run_skipped
-                    .iter()
-                    .map(|c| c.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                pkg.name()
-            );
-        }
-        println!("  Dependencies: {}", pkg.dependencies().len());
-        println!("\nDry run complete. No changes made.");
-        return Ok(());
     }
+    println!("  Dependencies: {}", pkg.dependencies().len());
+    println!("\nDry run complete. No changes made.");
+}
 
-    // Pre-transaction validation - check if already installed or needs upgrade
-    let old_trove_to_upgrade =
-        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
-            UpgradeCheck::FreshInstall => None,
-            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
-        };
-
+/// Extract files from the package and classify them into components.
+fn extract_and_classify_files(
+    pkg: &dyn conary_core::packages::PackageFormat,
+    component_selection: &ComponentSelection,
+    progress: &InstallProgress,
+) -> Result<ExtractionResult> {
     // Extract and install
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
     info!("Extracting file contents from package...");
@@ -951,7 +1260,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let installed_component_types: Vec<ComponentType> = classified.keys().copied().collect();
 
     // Show what we're actually installing
-    let skipped_components: Vec<_> = available_components
+    let skipped_components: Vec<&str> = available_components
         .iter()
         .filter(|c| !component_selection.should_install(**c))
         .map(|c| c.as_str())
@@ -990,27 +1299,44 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         );
     }
 
+    Ok(ExtractionResult {
+        extracted_files,
+        classified,
+        installed_component_types,
+        skipped_components,
+        language_provides,
+    })
+}
+
+/// Run pre-install scriptlets and query old package scriptlets for upgrades.
+fn run_pre_install_phase(
+    conn: &rusqlite::Connection,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    installed_component_types: &[ComponentType],
+    ctx: &ScriptletContext<'_>,
+    progress: &InstallProgress,
+) -> Result<PreScriptletState> {
     // Determine package format and execution mode for scriptlet execution
-    let scriptlet_format = to_scriptlet_format(format);
+    let scriptlet_format = to_scriptlet_format(ctx.format);
     let execution_mode =
-        build_execution_mode(old_trove_to_upgrade.as_ref().map(|t| t.version.as_str()));
+        build_execution_mode(ctx.old_trove.map(|t| t.version.as_str()));
 
     // Execute pre-install scriptlet (before any changes)
     // Scriptlets only run when :runtime or :lib is being installed
     let scriptlets = pkg.scriptlets();
-    let run_scriptlets = should_run_scriptlets(&installed_component_types);
-    if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
+    let run_scriptlets = should_run_scriptlets(installed_component_types);
+    if !ctx.no_scripts && !scriptlets.is_empty() && run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PreScript);
         run_pre_install(
-            Path::new(root),
+            Path::new(ctx.root),
             pkg.name(),
             pkg.version(),
             scriptlets,
             scriptlet_format,
             &execution_mode,
-            sandbox_mode,
+            ctx.sandbox_mode,
         )?;
-    } else if !no_scripts && !scriptlets.is_empty() && !run_scriptlets {
+    } else if !ctx.no_scripts && !scriptlets.is_empty() && !run_scriptlets {
         info!(
             "Skipping scriptlets: no :runtime or :lib component being installed (components: {:?})",
             installed_component_types
@@ -1022,42 +1348,57 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Query old package's scriptlets BEFORE we delete it from DB
     // We need these for running pre-remove and post-remove during upgrade
-    let old_trove_id = old_trove_to_upgrade.as_ref().and_then(|t| t.id);
-    let old_package_scriptlets = get_old_package_scriptlets(&conn, old_trove_id)?;
+    let old_trove_id = ctx.old_trove.and_then(|t| t.id);
+    let old_package_scriptlets = get_old_package_scriptlets(conn, old_trove_id)?;
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
-    if !no_scripts && let Some(ref old_trove) = old_trove_to_upgrade {
+    if !ctx.no_scripts && let Some(old_trove) = ctx.old_trove {
         run_old_pre_remove(
-            Path::new(root),
+            Path::new(ctx.root),
             &old_trove.name,
             &old_trove.version,
             pkg.version(),
             &old_package_scriptlets,
             scriptlet_format,
-            sandbox_mode,
+            ctx.sandbox_mode,
         )?;
     }
 
-    // Track if this is an upgrade
-    let is_upgrade = old_trove_to_upgrade.is_some();
+    Ok(PreScriptletState {
+        scriptlet_format,
+        execution_mode,
+        old_package_scriptlets,
+        run_scriptlets,
+    })
+}
+
+/// Execute the main install transaction: filesystem changes + DB commit.
+fn execute_install_transaction(
+    conn: &mut rusqlite::Connection,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    extraction: &ExtractionResult,
+    ctx: &TransactionContext<'_>,
+    progress: &InstallProgress,
+) -> Result<InstallTransactionResult> {
+    let is_upgrade = ctx.old_trove_to_upgrade.is_some();
 
     // === TRANSACTION ENGINE INTEGRATION ===
     // Create transaction engine for crash-safe atomic operations
-    let db_path_buf = PathBuf::from(db_path);
-    let tx_config = TransactionConfig::new(PathBuf::from(root), db_path_buf.clone());
+    let db_path_buf = PathBuf::from(ctx.db_path);
+    let tx_config = TransactionConfig::new(PathBuf::from(ctx.root), db_path_buf.clone());
     let engine =
         TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
     // Recover any incomplete transactions from previous crashes
     let recovery_outcomes = engine
-        .recover(&mut conn)
+        .recover(conn)
         .context("Failed to recover incomplete transactions")?;
     for outcome in &recovery_outcomes {
         info!("Recovery outcome: {:?}", outcome);
     }
 
     // Begin new transaction
-    let tx_description = if let Some(ref old_trove) = old_trove_to_upgrade {
+    let tx_description = if let Some(old_trove) = ctx.old_trove_to_upgrade {
         format!(
             "Upgrade {} from {} to {}",
             pkg.name(),
@@ -1074,15 +1415,15 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     info!("Started transaction {} for {}", txn.uuid(), tx_description);
 
     // Convert extracted files to transaction format
-    let tx_files = convert_extracted_files(&extracted_files);
+    let tx_files = convert_extracted_files(&extraction.extracted_files);
 
     // Get files to remove for upgrades
-    let files_to_remove = if let Some(ref old_trove) = old_trove_to_upgrade
+    let files_to_remove = if let Some(old_trove) = ctx.old_trove_to_upgrade
         && let Some(old_id) = old_trove.id
     {
         let new_paths: std::collections::HashSet<&str> =
-            extracted_files.iter().map(|f| f.path.as_str()).collect();
-        get_files_to_remove(&conn, old_id, &new_paths)?
+            extraction.extracted_files.iter().map(|f| f.path.as_str()).collect();
+        get_files_to_remove(conn, old_id, &new_paths)?
     } else {
         Vec::new()
     };
@@ -1099,7 +1440,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         files_to_add: tx_files.clone(),
         files_to_remove,
         is_upgrade,
-        old_package: old_trove_to_upgrade.as_ref().map(|t| PackageInfo {
+        old_package: ctx.old_trove_to_upgrade.map(|t| PackageInfo {
             name: t.name.clone(),
             version: t.version.clone(),
             release: None,
@@ -1108,7 +1449,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     };
 
     let plan = txn
-        .plan_operations(operations, &conn)
+        .plan_operations(operations, conn)
         .context("Failed to plan transaction")?;
 
     // Extract plan data before further mutations (to avoid borrow checker issues)
@@ -1163,7 +1504,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // Build file hashes from staged files for DB insertion
     // Create a lookup from path to size using extracted files
-    let size_lookup: HashMap<String, i64> = extracted_files
+    let size_lookup: HashMap<String, i64> = extraction.extracted_files
         .iter()
         .map(|f| (f.path.clone(), f.size))
         .collect();
@@ -1177,13 +1518,19 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         .collect();
 
     // DB transaction with tx_uuid for crash recovery
+    let format = ctx.format;
+    let selection_reason = ctx.selection_reason;
+    let classified = &extraction.classified;
+    let language_provides = &extraction.language_provides;
+    let scriptlets = pkg.scriptlets();
+
     let tx_uuid = txn.uuid().to_string();
-    let db_result = conary_core::db::transaction(&mut conn, |tx| {
+    let db_result = conary_core::db::transaction(conn, |tx| {
         // Create changeset with tx_uuid for crash recovery
         let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
         let changeset_id = changeset.insert(tx)?;
 
-        if let Some(old_trove) = old_trove_to_upgrade.as_ref()
+        if let Some(old_trove) = ctx.old_trove_to_upgrade
             && let Some(old_id) = old_trove.id
         {
             info!("Removing old version {} before upgrade", old_trove.version);
@@ -1213,7 +1560,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
         // Build path-to-component-id lookup for efficient file insertion
         let mut path_to_component: HashMap<&str, i64> = HashMap::new();
-        for (comp_type, files) in &classified {
+        for (comp_type, files) in classified {
             if let Some(&comp_id) = component_ids.get(comp_type) {
                 for path in files {
                     path_to_component.insert(path.as_str(), comp_id);
@@ -1277,7 +1624,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         }
 
         // Store language-specific provides (python, perl, ruby, etc.)
-        for lang_dep in &language_provides {
+        for lang_dep in language_provides {
             let kind = match lang_dep.class {
                 DependencyClass::Package => "package",
                 _ => lang_dep.class.prefix(),
@@ -1326,46 +1673,69 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     // Suppress unused variable warning
     let _ = trove_id;
 
+    // Mark post-scripts complete and finish transaction within this scope
+    // (Transaction has a lifetime tied to the engine, so it cannot be returned)
+    txn.mark_post_scripts_complete()
+        .context("Failed to mark post-scripts complete")?;
+
+    let finish_result = txn.finish().context("Failed to finish transaction")?;
+    info!(
+        "Transaction {} completed in {}ms",
+        finish_result.tx_uuid, finish_result.duration_ms
+    );
+
+    Ok(InstallTransactionResult {
+        changeset_id,
+    })
+}
+
+/// Run post-install scriptlets, triggers, and print the final summary.
+fn finalize_install(
+    conn: &rusqlite::Connection,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    extraction: &ExtractionResult,
+    scriptlet_ctx: &ScriptletContext<'_>,
+    pre_state: &PreScriptletState,
+    tx_result: &InstallTransactionResult,
+    progress: &InstallProgress,
+) -> Result<()> {
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
-    if !no_scripts && let Some(ref old_trove) = old_trove_to_upgrade {
+    if !scriptlet_ctx.no_scripts && let Some(old_trove) = scriptlet_ctx.old_trove {
         run_old_post_remove(
-            Path::new(root),
+            Path::new(scriptlet_ctx.root),
             &old_trove.name,
             &old_trove.version,
             pkg.version(),
-            &old_package_scriptlets,
-            scriptlet_format,
-            sandbox_mode,
+            &pre_state.old_package_scriptlets,
+            pre_state.scriptlet_format,
+            scriptlet_ctx.sandbox_mode,
         );
     }
 
     // Execute post-install scriptlet (after files are deployed)
-    if !no_scripts && !scriptlets.is_empty() && run_scriptlets {
+    let scriptlets = pkg.scriptlets();
+    if !scriptlet_ctx.no_scripts && !scriptlets.is_empty() && pre_state.run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PostScript);
         run_post_install(
-            Path::new(root),
+            Path::new(scriptlet_ctx.root),
             pkg.name(),
             pkg.version(),
             scriptlets,
-            scriptlet_format,
-            &execution_mode,
-            sandbox_mode,
+            pre_state.scriptlet_format,
+            &pre_state.execution_mode,
+            scriptlet_ctx.sandbox_mode,
         );
     }
 
-    // Mark post-scripts complete in transaction
-    txn.mark_post_scripts_complete()
-        .context("Failed to mark post-scripts complete")?;
-
     progress.set_phase(pkg.name(), InstallPhase::Triggers);
-    let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
-    run_triggers(&conn, Path::new(root), changeset_id, &file_paths);
+    let file_paths: Vec<String> = extraction.extracted_files.iter().map(|f| f.path.clone()).collect();
+    run_triggers(conn, Path::new(scriptlet_ctx.root), tx_result.changeset_id, &file_paths);
 
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
     // Show what components were available vs installed
-    let skipped_info = if !skipped_components.is_empty() {
-        format!(" (skipped: {})", skipped_components.join(", "))
+    let skipped_info = if !extraction.skipped_components.is_empty() {
+        format!(" (skipped: {})", extraction.skipped_components.join(", "))
     } else {
         String::new()
     };
@@ -1376,10 +1746,10 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         pkg.version()
     );
     println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    println!("  Files installed: {}", extracted_files.len());
+    println!("  Files installed: {}", extraction.extracted_files.len());
     println!(
         "  Components: {}{}",
-        installed_component_types
+        extraction.installed_component_types
             .iter()
             .map(|c| format!(":{}", c.as_str()))
             .collect::<Vec<_>>()
@@ -1387,22 +1757,15 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         skipped_info
     );
     println!("  Dependencies: {}", pkg.dependencies().len());
-    if !language_provides.is_empty() {
+    if !extraction.language_provides.is_empty() {
         println!(
             "  Provides: {} (language-specific capabilities)",
-            language_provides.len()
+            extraction.language_provides.len()
         );
     }
 
-    // Finish transaction (cleanup working directory, archive journal)
-    let tx_result = txn.finish().context("Failed to finish transaction")?;
-    info!(
-        "Transaction {} completed in {}ms",
-        tx_result.tx_uuid, tx_result.duration_ms
-    );
-
     // Create state snapshot after successful install
-    create_state_snapshot(&conn, changeset_id, &format!("Install {}", pkg.name()))?;
+    create_state_snapshot(conn, tx_result.changeset_id, &format!("Install {}", pkg.name()))?;
 
     Ok(())
 }
