@@ -13,6 +13,29 @@ use serde::Deserialize;
 
 use crate::{Error, Result};
 
+/// A repo constraint that accepts either a single string or a list of strings.
+///
+/// This allows YAML rules to use either `repo: fedora` (convenient for simple rules)
+/// or `repo: [fedora, arch]` (when the same mapping applies to multiple repos).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum StringOrVec {
+    /// A single repo string (e.g., `repo: fedora`).
+    Single(String),
+    /// Multiple repo strings (e.g., `repo: [fedora, arch]`).
+    Multiple(Vec<String>),
+}
+
+impl StringOrVec {
+    /// Check whether a value is contained in this constraint.
+    pub fn contains(&self, value: &str) -> bool {
+        match self {
+            Self::Single(s) => s == value,
+            Self::Multiple(v) => v.iter().any(|s| s == value),
+        }
+    }
+}
+
 /// A single canonical mapping rule (Repology-compatible format).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Rule {
@@ -28,9 +51,9 @@ pub struct Rule {
     #[serde(default)]
     pub namepat: Option<String>,
 
-    /// Repository to match (e.g., "fedora_43").
+    /// Repository constraint: single string or array of strings.
     #[serde(default)]
-    pub repo: Option<String>,
+    pub repo: Option<StringOrVec>,
 
     /// Kind classification (e.g., "group").
     #[serde(default)]
@@ -137,7 +160,7 @@ impl RulesEngine {
             // Check repo constraint.
             if let Some(ref rule_repo) = rule.repo {
                 match repo {
-                    Some(r) if r == rule_repo => {}
+                    Some(r) if rule_repo.contains(r) => {}
                     _ => continue,
                 }
             }
@@ -314,5 +337,64 @@ rules:
         );
         assert_eq!(engine.resolve("nginx", None), Some("nginx".to_string()));
         assert_eq!(engine.get_kind("nginx"), Some("group".to_string()));
+    }
+
+    #[test]
+    fn test_string_or_vec_single() {
+        let yaml = r#"
+rules:
+  - name: zlib
+    setname: zlib
+    repo: fedora
+"#;
+        let rules = parse_rules(yaml).unwrap();
+        assert_eq!(rules.len(), 1);
+        let repo = rules[0].repo.as_ref().unwrap();
+        assert!(repo.contains("fedora"));
+        assert!(!repo.contains("arch"));
+    }
+
+    #[test]
+    fn test_string_or_vec_multiple() {
+        let yaml = r#"
+rules:
+  - name: zlib
+    setname: zlib
+    repo: [fedora, arch]
+"#;
+        let rules = parse_rules(yaml).unwrap();
+        assert_eq!(rules.len(), 1);
+        let repo = rules[0].repo.as_ref().unwrap();
+        assert!(repo.contains("fedora"));
+        assert!(repo.contains("arch"));
+        assert!(!repo.contains("ubuntu"));
+    }
+
+    #[test]
+    fn test_resolve_with_repo_array() {
+        let yaml = r#"
+rules:
+  - name: zlib
+    setname: zlib
+    repo: [fedora, arch]
+  - name: zlib1g
+    setname: zlib
+    repo: ubuntu
+"#;
+        let engine = RulesEngine::new(parse_rules(yaml).unwrap()).unwrap();
+
+        assert_eq!(
+            engine.resolve("zlib", Some("fedora")),
+            Some("zlib".to_string())
+        );
+        assert_eq!(
+            engine.resolve("zlib", Some("arch")),
+            Some("zlib".to_string())
+        );
+        assert_eq!(engine.resolve("zlib", Some("ubuntu")), None);
+        assert_eq!(
+            engine.resolve("zlib1g", Some("ubuntu")),
+            Some("zlib".to_string())
+        );
     }
 }
