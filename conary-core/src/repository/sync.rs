@@ -6,8 +6,8 @@
 //! including native format support for Arch, Debian, and Fedora repositories.
 
 use crate::db::models::{
-    PackageDelta, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup as DbRequirementGroup,
+    CanonicalPackage, PackageDelta, PackageImplementation, Repository, RepositoryPackage,
+    RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -16,7 +16,7 @@ use crate::repository::dependency_model::{
 use crate::repository::parsers::{DependencyType, PackageMetadata};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -478,6 +478,23 @@ struct RemiPackageEntry {
     metadata: Option<serde_json::Value>,
 }
 
+/// Response from Remi canonical map API (`GET /v1/canonical/map`)
+#[derive(serde::Deserialize)]
+struct CanonicalMapResponse {
+    #[allow(dead_code)]
+    version: u32,
+    #[allow(dead_code)]
+    generated_at: String,
+    entries: Vec<CanonicalMapEntry>,
+}
+
+/// A single entry in the canonical map response
+#[derive(serde::Deserialize)]
+struct CanonicalMapEntry {
+    canonical: String,
+    implementations: HashMap<String, String>,
+}
+
 fn remi_sync_row(
     repo_id: i64,
     endpoint: String,
@@ -635,6 +652,47 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
     Ok(count)
 }
 
+/// Fetch the canonical package map from a Remi endpoint and persist it locally.
+///
+/// Downloads the full canonical map from `{endpoint}/v1/canonical/map` and upserts
+/// each entry into `canonical_packages` and `package_implementations`. This is
+/// non-fatal: callers should log failures at debug level and continue.
+fn fetch_and_persist_canonical_map(conn: &Connection, endpoint: &str) -> Result<u64> {
+    let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
+    debug!("Fetching canonical map from {}", url);
+
+    let client = RepositoryClient::new()?;
+    let bytes = client.download_to_bytes(&url)?;
+
+    let map: CanonicalMapResponse = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::ParseError(format!("Failed to parse canonical map from {url}: {e}"))
+    })?;
+
+    let tx = conn.unchecked_transaction()?;
+    let mut count = 0u64;
+
+    for entry in &map.entries {
+        let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
+        let Some(canonical_id) = canonical.insert_or_ignore(&tx)? else {
+            continue;
+        };
+
+        for (distro, distro_name) in &entry.implementations {
+            let mut imp = PackageImplementation::new(
+                canonical_id,
+                distro.clone(),
+                distro_name.clone(),
+                "remi".to_string(),
+            );
+            imp.insert_or_ignore(&tx)?;
+            count += 1;
+        }
+    }
+
+    tx.commit()?;
+    Ok(count)
+}
+
 /// Synchronize repository metadata with the database
 pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     info!("Synchronizing repository: {}", repo.name);
@@ -662,24 +720,50 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
     }
 
     // Route to Remi-native sync if strategy is "remi"
-    if repo.default_strategy.as_deref() == Some("remi") {
-        return sync_repository_remi(conn, repo);
-    }
+    let count = if repo.default_strategy.as_deref() == Some("remi") {
+        sync_repository_remi(conn, repo)?
+    } else {
+        // Detect repository format using registry
+        let format = registry::detect_repository_format(&repo.name, &repo.url);
 
-    // Detect repository format using registry
-    let format = registry::detect_repository_format(&repo.name, &repo.url);
+        // Try native format first if detected
+        let native_result = if format != RepositoryFormat::Json {
+            match sync_repository_native(conn, repo, format) {
+                Ok(count) => Some(count),
+                Err(e) => {
+                    warn!("Native format sync failed: {}, falling back to JSON", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-    // Try native format first if detected
-    if format != RepositoryFormat::Json {
-        match sync_repository_native(conn, repo, format) {
-            Ok(count) => return Ok(count),
+        if let Some(count) = native_result {
+            count
+        } else {
+            // Fall back to JSON metadata format
+            sync_repository_json_fallback(conn, repo)?
+        }
+    };
+
+    // After package sync completes, fetch the canonical map from Remi (non-fatal)
+    if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
+        match fetch_and_persist_canonical_map(conn, remi_endpoint) {
+            Ok(mapping_count) => {
+                info!("Synced {} canonical mappings from Remi", mapping_count);
+            }
             Err(e) => {
-                warn!("Native format sync failed: {}, falling back to JSON", e);
+                debug!("Failed to fetch canonical map: {}", e);
             }
         }
     }
 
-    // Fall back to JSON metadata format
+    Ok(count)
+}
+
+/// JSON metadata fallback sync path (used when native format sync is unavailable)
+fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     let client = RepositoryClient::new()?;
     let metadata = client.fetch_metadata(&repo.url)?;
 
@@ -1405,5 +1489,119 @@ mod tests {
         assert_eq!(clauses.len(), 1);
         assert_eq!(clauses[0].capability, "systemd");
         assert_eq!(clauses[0].version_constraint.as_deref(), Some(">= 255"));
+    }
+
+    #[test]
+    fn test_canonical_map_deserialization_and_persist() {
+        use crate::db::models::{CanonicalPackage, PackageImplementation};
+
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        // Simulate the JSON response from GET /v1/canonical/map
+        let json = json!({
+            "version": 1,
+            "generated_at": "2026-03-16T00:00:00Z",
+            "entries": [
+                {
+                    "canonical": "firefox",
+                    "implementations": {
+                        "fedora": "firefox",
+                        "debian": "firefox-esr",
+                        "arch": "firefox"
+                    }
+                },
+                {
+                    "canonical": "openssl",
+                    "implementations": {
+                        "fedora": "openssl",
+                        "ubuntu": "libssl3"
+                    }
+                }
+            ]
+        });
+
+        let map: CanonicalMapResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(map.entries.len(), 2);
+
+        // Persist the map entries using the same logic as fetch_and_persist_canonical_map
+        let tx = conn.unchecked_transaction().unwrap();
+        let mut count = 0u64;
+
+        for entry in &map.entries {
+            let mut canonical =
+                CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
+            let Some(canonical_id) = canonical.insert_or_ignore(&tx).unwrap() else {
+                continue;
+            };
+
+            for (distro, distro_name) in &entry.implementations {
+                let mut imp = PackageImplementation::new(
+                    canonical_id,
+                    distro.clone(),
+                    distro_name.clone(),
+                    "remi".to_string(),
+                );
+                imp.insert_or_ignore(&tx).unwrap();
+                count += 1;
+            }
+        }
+        tx.commit().unwrap();
+
+        assert_eq!(count, 5);
+
+        // Verify canonical packages were persisted
+        let firefox = CanonicalPackage::find_by_name(&conn, "firefox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(firefox.kind, "package");
+
+        let openssl = CanonicalPackage::find_by_name(&conn, "openssl")
+            .unwrap()
+            .unwrap();
+        assert_eq!(openssl.kind, "package");
+
+        // Verify implementations
+        let ff_impls =
+            PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
+        assert_eq!(ff_impls.len(), 3);
+        let debian_impl = ff_impls.iter().find(|i| i.distro == "debian").unwrap();
+        assert_eq!(debian_impl.distro_name, "firefox-esr");
+        assert_eq!(debian_impl.source, "remi");
+
+        let ssl_impls =
+            PackageImplementation::find_by_canonical(&conn, openssl.id.unwrap()).unwrap();
+        assert_eq!(ssl_impls.len(), 2);
+        let ubuntu_impl = ssl_impls.iter().find(|i| i.distro == "ubuntu").unwrap();
+        assert_eq!(ubuntu_impl.distro_name, "libssl3");
+
+        // Second ingest is idempotent -- no duplicate rows
+        let tx2 = conn.unchecked_transaction().unwrap();
+        for entry in &map.entries {
+            let mut canonical =
+                CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
+            let Some(canonical_id) = canonical.insert_or_ignore(&tx2).unwrap() else {
+                continue;
+            };
+
+            for (distro, distro_name) in &entry.implementations {
+                let mut imp = PackageImplementation::new(
+                    canonical_id,
+                    distro.clone(),
+                    distro_name.clone(),
+                    "remi".to_string(),
+                );
+                imp.insert_or_ignore(&tx2).unwrap();
+            }
+        }
+        tx2.commit().unwrap();
+
+        let ff_impls2 =
+            PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
+        assert_eq!(
+            ff_impls2.len(),
+            3,
+            "No duplicate implementations after re-ingest"
+        );
     }
 }
