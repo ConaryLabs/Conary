@@ -1,7 +1,7 @@
 // src/commands/collection.rs
 //! Collection management commands
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::scriptlet::SandboxMode;
 use tracing::info;
 
@@ -68,7 +68,8 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
         .query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to list collections")?;
 
     if collections.is_empty() {
         println!("No collections found.");

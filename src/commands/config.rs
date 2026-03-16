@@ -4,7 +4,7 @@
 //!
 //! Commands for tracking, diffing, and managing configuration files.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::paths::objects_dir;
 use std::path::Path;
 use tracing::info;
@@ -233,7 +233,8 @@ pub fn cmd_config_restore(
 
     // Backup current version first
     if fs_path.exists() {
-        let current = std::fs::read(&fs_path)?;
+        let current = std::fs::read(&fs_path)
+            .with_context(|| format!("Failed to read current config file '{}'", path))?;
         let current_hash = cas.store(&current)?;
         let mut pre_restore = ConfigBackup::new(config_id, current_hash, "pre-restore".to_string());
         pre_restore.insert(&conn)?;
@@ -294,7 +295,8 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
         }
 
         // Compute current hash
-        let content = std::fs::read(&fs_path)?;
+        let content = std::fs::read(&fs_path)
+            .with_context(|| format!("Failed to read config file '{}'", config.path))?;
         let current_hash = CasStore::compute_sha256(&content);
 
         if current_hash == config.original_hash {
