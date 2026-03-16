@@ -39,12 +39,12 @@
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">270+</span>
+			<span class="stat-value">2,600+</span>
 			<span class="stat-label">Tests</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">100K+</span>
+			<span class="stat-value">190K+</span>
 			<span class="stat-label">Lines of Rust</span>
 		</div>
 	</div>
