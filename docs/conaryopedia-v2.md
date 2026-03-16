@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-13
-revision: 3
-summary: Update schema to v51, add cross-distro repo capability resolution tables
+last_updated: 2026-03-16
+revision: 5
+summary: Fix capability field names, add CapabilityPolicy three-tier docs, Scriptlet profile, enforce/audit commands
 ---
 
 # Conaryopedia v2
@@ -32,7 +32,7 @@ The [original Conaryopedia](conaryopedia.md) documented the rPath-era Conary (20
 - [5.1 Culinary Terminology](#51-culinary-terminology) -- [5.2 Recipe Format](#52-recipe-format) -- [5.3 The Cook Command](#53-the-cook-command) -- [5.4 Hermetic Build Architecture](#54-hermetic-build-architecture) -- [5.5 Kitchen Configuration](#55-kitchen-configuration) -- [5.6 Build Phases](#56-build-phases-in-detail) -- [5.7 Container Isolation](#57-container-isolation) -- [5.8 Cross-Compilation](#58-cross-compilation-support) -- [5.9 Bootstrap Stages](#59-bootstrap-stages) -- [5.10 Build Provenance](#510-build-provenance-capture) -- [5.11 Build Caching](#511-build-caching) -- [5.12 Dependency Graph](#512-dependency-graph) -- [5.13 Bootstrap Plans](#513-bootstrap-plans) -- [5.14 PKGBUILD Conversion](#514-pkgbuild-conversion) -- [5.15 Source Management](#515-source-management)
 
 **6. [Remi Server](#6-remi-server)**
-- [6.1 Architecture Overview](#61-architecture-overview) -- [6.2 Configuration](#62-toml-configuration) -- [6.3 Conversion Pipeline](#63-on-demand-conversion-pipeline) -- [6.4 Chunk Storage](#64-content-addressed-chunk-storage) -- [6.5 LRU Eviction](#65-lru-cache-eviction) -- [6.6 Bloom Filter](#66-bloom-filter-dos-protection) -- [6.7 Pull-Through Caching](#67-pull-through-caching-and-request-coalescing) -- [6.8 Chunk Endpoints](#68-chunk-serving-endpoints) -- [6.9 R2/CDN](#69-r2cdn-integration) -- [6.10 Sparse Index](#610-sparse-http-index) -- [6.11 Search](#611-full-text-search) -- [6.12 OCI Distribution](#612-oci-distribution-spec-v2) -- [6.13 Security](#613-security) -- [6.14 Negative Cache](#614-negative-cache) -- [6.15 Job Management](#615-job-management) -- [6.16 Analytics](#616-analytics-and-metrics) -- [6.17 Delta Manifests](#617-delta-manifests) -- [6.18 Pre-Warming](#618-pre-warming-pipeline) -- [6.19 Federated Index](#619-federated-sparse-index) -- [6.20 Remi Lite](#620-remi-lite-zero-config-lan-proxy) -- [6.21 Index Signing](#621-index-generation-and-signing) -- [6.22 Deployment](#622-deployment) -- [6.23 API Reference](#623-complete-api-reference)
+- [6.1 Architecture Overview](#61-architecture-overview) -- [6.2 Configuration](#62-toml-configuration) -- [6.3 Conversion Pipeline](#63-on-demand-conversion-pipeline) -- [6.4 Chunk Storage](#64-content-addressed-chunk-storage) -- [6.5 LRU Eviction](#65-lru-cache-eviction) -- [6.6 Bloom Filter](#66-bloom-filter-dos-protection) -- [6.7 Pull-Through Caching](#67-pull-through-caching-and-request-coalescing) -- [6.8 Chunk Endpoints](#68-chunk-serving-endpoints) -- [6.9 R2/CDN](#69-r2cdn-integration) -- [6.10 Sparse Index](#610-sparse-http-index) -- [6.11 Search](#611-full-text-search) -- [6.12 OCI Distribution](#612-oci-distribution-spec-v2) -- [6.13 Security](#613-security) -- [6.14 Negative Cache](#614-negative-cache) -- [6.15 Job Management](#615-job-management) -- [6.16 Analytics](#616-analytics-and-metrics) -- [6.17 Delta Manifests](#617-delta-manifests) -- [6.18 Pre-Warming](#618-pre-warming-pipeline) -- [6.19 Federated Index](#619-federated-sparse-index) -- [6.20 Remi Lite](#620-remi-lite-zero-config-lan-proxy) -- [6.21 Index Signing](#621-index-generation-and-signing) -- [6.22 Deployment](#622-deployment) -- [6.23 API Reference](#623-complete-api-reference) -- [6.24 Test Data API](#624-test-data-api) -- [6.25 Canonical Package Mapping](#625-canonical-package-mapping) -- [6.26 Chunk Garbage Collection](#626-chunk-garbage-collection)
 
 **7. [Security and Trust](#7-security-and-trust)**
 - [7.1 Capability Declarations](#71-capability-declarations) -- [7.2 Capability Inference](#72-capability-inference) -- [7.3 Capability Enforcement](#73-capability-enforcement) -- [7.4 Capability-Based Resolution](#74-capability-based-dependency-resolution) -- [7.5 Capability Audit](#75-capability-audit) -- [7.6 Container Sandboxing](#76-container-sandboxing) -- [7.7 Package DNA](#77-package-dna-provenance) -- [7.8 TUF Supply Chain Trust](#78-tuf-supply-chain-trust) -- [7.9 Hermetic Build Security](#79-hermetic-build-security) -- [7.10 Security Architecture Summary](#710-security-architecture-summary)
@@ -2330,12 +2330,13 @@ src/server/
 
 ## 6.1 Architecture Overview
 
-Remi runs two Axum HTTP servers concurrently:
+Remi runs three Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Admin API** (default `127.0.0.1:8081`): Conversion triggers, cache management, Bloom filter rebuild, recipe builds (SSRF-sensitive). Always bound to localhost -- access via SSH tunnel only.
+- **Internal Admin API** (default `127.0.0.1:8081`): Conversion triggers, cache management, Bloom filter rebuild, recipe builds (SSRF-sensitive). Always bound to localhost -- access via SSH tunnel only, no auth required.
+- **External Admin API** (default `0.0.0.0:8082`): Bearer token authentication, per-IP rate limiting, audit logging. Token management, CI proxy, federation config, SSE events, MCP endpoint.
 
-Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
+All three servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
 ```rust
 // src/server/mod.rs
@@ -3341,7 +3342,66 @@ Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min,
 | GET | `/v1/admin/audit` | Query audit log | admin |
 | DELETE | `/v1/admin/audit` | Purge old audit entries | admin |
 | GET | `/v1/admin/openapi.json` | OpenAPI 3.1 spec | (no auth) |
-| GET/POST | `/mcp` | MCP endpoint (16 tools) | admin |
+| GET/POST | `/mcp` | MCP endpoint (23 tools) | admin |
+| POST | `/v1/admin/test-runs` | Create a test run | admin |
+| GET | `/v1/admin/test-runs` | List runs (cursor pagination) | admin |
+| GET | `/v1/admin/test-runs/{id}` | Get run with results | admin |
+| PUT | `/v1/admin/test-runs/{id}` | Update run status | admin |
+| POST | `/v1/admin/test-runs/{id}/results` | Push test result with steps/logs | admin |
+| GET | `/v1/admin/test-runs/{id}/tests/{test_id}` | Get test with steps and logs | admin |
+| GET | `/v1/admin/test-runs/{id}/tests/{test_id}/logs` | Get filtered logs | admin |
+| GET | `/v1/admin/test-health` | Aggregate pass rates | admin |
+| DELETE | `/v1/admin/test-runs/gc` | Garbage collect old runs | admin |
+
+## 6.24 Test Data API
+
+Remi persists test run data in a separate SQLite database (`/conary/test-data.db`), independent from the main package database. This enables test result persistence, per-step logging, and aggregate health dashboards.
+
+**Endpoints** (on :8082, bearer auth required):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/v1/admin/test-runs` | Create a test run |
+| GET | `/v1/admin/test-runs` | List runs (cursor pagination) |
+| GET | `/v1/admin/test-runs/{id}` | Get run with results |
+| PUT | `/v1/admin/test-runs/{id}` | Update run status |
+| POST | `/v1/admin/test-runs/{id}/results` | Push test result with steps/logs |
+| GET | `/v1/admin/test-runs/{id}/tests/{test_id}` | Get test with steps and logs |
+| GET | `/v1/admin/test-runs/{id}/tests/{test_id}/logs` | Get filtered logs |
+| GET | `/v1/admin/test-health` | Aggregate pass rates |
+| DELETE | `/v1/admin/test-runs/gc` | Garbage collect old runs |
+
+**MCP Tools:** `test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`
+
+## 6.25 Canonical Package Mapping
+
+Remi builds a cross-distro canonical package map by analyzing all indexed distributions. Packages with different names across distros (e.g., `kernel` on Fedora, `linux` on Arch, `linux-image-generic` on Ubuntu) are grouped into canonical entries.
+
+The map is built using:
+- **Auto-discovery**: name matching, provides matching, stem matching across distros
+- **Curated rules**: YAML mapping files in `data/canonical-rules/`
+- **Repology integration**: external package equivalence data (optional)
+
+**Endpoints** (public, no auth):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/v1/canonical/map` | Full canonical map (cached 5 min) |
+| GET | `/v1/canonical/{name}` | Look up canonical entry |
+| GET | `/v1/canonical/search?q=...` | Search canonical names |
+
+**MCP Tool:** `canonical_rebuild` -- triggers a full map rebuild on demand.
+
+Clients fetch the map during `conary repo sync` and use it for cross-distro dependency resolution and "did you mean?" suggestions.
+
+## 6.26 Chunk Garbage Collection
+
+Orphaned chunks (from superseded package versions) accumulate on local disk and in R2. The `chunk_gc` tool finds chunks not referenced by any converted package and deletes them.
+
+**CLI:** `conary system gc --chunks [--dry-run]`
+**MCP Tool:** `chunk_gc` (with dry_run parameter)
+
+Features: grace period for in-flight conversions, protected chunk safety, local disk + R2 cleanup, dry-run preview mode.
 
 ---
 
