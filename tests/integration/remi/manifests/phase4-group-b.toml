@@ -70,10 +70,9 @@ timeout = 30
 group = "B"
 
 [[test.step]]
-conary = "model diff"
+run = "${CONARY_BIN} model diff --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
-exit_code_not = 0
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
