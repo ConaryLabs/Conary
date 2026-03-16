@@ -3419,8 +3419,8 @@ Every Conary package can declare exactly what system resources it needs -- netwo
 
 ```rust
 pub struct CapabilityDeclaration {
-    pub version: u32,           // Schema version (currently 1)
-    pub rationale: String,      // Human-readable explanation
+    pub version: u32,               // Schema version (currently 1)
+    pub rationale: Option<String>,   // Human-readable explanation (optional)
     pub network: Option<NetworkCapabilities>,
     pub filesystem: Option<FilesystemCapabilities>,
     pub syscalls: Option<SyscallCapabilities>,
@@ -3434,8 +3434,8 @@ A TOML declaration in a recipe looks like:
 rationale = "Web server that binds HTTP/HTTPS and writes logs"
 
 [capabilities.network]
-listen_ports = ["80", "443"]
-outbound_ports = ["443"]   # For OCSP stapling
+listen = ["80", "443"]
+outbound = ["443"]   # For OCSP stapling
 
 [capabilities.filesystem]
 read = ["/etc/nginx", "/etc/ssl/certs", "/usr/share/nginx"]
@@ -3450,9 +3450,9 @@ profile = "network-server"
 
 ```rust
 pub struct NetworkCapabilities {
-    pub outbound_ports: Vec<String>,  // Ports the package connects to
-    pub listen_ports: Vec<String>,    // Ports the package listens on
-    pub none: bool,                   // Explicit "no network needed"
+    pub outbound: Vec<String>,  // Ports the package connects to
+    pub listen: Vec<String>,    // Ports the package listens on
+    pub none: bool,             // Explicit "no network needed"
 }
 ```
 
@@ -3481,7 +3481,7 @@ pub struct SyscallCapabilities {
 }
 ```
 
-Six predefined syscall profiles cover common package archetypes:
+Seven predefined syscall profiles cover common package archetypes:
 
 | Profile | Syscalls | Use case |
 |---------|----------|----------|
@@ -3491,6 +3491,7 @@ Six predefined syscall profiles cover common package archetypes:
 | `gui-app` | ~42 (adds shm, ioctl, poll, memfd) | Desktop applications |
 | `system-daemon` | ~45 (adds mount, chroot, setuid, prctl) | systemd, init services |
 | `container` | ~50 (adds clone, unshare, pivot_root, seccomp) | Docker, Podman |
+| `scriptlet` | ~40 (adds fork, execve, mkdir, chmod, chown) | Package scriptlet execution |
 
 Each profile is a static array of syscall names. Explicit `allow` and `deny` lists are merged with the profile: `final = (profile + allow) - deny`.
 
@@ -3773,6 +3774,39 @@ pub fn check_enforcement_support() -> EnforcementSupport {
 }
 ```
 
+### Install-Time Capability Policy
+
+CCS packages with capability declarations are evaluated against a three-tier
+policy at install time (`conary-core/src/capability/policy.rs`):
+
+| Tier | Behavior | Default capabilities |
+|------|----------|---------------------|
+| **Allowed** | Install proceeds silently | `cap-dac-read-search`, `cap-chown`, `cap-fowner` |
+| **Prompt** | Requires `--allow-capabilities` flag | `cap-net-raw`, `cap-net-bind-service`, `cap-sys-ptrace` |
+| **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio`, `cap-sys-module` |
+
+The policy engine infers required Linux capabilities from the declaration's
+network, filesystem, and syscall fields via `infer_linux_capabilities()`:
+- Listening on ports < 1024 -> `cap-net-bind-service`
+- Writing outside standard paths -> `cap-dac-override`
+- Syscalls like `ptrace`, `mount`, `mknod` -> corresponding capabilities
+
+**CLI flags:**
+- `conary ccs install pkg.ccs --allow-capabilities` -- approve prompted capabilities
+- `conary ccs install pkg.ccs --capability-policy /path/to/policy.toml` -- custom policy
+
+**Custom policy file** (`/etc/conary/capability-policy.toml`):
+
+```toml
+[capabilities]
+allowed = ["cap-dac-read-search", "cap-chown"]
+prompt = ["cap-net-raw", "cap-net-bind-service"]
+denied = ["cap-sys-admin"]
+default_tier = "prompt"
+```
+
+**Implementation:** `conary-core/src/capability/policy.rs`
+
 ## 7.4 Capability-Based Dependency Resolution
 
 Beyond enforcing capabilities at runtime, Conary uses them for dependency resolution. Instead of depending on a specific package name, a recipe can depend on a *capability* (`src/capability/resolver.rs`).
@@ -3806,7 +3840,7 @@ The resolver queries both the `provides` table (traditional dependency matching)
 | Match type | Score | Example |
 |------------|-------|---------|
 | Typed (`soname(...)`) | 95 | `soname(libssl.so.3)` -> `openssl` |
-| Declared capability | 90 | `ssl` -> package with `capabilities.network.outbound_ports` containing `443` |
+| Declared capability | 90 | `ssl` -> package with `capabilities.network.outbound` containing `443` |
 | Network match | 85 | `network.listen:443` -> package listening on 443 |
 | Filesystem match | 80 | `filesystem.read:/etc/ssl` -> package reading SSL certs |
 
@@ -3837,7 +3871,13 @@ The audit workflow:
 2. Compare against the stored `CapabilityDeclaration`
 3. Flag discrepancies as violations
 
-Use `conary capability audit <package>` to check a single package, or `conary capability audit --all` to scan every installed package.
+### CLI Commands
+
+- `conary capability audit <package>` -- shows what enforcement would be applied; compares declared vs. inferred capabilities and reports discrepancies
+- `conary capability audit --all` -- scan every installed package
+- `conary capability run <package> -- <command>` -- enforces capability restrictions (landlock + seccomp) while running `<command>`
+- `conary capability enforce <package> -- <command>` -- alias for `capability run`
+- `--permissive` flag -- audit/log mode; violations are logged but not blocked (uses `EnforcementMode::Audit` instead of `EnforcementMode::Enforce`)
 
 ## 7.6 Container Sandboxing
 
