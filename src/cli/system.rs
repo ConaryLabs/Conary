@@ -160,6 +160,10 @@ pub enum SystemCommands {
         /// Show what would be removed without actually deleting
         #[arg(long)]
         dry_run: bool,
+
+        /// Also garbage collect orphaned chunks from local disk
+        #[arg(long)]
+        chunks: bool,
     },
 
     /// Generate SBOM (Software Bill of Materials) for a package

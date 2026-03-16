@@ -746,7 +746,7 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
 ///
 /// This removes files from the content-addressable store that are no longer
 /// referenced by any installed package or recent file history (for rollback).
-pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -> Result<()> {
+pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool, chunks: bool) -> Result<()> {
     use std::collections::HashSet;
     use std::fs;
 
@@ -921,6 +921,93 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool) -
         println!("  Errors: {}", error_count);
         println!("  Space reclaimed: {}", format_bytes(reclaimable_size));
     }
+
+    if chunks {
+        gc_orphaned_chunks(&conn, db_path, dry_run)?;
+    }
+
+    Ok(())
+}
+
+/// Garbage collect orphaned chunks from local disk.
+///
+/// Scans the CAS objects directory for chunk files that are not referenced by
+/// any converted package (`chunk_hashes_json`) or protected in `chunk_access`.
+fn gc_orphaned_chunks(
+    conn: &rusqlite::Connection,
+    db_path: &str,
+    dry_run: bool,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let objects_dir = conary_core::db::paths::objects_dir(db_path);
+
+    println!("\nChunk GC: collecting referenced chunk hashes...");
+
+    // Build referenced set from converted_packages
+    let mut referenced = HashSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT chunk_hashes_json FROM converted_packages WHERE chunk_hashes_json IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let json_str: String = row.get(0)?;
+        if let Ok(hashes) = serde_json::from_str::<Vec<String>>(&json_str) {
+            for hash in hashes {
+                referenced.insert(hash);
+            }
+        }
+    }
+
+    // Add protected chunks from chunk_access
+    let mut stmt = conn.prepare("SELECT hash FROM chunk_access WHERE protected = 1")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let hash: String = row.get(0)?;
+        referenced.insert(hash);
+    }
+
+    // Scan local chunks in the objects directory
+    let mut orphaned = 0usize;
+    let mut freed = 0u64;
+    if objects_dir.exists() {
+        for prefix_entry in std::fs::read_dir(&objects_dir)? {
+            let prefix_entry = prefix_entry?;
+            if !prefix_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let prefix = prefix_entry.file_name().to_string_lossy().to_string();
+            if prefix.len() != 2 {
+                continue;
+            }
+            for file_entry in std::fs::read_dir(prefix_entry.path())? {
+                let file_entry = file_entry?;
+                let suffix = file_entry.file_name().to_string_lossy().to_string();
+                if suffix.ends_with(".tmp") {
+                    continue;
+                }
+                let hash = format!("{prefix}{suffix}");
+                if !referenced.contains(&hash) {
+                    let size = file_entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    if dry_run {
+                        println!("[dry-run] Would delete: {} ({} bytes)", hash, size);
+                    } else {
+                        let _ = std::fs::remove_file(file_entry.path());
+                        let _ = std::fs::remove_dir(prefix_entry.path());
+                    }
+                    orphaned += 1;
+                    freed += size;
+                }
+            }
+        }
+    }
+
+    println!(
+        "Chunk GC: {} referenced, {} orphaned, {} freed",
+        referenced.len(),
+        orphaned,
+        format_bytes(freed)
+    );
 
     Ok(())
 }
