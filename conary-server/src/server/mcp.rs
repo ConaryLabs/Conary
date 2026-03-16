@@ -689,6 +689,38 @@ impl RemiMcpServer {
         let text = to_json_text(&health)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    // -----------------------------------------------------------------------
+    // Canonical mapping
+    // -----------------------------------------------------------------------
+
+    /// Rebuild the canonical package mapping from all indexed distros.
+    ///
+    /// Runs auto-discovery and curated rules to create cross-distro name
+    /// equivalences.
+    #[tool(
+        description = "Rebuild the canonical package mapping from all indexed distros. Runs auto-discovery and curated rules to create cross-distro name equivalences."
+    )]
+    async fn canonical_rebuild(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state.read().await;
+        let db_path = state.config.db_path.clone();
+        drop(state);
+
+        let rules_dir = std::path::PathBuf::from("data/canonical-rules");
+
+        let count = tokio::task::spawn_blocking(move || {
+            crate::server::canonical_job::rebuild_canonical_map(&db_path, &rules_dir)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let text = to_json_text(&serde_json::json!({
+            "status": "ok",
+            "new_mappings": count,
+        }))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -754,6 +786,6 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 21, "Expected 21 MCP tools");
+        assert_eq!(tools.len(), 22, "Expected 22 MCP tools");
     }
 }
