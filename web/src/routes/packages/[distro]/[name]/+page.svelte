@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { getPackageDetail, getReverseDependencies } from '$lib/api';
+	import { getPackageDetail, getReverseDependencies, getCanonicalInfo } from '$lib/api';
 	import type { PackageDetail } from '$lib/types';
 
 	let pkg: PackageDetail | null = $state(null);
 	let rdepends: string[] = $state([]);
+	let canonicalInfo: any = $state(null);
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let showAllVersions = $state(false);
@@ -22,12 +23,14 @@
 		loading = true;
 		error = null;
 		try {
-			const [detail, rdeps] = await Promise.all([
+			const [detail, rdeps, canonical] = await Promise.all([
 				getPackageDetail(distro, name),
-				getReverseDependencies(distro, name).catch(() => [] as string[])
+				getReverseDependencies(distro, name).catch(() => [] as string[]),
+				getCanonicalInfo(name).catch(() => null)
 			]);
 			pkg = detail;
 			rdepends = rdeps;
+			canonicalInfo = canonical;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load package';
 		} finally {
@@ -85,6 +88,25 @@
 				<p class="pkg-description">{pkg.description}</p>
 			{/if}
 		</div>
+
+		{#if canonicalInfo && canonicalInfo.implementations}
+			{@const otherDistros = canonicalInfo.implementations.filter(i =>
+				i.distro !== distro || i.distro_name !== name
+			)}
+			{#if otherDistros.length > 0}
+				<div class="cross-distro animate-in" style="--stagger: 1">
+					<h2>Also available as</h2>
+					<div class="cross-distro-list">
+						{#each otherDistros as impl}
+							<a href="/packages/{impl.distro}/{impl.distro_name}" class="cross-distro-link">
+								{impl.distro_name}
+								<span class="text-muted" style="font-size: 0.8rem;">({distroLabel(impl.distro)})</span>
+							</a>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		{/if}
 
 		<div class="pkg-grid">
 			<div class="pkg-main">
@@ -278,6 +300,43 @@
 		font-size: 1rem;
 		line-height: 1.6;
 		color: var(--color-text-secondary);
+	}
+
+	.cross-distro {
+		margin-bottom: 1.5rem;
+		padding: 1.25rem;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+	}
+
+	.cross-distro h2 {
+		font-family: var(--font-display);
+		font-size: 1.1rem;
+		font-weight: 700;
+		margin-bottom: 0.75rem;
+	}
+
+	.cross-distro-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.cross-distro-link {
+		padding: 0.25rem 0.75rem;
+		background: var(--color-code-bg);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		text-decoration: none;
+		color: var(--color-text);
+		font-size: 0.9rem;
+		transition: border-color 0.15s;
+	}
+
+	.cross-distro-link:hover {
+		border-color: var(--color-accent);
+		color: var(--color-accent);
 	}
 
 	.pkg-grid {

@@ -106,3 +106,7 @@ export async function getSparseIndex(
 ): Promise<SparseIndexEntry> {
 	return fetchJson(`/v1/index/${encodeURIComponent(distro)}/${encodeURIComponent(name)}`);
 }
+
+export async function getCanonicalInfo(name: string) {
+	return fetchJson(`/v1/canonical/${encodeURIComponent(name)}`);
+}
