@@ -1,6 +1,6 @@
 [package]
 name = "conary-test"
-version = "0.2.0"
+version = "0.3.0"
 # Separate version track (test-v* tags). See CLAUDE.md "Version Groups".
 edition = "2024"
 rust-version = "1.94"
