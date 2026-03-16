@@ -6,10 +6,6 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-/// Column list for FederationPeer SELECT queries
-const PEER_COLUMNS: &str = "id, endpoint, node_name, tier, first_seen, last_seen, \
-    latency_ms, success_count, failure_count, consecutive_failures, is_enabled";
-
 /// A federation peer record.
 #[derive(Debug, Clone, Serialize)]
 pub struct FederationPeer {
@@ -47,10 +43,11 @@ impl FederationPeer {
 
 /// List all federation peers, ordered by node_name (nulls last), then endpoint.
 pub fn list(conn: &Connection) -> Result<Vec<FederationPeer>> {
-    let sql = format!(
-        "SELECT {PEER_COLUMNS} FROM federation_peers ORDER BY COALESCE(node_name, endpoint)"
-    );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, endpoint, node_name, tier, first_seen, last_seen, \
+         latency_ms, success_count, failure_count, consecutive_failures, is_enabled \
+         FROM federation_peers ORDER BY COALESCE(node_name, endpoint)",
+    )?;
     let peers = stmt
         .query_map([], FederationPeer::from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -59,8 +56,11 @@ pub fn list(conn: &Connection) -> Result<Vec<FederationPeer>> {
 
 /// Find a federation peer by its ID.
 pub fn find_by_id(conn: &Connection, id: &str) -> Result<Option<FederationPeer>> {
-    let sql = format!("SELECT {PEER_COLUMNS} FROM federation_peers WHERE id = ?1");
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, endpoint, node_name, tier, first_seen, last_seen, \
+         latency_ms, success_count, failure_count, consecutive_failures, is_enabled \
+         FROM federation_peers WHERE id = ?1",
+    )?;
     let result = stmt
         .query_row(params![id], FederationPeer::from_row)
         .optional()?;

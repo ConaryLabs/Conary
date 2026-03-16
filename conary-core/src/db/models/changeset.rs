@@ -6,10 +6,6 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
 
-/// Column list for Changeset SELECT queries (avoids repetition across methods)
-const CHANGESET_COLUMNS: &str = "id, description, status, created_at, applied_at, \
-    rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata";
-
 /// Changeset status
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
 #[strum(serialize_all = "snake_case")]
@@ -88,24 +84,33 @@ impl Changeset {
 
     /// Find a changeset by transaction UUID
     pub fn find_by_tx_uuid(conn: &Connection, tx_uuid: &str) -> Result<Option<Self>> {
-        let sql = format!("SELECT {CHANGESET_COLUMNS} FROM changesets WHERE tx_uuid = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, description, status, created_at, applied_at, \
+             rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata \
+             FROM changesets WHERE tx_uuid = ?1",
+        )?;
         let changeset = stmt.query_row([tx_uuid], Self::from_row).optional()?;
         Ok(changeset)
     }
 
     /// Find a changeset by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!("SELECT {CHANGESET_COLUMNS} FROM changesets WHERE id = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, description, status, created_at, applied_at, \
+             rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata \
+             FROM changesets WHERE id = ?1",
+        )?;
         let changeset = stmt.query_row([id], Self::from_row).optional()?;
         Ok(changeset)
     }
 
     /// List all changesets
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {CHANGESET_COLUMNS} FROM changesets ORDER BY created_at DESC");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, description, status, created_at, applied_at, \
+             rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata \
+             FROM changesets ORDER BY created_at DESC",
+        )?;
         let changesets = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

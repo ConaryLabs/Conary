@@ -5,10 +5,6 @@
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-/// Column list for FileEntry SELECT queries (avoids repetition across methods)
-const FILE_COLUMNS: &str = "id, path, sha256_hash, size, permissions, owner, group_name, \
-    trove_id, installed_at, component_id";
-
 /// A File represents a tracked file in the filesystem
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -139,16 +135,22 @@ impl FileEntry {
 
     /// Find a file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE path = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files WHERE path = ?1",
+        )?;
         let file = stmt.query_row([path], Self::from_row).optional()?;
         Ok(file)
     }
 
     /// Find all files belonging to a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE trove_id = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files WHERE trove_id = ?1",
+        )?;
         let files = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -157,8 +159,11 @@ impl FileEntry {
 
     /// Find all files belonging to a specific component
     pub fn find_by_component(conn: &Connection, component_id: i64) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE component_id = ?1");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files WHERE component_id = ?1",
+        )?;
         let files = stmt
             .query_map([component_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -167,8 +172,11 @@ impl FileEntry {
 
     /// Find files matching a path pattern (LIKE query)
     pub fn find_by_path_pattern(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE path LIKE ?1 ORDER BY path");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files WHERE path LIKE ?1 ORDER BY path",
+        )?;
         let files = stmt
             .query_map([pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -177,8 +185,11 @@ impl FileEntry {
 
     /// List all files for a trove with ls -l style information
     pub fn list_files_lsl(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE trove_id = ?1 ORDER BY path");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files WHERE trove_id = ?1 ORDER BY path",
+        )?;
         let files = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
