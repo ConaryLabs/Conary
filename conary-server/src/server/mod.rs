@@ -20,6 +20,7 @@ pub mod audit;
 pub mod auth;
 mod bloom;
 mod cache;
+pub mod canonical_job;
 pub mod config;
 mod conversion;
 pub mod delta_manifests;
