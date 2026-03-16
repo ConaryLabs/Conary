@@ -199,14 +199,15 @@ fn test_pristine_for_bootstrap() {
         "Should mount destdir"
     );
 
-    // Verify no host system directories
+    // Verify no broad host system directories (specific subdirs like
+    // /usr/bin, /lib, /lib64 are allowed for bootstrap host tools)
     assert!(
         !mount_sources.contains(&"/usr".to_string()),
-        "Should not mount /usr"
+        "Should not mount all of /usr"
     );
     assert!(
-        !mount_sources.contains(&"/lib".to_string()),
-        "Should not mount /lib"
+        !mount_sources.contains(&"/sbin".to_string()),
+        "Should not mount /sbin"
     );
 }
 

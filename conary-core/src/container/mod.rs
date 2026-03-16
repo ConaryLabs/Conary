@@ -299,12 +299,13 @@ impl ContainerConfig {
         self.bind_mounts.push(mount);
     }
 
-    /// Check if this is a pristine (no host mounts) configuration
+    /// Check if this is a pristine (no host mounts) configuration.
+    /// Mounting specific directories like /usr/bin for host tools is
+    /// acceptable for bootstrap; mounting all of /usr is not.
     pub fn is_pristine(&self) -> bool {
-        // Pristine = no default system mounts
         !self.bind_mounts.iter().any(|m| {
             let src = m.source.to_string_lossy();
-            src == "/usr" || src == "/lib" || src == "/lib64" || src == "/bin" || src == "/sbin"
+            src == "/usr" || src == "/sbin" || src == "/"
         })
     }
 
