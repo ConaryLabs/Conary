@@ -929,7 +929,8 @@ pub fn cmd_gc(db_path: &str, objects_dir: &str, keep_days: u32, dry_run: bool, c
     Ok(())
 }
 
-/// Garbage collect orphaned chunks from local disk.
+/// Local-only chunk GC for the CLI. The full async version with R2 support
+/// is in conary-server/src/server/chunk_gc.rs.
 ///
 /// Scans the CAS objects directory for chunk files that are not referenced by
 /// any converted package (`chunk_hashes_json`) or protected in `chunk_access`.

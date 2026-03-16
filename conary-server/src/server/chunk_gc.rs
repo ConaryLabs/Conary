@@ -155,6 +155,8 @@ pub async fn run_chunk_gc(
     let mut result = GcResult::default();
 
     // Step 1: Build referenced set (blocking DB work)
+    // Each spawn_blocking task opens its own DB connection because
+    // rusqlite::Connection is !Send and can't cross await points.
     let db_path_owned = db_path.to_path_buf();
     let referenced = tokio::task::spawn_blocking(move || -> Result<HashSet<String>> {
         let conn = conary_core::db::open(&db_path_owned)?;
@@ -185,7 +187,14 @@ pub async fn run_chunk_gc(
     // Step 4: Find orphans (stored but not referenced)
     let local_set: HashSet<&str> = local_chunks.iter().map(String::as_str).collect();
     let r2_set: HashSet<&str> = r2_chunks.iter().map(String::as_str).collect();
-    let all_stored: HashSet<&str> = local_set.union(&r2_set).copied().collect();
+    let mut all_stored: HashSet<&str> =
+        HashSet::with_capacity(local_chunks.len() + r2_chunks.len());
+    for h in &local_chunks {
+        all_stored.insert(h.as_str());
+    }
+    for h in &r2_chunks {
+        all_stored.insert(h.as_str());
+    }
 
     let orphan_candidates: Vec<&str> = all_stored
         .iter()
@@ -204,12 +213,35 @@ pub async fn run_chunk_gc(
             let cutoff = chrono::Utc::now() - chrono::Duration::seconds(grace as i64);
             let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
 
+            // Batch-load all chunk_access entries into a HashMap to avoid
+            // one query per orphan candidate.
+            let mut access_map: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
+            if !orphan_strings.is_empty() {
+                let placeholders = orphan_strings.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT hash, last_accessed FROM chunk_access WHERE hash IN ({})",
+                    placeholders
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let params: Vec<&dyn rusqlite::types::ToSql> = orphan_strings
+                    .iter()
+                    .map(|s| s as &dyn rusqlite::types::ToSql)
+                    .collect();
+                let mut rows = stmt.query(params.as_slice())?;
+                while let Some(row) = rows.next()? {
+                    let hash: String = row.get(0)?;
+                    let last_accessed: Option<String> = row.get(1)?;
+                    access_map.insert(hash, last_accessed);
+                }
+            }
+
             let mut kept = Vec::new();
             for hash in &orphan_strings {
-                // Check if this chunk was recently accessed
-                if let Ok(Some(access)) =
-                    conary_core::db::models::ChunkAccess::find_by_hash(&conn, hash)
-                    && let Some(ref last) = access.last_accessed
+                // Check if this chunk was recently accessed.
+                // ISO 8601 timestamps are lexicographically sortable, so string
+                // comparison is correct here.
+                if let Some(Some(last)) = access_map.get(hash)
                     && last.as_str() > cutoff_str.as_str()
                 {
                     tracing::debug!(

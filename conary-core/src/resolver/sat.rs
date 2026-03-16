@@ -83,7 +83,7 @@ pub fn solve_install(
         // has candidates available when the fallback fires.
         let equiv_names: Vec<String> = new_names
             .iter()
-            .flat_map(|n| provider.canonical_equivalents(n).to_vec())
+            .flat_map(|n| provider.canonical_equivalents(n).iter().cloned())
             .filter(|n| loaded_names.insert(n.clone()))
             .collect();
         new_names.extend(equiv_names);
