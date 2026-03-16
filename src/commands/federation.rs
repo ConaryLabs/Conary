@@ -563,8 +563,8 @@ pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -
 
 // Helper types
 
-#[allow(dead_code)]
 struct PeerRow {
+    #[allow(dead_code)] // Populated from DB row; reserved for peer detail display
     id: String,
     endpoint: String,
     name: Option<String>,
@@ -572,20 +572,23 @@ struct PeerRow {
     latency: i64,
     successes: i64,
     failures: i64,
+    #[allow(dead_code)] // Populated from DB; reserved for health display
     consecutive_failures: i64,
     enabled: bool,
     last_seen: String,
 }
 
-#[allow(dead_code)]
 struct StatsRow {
     date: String,
     bytes_peers: i64,
     bytes_upstream: i64,
+    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
     chunks_peers: i64,
+    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
     chunks_upstream: i64,
     coalesced: i64,
     circuit_trips: i64,
+    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
     peer_count: i64,
 }
 

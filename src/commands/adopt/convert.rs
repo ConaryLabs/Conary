@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, warn};
 
 /// Options for batch conversion (public API for programmatic use)
-#[allow(dead_code)]
+#[allow(dead_code)] // TODO: wire into conary adopt --convert CLI flag
 pub struct BatchConvertOptions {
     pub jobs: Option<usize>,
     pub no_chunking: bool,

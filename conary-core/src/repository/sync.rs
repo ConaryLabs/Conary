@@ -472,7 +472,7 @@ struct RemiMetadataResponse {
 struct RemiPackageEntry {
     name: String,
     version: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Present in wire format; not used by sync logic
     converted: bool,
     dependencies: Option<Vec<String>>,
     metadata: Option<serde_json::Value>,
@@ -481,9 +481,9 @@ struct RemiPackageEntry {
 /// Response from Remi canonical map API (`GET /v1/canonical/map`)
 #[derive(serde::Deserialize)]
 struct CanonicalMapResponse {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Wire format field; only entries is consumed
     version: u32,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Wire format field; only entries is consumed
     generated_at: String,
     entries: Vec<CanonicalMapEntry>,
 }

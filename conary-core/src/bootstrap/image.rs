@@ -339,7 +339,7 @@ pub struct ImageBuilder {
     work_dir: PathBuf,
 
     /// Bootstrap configuration
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Only target_arch accessed currently; full config retained for future build steps
     config: BootstrapConfig,
 
     /// Base system root
