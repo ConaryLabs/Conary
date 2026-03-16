@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-16
-revision: 1
-summary: Wire the canonical mapping pipeline end-to-end — sync integration, dependency resolution, rdepends fix, Repology import, UX hints
+revision: 2
+summary: Remi-centric canonical mapping — server builds the map, clients consume it
 ---
 
 # Cross-Distro Package Mapping — End-to-End
@@ -12,67 +12,125 @@ Conary supports Fedora, Arch, and Ubuntu simultaneously, but packages have
 different names across distros (~40% of common packages). The canonical
 mapping infrastructure exists (2,300+ lines, 5 discovery strategies, Repology
 client, AppStream parser, YAML rules engine) but is completely disconnected
-from the actual pipeline:
+from the pipeline. None of it is called anywhere.
 
-1. `repo sync` never calls `ingest_canonical_mappings()` — auto-discovery
-   never runs
-2. The SAT dependency resolver ignores canonical names — cross-distro deps
-   fail with "not found"
-3. The Remi packages site uses `LIKE '%name%'` for reverse dependencies —
-   false positives everywhere
-4. When a package isn't found, there's no suggestion of canonical alternatives
-5. Repology and AppStream clients exist but have no CLI entry points
+## Architectural Decision: Remi Holds the Map
 
-## Design
+**Remi is the canonical mapping authority**, not the client.
 
-### 1. Wire canonical sync into repo sync
-
-**Location:** `conary-core/src/repository/sync.rs` (or wherever repo sync
-persists packages).
-
-After the repository metadata is parsed and persisted, call:
-
-```rust
-canonical::sync::ingest_canonical_mappings(&tx, &repo_packages, rules_engine.as_ref())?;
-```
-
-This triggers:
-- Phase 1: Apply curated YAML rules (from `/usr/share/conary/canonical-rules/`
-  or `~/.config/conary/canonical-rules/`)
-- Phase 2: Run auto-discovery on unmatched packages (name match, provides
-  match, stem match)
+Why:
+- Remi has ALL distro metadata already (it indexes Fedora, Arch, Ubuntu)
+- Remi can see cross-distro equivalences that no single client can (a client
+  configured with only Fedora repos has no data to discover Arch equivalents)
+- Remi can run Repology/AppStream imports on a schedule without user action
+- A single authoritative map means all clients get the same consistent view
+- The map is computed once on the server, consumed many times by clients
 
 **Data flow:**
 ```
-repo sync fedora-43
-  → parse 50K packages from RPM metadata
-  → persist to repository_packages table
-  → NEW: build RepoPackageInfo vec from parsed packages
-  → NEW: call ingest_canonical_mappings()
-  → canonical_packages + package_implementations populated
+Remi (server)                              Client
+┌─────────────────────────────────┐        ┌──────────────────────┐
+│ 1. Index all distro repos       │        │                      │
+│ 2. Run auto-discovery:          │        │ conary repo sync     │
+│    - name match across distros  │ ──────→│   fetches packages   │
+│    - provides match             │        │   + canonical map    │
+│    - stem match                 │        │                      │
+│ 3. Import Repology (scheduled)  │        │ conary install curl  │
+│ 4. Import AppStream (scheduled) │        │   looks up canonical │
+│ 5. Apply curated rules          │        │   resolves per-distro│
+│ 6. Serve canonical map via API  │        │                      │
+└─────────────────────────────────┘        └──────────────────────┘
 ```
 
-The `RepoPackageInfo` struct already exists in `canonical/sync.rs`. It needs:
-`name`, `distro`, `provides` (from RPM/DEB provides), `files` (empty for
-now — file lists require unpacking, which we defer).
+## Design
 
-**When multiple distros are synced**, auto-discovery fires on each sync.
-The name-match strategy finds packages with the same name across distros
-and creates canonical entries. After syncing both Fedora and Arch, packages
-like `curl`, `gcc`, `nginx` (same name) are automatically mapped. Packages
-like `kernel` (Fedora) vs `linux` (Arch) need either Repology data or
-curated rules.
+### 1. Remi canonical mapping pipeline (server-side)
 
-### 2. Fix rdepends to use normalized provides
+**New scheduled job on Remi** that runs after repo indexing completes
+(or on a configurable interval, default: after each mirror sync).
+
+Steps:
+1. Load all `repository_packages` across all enabled repos
+2. Build `RepoPackageInfo` vec (name, distro, provides)
+3. Apply curated YAML rules (shipped with Remi in `data/canonical-rules/`)
+4. Run auto-discovery on unmatched packages:
+   - Name match: same name in 2+ distros → canonical
+   - Provides match: shared virtual capability → canonical
+   - Stem match: strip `-dev`/`-devel`/`-lib` suffixes → match stems
+5. Optionally run Repology batch import (configurable, default: weekly)
+6. Optionally run AppStream import per distro
+7. Persist results to `canonical_packages` + `package_implementations`
+
+**Location:** New module `conary-server/src/server/canonical_job.rs` or
+add to existing job queue infrastructure.
+
+**Trigger:** After mirror sync completes (Forgejo CI pushes, or the
+10-minute GitHub mirror poll). Also available as a manual MCP tool:
+`canonical_rebuild`.
+
+### 2. Remi canonical map API
+
+**New endpoints** on the Remi server (public, no auth needed):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/v1/canonical/map` | Full canonical map (JSON, cached 5 min) |
+| GET | `/v1/canonical/search?q=<term>` | Search canonical names |
+| GET | `/v1/canonical/resolve?name=<pkg>&distro=<distro>` | Resolve one name |
+
+**`/v1/canonical/map` response format:**
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-03-16T00:00:00Z",
+  "entries": [
+    {
+      "canonical": "linux-kernel",
+      "implementations": {
+        "fedora": "kernel",
+        "arch": "linux",
+        "ubuntu": "linux-image-generic"
+      }
+    },
+    {
+      "canonical": "openssl",
+      "implementations": {
+        "fedora": "openssl",
+        "arch": "openssl",
+        "ubuntu": "libssl3"
+      }
+    }
+  ]
+}
+```
+
+Lightweight — just names and distro mappings. The client downloads this
+once during `repo sync` and caches it locally.
+
+### 3. Client: fetch canonical map during repo sync
+
+**Location:** The repo sync flow in `conary-core/src/repository/sync.rs`.
+
+After syncing package metadata from a Remi-backed repo, also fetch:
+```
+GET {remi_endpoint}/v1/canonical/map
+```
+
+Persist to the local DB's `canonical_packages` + `package_implementations`
+tables (same schema, just populated from server data instead of local
+discovery). Use `INSERT OR REPLACE` to keep the local map fresh.
+
+For non-Remi repos (direct Fedora/Arch/Ubuntu mirrors), the canonical
+map isn't available — the client falls back to exact name matching only.
+This is acceptable because most users will have at least one Remi repo.
+
+### 4. Fix rdepends to use normalized requirements
 
 **Location:** `conary-server/src/server/handlers/detail.rs:391-424`
 
-Replace the LIKE substring scan:
-```sql
-WHERE rp.dependencies LIKE '%kernel%'
-```
+Replace the LIKE substring scan with an indexed join:
 
-With an indexed join on `repository_requirements`:
 ```sql
 SELECT DISTINCT rp.name
 FROM repository_packages rp
@@ -83,101 +141,57 @@ WHERE rr.name = ?1
 ORDER BY rp.name
 ```
 
-The `repository_requirements` table already exists (added in schema v51)
-with individual rows per dependency, indexed by name. This gives exact
-matching and O(log N) performance.
+**Prerequisite:** Verify `repository_requirements` is populated during
+sync. If not, add population as part of this work.
 
-**Also check:** Does the `repository_requirements` table get populated
-during repo sync? If not, that's another gap to fix — the sync must
-populate both `repository_packages.dependencies` (JSON blob for display)
-AND `repository_requirements` (normalized rows for querying).
+### 5. Canonical expansion in dependency resolution
 
-### 3. Canonical expansion in dependency resolution
+**Location:** `conary-core/src/resolver/engine.rs` and
+`src/commands/install/resolve.rs`.
 
-**Location:** `conary-core/src/resolver/engine.rs` (SAT solver) and
-`src/commands/install/resolve.rs` (package resolution).
-
-Currently when the resolver needs package `libssl3` and can't find it in
-the active repos, it fails. The fix:
+When the resolver can't find a dependency by exact name:
 
 ```
-For each unresolved dependency D:
-  1. Exact name lookup in active repos → found? done
-  2. NEW: Canonical lookup: find canonical entry for D
-     → get all implementations across distros
-     → filter to repos the user has configured
-     → if exactly one match: use it
-     → if multiple: pick by affinity (same distro preference)
-  3. Provides lookup: check if any package provides D
-  4. Fail with "not found" + suggestions
+1. Exact name lookup → found? done
+2. NEW: Check local canonical map for this name
+   → find implementations for the configured distros
+   → retry exact lookup with each implementation name
+   → use the first hit
+3. Provides lookup (existing)
+4. Fail with "not found" + suggestions
 ```
 
-This applies to BOTH root requests (user-typed names) AND transitive
-dependencies. The current code only does canonical expansion for root
-requests.
+This applies to BOTH root requests AND transitive dependencies. The
+canonical map is already in the local DB (synced from Remi), so this
+is a fast local lookup — no network call in the hot path.
 
-**Important:** This must not slow down the common case. The canonical
-lookup only fires when the exact name lookup fails — it's a fallback
-path. Cache the canonical index in the resolver's `ConaryProvider` (same
-pattern as the provides index we added for `solve_removal`).
+### 6. "Did you mean?" on package not found
 
-### 4. "Did you mean?" suggestions for package not found
+**Location:** `src/commands/install/mod.rs` (error handling).
 
-**Location:** `src/commands/install/mod.rs` (install error handling).
-
-When a package is not found anywhere (repos, canonical, provides), instead
-of a bare "Package not found" error, search for alternatives:
+When a package isn't found anywhere:
 
 ```
 Error: Package 'ssl-library' not found.
 
 Did you mean:
-  openssl        (Fedora 43)
+  openssl        (Fedora 43, Arch Linux)
   libssl3        (Ubuntu Noble)
-  openssl        (Arch Linux)
 
 Use 'conary canonical search ssl' for more options.
 ```
 
-Implementation: query `canonical_packages` and `repository_packages` with
-a fuzzy/stem match on the failed name. Show top 5 results with their
-distro source.
+Search strategy:
+1. Check canonical entries with substring/stem match
+2. Check repository_packages with LIKE prefix match
+3. Show top 5 results with distro provenance
 
-### 5. Repology and AppStream import commands
+### 7. Ship curated rules for critical packages
 
-**Location:** `src/commands/canonical.rs` (add subcommands).
-
-Two new CLI commands:
-
-```bash
-conary canonical import repology [--project <name>] [--batch <prefix>]
-conary canonical import appstream [--distro <distro>]
-```
-
-**Repology import:**
-- Single project: `conary canonical import repology --project curl`
-  → calls `RepologyClient::fetch_project("curl")`
-  → maps to canonical entry with implementations per distro
-- Batch: `conary canonical import repology --batch a`
-  → calls `RepologyClient::fetch_projects_batch("a")`
-  → processes all projects starting with 'a'
-- Full: `conary canonical import repology`
-  → iterates all projects (rate-limited, may take hours)
-
-**AppStream import:**
-- `conary canonical import appstream --distro fedora`
-  → downloads AppStream catalog from repo metadata
-  → parses XML/YAML
-  → calls `appstream::ingest_appstream()`
-
-Both clients are fully implemented — this is just wiring them into CLI
-commands and calling the existing functions.
-
-### 6. Ship curated canonical rules for critical packages
-
-Create `data/canonical-rules/00-kernel.yaml`:
+Create `data/canonical-rules/00-critical.yaml` shipped with Remi:
 
 ```yaml
+# Kernel
 - setname: linux-kernel
   name: kernel
   repo: fedora
@@ -188,6 +202,7 @@ Create `data/canonical-rules/00-kernel.yaml`:
   name: linux-image-generic
   repo: ubuntu
 
+# SSL
 - setname: openssl
   name: openssl
   repo: [fedora, arch]
@@ -195,6 +210,7 @@ Create `data/canonical-rules/00-kernel.yaml`:
   name: libssl3
   repo: ubuntu
 
+# Python
 - setname: python
   name: python3
   repo: [fedora, ubuntu]
@@ -202,59 +218,68 @@ Create `data/canonical-rules/00-kernel.yaml`:
   name: python
   repo: arch
 
+# zlib
 - setname: zlib
   name: zlib
   repo: [fedora, arch]
 - setname: zlib
   name: zlib1g
   repo: ubuntu
+
+# Development headers (pattern-based)
+- setname: $1-devel
+  namepat: "^(.+)-devel$"
+  repo: fedora
+- setname: $1-devel
+  namepat: "^lib(.+)-dev$"
+  repo: ubuntu
 ```
 
-Ship ~50-100 critical mappings covering kernel, SSL, Python, development
-headers, common libraries, and popular tools. The auto-discovery handles
-the rest (packages with identical names across distros).
+Ship ~50-100 rules covering kernel, SSL, Python, zlib, development headers,
+and other high-profile naming differences. Auto-discovery handles the rest.
 
-### 7. Additional gaps found during audit
+### 8. MCP tools + CLI commands
 
-**7a. `repository_requirements` population during sync**
+**New remi-admin MCP tool:**
+- `canonical_rebuild` — trigger canonical map rebuild on demand
 
-Verify that `repo sync` populates the `repository_requirements` table
-with individual rows per dependency. If not, add it — this table is
-required for the rdepends fix AND for dependency resolution canonical
-expansion.
+**New conary CLI commands:**
+- `conary canonical import repology [--project <name>]` — manual import
+  (for bootstrapping or one-off lookups)
+- `conary canonical import appstream --distro <distro>` — manual import
+- These are convenience commands; the primary flow is Remi-automatic
 
-**7b. `canonical_id` index on `repository_packages`**
+### 9. Remi packages site: use canonical for cross-distro links
 
-Consider adding `canonical_id INTEGER REFERENCES canonical_packages(id)`
-to `repository_packages` to enable fast joins between repo packages and
-their canonical equivalents. Currently requires going through
-`package_implementations` which is an extra hop.
+On the package detail page (`/packages/fedora/kernel`), if the package
+has canonical equivalents, show a cross-distro panel:
 
-**7c. Provides normalization during sync**
+```
+Also available as:
+  linux (Arch Linux)
+  linux-image-generic (Ubuntu Noble)
+```
 
-The `repository_provide` table exists but may not be populated for all
-distro formats. Verify that RPM provides, DEB provides, and Arch provides
-are all extracted and normalized during sync. This is needed for both
-rdepends and cross-distro dependency resolution.
+This uses the canonical map that Remi already has — just a UI addition.
 
 ## Implementation Order
 
-1. **Fix rdepends query** — switch from LIKE to repository_requirements join
-   (quick win, visible on packages site immediately)
-2. **Wire canonical sync into repo sync** — call ingest_canonical_mappings()
-   after package persistence
-3. **Ship curated rules** — 50-100 critical package mappings in YAML
-4. **"Did you mean?" suggestions** — fuzzy search on install failure
-5. **Canonical expansion in dependency resolution** — fallback path in SAT
-   resolver
-6. **Repology/AppStream CLI commands** — wire existing clients
-7. **Verify/fix repository_requirements population**
+1. **Fix rdepends query** — LIKE → indexed join (visible immediately)
+2. **Remi canonical job** — build the map server-side after indexing
+3. **Canonical map API** — serve the map to clients
+4. **Ship curated rules** — 50-100 critical mappings
+5. **Client sync** — fetch canonical map during repo sync
+6. **Dependency resolution expansion** — canonical fallback in SAT solver
+7. **"Did you mean?"** — suggestions on package not found
+8. **MCP tool + CLI** — canonical_rebuild, import commands
+9. **Packages site** — cross-distro links panel
 
 ## Success Criteria
 
 - `conary install kernel` works on Arch (resolves to `linux` via canonical)
-- `conary install openssl-devel` works on Ubuntu (resolves to `libssl-dev`)
-- The packages site shows correct reverse dependencies (no false positives)
-- `cargo test` passes
-- Repo sync populates canonical mappings automatically
+- `conary install openssl-devel` on Ubuntu resolves to `libssl-dev`
+- Packages site shows correct reverse dependencies (no false positives)
+- Packages site shows cross-distro equivalents
+- Remi rebuilds canonical map automatically after mirror sync
 - `conary canonical show kernel` shows implementations for all 3 distros
+- `cargo test` passes
