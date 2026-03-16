@@ -262,7 +262,14 @@ impl ContainerConfig {
         // shell, dynamic linker, and basic tools (bash, make, coreutils).
         // The toolchain gcc is in the sysroot; everything else comes from
         // the host.
-        for dir in &["/usr/bin", "/usr/lib", "/usr/lib64", "/lib64", "/bin", "/lib"] {
+        for dir in &[
+            "/usr/bin",
+            "/usr/lib",
+            "/usr/lib64",
+            "/lib64",
+            "/bin",
+            "/lib",
+        ] {
             let p = std::path::Path::new(dir);
             if p.exists() {
                 config.add_bind_mount(BindMount::readonly(p, p));

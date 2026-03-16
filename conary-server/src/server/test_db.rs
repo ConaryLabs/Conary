@@ -275,15 +275,12 @@ impl TestRun {
     /// Returns at most `limit` rows.
     pub fn list(conn: &Connection, cursor: Option<i64>, limit: u32) -> Result<Vec<Self>> {
         let rows = if let Some(cursor_id) = cursor {
-            let mut stmt = conn.prepare(
-                "SELECT * FROM test_runs WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT * FROM test_runs WHERE id < ?1 ORDER BY id DESC LIMIT ?2")?;
             stmt.query_map(params![cursor_id, limit], row_to_run)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
-            let mut stmt = conn.prepare(
-                "SELECT * FROM test_runs ORDER BY id DESC LIMIT ?1",
-            )?;
+            let mut stmt = conn.prepare("SELECT * FROM test_runs ORDER BY id DESC LIMIT ?1")?;
             stmt.query_map(params![limit], row_to_run)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
@@ -375,9 +372,7 @@ impl TestResult {
 
     /// Find all results for a given run, ordered by id.
     pub fn find_by_run(conn: &Connection, run_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM test_results WHERE run_id = ?1 ORDER BY id",
-        )?;
+        let mut stmt = conn.prepare("SELECT * FROM test_results WHERE run_id = ?1 ORDER BY id")?;
         let rows = stmt
             .query_map(params![run_id], row_to_result)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -437,9 +432,8 @@ impl TestStep {
 
     /// Find all steps for a given result, ordered by step index.
     pub fn find_by_result(conn: &Connection, result_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM test_steps WHERE result_id = ?1 ORDER BY step_index",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM test_steps WHERE result_id = ?1 ORDER BY step_index")?;
         let rows = stmt
             .query_map(params![result_id], row_to_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -454,12 +448,7 @@ impl TestStep {
 impl TestLog {
     /// Insert a log entry for a step. ANSI escape codes are stripped from
     /// `content`; the original is preserved in `raw_content`.
-    pub fn insert(
-        conn: &Connection,
-        step_id: i64,
-        stream: &str,
-        raw: &str,
-    ) -> Result<Self> {
+    pub fn insert(conn: &Connection, step_id: i64, stream: &str, raw: &str) -> Result<Self> {
         let content = strip_ansi(raw);
         let raw_content = if content == raw { None } else { Some(raw) };
         conn.execute(
@@ -481,9 +470,7 @@ impl TestLog {
 
     /// Find all log entries for a step, ordered by id.
     pub fn find_by_step(conn: &Connection, step_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM test_logs WHERE step_id = ?1 ORDER BY id",
-        )?;
+        let mut stmt = conn.prepare("SELECT * FROM test_logs WHERE step_id = ?1 ORDER BY id")?;
         let rows = stmt
             .query_map(params![step_id], row_to_log)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -579,8 +566,15 @@ mod tests {
     fn test_init_and_create_run() {
         let conn = mem_db();
 
-        let run = TestRun::create(&conn, "phase1-core", "fedora43", 1, Some("ci"), Some("abc123"))
-            .expect("create run");
+        let run = TestRun::create(
+            &conn,
+            "phase1-core",
+            "fedora43",
+            1,
+            Some("ci"),
+            Some("abc123"),
+        )
+        .expect("create run");
 
         assert_eq!(run.suite, "phase1-core");
         assert_eq!(run.distro, "fedora43");
@@ -623,15 +617,8 @@ mod tests {
         // Insert 5 runs
         let mut ids = Vec::new();
         for i in 0..5 {
-            let run = TestRun::create(
-                &conn,
-                &format!("suite-{i}"),
-                "fedora43",
-                1,
-                None,
-                None,
-            )
-            .expect("create run");
+            let run = TestRun::create(&conn, &format!("suite-{i}"), "fedora43", 1, None, None)
+                .expect("create run");
             ids.push(run.id);
         }
 
@@ -665,8 +652,8 @@ mod tests {
         let conn = mem_db();
 
         // Create run -> result -> step -> log
-        let run = TestRun::create(&conn, "phase1-core", "fedora43", 1, None, None)
-            .expect("create run");
+        let run =
+            TestRun::create(&conn, "phase1-core", "fedora43", 1, None, None).expect("create run");
 
         let result = TestResult::insert(
             &conn,
@@ -698,8 +685,7 @@ mod tests {
 
         // Log with ANSI codes -- should be stripped in `content`, preserved in `raw_content`
         let raw_output = "\x1b[32mconary 0.5.0\x1b[0m";
-        let log = TestLog::insert(&conn, step.id, "stdout", raw_output)
-            .expect("insert log");
+        let log = TestLog::insert(&conn, step.id, "stdout", raw_output).expect("insert log");
         assert_eq!(log.content, "conary 0.5.0");
         assert_eq!(log.raw_content.as_deref(), Some(raw_output));
 
@@ -724,9 +710,21 @@ mod tests {
         // Verify CASCADE delete: deleting the run should remove everything
         conn.execute("DELETE FROM test_runs WHERE id = ?1", params![run.id])
             .expect("delete run");
-        assert!(TestResult::find_by_run(&conn, run.id).expect("find").is_empty());
-        assert!(TestStep::find_by_result(&conn, result.id).expect("find").is_empty());
-        assert!(TestLog::find_by_step(&conn, step.id).expect("find").is_empty());
+        assert!(
+            TestResult::find_by_run(&conn, run.id)
+                .expect("find")
+                .is_empty()
+        );
+        assert!(
+            TestStep::find_by_result(&conn, result.id)
+                .expect("find")
+                .is_empty()
+        );
+        assert!(
+            TestLog::find_by_step(&conn, step.id)
+                .expect("find")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -798,8 +796,7 @@ mod tests {
             .expect("insert step");
 
         // Clean content (no ANSI) should NOT store raw_content
-        let log = TestLog::insert(&conn, step.id, "stdout", "clean output")
-            .expect("insert log");
+        let log = TestLog::insert(&conn, step.id, "stdout", "clean output").expect("insert log");
         assert_eq!(log.content, "clean output");
         assert!(log.raw_content.is_none());
     }

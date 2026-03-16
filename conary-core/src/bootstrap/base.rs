@@ -407,10 +407,7 @@ impl BaseBuilder {
         let sysroot_for_linker = toolchain.path.parent().unwrap_or(&toolchain.path);
         let sysroot_path = sysroot_for_linker.display();
         let sysroot_flag = format!("--sysroot={sysroot_path}");
-        let include_path = format!(
-            "-I{}/usr/include",
-            target_root.display()
-        );
+        let include_path = format!("-I{}/usr/include", target_root.display());
         let lib_path = format!(
             "-L{}/usr/lib -L{}/lib -Wl,-rpath-link,{}/usr/lib",
             target_root.display(),
@@ -428,10 +425,7 @@ impl BaseBuilder {
             "CXXFLAGS".to_string(),
             format!("-O2 -pipe -std=gnu++17 {sysroot_flag} {include_path}"),
         );
-        build_env.insert(
-            "LDFLAGS".to_string(),
-            format!("{sysroot_flag} {lib_path}"),
-        );
+        build_env.insert("LDFLAGS".to_string(), format!("{sysroot_flag} {lib_path}"));
 
         // Also set LIBRARY_PATH for static linking and tools that don't use LDFLAGS
         build_env.insert(
@@ -952,12 +946,10 @@ impl BaseBuilder {
         // recipes and need host tools (bash, make, find, coreutils) that
         // aren't in the cross-toolchain sysroot. Sandboxing is applied in
         // stage2+ where untrusted recipes are built.
-        let sandbox_result: std::result::Result<
-            (i32, String, String),
-            crate::error::Error,
-        > = Err(crate::error::Error::ScriptletError(
-            "Bootstrap base builds skip sandbox (trusted recipes)".to_string(),
-        ));
+        let sandbox_result: std::result::Result<(i32, String, String), crate::error::Error> =
+            Err(crate::error::Error::ScriptletError(
+                "Bootstrap base builds skip sandbox (trusted recipes)".to_string(),
+            ));
 
         match sandbox_result {
             Ok((code, stdout, stderr)) => {

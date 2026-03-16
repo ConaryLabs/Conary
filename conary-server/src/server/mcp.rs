@@ -631,9 +631,7 @@ impl RemiMcpServer {
     }
 
     /// Get full details for a test run including all test result summaries.
-    #[tool(
-        description = "Get full details for a test run including all test result summaries."
-    )]
+    #[tool(description = "Get full details for a test run including all test result summaries.")]
     async fn test_get_run(
         &self,
         Parameters(params): Parameters<TestGetRunParams>,
@@ -646,17 +644,14 @@ impl RemiMcpServer {
     }
 
     /// Get a single test result with all execution steps and their logs.
-    #[tool(
-        description = "Get a single test result with all execution steps and their logs."
-    )]
+    #[tool(description = "Get a single test result with all execution steps and their logs.")]
     async fn test_get_test(
         &self,
         Parameters(params): Parameters<TestGetTestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let detail =
-            admin_service::get_test_detail(&self.state, params.run_id, params.test_id)
-                .await
-                .map_err(service_err_to_mcp)?;
+        let detail = admin_service::get_test_detail(&self.state, params.run_id, params.test_id)
+            .await
+            .map_err(service_err_to_mcp)?;
         let text = to_json_text(&detail)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
@@ -761,5 +756,4 @@ mod tests {
         let tools = router.list_all();
         assert_eq!(tools.len(), 21, "Expected 21 MCP tools");
     }
-
 }
