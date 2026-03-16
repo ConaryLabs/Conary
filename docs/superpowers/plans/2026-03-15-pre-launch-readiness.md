@@ -492,7 +492,7 @@ docs: update ROADMAP and README for pre-launch accuracy
 
 ---
 
-### Task 9: Error message sweep + final verification
+### Task 9: Error message sweep
 
 **Files:** Various command handlers
 
@@ -512,7 +512,157 @@ cargo run -- ccs install /nonexistent.ccs --db-path /tmp/t.db  # missing file
 
 Fix any that show raw errors.
 
-- [ ] **Step 3: Run full test suite**
+- [ ] **Step 3: Commit**
+
+```
+fix(cli): improve error messages for common mistake paths
+```
+
+---
+
+## Chunk 4: Progress Bar Coverage
+
+### Task 10: Progress bars for long-running operations
+
+**Files:**
+- Modify: `src/commands/repo.rs` (repo sync)
+- Modify: `src/commands/ccs/mod.rs` or `build.rs` (ccs build)
+- Modify: `src/commands/self_update.rs` (self-update download)
+- Modify: `src/commands/adopt/system.rs` (system takeover phases)
+- Modify: `src/commands/cook.rs` (recipe cook phases)
+- Modify: `src/commands/model.rs` (model apply)
+- Modify: `src/commands/progress.rs` (new progress types if needed)
+
+Every operation that takes >2 seconds must show feedback. Use the existing
+`indicatif` infrastructure in `src/commands/progress.rs`.
+
+- [ ] **Step 1: repo sync progress**
+
+Add a spinner with package count during repo sync. The sync operation
+iterates packages from the remote index — wrap with a spinner showing
+the repo name and running count:
+
+```rust
+let spinner = ProgressBar::new_spinner();
+spinner.set_style(ProgressStyle::default_spinner()
+    .template("  {spinner:.cyan} Syncing {msg}...")
+    .unwrap());
+spinner.set_message(repo_name.to_string());
+// ... during iteration:
+spinner.set_message(format!("{repo_name} ({count} packages)"));
+// ... at end:
+spinner.finish_with_message(format!("{repo_name}: {count} packages synced"));
+```
+
+- [ ] **Step 2: ccs build phase feedback**
+
+Add `println!` phase markers at key points in the CCS build flow:
+- "Parsing manifest..."
+- "Scanning files... ({n} files)"
+- "Compressing..."
+- "Writing CCS package..."
+- "Created: output/package-1.0.0.ccs ({size})"
+
+These are lightweight prints, not full progress bars.
+
+- [ ] **Step 3: self-update download progress**
+
+Add a download progress bar using content-length from the HTTP response:
+
+```rust
+let pb = ProgressBar::new(content_length);
+pb.set_style(ProgressStyle::default_bar()
+    .template("  Downloading [{bar:40.green/dim}] {bytes}/{total_bytes}")
+    .unwrap()
+    .progress_chars("##-"));
+```
+
+- [ ] **Step 4: system takeover phase spinner**
+
+Add phase feedback: "Scanning installed packages...",
+"Converting {n} packages...", "Recording in database..."
+
+- [ ] **Step 5: cook phase feedback**
+
+Add phase prints: "Fetching source...", "Configuring...",
+"Building... ({jobs} parallel)", "Installing to staging..."
+
+- [ ] **Step 6: model apply delegation**
+
+When `model apply` triggers installs/removes, use the existing
+`InstallProgress` / `RemoveProgress` types.
+
+- [ ] **Step 7: bootstrap overall progress**
+
+The bootstrap already prints `[1/12] Building zlib...` via tracing.
+Add an overall `ProgressBar::new(total_packages)` that increments
+after each `[OK]` line.
+
+- [ ] **Step 8: Commit**
+
+```
+feat(cli): add progress bars and phase feedback to all long-running commands
+
+repo sync: spinner with package count. ccs build: phase prints.
+self-update: download bar. takeover: phase spinner. cook: phase prints.
+model apply: delegates to InstallProgress. bootstrap: overall bar.
+```
+
+---
+
+### Task 11: Confirmation output for mutating commands
+
+**Files:** Various command handlers
+
+Every command that changes state should print a one-line confirmation.
+Audit each mutating command and add confirmation if missing.
+
+- [ ] **Step 1: Audit mutating commands for confirmation output**
+
+Check each for a final confirmation print:
+
+| Command | Expected output |
+|---------|----------------|
+| `pin` | "Pinned {pkg} at {version}" |
+| `unpin` | "Unpinned {pkg}" |
+| `config backup` | "Backed up {path} (backup #{n})" |
+| `config restore` | "Restored {path} from backup #{n}" |
+| `system gc` | "Freed {size} ({n} orphaned objects removed)" |
+| `collection create` | "Created collection '{name}' with {n} members" |
+| `collection delete` | "Deleted collection '{name}'" |
+| `collection add` | "Added {members} to collection '{name}'" |
+| `collection remove` | "Removed {members} from collection '{name}'" |
+| `derive create` | "Created derived package '{name}' from {parent}" |
+| `derive delete` | "Deleted derived package '{name}'" |
+| `redirect add` | "Added redirect: {source} -> {target}" |
+| `redirect remove` | "Removed redirect for {source}" |
+| `trigger enable/disable` | "Enabled/Disabled trigger '{name}'" |
+| `trust init` | "Initialized TUF for repository '{repo}'" |
+| `trust enable/disable` | "Enabled/Disabled TUF for '{repo}'" |
+| `federation add-peer` | "Added federation peer '{url}'" |
+| `federation remove-peer` | "Removed federation peer '{peer}'" |
+| `automation configure` | "Updated automation settings" |
+
+- [ ] **Step 2: Add missing confirmations**
+
+For each command missing a confirmation print, add a `println!()` after
+the successful operation. Keep it to one line, no emojis, just facts.
+
+- [ ] **Step 3: Commit**
+
+```
+feat(cli): add confirmation output to all mutating commands
+```
+
+---
+
+### Task 12: Site content check + final verification
+
+- [ ] **Step 1: Review site content**
+
+Read `site/src/` to verify marketing copy matches features.
+
+- [ ] **Step 2: Run full test suite**
 
 ```bash
 cargo test
@@ -522,6 +672,17 @@ cargo clippy --features server -- -D warnings
 ```
 
 All must pass with 0 failures.
+
+- [ ] **Step 3: Manual smoke test**
+
+```bash
+cargo build
+./target/debug/conary system init --db-path /tmp/launch-test.db
+./target/debug/conary repo sync --db-path /tmp/launch-test.db  # should show spinner
+./target/debug/conary search tree --db-path /tmp/launch-test.db
+./target/debug/conary capability --help  # should show enforce, audit
+./target/debug/conary install nonexistent --db-path /tmp/nonexistent.db  # should hint system init
+```
 
 - [ ] **Step 4: Final commit**
 
@@ -539,5 +700,7 @@ chore: pre-launch readiness verification complete
 - [ ] `conary capability enforce` and `conary capability audit` appear in --help
 - [ ] `conary install foo` on uninitialized DB says "Run 'conary system init'"
 - [ ] `conary repo add remi ...` on duplicate says "already exists"
+- [ ] Every long-running command shows progress feedback
+- [ ] Every mutating command prints a confirmation of what it did
 - [ ] README makes no claims the code can't back up
 - [ ] ROADMAP reflects actual project state
