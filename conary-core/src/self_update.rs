@@ -252,6 +252,97 @@ pub fn download_update(
     Ok(dest_path)
 }
 
+/// Download the CCS package with a visual progress bar
+///
+/// Like [`download_update`] but displays download progress via `indicatif`.
+/// If `content_length` is provided, shows a determinate bar; otherwise a spinner.
+pub fn download_update_with_progress(
+    download_url: &str,
+    expected_sha256: &str,
+    dest_dir: &Path,
+    content_length: Option<u64>,
+) -> Result<PathBuf> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    let dest_path = dest_dir.join("conary-update.ccs");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
+
+    let mut response = client
+        .get(download_url)
+        .send()
+        .map_err(|e| Error::DownloadError(format!("Failed to download update: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(Error::DownloadError(format!(
+            "Download failed: HTTP {}",
+            response.status()
+        )));
+    }
+
+    // Use content-length from response header if not provided, fall back to spinner
+    let total = content_length
+        .or_else(|| response.content_length());
+
+    let pb = if let Some(size) = total {
+        let bar = ProgressBar::new(size);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("  Downloading [{bar:40.green/dim}] {bytes}/{total_bytes}")
+                .expect("Invalid progress bar template")
+                .progress_chars("##-"),
+        );
+        bar
+    } else {
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .template("  {spinner:.cyan} Downloading... {bytes}")
+                .expect("Invalid spinner template"),
+        );
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+        spinner
+    };
+
+    let mut file = fs::File::create(&dest_path)
+        .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        let n = response
+            .read(&mut buf)
+            .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        file.write_all(&buf[..n])
+            .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
+        pb.inc(n as u64);
+    }
+    file.flush()
+        .map_err(|e| Error::IoError(format!("Failed to flush download file: {e}")))?;
+
+    pb.finish_and_clear();
+
+    let actual_hash = hex::encode(hasher.finalize());
+    if actual_hash != expected_sha256 {
+        fs::remove_file(&dest_path).ok();
+        return Err(Error::ChecksumMismatch {
+            expected: expected_sha256.to_string(),
+            actual: actual_hash,
+        });
+    }
+
+    Ok(dest_path)
+}
+
 /// Extract the conary binary from a CCS package to a temp file
 ///
 /// Returns the path to the extracted binary. The binary is placed on the

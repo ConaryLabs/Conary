@@ -123,12 +123,19 @@ pub fn cmd_cook(
     // Check if sources are cached
     if kitchen.sources_cached(&recipe) {
         println!("  - Sources already cached (offline build possible)");
+    } else {
+        println!("Fetching source...");
     }
+
+    println!("Configuring...");
+    println!("Building ({} parallel jobs)...", config.jobs);
 
     // Create kitchen and cook
     let result = kitchen
         .cook(&recipe, output_dir)
         .with_context(|| format!("Failed to cook {}", recipe.package.name))?;
+
+    println!("Installing to staging...");
 
     println!("\n[COMPLETE] Cooked: {}", result.package_path.display());
 
