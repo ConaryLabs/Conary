@@ -89,5 +89,5 @@
 | `src/server/state.rs` | AppState with DashMap, broadcast channel, cancellation flags |
 | `src/server/remi_client.rs` | HTTP client for pushing results to Remi |
 | `src/server/wal.rs` | Local write-ahead log for Remi unreachability |
-| `src/server/` | Axum HTTP API (14 endpoints), MCP server (24 tools via rmcp) |
+| `src/server/` | Axum HTTP API (14 endpoints), MCP server (23 tools via rmcp) |
 | `src/cli.rs` | Binary entrypoint |

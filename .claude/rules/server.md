@@ -27,7 +27,7 @@ conaryd (local daemon with REST API).
 - `ServiceError` -- shared error type for admin_service layer (BadRequest, NotFound, Conflict, Internal)
 - `AdminRateLimiters` -- per-IP token buckets (read 60/min, write 10/min, auth-fail 5/min) via governor crate
 - `AdminEvent` -- typed event for SSE broadcast (event_type, data, timestamp)
-- `RemiMcpServer` -- MCP server exposing 16 admin tools to LLM agents via rmcp
+- `RemiMcpServer` -- MCP server exposing 23 admin tools to LLM agents via rmcp
 - `RepoRequest` / `RepoResponse` -- admin API repo management types
 - `PeerResponse` / `AddPeerRequest` -- admin API federation peer types
 
