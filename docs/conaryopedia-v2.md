@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-16
 revision: 5
-summary: Fix capability field names, add CapabilityPolicy three-tier docs, Scriptlet profile, enforce/audit commands
+summary: Ch 6 — add test data API, canonical mapping, chunk GC sections, fix MCP count. Ch 7 — fix capability field names, add three-tier policy docs, Scriptlet profile, enforce/audit commands
 ---
 
 # Conaryopedia v2
