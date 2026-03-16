@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-16
-revision: 2
+revision: 3
 summary: Remi-centric canonical mapping — server builds the map, clients consume it
 ---
 
@@ -51,7 +51,10 @@ Remi (server)                              Client
 
 Steps:
 1. Load all `repository_packages` across all enabled repos
-2. Build `RepoPackageInfo` vec (name, distro, provides)
+2. Build `RepoPackageInfo` vec (name, distro, provides) — source provides
+   from the already-parsed `RepositoryProvide` objects in the sync pipeline
+   (`normalized_repository_capabilities()` at sync.rs:283), not by re-parsing
+   metadata
 3. Apply curated YAML rules (shipped with Remi in `data/canonical-rules/`)
 4. Run auto-discovery on unmatched packages:
    - Name match: same name in 2+ distros → canonical
@@ -129,20 +132,22 @@ This is acceptable because most users will have at least one Remi repo.
 
 **Location:** `conary-server/src/server/handlers/detail.rs:391-424`
 
-Replace the LIKE substring scan with an indexed join:
+Replace the LIKE substring scan with an indexed join on the
+`repository_requirements` table (column is `capability`, not `name`):
 
 ```sql
 SELECT DISTINCT rp.name
 FROM repository_packages rp
 JOIN repository_requirements rr ON rr.repository_package_id = rp.id
-WHERE rr.name = ?1
+WHERE rr.capability = ?1
   AND rp.repository_id = ?2
   AND rp.name != ?3
 ORDER BY rp.name
 ```
 
-**Prerequisite:** Verify `repository_requirements` is populated during
-sync. If not, add population as part of this work.
+**Confirmed:** `repository_requirements` IS populated during repo sync.
+`sync.rs` calls `RepositoryRequirement::batch_insert()` at lines 257 and
+272. No additional work needed here.
 
 ### 5. Canonical expansion in dependency resolution
 
@@ -164,6 +169,20 @@ When the resolver can't find a dependency by exact name:
 This applies to BOTH root requests AND transitive dependencies. The
 canonical map is already in the local DB (synced from Remi), so this
 is a fast local lookup — no network call in the hot path.
+
+**Performance:** Pre-load the canonical index into a HashMap at resolver
+construction time (same pattern as `provides_index` in
+`ConaryProvider::load_removal_data()`). Do NOT do per-dependency DB
+queries — that would be too slow for packages with 500+ transitive deps.
+
+**Mixing policy for transitive canonical expansion:** When expanding a
+dependency canonically, only consider implementations from the SAME
+distro family as the parent package. If a Fedora package depends on
+`libssl3` (a Debian name), canonical expansion finds `openssl` (Fedora)
+and `libssl3` (Ubuntu). The resolver picks `openssl` because it matches
+the active distro. This prevents mixed-distro dependency chains.
+Concretely: filter canonical implementations by the repos the user has
+configured + the distro of the package being installed.
 
 ### 6. "Did you mean?" on package not found
 
@@ -238,6 +257,20 @@ Create `data/canonical-rules/00-critical.yaml` shipped with Remi:
 Ship ~50-100 rules covering kernel, SSL, Python, zlib, development headers,
 and other high-profile naming differences. Auto-discovery handles the rest.
 
+**Note on `repo` field:** The existing `rules.rs` parser accepts
+`repo: Option<String>` (single string). The `repo: [fedora, arch]` array
+syntax above requires extending the parser to accept `StringOrVec`. This
+is a minor serde change. Alternatively, use one rule per distro for
+multi-distro mappings (more verbose but requires no parser change).
+
+**First-sync edge case:** Auto-discovery strategies require packages from
+2+ distros to create mappings (the `distros.len() >= 2` check). On Remi
+this is not an issue — Remi indexes all 3 distros simultaneously. For
+clients that only have one Remi repo, the canonical map comes from the
+server (which sees all distros). Curated rules additionally apply to
+single-distro setups since they match by repo name, not cross-distro
+comparison.
+
 ### 8. MCP tools + CLI commands
 
 **New remi-admin MCP tool:**
@@ -245,7 +278,8 @@ and other high-profile naming differences. Auto-discovery handles the rest.
 
 **New conary CLI commands:**
 - `conary canonical import repology [--project <name>]` — manual import
-  (for bootstrapping or one-off lookups)
+  (for bootstrapping or one-off lookups). Full import covers ~100K projects
+  in batches of 200 at ~1 request/sec (Repology rate limit) = ~8-10 min.
 - `conary canonical import appstream --distro <distro>` — manual import
 - These are convenience commands; the primary flow is Remi-automatic
 
