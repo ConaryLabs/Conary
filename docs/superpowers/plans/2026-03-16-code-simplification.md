@@ -1,6 +1,6 @@
-# Code Simplification Implementation Plan
+# Code Simplification Implementation Plan [COMPLETE]
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> All 11 tasks across 3 tiers implemented. 10 commits, all tests passing, clippy clean.
 
 **Goal:** Fix all systemic code quality and efficiency issues found during the simplify review — quick wins first, then deeper refactors.
 
@@ -10,272 +10,120 @@
 
 ---
 
-## Tier 1: Quick Wins (1-2 hours each)
+## Tier 1: Quick Wins [COMPLETE]
 
-### Task 1: Create `open_db()` helper and unify db::open calls
+### Task 1: Create `open_db()` helper and unify db::open calls [COMPLETE]
 
-**Files:**
-- Modify: `src/commands/mod.rs` — add helper
-- Modify: 41 command files — replace 146 bare `db::open()?` calls
+Commit: `fdfa217` — 146 calls unified across 48 files.
 
-- [ ] Add to `src/commands/mod.rs`:
-```rust
-pub fn open_db(path: &str) -> Result<rusqlite::Connection> {
-    conary_core::db::open(path).context("Failed to open package database")
-}
-```
-- [ ] Find all bare `conary_core::db::open(db_path)?` without `.context()` across `src/commands/`
-- [ ] Replace with `open_db(db_path)?`
-- [ ] Verify: `cargo build && cargo test`
-- [ ] Commit: `refactor(cli): unify db::open calls with open_db() helper`
+- [x] Added `open_db()` to `src/commands/mod.rs`
+- [x] Replaced all bare `conary_core::db::open(db_path)?` without `.context()`
+- [x] Exceptions kept: test code (`.unwrap()`), one closure returning `conary_core::Result`
 
 ---
 
-### Task 2: Promote `Trove::find_one_by_name()` usage
+### Task 2: Promote `Trove::find_one_by_name()` usage [COMPLETE]
 
-> **Review correction:** The plan originally proposed a new `find_installed_trove()` wrapper, but `Trove::find_one_by_name()` already exists in conary-core and is only used in 3 places. 9 files (not ~15) have "package not found" patterns with 3 different approaches (`.ok_or_else()`, `bail!()`, `.is_empty()` checks). Some files like `provenance.rs` have custom helpers with different return types — leave those as-is.
+Commit: `a678cff` — 6 patterns replaced in 4 files.
 
-**Files:**
-- Modify: 5-6 command files where `Trove::find_one_by_name()` can replace manual lookup + error
-
-- [ ] Identify files doing manual `Trove::find_by_name()` + `.first()` / `.is_empty()` + error construction
-- [ ] Replace with `Trove::find_one_by_name()` where the pattern matches (simple name -> single trove lookup)
-- [ ] Leave alone: files with custom return types (e.g., `provenance.rs`'s `find_trove()` returning `Option<(i64, String, String)>`)
-- [ ] Verify: `cargo build && cargo test`
-- [ ] Commit: `refactor(cli): use Trove::find_one_by_name() instead of manual lookup patterns`
+- [x] Replaced manual `find_by_name()` + `.first()` / `.is_empty()` in: `update.rs`, `query/dependency.rs`, `query/deptree.rs`, `restore.rs`
+- [x] Left alone: files iterating all troves, custom helpers, control-flow branches
 
 ---
 
-### Task 3: Add missing SQL indexes
+### Task 3: Add missing SQL indexes [COMPLETE]
 
-> **Review correction:** 2 of the 4 originally proposed indexes are redundant. `idx_deps_trove` duplicates v1's `idx_dependencies_trove_id`. `idx_provides_kind_cap` duplicates v23's `idx_provides_kind_capability`. Only 2 new indexes needed.
+Commit: `e9268fc` — Schema v52, 2 new composite indexes.
 
-**Files:**
-- Modify: `conary-core/src/db/schema.rs` — bump to v52
-- Modify: `conary-core/src/db/migrations.rs` — add migration
-
-- [ ] Add migration v52:
-```sql
-CREATE INDEX IF NOT EXISTS idx_provides_trove_cap ON provides(trove_id, capability);
-CREATE INDEX IF NOT EXISTS idx_repo_req_pkg_kind ON repository_requirements(repository_package_id, kind);
-```
-- [ ] Bump SCHEMA_VERSION to 52
-- [ ] Add v52 match arm in `apply_migration()`
-- [ ] Verify: `cargo test -p conary-core db`
-- [ ] Commit: `perf(db): add composite indexes for resolver and sync hot paths`
+- [x] `idx_provides_trove_cap` on `provides(trove_id, capability)`
+- [x] `idx_repo_req_pkg_kind` on `repository_requirements(repository_package_id, kind)`
+- [x] Skipped 2 redundant indexes (already existed from v1 and v23)
 
 ---
 
-### Task 4: Batch load dependencies in resolver
+### Task 4: Batch load dependencies in resolver [COMPLETE]
 
-> **Review correction:** The N+1 pattern exists in 3 locations, not just `load_removal_data()`: also `load_installed_packages()` (provider.rs:304) and `resolver/graph.rs:202`. Address all three.
+Commit: `3fd1359` — N+1 eliminated in 3 call sites.
 
-**Files:**
-- Modify: `conary-core/src/db/models/dependency.rs` — add batch method
-- Modify: `conary-core/src/resolver/provider.rs` — use batch in `load_removal_data()` and `load_installed_packages()`
-- Modify: `conary-core/src/resolver/graph.rs` — use batch in dependency graph construction
-
-- [ ] Add `DependencyEntry::find_by_troves(conn, &[i64])` batch method using `WHERE trove_id IN (...)`:
-```rust
-pub fn find_by_troves(conn: &Connection, trove_ids: &[i64]) -> Result<HashMap<i64, Vec<Self>>> {
-    // Build parameterized IN clause, execute single query, group by trove_id
-}
-```
-- [ ] Replace per-solvable `DependencyEntry::find_by_trove()` loop in `load_removal_data()`
-- [ ] Replace same pattern in `load_installed_packages()` (provider.rs:304)
-- [ ] Replace same pattern in `resolver/graph.rs:202`
-- [ ] Verify: `cargo test -p conary-core resolver`
-- [ ] Commit: `perf(resolver): batch load dependencies to eliminate N+1 queries`
+- [x] Added `DependencyEntry::find_by_troves()` with chunking at 500 IDs
+- [x] Updated `load_installed_packages()`, `load_removal_data()`, `build_from_db()`
 
 ---
 
-### Task 5: Replace format!() SQL with const strings
+### Task 5: Replace format!() SQL with const strings [COMPLETE]
 
-**Files:**
-- Modify: 16 model files in `conary-core/src/db/models/` (41 instances total)
+Commit: `df5aab4` — 41 `format!()` removed, 24 constants eliminated across 16 files.
 
-**Priority order by query frequency:**
-1. `dependency.rs` (1) — resolver hot path
-2. `trove.rs` (2) — most-queried model
-3. `file_entry.rs` (5) — file deployment
-4. `state.rs` (4) — generation management
-5. `changeset.rs` (3) — transaction tracking
-6. `label.rs` (5), `trigger.rs` (4), `derived.rs` (3), `config.rs` (3), `chunk_access.rs` (3)
-7. Remaining: `component_dependency.rs` (2), `repository.rs` (2), `redirect.rs` (1), `federation_peer.rs` (1), `converted.rs` (1), `component.rs` (1)
-
-- [ ] For each model file, replace `format!("SELECT {COLUMNS} FROM table WHERE ...")` with inline string literals in `conn.prepare()`:
-```rust
-// Before:
-let sql = format!("SELECT {DEP_COLUMNS} FROM dependencies WHERE trove_id = ?1");
-let mut stmt = conn.prepare(&sql)?;
-
-// After:
-let mut stmt = conn.prepare(
-    "SELECT id, trove_id, depends_on_name, depends_on_version, \
-     dependency_type, version_constraint, kind FROM dependencies WHERE trove_id = ?1"
-)?;
-```
-- [ ] Remove unused `COLUMNS` constants after all their usages are inlined
-- [ ] Verify: `cargo test -p conary-core`
-- [ ] Commit: `perf(db): use const SQL strings instead of format!() allocation`
+- [x] All model files inlined, unused COLUMNS constants removed
 
 ---
 
-## Tier 2: Moderate Refactors (2-3 hours each)
+## Tier 2: Moderate Refactors [COMPLETE]
 
-### Task 6: Reduce constraint clones in resolver
+### Task 6+7: Reduce cloning in resolver [COMPLETE]
 
-> **Review correction:** Rc/Arc adds pointer overhead and reference counting — overkill for this case. ConaryConstraint is 40-80+ bytes and cloned twice per `intern_version_set()` call plus once per `intern_repo_version_set()`. The right approach is a constraint ID pool (like the existing name interning pattern).
+Commit: `6ff8079` — Combined constraint and string allocation improvements.
 
-**Files:**
-- Modify: `conary-core/src/resolver/provider.rs`
-
-- [ ] Add a constraint arena/pool similar to name interning:
-```rust
-// Store constraints in a Vec, reference by index
-constraints: Vec<ConaryConstraint>,
-constraint_to_id: HashMap<ConaryConstraint, ConstraintId>,
-```
-- [ ] In `intern_version_set()`, intern the constraint and store ConstraintId instead of cloning
-- [ ] In `intern_repo_version_set()`, same pattern
-- [ ] Update `version_sets` to store `(NameId, ConstraintId)` instead of `(NameId, ConaryConstraint)`
-- [ ] Fix `intern_all_dependency_version_sets()` line 610+ which clones all deps
-- [ ] Verify: `cargo test -p conary-core resolver`
-- [ ] Commit: `perf(resolver): intern constraints to eliminate cloning in version set interning`
+- [x] `intern_version_set()`: removed extra clone (move instead of clone)
+- [x] `intern_name()`: single `to_string()` + clone instead of two `to_string()`
+- [x] `intern_all_dependency_version_sets()`: `mem::take` instead of cloning all SolverDep entries
+- [x] Added `new_dependency_names(known)` to skip already-loaded names in transitive loop
+- Note: Full constraint ID pool (plan's original approach) deferred — diminishing returns vs. complexity
 
 ---
 
-### Task 7: Reduce string allocations in SAT solver
+### Task 8: Break up cmd_install (1,179 lines) [COMPLETE]
 
-**Files:**
-- Modify: `conary-core/src/resolver/sat.rs`
-- Modify: `conary-core/src/resolver/provider.rs`
+Commit: `b1b982d` — 1,179 lines reduced to 238-line orchestrator + 12 helper functions.
 
-**Hotspots (sat.rs lines 68-92, transitive dependency loading loop):**
-- Clone 1: `requests.iter().map(|(n, _)| n.clone())` into HashSet
-- Clone 2: `loaded_names.iter().cloned()` into Vec
-- Clone 3: `loaded_names.insert(n.clone())` in filter
-- Clone 4: `canonical_equivalents(n).iter().cloned()`
-- Clone 5: `loaded_names.insert(n.clone())` again in equiv filter
-
-**provider.rs `intern_name()` double-clone (lines 165-173):**
-- Clone 1: `self.names.push(name.to_string())`
-- Clone 2: `self.name_to_id.insert(name.to_string(), id)`
-
-- [ ] In transitive dep loop: use `HashSet<&str>` borrowing from provider's interned names where possible
-- [ ] Pre-allocate `to_load` and `new_names` based on estimated dependency counts
-- [ ] In `intern_name()`: allocate once, clone once (or use entry API)
-- [ ] Verify: `cargo test -p conary-core resolver`
-- [ ] Commit: `perf(resolver): reduce string allocations in SAT dependency loading`
+Extracted functions:
+- `build_resolution_policy()`, `resolve_canonical_name()`, `parse_component_and_validate()`
+- `try_promote_existing_dep()`, `resolve_and_parse_package()`
+- `handle_dependencies()`, `handle_dep_adoptions()`, `handle_dep_installs()`
+- `check_unresolvable_deps()`, `show_dry_run_summary()`
+- `extract_and_classify_files()`, `run_pre_install_phase()`
+- `execute_install_transaction()`, `finalize_install()`
 
 ---
 
-### Task 8: Break up cmd_install (1,179 lines)
+### Task 9: Make RepositoryClient timeouts configurable [COMPLETE]
 
-**Files:**
-- Modify: `src/commands/install/mod.rs` (lines 228-1407)
-- Directory already has helper modules: `batch.rs`, `conversion.rs`, `dependencies.rs`, `dep_resolution.rs`, `execute.rs`, `prepare.rs`, `resolve.rs`, `scriptlets.rs`, `system_pm.rs`, `blocklist.rs`, `dep_mode.rs`
+Commit: `beb4ea8` — `TimeoutConfig` with per-request timeouts.
 
-**Logical sections to extract:**
-1. Lines 248-297: Option destructuring, DB open, policy construction
-2. Lines 298-407: Canonical resolution, component spec parsing, blocklist/adoption checks
-3. Lines 409-551: Already-installed promotion, progress tracker, package resolution, format detection
-4. Lines 553-903: Dependency analysis (build edges, filter, resolve)
-5. Lines 904-1100: File extraction, component selection, capabilities inference, scriptlet setup
-6. Lines 1100-1407: Transaction execution + rollback
-
-- [ ] Extract sub-functions from `cmd_install`:
-  - `resolve_package_source()` — canonical resolution + policy ranking (~sections 2-3)
-  - `analyze_dependencies()` — dependency graph construction + resolution (~section 4)
-  - `prepare_installation()` — file extraction, components, capabilities, scriptlets (~section 5)
-  - `execute_transaction()` — DB transaction, file deployment, rollback (~section 6)
-- [ ] Each extracted function should be < 300 lines
-- [ ] Keep `cmd_install` as orchestrator calling the sub-functions
-- [ ] Verify: `cargo build && cargo test`
-- [ ] Commit: `refactor(install): extract sub-functions from 1,179-line cmd_install`
+- [x] `TimeoutConfig` struct: metadata (30s), download (300s), connect (30s)
+- [x] `RepositoryClient::with_timeouts()` constructor
+- [x] Per-request timeouts via `RequestBuilder::timeout()`
 
 ---
 
-### Task 9: Make RepositoryClient timeouts configurable
+## Tier 3: Documentation + Cleanup [COMPLETE]
 
-> **Review correction:** Timeouts are already differentiated across modules (30s general, 60s chunks, 300s polling). The real issue is that `RepositoryClient::new()` hardcodes `HTTP_TIMEOUT = 30s` with no override mechanism.
+### Task 10: Document output standards in CLI rules [COMPLETE]
 
-**Files:**
-- Modify: `conary-core/src/repository/client.rs`
+Commit: `7341567`
 
-- [ ] Add `TimeoutConfig` struct:
-```rust
-pub struct TimeoutConfig {
-    pub metadata: Duration,   // Default 10s — repo index, package metadata
-    pub download: Duration,   // Default 300s — file/package downloads
-    pub default: Duration,    // Default 30s — everything else
-}
-```
-- [ ] Add builder method to `RepositoryClient`:
-```rust
-pub fn with_timeouts(mut self, config: TimeoutConfig) -> Self
-```
-- [ ] Use per-request timeout override instead of client-level timeout where needed
-- [ ] Verify: `cargo build -p conary-core`
-- [ ] Commit: `feat(repo): make RepositoryClient timeouts configurable`
+- [x] Output formatting standards (println, tracing, eprintln)
+- [x] Function size guideline (< 300 lines)
+- [x] `open_db()` and `find_one_by_name()` conventions documented
 
 ---
 
-## Tier 3: Documentation + Cleanup
+### Task 11: Audit and document dead code [COMPLETE]
 
-### Task 10: Document output standards in CLI rules
+Commit: `f9eb721` — 27 markers audited across 12 files.
 
-**Files:**
-- Modify: `.claude/rules/cli.md`
-
-- [ ] Add output formatting standards:
-  - `println!()` for user-facing results only
-  - `tracing::info!()` / `warn!()` for diagnostics
-  - `eprintln!()` only for usage errors
-- [ ] Document function size guideline (< 300 lines)
-- [ ] Document `open_db()` helper and `Trove::find_one_by_name()` convention
-- [ ] Commit: `docs: add CLI output and function size standards`
+- [x] 1 truly dead struct removed (`BenchmarkResult`)
+- [x] 5 struct-level annotations narrowed to field-level
+- [x] 13 kept annotations given explanatory comments
+- [x] 9 already had adequate documentation
 
 ---
 
-### Task 11: Audit and document dead code
+## Success Criteria [ALL MET]
 
-**Files:**
-- Modify: Various files with `#[allow(dead_code)]`
-
-- [ ] For each `#[allow(dead_code)]`:
-  - If truly unused and not planned: remove
-  - If planned for future phase: add comment with phase reference
-  - If needed for public API: keep with explanation
-- [ ] Verify: `cargo build && cargo clippy -- -D warnings`
-- [ ] Commit: `chore: audit dead code markers, remove unused, document planned`
-
----
-
-## Implementation Order
-
-**Do first (highest impact, lowest effort):**
-1. Task 1: open_db() helper (15 min, 41 files / 146 calls)
-2. Task 3: SQL indexes (15 min, 2 new indexes)
-3. Task 2: Promote find_one_by_name() (30 min, 5-6 files)
-4. Task 4: Batch load deps (1 hour, 3 N+1 sites)
-5. Task 5: Const SQL strings (1-2 hours, 41 instances / 16 files)
-
-**Do next (moderate effort, good payoff):**
-6. Task 9: Configurable timeouts (30 min)
-7. Task 10: Document standards (30 min)
-8. Task 11: Dead code audit (1 hour)
-
-**Do when time allows (larger refactors):**
-9. Task 6: Constraint interning (2-3 hours)
-10. Task 7: String allocations (2-3 hours)
-11. Task 8: Break up cmd_install (2-3 hours)
-
-## Success Criteria
-
-- `cargo test` passes with zero failures
-- `cargo clippy -- -D warnings` clean
-- No bare `db::open()?` in command handlers
-- Schema at v52 with 2 new indexes
-- `load_removal_data()` and siblings use batch query
-- All `#[allow(dead_code)]` documented or removed
+- [x] `cargo test` passes with zero failures
+- [x] `cargo clippy -- -D warnings` clean
+- [x] No bare `db::open()?` in command handlers
+- [x] Schema at v52 with 2 new indexes
+- [x] `load_removal_data()` and siblings use batch query
+- [x] All `#[allow(dead_code)]` documented or removed

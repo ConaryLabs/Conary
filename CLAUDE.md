@@ -58,7 +58,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **CAS**: Content-addressable storage for files
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
-Database schema is currently **v51** (50+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
+Database schema is currently **v52** (50+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 
