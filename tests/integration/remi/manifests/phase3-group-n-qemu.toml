@@ -31,7 +31,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v1"
+image = "minimal-boot-v2"
 memory_mb = 1024
 timeout_seconds = 240
 ssh_port = 2230
@@ -63,7 +63,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v1"
+image = "minimal-boot-v2"
 memory_mb = 1024
 timeout_seconds = 180
 ssh_port = 2231
@@ -95,7 +95,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v1"
+image = "minimal-boot-v2"
 memory_mb = 1024
 timeout_seconds = 180
 ssh_port = 2232
@@ -128,7 +128,7 @@ depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v1"
+image = "minimal-boot-v2"
 memory_mb = 1024
 timeout_seconds = 240
 ssh_port = 2233
@@ -159,17 +159,19 @@ group = "N"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v1"
+image = "minimal-boot-v2"
 memory_mb = 1024
 timeout_seconds = 180
 ssh_port = 2222
 commands = [
     "uname -r",
+    "systemctl is-system-running --wait || true",
     "id -un",
-    "echo login prompt reached",
+    "cat /etc/os-release | grep conaryOS || true",
+    "echo boot-verified",
 ]
 expect_output = [
-    "login prompt reached",
+    "boot-verified",
 ]
 
 [test.step.assert]
