@@ -47,7 +47,7 @@ impl RepartDefinition {
             size_min: Some(size_bytes),
             size_max: Some(size_bytes),
             copy_files: Some("/boot:/".to_string()),
-            label: Some("ESP".to_string()),
+            label: Some("CONARY_ESP".to_string()),
             minimize: false,
         }
     }
@@ -65,7 +65,7 @@ impl RepartDefinition {
             size_min: None,
             size_max: None,
             copy_files: Some("/:/".to_string()),
-            label: Some("root".to_string()),
+            label: Some("CONARY_ROOT".to_string()),
             minimize: true,
         }
     }
@@ -124,7 +124,7 @@ mod tests {
         assert!(content.contains("Type=esp"));
         assert!(content.contains("SizeMinBytes=536870912")); // 512 * 1024 * 1024
         assert!(content.contains("Format=vfat"));
-        assert!(content.contains("Label=ESP"));
+        assert!(content.contains("Label=CONARY_ESP"));
     }
 
     #[test]
