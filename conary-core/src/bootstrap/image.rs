@@ -967,73 +967,12 @@ tmpfs              /tmp           tmpfs   defaults,nosuid   0      0
         Ok(())
     }
 
-    /// Set up EFI boot structure
-    fn setup_efi_boot(&self, mount_dir: &Path) -> Result<(), ImageError> {
-        let efi_dir = mount_dir.join("boot/efi/EFI");
-        let boot_dir = efi_dir.join("BOOT");
-        let conary_dir = efi_dir.join("conary");
-
-        fs::create_dir_all(&boot_dir)?;
-        fs::create_dir_all(&conary_dir)?;
-
-        // Look for GRUB EFI binary in sysroot
-        let grub_efi_paths = [
-            self.sysroot.join("usr/lib/grub/x86_64-efi/grubx64.efi"),
-            self.sysroot.join("usr/share/grub/x86_64-efi/grubx64.efi"),
-            self.sysroot.join("boot/efi/EFI/conary/grubx64.efi"),
-        ];
-
-        let grub_efi = grub_efi_paths.iter().find(|p| p.exists());
-
-        if let Some(src) = grub_efi {
-            fs::copy(src, boot_dir.join("BOOTX64.EFI"))?;
-            fs::copy(src, conary_dir.join("grubx64.efi"))?;
-        } else {
-            warn!("GRUB EFI binary not found - creating stub EFI application");
-            // Create a minimal placeholder that would need GRUB installed
-            self.create_stub_efi(&boot_dir.join("BOOTX64.EFI"))?;
-        }
-
-        // Create GRUB config
-        let grub_cfg = conary_dir.join("grub.cfg");
-        self.create_grub_config(&grub_cfg)?;
-
-        // Also put config in standard location
-        let boot_grub = mount_dir.join("boot/grub");
-        fs::create_dir_all(&boot_grub)?;
-        self.create_grub_config(&boot_grub.join("grub.cfg"))?;
-
-        Ok(())
-    }
-
-    /// Create GRUB configuration
-    fn create_grub_config(&self, path: &Path) -> Result<(), ImageError> {
-        let config = r#"# GRUB Configuration for Conary
-set default=0
-set timeout=5
-
-menuentry "Conary Linux" {
-    search --label --set=root CONARY_ROOT
-    linux /boot/vmlinuz root=LABEL=CONARY_ROOT ro quiet
-    initrd /boot/initramfs.img
-}
-
-menuentry "Conary Linux (Recovery Mode)" {
-    search --label --set=root CONARY_ROOT
-    linux /boot/vmlinuz root=LABEL=CONARY_ROOT ro single
-    initrd /boot/initramfs.img
-}
-"#;
-
-        fs::write(path, config)?;
-        Ok(())
-    }
-
-    /// Create a stub EFI application (placeholder)
-    fn create_stub_efi(&self, _path: &Path) -> Result<(), ImageError> {
-        // In a real implementation, we would create a minimal EFI stub
-        // or copy from a known location. For now, just warn.
-        warn!("EFI stub creation not implemented - manual GRUB installation required");
+    /// Set up EFI boot structure.
+    ///
+    /// Boot setup is now handled by `BaseBuilder::finalize_sysroot()` in base.rs.
+    /// systemd-repart's `CopyFiles=/boot:/` copies the bootloader, kernel,
+    /// initramfs, and loader config from the sysroot to the ESP.
+    fn setup_efi_boot(&self, _mount_dir: &Path) -> Result<(), ImageError> {
         Ok(())
     }
 
@@ -1241,6 +1180,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
     ///
     /// Busybox source: prefers host system's static busybox, falls back to error
     /// asking user to install the `busybox-static` package.
+    #[allow(dead_code)] // Deprecated: use BaseBuilder::finalize_sysroot() + dracut instead
     pub fn generate_initramfs(&self, sources_dir: &Path) -> Result<PathBuf, ImageError> {
         let initramfs_root = self.work_dir.join("initramfs");
         let output = self.sysroot.join("boot/initramfs.img");
