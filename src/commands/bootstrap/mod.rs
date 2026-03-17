@@ -369,6 +369,15 @@ pub fn cmd_bootstrap_base(
         );
     }
 
+    // Populate sysroot with system config (passwd, fstab, SSH, systemd targets)
+    println!("\nPopulating sysroot with system configuration...");
+    let sysroot_path = std::path::PathBuf::from(root);
+    conary_core::bootstrap::BaseBuilder::populate_sysroot(&sysroot_path)?;
+
+    // Finalize: kernel, initramfs, bootloader, SSH keys
+    println!("Finalizing sysroot (kernel, initramfs, bootloader, SSH keys)...");
+    conary_core::bootstrap::BaseBuilder::finalize_sysroot(&sysroot_path)?;
+
     println!("\nNext steps:");
     println!("  Run 'conary bootstrap image' to generate a bootable image");
 
