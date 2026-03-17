@@ -1209,6 +1209,291 @@ impl BaseBuilder {
         info!("Sysroot populated with system files, SSH, networking, and systemd targets");
         Ok(())
     }
+
+    /// Finalize a sysroot for image generation.
+    ///
+    /// Runs host tools against the sysroot to prepare it for booting:
+    /// kernel copy, initramfs generation (dracut), systemd-boot loader
+    /// configuration, EFI binary copy, and SSH host key generation.
+    pub fn finalize_sysroot(root: &Path) -> Result<(), crate::error::Error> {
+        // Step 1: Detect kernel version from /usr/lib/modules/<ver>/
+        let modules_dir = root.join("usr/lib/modules");
+        let kernel_version = if modules_dir.is_dir() {
+            let mut found: Option<String> = None;
+            if let Ok(entries) = fs::read_dir(&modules_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir()
+                        && let Some(name) = entry.file_name().to_str()
+                    {
+                        found = Some(name.to_string());
+                        break;
+                    }
+                }
+            }
+            found
+        } else {
+            None
+        };
+
+        let Some(ver) = kernel_version else {
+            warn!("No kernel found in {}, skipping kernel/boot configuration", modules_dir.display());
+
+            // Skip to step 6 (EFI binary) -- steps 2-5 require a kernel
+            Self::copy_efi_binary(root)?;
+            Self::generate_ssh_host_keys(root);
+            Self::generate_test_ssh_keypair(root);
+            return Ok(());
+        };
+
+        info!("Detected kernel version: {ver}");
+
+        // Step 2: Copy kernel to /boot/
+        let boot_dir = root.join("boot");
+        fs::create_dir_all(&boot_dir)?;
+
+        let vmlinuz_src = modules_dir.join(&ver).join("vmlinuz");
+        let vmlinuz_dst = boot_dir.join(format!("vmlinuz-{ver}"));
+        if vmlinuz_src.exists() {
+            fs::copy(&vmlinuz_src, &vmlinuz_dst)?;
+            info!("Copied kernel to {}", vmlinuz_dst.display());
+        } else {
+            warn!("Kernel image not found at {}, skipping copy", vmlinuz_src.display());
+        }
+
+        // Step 3: Generate initramfs via dracut (requires bind mounts)
+        let mount_points = ["proc", "sys", "dev"];
+        let mut mounted = Vec::new();
+
+        for mp in &mount_points {
+            let target = root.join(mp);
+            fs::create_dir_all(&target)?;
+            let source = Path::new("/").join(mp);
+            let status = Command::new("mount")
+                .args(["--bind"])
+                .arg(&source)
+                .arg(&target)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    debug!("Bind-mounted /{mp} into sysroot");
+                    mounted.push(target);
+                }
+                Ok(s) => warn!("mount --bind /{mp} failed with exit code {s}"),
+                Err(e) => warn!("Failed to run mount for /{mp}: {e}"),
+            }
+        }
+
+        let dracut_status = Command::new("chroot")
+            .arg(root)
+            .args([
+                "dracut",
+                "--no-hostonly",
+                "--force",
+                &format!("/boot/initramfs-{ver}.img"),
+                &ver,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+
+        match dracut_status {
+            Ok(s) if s.success() => info!("Generated initramfs for kernel {ver}"),
+            Ok(s) => warn!("dracut exited with code {s}"),
+            Err(e) => warn!("Failed to run dracut: {e}"),
+        }
+
+        // Unmount in reverse order (best-effort)
+        for target in mounted.iter().rev() {
+            let _ = Command::new("umount")
+                .arg(target)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        // Step 4: Write systemd-boot loader config
+        let loader_dir = boot_dir.join("loader");
+        fs::create_dir_all(&loader_dir)?;
+        fs::write(
+            loader_dir.join("loader.conf"),
+            "default conaryos.conf\n\
+             timeout 3\n\
+             console-mode auto\n\
+             editor no\n",
+        )?;
+        debug!("Wrote loader.conf");
+
+        // Step 5: Write BLS entry
+        let entries_dir = loader_dir.join("entries");
+        fs::create_dir_all(&entries_dir)?;
+        fs::write(
+            entries_dir.join("conaryos.conf"),
+            format!(
+                "title   conaryOS\n\
+                 linux   /vmlinuz-{ver}\n\
+                 initrd  /initramfs-{ver}.img\n\
+                 options root=LABEL=CONARY_ROOT ro console=ttyS0,115200\n"
+            ),
+        )?;
+        debug!("Wrote BLS entry for kernel {ver}");
+
+        // Step 6: Copy systemd-boot EFI binary
+        Self::copy_efi_binary(root)?;
+
+        // Step 7: Generate SSH host keys
+        Self::generate_ssh_host_keys(root);
+
+        // Step 8: Generate test SSH keypair
+        Self::generate_test_ssh_keypair(root);
+
+        info!("Sysroot finalized for image generation");
+        Ok(())
+    }
+
+    /// Copy the systemd-boot EFI binary into the sysroot.
+    ///
+    /// This is the only hard error in finalize -- without an EFI binary the
+    /// image cannot boot at all.
+    fn copy_efi_binary(root: &Path) -> Result<(), crate::error::Error> {
+        let efi_name = "systemd-bootx64.efi";
+        let sysroot_efi = root.join(format!("usr/lib/systemd/boot/efi/{efi_name}"));
+        let host_efi = PathBuf::from(format!("/usr/lib/systemd/boot/efi/{efi_name}"));
+
+        let source = if sysroot_efi.exists() {
+            sysroot_efi
+        } else if host_efi.exists() {
+            host_efi
+        } else {
+            return Err(crate::error::Error::InitError(format!(
+                "systemd-boot EFI binary not found in sysroot or host at usr/lib/systemd/boot/efi/{efi_name}"
+            )));
+        };
+
+        let efi_dst = root.join("boot/EFI/BOOT");
+        fs::create_dir_all(&efi_dst)?;
+        fs::copy(&source, efi_dst.join("BOOTX64.EFI"))?;
+        info!("Copied systemd-boot EFI binary from {}", source.display());
+        Ok(())
+    }
+
+    /// Generate SSH host keys (ed25519, rsa, ecdsa) in the sysroot.
+    ///
+    /// Skips keys that already exist. Warns on failure instead of aborting.
+    fn generate_ssh_host_keys(root: &Path) {
+        let ssh_dir = root.join("etc/ssh");
+        if let Err(e) = fs::create_dir_all(&ssh_dir) {
+            warn!("Failed to create {}: {e}", ssh_dir.display());
+            return;
+        }
+
+        let keys: &[(&str, &str, Option<&str>)] = &[
+            ("ssh_host_ed25519_key", "ed25519", None),
+            ("ssh_host_rsa_key", "rsa", Some("4096")),
+            ("ssh_host_ecdsa_key", "ecdsa", None),
+        ];
+
+        for &(filename, key_type, bits) in keys {
+            let key_path = ssh_dir.join(filename);
+            if key_path.exists() {
+                debug!("SSH host key already exists: {}", key_path.display());
+                continue;
+            }
+
+            let mut cmd = Command::new("ssh-keygen");
+            cmd.args(["-t", key_type]);
+            if let Some(b) = bits {
+                cmd.args(["-b", b]);
+            }
+            cmd.args(["-f", &key_path.to_string_lossy(), "-N", ""]);
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+
+            match cmd.status() {
+                Ok(s) if s.success() => debug!("Generated {filename}"),
+                Ok(s) => warn!("ssh-keygen for {filename} exited with code {s}"),
+                Err(e) => warn!("Failed to run ssh-keygen for {filename}: {e}"),
+            }
+        }
+    }
+
+    /// Generate a test SSH keypair for automated QEMU access.
+    ///
+    /// Creates an ed25519 key at `/root/.ssh/conaryos-test-key` and installs
+    /// the public key into `authorized_keys`. Warns on failure.
+    fn generate_test_ssh_keypair(root: &Path) {
+        let ssh_dir = root.join("root/.ssh");
+        if let Err(e) = fs::create_dir_all(&ssh_dir) {
+            warn!("Failed to create {}: {e}", ssh_dir.display());
+            return;
+        }
+
+        // Set .ssh directory permissions to 700
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700)) {
+                warn!("Failed to set permissions on {}: {e}", ssh_dir.display());
+            }
+        }
+
+        let key_path = ssh_dir.join("conaryos-test-key");
+        if key_path.exists() {
+            debug!("Test SSH key already exists: {}", key_path.display());
+        } else {
+            let status = Command::new("ssh-keygen")
+                .args(["-t", "ed25519"])
+                .args(["-f", &key_path.to_string_lossy()])
+                .args(["-N", ""])
+                .args(["-C", "conaryos-test"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            match status {
+                Ok(s) if s.success() => debug!("Generated test SSH keypair"),
+                Ok(s) => {
+                    warn!("ssh-keygen for test key exited with code {s}");
+                    return;
+                }
+                Err(e) => {
+                    warn!("Failed to run ssh-keygen for test key: {e}");
+                    return;
+                }
+            }
+        }
+
+        // Copy public key to authorized_keys
+        let pub_key_path = ssh_dir.join("conaryos-test-key.pub");
+        if pub_key_path.exists() {
+            match fs::read_to_string(&pub_key_path) {
+                Ok(pub_key) => {
+                    let auth_keys = ssh_dir.join("authorized_keys");
+                    if let Err(e) = fs::write(&auth_keys, pub_key) {
+                        warn!("Failed to write authorized_keys: {e}");
+                        return;
+                    }
+
+                    // Set authorized_keys permissions to 600
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Err(e) = fs::set_permissions(
+                            &auth_keys,
+                            fs::Permissions::from_mode(0o600),
+                        ) {
+                            warn!("Failed to set permissions on authorized_keys: {e}");
+                        }
+                    }
+
+                    debug!("Installed test SSH public key to authorized_keys");
+                }
+                Err(e) => warn!("Failed to read test public key: {e}"),
+            }
+        } else {
+            warn!("Test SSH public key not found at {}", pub_key_path.display());
+        }
+    }
 }
 
 /// Build summary statistics
