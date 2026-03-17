@@ -6,7 +6,7 @@ paths:
 # Database Module
 
 All runtime state lives in SQLite. No config files for runtime state -- this is a core
-architectural invariant. The schema is at version v51 with 50+ tables across 51 migrations.
+architectural invariant. The schema is at version v52 with 50+ tables across 51 migrations.
 Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Key Types
@@ -38,6 +38,6 @@ Connection management uses `rusqlite::Connection` directly (no pool).
 
 ## Files
 - `mod.rs` -- `init()`, `open()`, `open_fast()`, `with_transaction()`, connection setup
-- `schema.rs` -- migration runner with version-gated inline migration blocks (v1-v51)
+- `schema.rs` -- migration runner with version-gated inline migration blocks (v1-v52)
 - `paths.rs` -- centralized path derivation (db_dir, objects_dir, keyring_dir, temp_dir)
 - `models/` -- 30+ model files, one per table group
