@@ -15,6 +15,9 @@ use crate::container::backend::ExecResult;
 
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://packages.conary.io/test-artifacts";
 
+/// Well-known filename for the conaryOS test SSH private key.
+const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
+
 pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     let missing_tools = missing_tools(["curl", "qemu-system-x86_64", "ssh"]).await?;
     if !missing_tools.is_empty() {
@@ -91,12 +94,13 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         });
     }
 
+    let key_path = test_ssh_key_path().await.ok();
     let mut stdout = String::new();
     let mut stderr = String::new();
     let mut exit_code = 0;
 
     for command in &config.commands {
-        let result = run_ssh_command(config.ssh_port, command).await?;
+        let result = run_ssh_command(config.ssh_port, command, key_path.as_deref()).await?;
         append_command_output(&mut stdout, &mut stderr, command, &result);
         if result.exit_code != 0 {
             exit_code = result.exit_code;
@@ -258,11 +262,33 @@ async fn download_image(url: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn test_ssh_key_path() -> Result<PathBuf> {
+    let dir = cache_dir();
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create cache dir {}", dir.display()))?;
+    let key_path = dir.join(TEST_SSH_KEY_NAME);
+    if key_path.exists() {
+        return Ok(key_path);
+    }
+    let url = format!("{DEFAULT_ARTIFACT_BASE_URL}/{TEST_SSH_KEY_NAME}");
+    download_image(&url, &key_path)
+        .await
+        .with_context(|| format!("failed to download test SSH key from {url}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to set permissions on {}", key_path.display()))?;
+    }
+    Ok(key_path)
+}
+
 async fn wait_for_ssh(
     child: &mut Child,
     ssh_port: u16,
     timeout_seconds: u64,
 ) -> Result<std::result::Result<(), String>> {
+    let key_path = test_ssh_key_path().await.ok();
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let mut last_error = "ssh not ready".to_string();
 
@@ -273,7 +299,7 @@ async fn wait_for_ssh(
             )));
         }
 
-        let probe = run_ssh_command(ssh_port, "true").await?;
+        let probe = run_ssh_command(ssh_port, "true", key_path.as_deref()).await?;
         if probe.exit_code == 0 {
             return Ok(Ok(()));
         }
@@ -291,12 +317,20 @@ async fn wait_for_ssh(
     )))
 }
 
-async fn run_ssh_command(ssh_port: u16, command: &str) -> Result<ExecResult> {
+async fn run_ssh_command(
+    ssh_port: u16,
+    command: &str,
+    key_path: Option<&Path>,
+) -> Result<ExecResult> {
     let remote = format!("sh -lc {}", shell_quote(command));
-    let output = Command::new("ssh")
+    let mut ssh = Command::new("ssh");
+    if let Some(key) = key_path {
+        ssh.args(["-i", &key.display().to_string()]);
+    } else {
+        ssh.args(["-o", "BatchMode=yes"]);
+    }
+    let output = ssh
         .args([
-            "-o",
-            "BatchMode=yes",
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
