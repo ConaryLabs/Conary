@@ -1106,16 +1106,16 @@ impl BaseBuilder {
         }
 
         // /etc/hostname
-        fs::write(etc.join("hostname"), "conary\n")?;
+        fs::write(etc.join("hostname"), "conaryos\n")?;
 
         // /etc/os-release -- required by systemd
         fs::write(
             etc.join("os-release"),
-            "NAME=\"Conary Linux\"\n\
-             ID=conary\n\
+            "NAME=\"conaryOS\"\n\
+             ID=conaryos\n\
              VERSION_ID=0.1\n\
-             PRETTY_NAME=\"Conary Linux 0.1 (Bootstrap)\"\n\
-             HOME_URL=\"https://conary.io\"\n",
+             PRETTY_NAME=\"conaryOS 0.1 (Bootstrap)\"\n\
+             HOME_URL=\"https://conaryos.com\"\n",
         )?;
 
         // /etc/machine-id -- empty file, systemd generates on first boot
@@ -1130,7 +1130,83 @@ impl BaseBuilder {
              tmpfs              /tmp   tmpfs defaults,nosuid   0 0\n",
         )?;
 
-        info!("Sysroot populated with essential system files");
+        // /etc/nsswitch.conf -- required for name resolution
+        fs::write(
+            etc.join("nsswitch.conf"),
+            "passwd: files\n\
+             group:  files\n\
+             shadow: files\n\
+             hosts:  files dns\n",
+        )?;
+
+        // /etc/ssh/sshd_config -- permit root login for bootstrap/test access
+        let ssh_dir = etc.join("ssh");
+        fs::create_dir_all(&ssh_dir)?;
+        fs::write(
+            ssh_dir.join("sshd_config"),
+            "# conaryOS sshd configuration\n\
+             PermitRootLogin yes\n\
+             PubkeyAuthentication yes\n\
+             PasswordAuthentication yes\n\
+             PermitEmptyPasswords yes\n\
+             UsePAM no\n",
+        )?;
+
+        // /root/.bashrc -- minimal shell prompt
+        let root_home = root.join("root");
+        fs::create_dir_all(&root_home)?;
+        fs::write(
+            root_home.join(".bashrc"),
+            "export PS1='[\\u@\\h \\W]\\$ '\n\
+             alias ls='ls --color=auto'\n",
+        )?;
+
+        // systemd-networkd DHCP config for all ethernet interfaces
+        let networkd_dir = etc.join("systemd/network");
+        fs::create_dir_all(&networkd_dir)?;
+        fs::write(
+            networkd_dir.join("80-dhcp.network"),
+            "[Match]\n\
+             Name=en*\n\n\
+             [Network]\n\
+             DHCP=yes\n",
+        )?;
+
+        // Systemd service wiring
+        let systemd_system = etc.join("systemd/system");
+        fs::create_dir_all(systemd_system.join("multi-user.target.wants"))?;
+        fs::create_dir_all(systemd_system.join("getty.target.wants"))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            // default.target -> multi-user.target
+            symlink(
+                "/usr/lib/systemd/system/multi-user.target",
+                systemd_system.join("default.target"),
+            )?;
+
+            // Enable sshd
+            symlink(
+                "/usr/lib/systemd/system/sshd.service",
+                systemd_system.join("multi-user.target.wants/sshd.service"),
+            )?;
+
+            // Enable systemd-networkd
+            symlink(
+                "/usr/lib/systemd/system/systemd-networkd.service",
+                systemd_system.join("multi-user.target.wants/systemd-networkd.service"),
+            )?;
+
+            // Enable serial console for QEMU -nographic
+            symlink(
+                "/usr/lib/systemd/system/serial-getty@.service",
+                systemd_system.join("getty.target.wants/serial-getty@ttyS0.service"),
+            )?;
+        }
+
+        info!("Sysroot populated with system files, SSH, networking, and systemd targets");
         Ok(())
     }
 }
@@ -1341,6 +1417,36 @@ mod tests {
         assert!(passwd.contains("root:x:0:0"));
 
         let os_release = std::fs::read_to_string(root.join("etc/os-release")).unwrap();
-        assert!(os_release.contains("Conary Linux"));
+        assert!(os_release.contains("conaryOS"));
+
+        let hostname = std::fs::read_to_string(root.join("etc/hostname")).unwrap();
+        assert!(hostname.contains("conaryos"));
+
+        // SSH config
+        assert!(root.join("etc/ssh/sshd_config").exists());
+        let sshd = std::fs::read_to_string(root.join("etc/ssh/sshd_config")).unwrap();
+        assert!(sshd.contains("PermitRootLogin yes"));
+
+        // Networking
+        assert!(root.join("etc/systemd/network/80-dhcp.network").exists());
+        assert!(root.join("etc/nsswitch.conf").exists());
+
+        // Shell
+        assert!(root.join("root/.bashrc").exists());
+
+        // Systemd targets (symlinks -- unix only)
+        #[cfg(unix)]
+        {
+            assert!(root.join("etc/systemd/system/default.target").exists());
+            assert!(root
+                .join("etc/systemd/system/multi-user.target.wants/sshd.service")
+                .exists());
+            assert!(root
+                .join("etc/systemd/system/multi-user.target.wants/systemd-networkd.service")
+                .exists());
+            assert!(root
+                .join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
+                .exists());
+        }
     }
 }
