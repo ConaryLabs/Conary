@@ -432,9 +432,44 @@ fn run_single_distro(
 ) -> Result<bool> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let backend = conary_test::container::BollardBackend::new()?;
         let host_results_dir = host_results_dir();
         std::fs::create_dir_all(&host_results_dir).ok();
+
+        let manifest_paths = match suite_path {
+            Some(p) => {
+                let path = PathBuf::from(p);
+                // If the path doesn't exist, try resolving relative to the manifest directory
+                let resolved = if path.exists() {
+                    path
+                } else {
+                    let dir = manifest_dir();
+                    let with_ext = Path::new(&dir).join(format!("{p}.toml"));
+                    if with_ext.exists() {
+                        with_ext
+                    } else {
+                        // Fall through with original path — load_manifest will produce a clear error
+                        path
+                    }
+                };
+                vec![resolved]
+            }
+            None => manifests_for_phase(phase)?,
+        };
+
+        // Check if all manifests contain only QEMU boot steps — if so,
+        // skip container setup entirely (QEMU tests boot their own VMs).
+        let all_qemu_only = manifest_paths.iter().all(|p| {
+            conary_test::config::load_manifest(p)
+                .map(|m| m.is_qemu_only())
+                .unwrap_or(false)
+        });
+
+        if all_qemu_only {
+            return run_qemu_only_suite(config, distro, phase, &manifest_paths, &host_results_dir)
+                .await;
+        }
+
+        let backend = conary_test::container::BollardBackend::new()?;
 
         // Resolve and build the image.
         let cf_path = containerfile_path(config, distro)?;
@@ -460,10 +495,6 @@ fn run_single_distro(
         use conary_test::container::ContainerBackend;
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
-        let manifest_paths = match suite_path {
-            Some(p) => vec![PathBuf::from(p)],
-            None => manifests_for_phase(phase)?,
-        };
 
         let mut aggregate_suite =
             conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
@@ -525,6 +556,60 @@ fn run_single_distro(
 
         Ok(!has_failures)
     })
+}
+
+/// Run a QEMU-only test suite without any container runtime.
+///
+/// QEMU tests boot their own VMs and execute commands over SSH.
+/// The container backend, image build, and container lifecycle are
+/// entirely skipped.
+async fn run_qemu_only_suite(
+    config: &conary_test::config::distro::GlobalConfig,
+    distro: &str,
+    phase: u32,
+    manifest_paths: &[PathBuf],
+    host_results_dir: &Path,
+) -> Result<bool> {
+    tracing::info!("QEMU-only suite detected, skipping container setup");
+
+    // Create a dummy backend and container for the runner API.
+    // QEMU steps ignore these — they boot their own VMs.
+    let dummy_backend = conary_test::container::NullBackend;
+    let dummy_container_id: conary_test::container::ContainerId = "qemu-standalone".to_string();
+    let dummy_config = conary_test::container::ContainerConfig::default();
+
+    let mut aggregate_suite =
+        conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
+    aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+
+    for manifest_path in manifest_paths {
+        let manifest = conary_test::config::load_manifest(manifest_path)
+            .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
+
+        let mut runner =
+            conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
+        let suite = runner
+            .run(
+                &manifest,
+                &dummy_backend,
+                &dummy_container_id,
+                Some(&dummy_config),
+            )
+            .await?;
+        for result in suite.results {
+            aggregate_suite.record(result);
+        }
+    }
+    aggregate_suite.finish();
+
+    let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
+    println!("{json}");
+
+    let results_file = host_results_dir.join(format!("{distro}-phase{phase}.json"));
+    conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
+    tracing::info!(path = %results_file.display(), "Results written");
+
+    Ok(aggregate_suite.failed() == 0)
 }
 
 // ---------------------------------------------------------------------------

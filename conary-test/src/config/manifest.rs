@@ -100,6 +100,23 @@ pub enum StepType {
     Sleep(u64),
 }
 
+impl TestManifest {
+    /// Returns true if every step in the manifest is a `qemu_boot` step.
+    ///
+    /// QEMU-only suites do not need a container runtime — they boot their
+    /// own VMs. The CLI uses this to skip container image build/start.
+    pub fn is_qemu_only(&self) -> bool {
+        let has_tests = !self.test.is_empty();
+        has_tests
+            && self.test.iter().all(|t| {
+                !t.step.is_empty()
+                    && t.step
+                        .iter()
+                        .all(|s| s.qemu_boot.is_some())
+            })
+    }
+}
+
 impl TestStep {
     pub fn step_type(&self) -> Option<StepType> {
         if let Some(cmd) = &self.run {

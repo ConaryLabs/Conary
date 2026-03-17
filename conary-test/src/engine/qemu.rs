@@ -40,6 +40,15 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         "tcg"
     };
 
+    // Locate UEFI firmware — bootstrap images use GPT + EFI boot
+    let ovmf_paths = [
+        "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+        "/usr/share/qemu/OVMF_CODE.fd",
+    ];
+    let ovmf_code = ovmf_paths.iter().find(|p| Path::new(p).exists());
+
     let mut qemu = Command::new("qemu-system-x86_64");
     qemu.args([
         "-m",
@@ -56,6 +65,10 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         "-accel",
         accel,
     ]);
+    // Add UEFI firmware if available (required for GPT/EFI boot images)
+    if let Some(fw) = ovmf_code {
+        qemu.args(["-bios", fw]);
+    }
     qemu.stdin(Stdio::null());
     qemu.stdout(Stdio::piped());
     qemu.stderr(Stdio::piped());
