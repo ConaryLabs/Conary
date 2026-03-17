@@ -254,6 +254,7 @@ impl BaseBuilder {
         ("efivar", "boot"),
         ("efibootmgr", "boot"),
         ("dosfstools", "boot"),
+        ("dracut", "boot"),
         ("grub", "boot"),
     ];
 
@@ -1123,10 +1124,10 @@ impl BaseBuilder {
         // /etc/fstab
         fs::write(
             etc.join("fstab"),
-            "# /etc/fstab - Conary system\n\
-             LABEL=CONARY_ROOT  /          ext4  defaults,noatime  0 1\n\
-             LABEL=CONARY_ESP   /boot/efi  vfat  defaults,noatime  0 2\n\
-             tmpfs              /tmp       tmpfs defaults,nosuid   0 0\n",
+            "# /etc/fstab - conaryOS\n\
+             LABEL=CONARY_ROOT  /      ext4  defaults,noatime  0 1\n\
+             LABEL=CONARY_ESP   /boot  vfat  defaults,noatime  0 2\n\
+             tmpfs              /tmp   tmpfs defaults,nosuid   0 0\n",
         )?;
 
         info!("Sysroot populated with essential system files");
@@ -1181,7 +1182,7 @@ mod tests {
         let boot_count = BaseBuilder::BOOT_PACKAGES.len();
 
         let total = lib_count + dev_count + core_count + user_count + boot_count;
-        assert_eq!(total, 60); // 12 + 14 + 7 + 22 + 5
+        assert_eq!(total, 61); // 12 + 14 + 7 + 22 + 6
     }
 
     #[test]

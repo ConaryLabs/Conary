@@ -936,7 +936,7 @@ impl ImageBuilder {
 #
 # <file system>  <mount point>  <type>  <options>        <dump> <pass>
 LABEL=CONARY_ROOT  /              ext4    defaults,noatime  0      1
-LABEL=CONARY_ESP   /boot/efi      vfat    defaults,noatime  0      2
+LABEL=CONARY_ESP   /boot          vfat    defaults,noatime  0      2
 tmpfs              /tmp           tmpfs   defaults,nosuid   0      0
 ";
 
