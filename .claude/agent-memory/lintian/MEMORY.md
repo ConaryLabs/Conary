@@ -54,6 +54,17 @@
 - Governor rate limiter DashMaps cleaned every 5 min via `run_limiter_cleanup()` (retain_recent + shrink_to_fit)
 - auth_middleware spawns background `touch()` on every authenticated request (open + write) -- no debouncing
 
+## Dead Code Audit (2026-03-16)
+- 27 `#[allow(dead_code)]` markers audited across the codebase
+- Common pattern: serde deserialization structs with unused fields (sync.rs) -- annotation needed to match wire format
+- Common pattern: RAII fields kept alive for side effects (SystemLock::file, tool_router via macro)
+- rmcp `#[tool_router]` macro generates code that reads `tool_router` field -- compiler can't see through it
+- `BenchmarkResult` in tests/inference_benchmark.rs is truly dead (never instantiated)
+- `CapturedPatch` in provenance_capture.rs has unnecessary annotation (struct IS used)
+- federation.rs PeerRow/StatsRow have struct-level annotations but most fields are used -- should be field-level
+- provenance_capture.rs has 3 public methods (with_recipe_hash, record_git_commit, record_build_deps) that are planned API but not wired up yet
+- Transaction module has 2 dead fields (deployer, description) -- both are planned for future use
+
 ## Review Findings (2026-03-08 full audit)
 - No SQL injection via format strings -- all DB queries use parameterized ?1 bindings
 - No `unwrap()`/`expect()` in non-test server handler code (all are in #[cfg(test)] blocks)
@@ -67,3 +78,16 @@
 - Resolver uses `as u32` for pool indices -- safe at current scale but fragile
 - CPIO parser has proper MAX_FILE_SIZE and MAX_NAME_SIZE guards
 - Recovery module's symlink validation is more permissive than staging validation
+
+## Bootstrap Pipeline Patterns (2026-03-16 bootable image spec review)
+- `populate_sysroot()` exists and is unit tested but never called from the build pipeline
+- `generate_initramfs()` in image.rs is a busybox-based fallback; hardcodes `/dev/vda2`
+- `dracut` appears in `package_phase()` classifier but NOT in any PACKAGES constant -- will not be installed
+- Duplicate fstab creation: `populate_sysroot()` in base.rs AND `create_fstab()` in image.rs
+- ESP mount path `/boot/efi` in both fstabs conflicts with repart `CopyFiles=/boot:/` semantics
+- Partition labels "ESP"/"root" in repart.rs mismatch fstab/boot config refs "CONARY_ESP"/"CONARY_ROOT"
+- GRUB code in image.rs (`setup_efi_boot`, `create_grub_config`, `create_stub_efi`) writes nothing when EFI binary not found
+- No network daemon enabled in sysroot (no systemd-networkd, no DHCP)
+- QEMU test SSH uses `BatchMode=yes` -- incompatible with password-based auth, needs key-based auth
+- `ssh-keygen -A -f <prefix>` does NOT re-root key generation; `-f` is ignored by `-A`
+- systemd-boot EFI binary (`systemd-bootx64.efi`) requires systemd built with `-Dbootloader=true`
