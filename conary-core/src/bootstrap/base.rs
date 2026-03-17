@@ -384,8 +384,14 @@ impl BaseBuilder {
         // The stage0 cross-tools (prefixed binaries like x86_64-conary-linux-gnu-ar)
         // live in a different directory than stage1's non-prefixed tools. Both
         // need to be in PATH for configure scripts and makefiles to find them.
+        //
+        // target_root/usr/bin is also added so that dev tools built in earlier
+        // phases (meson, cmake, ninja, python3) are available to later packages
+        // (systemd, dbus, etc.) that need them.
         let stage0_tools = work_dir.join("stage0").join("tools").join("bin");
         let ct_tools = std::path::Path::new("/conary/bootstrap/tools/bin");
+        let target_bin = target_root.join("usr/bin");
+        let target_sbin = target_root.join("usr/sbin");
         if let Some(current_path) = build_env.get("PATH").cloned() {
             let mut paths = vec![current_path.clone()];
             if stage0_tools.exists() {
@@ -394,6 +400,9 @@ impl BaseBuilder {
             if ct_tools.exists() {
                 paths.insert(0, ct_tools.display().to_string());
             }
+            // Target sysroot bins go first — prefer freshly-built tools
+            paths.insert(0, target_sbin.display().to_string());
+            paths.insert(0, target_bin.display().to_string());
             build_env.insert("PATH".to_string(), paths.join(":"));
         }
 

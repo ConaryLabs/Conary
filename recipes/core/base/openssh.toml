@@ -37,9 +37,10 @@ configure = """
     --with-privsep-user=sshd \
     --with-privsep-path=/var/lib/sshd \
     --with-ssl-engine \
-    --with-pam \
-    --with-selinux \
-    --with-audit=linux \
+    --without-pam \
+    --without-selinux \
+    --without-audit \
+    --without-openssl-header-check \
     --disable-strip \
     --with-default-path=/usr/local/bin:/usr/bin:/bin \
     --with-superuser-path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
