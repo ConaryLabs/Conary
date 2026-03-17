@@ -51,7 +51,7 @@ meson setup build \
     -Drc-local=/etc/rc.local \
     -Ddefault-hierarchy=unified \
     -Ddefault-kill-user-processes=false \
-    -Dpamconfdir=/etc/pam.d \
+    -Dpam=false \
     -Ddns-servers='1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net' \
     -Dntp-servers='0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org' \
     -Dsupport-url='https://github.com/ConaryLabs/Conary/issues' \
@@ -89,6 +89,11 @@ meson setup build \
     -Dxdg-autostart=true \
     -Dman=false \
     -Dhtml=false \
+    -Dnobody-user=nobody \
+    -Dnobody-group=nogroup \
+    -Dkmod=false \
+    -Ddbus=disabled \
+    -Dbootloader=true \
     -Dtests=false \
     -Dinstall-tests=false
 """
@@ -119,8 +124,6 @@ mkdir -p %(destdir)s/bin
 ln -sf /usr/bin/systemctl %(destdir)s/bin/systemctl
 ln -sf /usr/bin/journalctl %(destdir)s/bin/journalctl
 """
-
-workdir = "."
 
 [variables]
 jobs = "$(nproc)"

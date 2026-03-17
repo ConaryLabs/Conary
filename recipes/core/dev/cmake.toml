@@ -33,10 +33,10 @@ configure = """
     --datadir=/share/cmake \
     --docdir=/share/doc/cmake \
     --mandir=/share/man \
-    --system-curl \
-    --system-zlib \
-    --system-expat \
-    --system-zstd \
+    --no-system-curl \
+    --no-system-zlib \
+    --no-system-expat \
+    --no-system-zstd \
     --parallel=%(jobs)s \
     -- \
     -DCMAKE_BUILD_TYPE=Release \

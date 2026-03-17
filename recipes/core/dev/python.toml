@@ -30,12 +30,12 @@ configure = """
 ./configure \
     --prefix=/usr \
     --enable-shared \
-    --enable-optimizations \
+    --disable-optimizations \
     --enable-ipv6 \
     --with-computed-gotos \
     --with-lto \
-    --with-system-expat \
-    --with-system-ffi \
+    --without-system-expat \
+    --without-system-ffi \
     --with-ensurepip=install \
     --without-static-libpython
 """
