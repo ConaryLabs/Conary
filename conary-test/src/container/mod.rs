@@ -6,7 +6,7 @@ pub mod lifecycle;
 
 pub use backend::{
     ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,
-    VolumeMount,
+    NullBackend, VolumeMount,
 };
 pub use image::build_distro_image;
 pub use lifecycle::BollardBackend;

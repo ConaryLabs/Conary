@@ -128,3 +128,61 @@ pub trait ContainerBackend: Send + Sync {
     /// List all available container images.
     async fn list_images(&self) -> Result<Vec<ImageInfo>>;
 }
+
+/// A no-op container backend for QEMU-only test suites.
+///
+/// All methods return errors — this backend should never be called directly.
+/// QEMU steps bypass the container backend entirely.
+pub struct NullBackend;
+
+#[async_trait]
+impl ContainerBackend for NullBackend {
+    async fn build_image(&self, _: &Path, _: &str, _: HashMap<String, String>) -> Result<String> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn create(&self, _: ContainerConfig) -> Result<ContainerId> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn start(&self, _: &ContainerId) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn exec(&self, _: &ContainerId, _: &[&str], _: Duration) -> Result<ExecResult> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn exec_detached(&self, _: &ContainerId, _: &[&str]) -> Result<String> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn exec_logs(&self, _: &str) -> Result<mpsc::Receiver<String>> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn exec_result(&self, _: &str) -> Result<ExecResult> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn kill(&self, _: &ContainerId, _: &str) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn kill_exec(&self, _: &str, _: &str) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn stop(&self, _: &ContainerId) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn remove(&self, _: &ContainerId) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn copy_from(&self, _: &ContainerId, _: &str) -> Result<Vec<u8>> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn copy_to(&self, _: &ContainerId, _: &str, _: &[u8]) -> Result<()> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn logs(&self, _: &ContainerId) -> Result<String> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn inspect_container(&self, _: &ContainerId) -> Result<ContainerInspection> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+    async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+        anyhow::bail!("NullBackend: container operations not available in QEMU-only mode")
+    }
+}
