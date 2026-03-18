@@ -377,48 +377,24 @@ impl RemiClient {
             pb.set_message(format!("Downloading {} chunks", manifest.chunks.len()));
         }
 
+        let retry_config = crate::repository::retry::RetryConfig::quick();
+
         for chunk in &manifest.chunks {
             let url = format!("{}/v1/chunks/{}", self.base_url, chunk.hash);
             debug!("Downloading chunk: {} ({} bytes)", chunk.hash, chunk.size);
 
-            let max_attempts: u32 = 3;
-            let mut last_err = None;
-            let mut data_result = None;
-
-            for attempt in 1..=max_attempts {
-                let response = match chunk_client.get(&url).send() {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        warn!(
-                            "Transient error downloading chunk {} (attempt {}/{}): {e}",
-                            chunk.hash, attempt, max_attempts
-                        );
-                        last_err = Some(format!("Failed to download chunk {}: {e}", chunk.hash));
-                        if attempt < max_attempts {
-                            let backoff =
-                                Duration::from_millis(500 * u64::from(2_u32.pow(attempt - 1)));
-                            std::thread::sleep(backoff);
-                        }
-                        continue;
-                    }
-                };
+            let data = crate::repository::retry::with_retry(&retry_config, || {
+                let response = chunk_client
+                    .get(&url)
+                    .send()
+                    .download_context(&url)?;
 
                 let status_code = response.status().as_u16();
                 if status_code >= 500 || status_code == 408 || status_code == 429 {
-                    warn!(
-                        "Server error downloading chunk {} (HTTP {}, attempt {}/{})",
-                        chunk.hash, status_code, attempt, max_attempts
-                    );
-                    last_err = Some(format!(
+                    return Err(Error::DownloadError(format!(
                         "Chunk {} returned HTTP {}",
                         chunk.hash, status_code
-                    ));
-                    if attempt < max_attempts {
-                        let backoff =
-                            Duration::from_millis(500 * u64::from(2_u32.pow(attempt - 1)));
-                        std::thread::sleep(backoff);
-                    }
-                    continue;
+                    )));
                 }
 
                 if !response.status().is_success() {
@@ -430,37 +406,9 @@ impl RemiClient {
                     )));
                 }
 
-                match response.bytes() {
-                    Ok(bytes) => {
-                        data_result = Some(bytes);
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Error reading chunk {} (attempt {}/{}): {e}",
-                            chunk.hash, attempt, max_attempts
-                        );
-                        last_err = Some(format!("Failed to read chunk {}: {e}", chunk.hash));
-                        if attempt < max_attempts {
-                            let backoff =
-                                Duration::from_millis(500 * u64::from(2_u32.pow(attempt - 1)));
-                            std::thread::sleep(backoff);
-                        }
-                    }
-                }
-            }
-
-            let data = match data_result {
-                Some(d) => d,
-                None => {
-                    return Err(Error::DownloadError(last_err.unwrap_or_else(|| {
-                        format!(
-                            "Failed to download chunk {} after {} attempts",
-                            chunk.hash, max_attempts
-                        )
-                    })));
-                }
-            };
+                let bytes = response.bytes().download_context(&url)?;
+                Ok(bytes)
+            })?;
 
             // Verify chunk hash using shared hash module
             crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| {
