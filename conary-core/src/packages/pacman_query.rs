@@ -7,23 +7,10 @@
 
 use crate::error::{Error, Result};
 use crate::packages::archive_utils::get_file_metadata;
-use crate::packages::rpm_query::DependencyInfo;
+use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
-
-/// Information about a file in an installed pacman package
-#[derive(Debug, Clone)]
-pub struct InstalledFileInfo {
-    pub path: String,
-    pub size: i64,
-    pub mode: i32,
-    pub digest: Option<String>,
-    pub user: Option<String>,
-    pub group: Option<String>,
-    /// For symlinks, the target path
-    pub link_target: Option<String>,
-}
 
 /// Information about an installed pacman package
 #[derive(Debug, Clone)]
@@ -53,18 +40,8 @@ impl InstalledPacmanInfo {
 pub fn list_installed_packages() -> Result<Vec<String>> {
     debug!("Querying installed pacman packages");
 
-    let output = Command::new("pacman").args(["-Qq"]).output().map_err(|e| {
-        Error::InitError(format!("Failed to run pacman: {}. Is pacman installed?", e))
-    })?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "pacman -Qq failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let packages: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let stdout = run_query_command("pacman", &["-Qq"])?;
+    let packages: Vec<String> = stdout
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -207,6 +184,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             user: None,
             group: None,
             link_target,
+            mtime: None,
         });
     }
 
@@ -384,21 +362,11 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledPacmanInfo>> {
     debug!("Querying all installed pacman packages with info");
 
     // Use pacman -Q to get all packages with versions
-    let output = Command::new("pacman")
-        .args(["-Q"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "pacman -Q failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
+    let stdout = run_query_command("pacman", &["-Q"])?;
 
     let mut packages = HashMap::new();
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in stdout.lines() {
         // Format: "package_name version"
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
@@ -463,20 +431,10 @@ pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
 pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
     debug!("Querying user-installed pacman packages via pacman -Qe");
 
-    let output = Command::new("pacman")
-        .args(["-Qe"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "pacman -Qe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
+    let stdout = run_query_command("pacman", &["-Qe"])?;
 
     // Output format: "package_name version\n..."
-    let user_installed = String::from_utf8_lossy(&output.stdout)
+    let user_installed = stdout
         .lines()
         .filter_map(|line| {
             let name = line.split_whitespace().next()?;

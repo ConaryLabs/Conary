@@ -6,50 +6,10 @@
 //! using the `rpm` command-line tool.
 
 use crate::error::{Error, Result};
+use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
-
-/// Dependency with version constraint
-#[derive(Debug, Clone)]
-pub struct DependencyInfo {
-    pub name: String,
-    pub constraint: Option<String>, // e.g., ">= 1.0", "< 2.0"
-}
-
-/// Information about a file in an installed RPM package
-#[derive(Debug, Clone)]
-pub struct InstalledFileInfo {
-    pub path: String,
-    pub size: i64,
-    pub mode: i32,
-    pub mtime: Option<i64>,
-    pub digest: Option<String>,
-    pub user: Option<String>,
-    pub group: Option<String>,
-    /// For symlinks, the target path
-    pub link_target: Option<String>,
-}
-
-impl InstalledFileInfo {
-    /// Check if this file is a symlink (mode & S_IFMT == S_IFLNK)
-    pub fn is_symlink(&self) -> bool {
-        // S_IFLNK = 0o120000 = 0xA000
-        (self.mode & 0o170000) == 0o120000
-    }
-
-    /// Check if this file is a directory (mode & S_IFMT == S_IFDIR)
-    pub fn is_directory(&self) -> bool {
-        // S_IFDIR = 0o040000
-        (self.mode & 0o170000) == 0o040000
-    }
-
-    /// Check if this file is a regular file (mode & S_IFMT == S_IFREG)
-    pub fn is_regular_file(&self) -> bool {
-        // S_IFREG = 0o100000
-        (self.mode & 0o170000) == 0o100000
-    }
-}
 
 /// Information about an installed RPM package
 #[derive(Debug, Clone)]
@@ -103,19 +63,8 @@ impl InstalledRpmInfo {
 pub fn list_installed_packages() -> Result<Vec<String>> {
     debug!("Querying installed RPM packages");
 
-    let output = Command::new("rpm")
-        .args(["-qa", "--queryformat", "%{NAME}\n"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}. Is rpm installed?", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "rpm -qa failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let packages: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let stdout = run_query_command("rpm", &["-qa", "--queryformat", "%{NAME}\n"])?;
+    let packages: Vec<String> = stdout
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -436,20 +385,7 @@ fn parse_rpm_dependency(dep: &str) -> DependencyInfo {
 pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     debug!("Querying provides for RPM package: {}", name);
 
-    let output = Command::new("rpm")
-        .args(["-q", "--provides", name])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "rpm -q --provides {} failed: {}",
-            name,
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = run_query_command("rpm", &["-q", "--provides", name])?;
     let provides: Vec<String> = stdout
         .lines()
         .map(|line| line.trim().to_string())
@@ -466,25 +402,14 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
     debug!("Querying all installed RPM packages with info");
 
     // Query format: NAME|VERSION|RELEASE|EPOCH|ARCH
-    let output = Command::new("rpm")
-        .args([
-            "-qa",
-            "--queryformat",
-            "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}\n",
-        ])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "rpm -qa failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
+    let stdout = run_query_command(
+        "rpm",
+        &["-qa", "--queryformat", "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}\n"],
+    )?;
 
     let mut packages = HashMap::new();
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in stdout.lines() {
         let parts: Vec<&str> = line.split('|').collect();
         if parts.len() < 5 {
             warn!("Skipping malformed rpm output line: {}", line);
@@ -530,19 +455,7 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
 pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
     debug!("Querying user-installed RPM packages via REASON tag");
 
-    let output = Command::new("rpm")
-        .args(["-qa", "--queryformat", "%{NAME}|%{REASON}\n"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "rpm -qa --queryformat failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = run_query_command("rpm", &["-qa", "--queryformat", "%{NAME}|%{REASON}\n"])?;
 
     // If every reason field is "(none)" the tag is unsupported — treat all as explicit.
     let has_reason_support = stdout

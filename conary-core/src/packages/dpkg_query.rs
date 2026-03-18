@@ -7,23 +7,10 @@
 
 use crate::error::{Error, Result};
 use crate::packages::archive_utils::get_file_metadata;
-use crate::packages::rpm_query::DependencyInfo;
+use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, warn};
-
-/// Information about a file in an installed dpkg package
-#[derive(Debug, Clone)]
-pub struct InstalledFileInfo {
-    pub path: String,
-    pub size: i64,
-    pub mode: i32,
-    pub digest: Option<String>,
-    pub user: Option<String>,
-    pub group: Option<String>,
-    /// For symlinks, the target path
-    pub link_target: Option<String>,
-}
 
 /// Information about an installed dpkg package
 #[derive(Debug, Clone)]
@@ -58,24 +45,8 @@ impl InstalledDpkgInfo {
 pub fn list_installed_packages() -> Result<Vec<String>> {
     debug!("Querying installed dpkg packages");
 
-    let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Package}\n"])
-        .output()
-        .map_err(|e| {
-            Error::InitError(format!(
-                "Failed to run dpkg-query: {}. Is dpkg installed?",
-                e
-            ))
-        })?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "dpkg-query failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let packages: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let stdout = run_query_command("dpkg-query", &["-W", "-f", "${Package}\n"])?;
+    let packages: Vec<String> = stdout
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -202,6 +173,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             user: None,
             group: None,
             link_target,
+            mtime: None,
         });
     }
 
@@ -392,21 +364,14 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledDpkgInfo>> {
     debug!("Querying all installed dpkg packages with info");
 
     // Use ASCII Record Separator (\x1e) to avoid conflicts with | in field values
-    let output = Command::new("dpkg-query")
-        .args(["-W", "-f", "${Package}\x1e${Version}\x1e${Architecture}\n"])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run dpkg-query: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::InitError(format!(
-            "dpkg-query failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
+    let stdout = run_query_command(
+        "dpkg-query",
+        &["-W", "-f", "${Package}\x1e${Version}\x1e${Architecture}\n"],
+    )?;
 
     let mut packages = HashMap::new();
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in stdout.lines() {
         let parts: Vec<&str> = line.split('\x1e').collect();
         if parts.len() < 3 {
             warn!("Skipping malformed dpkg-query output line: {}", line);
