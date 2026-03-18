@@ -1,0 +1,126 @@
+# recipes/tier2/openssh.toml
+#
+# BLFS — OpenSSH-10.2p1
+# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/openssh.html
+#
+# Secure shell client and server. Built with PAM support. Includes
+# sshd.service systemd unit and sshd_config that enables PubkeyAuth
+# and PermitRootLogin for bootstrap testing.
+#
+# DEVIATION: PermitRootLogin enabled (LFS/BLFS default is no)
+# DEVIATION: PasswordAuthentication yes (for bootstrap testing)
+
+[package]
+name = "openssh"
+version = "10.2p1"
+release = "1"
+summary = "Secure Shell client and server"
+description = """
+OpenSSH is the premier connectivity tool for remote login with the
+SSH protocol. It encrypts all traffic to eliminate eavesdropping,
+connection hijacking, and other attacks. OpenSSH provides a large
+suite of secure tunneling capabilities and authentication methods.
+"""
+license = "BSD-2-Clause"
+homepage = "https://www.openssh.com/"
+
+[source]
+archive = "https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz"
+checksum = "md5:801b5ad6da38e0045de20dd5dd2f6a80"
+
+[build]
+requires = ["glibc", "openssl", "linux-pam", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr                     \
+            --sysconfdir=/etc/ssh             \
+            --with-privsep-path=/var/lib/sshd \
+            --with-default-path=/usr/bin      \
+            --with-superuser-path=/usr/sbin:/usr/bin \
+            --with-pid-dir=/run               \
+            --with-pam
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+install -v -m755 contrib/ssh-copy-id /usr/bin
+install -v -m644 contrib/ssh-copy-id.1 /usr/share/man/man1
+install -v -m755 -d /usr/share/doc/openssh-%(version)s
+install -v -m644 INSTALL LICENCE OVERVIEW README* /usr/share/doc/openssh-%(version)s
+
+# Create privilege separation directory
+install -v -dm700 /var/lib/sshd
+
+# Create sshd user if it does not exist
+if ! getent passwd sshd >/dev/null 2>&1; then
+    groupadd -g 50 sshd
+    useradd -c 'sshd PrivSep' -d /var/lib/sshd -g sshd \
+            -s /bin/false -u 50 sshd
+fi
+
+# PAM configuration for sshd
+sed 's@d/login@d/sshd@g' /etc/pam.d/login > /etc/pam.d/sshd
+chmod 644 /etc/pam.d/sshd
+
+# Write sshd_config with bootstrap-friendly settings
+cat > /etc/ssh/sshd_config << "SSHEOF"
+# conaryOS sshd_config -- bootstrap defaults
+# Regenerate with stricter settings for production use.
+
+PermitRootLogin yes
+PubkeyAuthentication yes
+PasswordAuthentication yes
+PermitEmptyPasswords yes
+UsePAM no
+
+# Logging
+SyslogFacility AUTH
+LogLevel INFO
+
+# Subsystem
+Subsystem sftp /usr/libexec/sftp-server
+SSHEOF
+
+# Install systemd unit
+cat > /usr/lib/systemd/system/sshd.service << "UNITEOF"
+[Unit]
+Description=OpenSSH Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/sshd -D
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=42s
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+# Enable sshd.service
+systemctl enable sshd.service 2>/dev/null || \
+    mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    ln -sf /usr/lib/systemd/system/sshd.service \
+           /etc/systemd/system/multi-user.target.wants/sshd.service
+"""
+
+[variables]
+jobs = "$(nproc)"
+
+[deviations]
+lfs_section = "BLFS"
+lfs_url = "https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/openssh.html"
+changes = [
+    { flag = "PermitRootLogin", lfs = "no", conary = "yes", reason = "Required for bootstrap/test access" },
+    { flag = "PasswordAuthentication", lfs = "default", conary = "yes", reason = "Bootstrap convenience" },
+    { flag = "PermitEmptyPasswords", lfs = "no", conary = "yes", reason = "Bootstrap convenience (no password set)" },
+    { flag = "UsePAM", lfs = "yes", conary = "no", reason = "Simpler bootstrap without PAM session" },
+]

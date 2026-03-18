@@ -1,0 +1,50 @@
+# recipes/tier2/nano.toml
+#
+# BLFS — Nano-8.7.1
+# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/nano.html
+#
+# Small, friendly text editor. An alternative to vim for users who
+# prefer a simpler editor. Built with UTF-8 support.
+
+[package]
+name = "nano"
+version = "8.7.1"
+release = "1"
+summary = "Small and friendly text editor"
+description = """
+GNU nano is a small and friendly text editor. It aims to replace
+Pico, the default editor in the Pine email suite, while also
+providing additional functionality. nano has syntax highlighting,
+undo/redo, and UTF-8 support.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.nano-editor.org/"
+
+[source]
+archive = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz"
+checksum = "md5:d873085c342e3670d108c08a0c3ebe2f"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr             \
+            --sysconfdir=/etc         \
+            --enable-utf8             \
+            --docdir=/usr/share/doc/nano-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+install -v -m644 doc/{nano.html,sample.nanorc} /usr/share/doc/nano-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"
