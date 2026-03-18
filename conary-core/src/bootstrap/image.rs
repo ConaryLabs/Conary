@@ -189,7 +189,6 @@ pub struct ImageTools {
     pub mkfs_ext4: Option<PathBuf>,
     pub mount: PathBuf,
     pub umount: PathBuf,
-    pub grub_install: Option<PathBuf>,
     pub qemu_img: Option<PathBuf>,
     pub xorriso: Option<PathBuf>,
     pub mksquashfs: Option<PathBuf>,
@@ -226,7 +225,6 @@ impl ImageTools {
             mkfs_ext4: find_tool(&["mkfs.ext4", "mke2fs"]),
             mount,
             umount,
-            grub_install: find_tool(&["grub-install", "grub2-install"]),
             qemu_img: find_tool(&["qemu-img"]),
             xorriso: find_tool(&["xorriso"]),
             mksquashfs: find_tool(&["mksquashfs"]),
@@ -291,9 +289,6 @@ impl ImageTools {
         }
         if self.mkfs_ext4.is_none() {
             missing.push("mkfs.ext4");
-        }
-        if self.grub_install.is_none() {
-            missing.push("grub-install");
         }
         if self.qemu_img.is_none() {
             missing.push("qemu-img");
@@ -536,7 +531,7 @@ impl ImageBuilder {
             format: ImageFormat::Raw,
             size,
             efi_bootable: true,
-            bios_bootable: self.tools.grub_install.is_some(),
+            bios_bootable: false,
             method: "legacy".to_string(),
             partitions: vec![
                 format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
@@ -955,14 +950,6 @@ tmpfs              /tmp           tmpfs   defaults,nosuid   0      0
         // Create EFI boot structure
         self.log_line("Setting up EFI boot");
         self.setup_efi_boot(&mount_dir)?;
-
-        // Install GRUB for BIOS if available
-        if self.tools.grub_install.is_some() {
-            self.log_line("Installing GRUB for BIOS boot");
-            // This would need the loop device, but GRUB installation in chroot
-            // is complex - for now we focus on EFI boot
-            debug!("GRUB BIOS installation skipped (requires chroot)");
-        }
 
         Ok(())
     }

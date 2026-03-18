@@ -254,7 +254,6 @@ impl BaseBuilder {
         ("efivar", "boot"),
         ("efibootmgr", "boot"),
         ("dosfstools", "boot"),
-        ("dracut", "boot"),
         ("grub", "boot"),
     ];
 
@@ -624,7 +623,7 @@ impl BaseBuilder {
                 BaseBuildPhase::DevTools
             }
             "linux" | "coreutils" | "bash" | "util-linux" | "systemd" => BaseBuildPhase::CoreSystem,
-            "grub" | "dosfstools" | "efivar" | "efibootmgr" | "popt" | "dracut" => {
+            "grub" | "dosfstools" | "efivar" | "efibootmgr" | "popt" => {
                 BaseBuildPhase::Boot
             }
             _ => BaseBuildPhase::Userland,
@@ -1221,9 +1220,9 @@ impl BaseBuilder {
 
     /// Finalize a sysroot for image generation.
     ///
-    /// Runs host tools against the sysroot to prepare it for booting:
-    /// kernel copy, initramfs generation (dracut), systemd-boot loader
+    /// Prepares the sysroot for booting: kernel copy, systemd-boot loader
     /// configuration, EFI binary copy, and SSH host key generation.
+    /// No initramfs is generated -- the kernel has root fs drivers built in.
     pub fn finalize_sysroot(root: &Path) -> Result<(), crate::error::Error> {
         // Step 1: Detect kernel version from /usr/lib/modules/<ver>/
         let modules_dir = root.join("usr/lib/modules");
@@ -1269,60 +1268,7 @@ impl BaseBuilder {
             warn!("Kernel image not found at {}, skipping copy", vmlinuz_src.display());
         }
 
-        // Step 3: Generate initramfs via dracut (requires bind mounts)
-        let mount_points = ["proc", "sys", "dev"];
-        let mut mounted = Vec::new();
-
-        for mp in &mount_points {
-            let target = root.join(mp);
-            fs::create_dir_all(&target)?;
-            let source = Path::new("/").join(mp);
-            let status = Command::new("mount")
-                .args(["--bind"])
-                .arg(&source)
-                .arg(&target)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    debug!("Bind-mounted /{mp} into sysroot");
-                    mounted.push(target);
-                }
-                Ok(s) => warn!("mount --bind /{mp} failed with exit code {s}"),
-                Err(e) => warn!("Failed to run mount for /{mp}: {e}"),
-            }
-        }
-
-        let dracut_status = Command::new("chroot")
-            .arg(root)
-            .args([
-                "dracut",
-                "--no-hostonly",
-                "--force",
-                &format!("/boot/initramfs-{ver}.img"),
-                &ver,
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .status();
-
-        match dracut_status {
-            Ok(s) if s.success() => info!("Generated initramfs for kernel {ver}"),
-            Ok(s) => warn!("dracut exited with code {s}"),
-            Err(e) => warn!("Failed to run dracut: {e}"),
-        }
-
-        // Unmount in reverse order (best-effort)
-        for target in mounted.iter().rev() {
-            let _ = Command::new("umount")
-                .arg(target)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-
-        // Step 4: Write systemd-boot loader config
+        // Step 3: Write systemd-boot loader config
         let loader_dir = boot_dir.join("loader");
         fs::create_dir_all(&loader_dir)?;
         fs::write(
@@ -1334,7 +1280,7 @@ impl BaseBuilder {
         )?;
         debug!("Wrote loader.conf");
 
-        // Step 5: Write BLS entry
+        // Step 4: Write BLS entry (no initrd -- kernel has root fs driver built in)
         let entries_dir = loader_dir.join("entries");
         fs::create_dir_all(&entries_dir)?;
         fs::write(
@@ -1342,19 +1288,18 @@ impl BaseBuilder {
             format!(
                 "title   conaryOS\n\
                  linux   /vmlinuz-{ver}\n\
-                 initrd  /initramfs-{ver}.img\n\
                  options root=LABEL=CONARY_ROOT ro console=ttyS0,115200\n"
             ),
         )?;
         debug!("Wrote BLS entry for kernel {ver}");
 
-        // Step 6: Copy systemd-boot EFI binary
+        // Step 5: Copy systemd-boot EFI binary
         Self::copy_efi_binary(root)?;
 
-        // Step 7: Generate SSH host keys
+        // Step 6: Generate SSH host keys
         Self::generate_ssh_host_keys(root);
 
-        // Step 8: Generate test SSH keypair
+        // Step 7: Generate test SSH keypair
         Self::generate_test_ssh_keypair(root);
 
         info!("Sysroot finalized for image generation");
@@ -1364,26 +1309,23 @@ impl BaseBuilder {
     /// Copy the systemd-boot EFI binary into the sysroot.
     ///
     /// This is the only hard error in finalize -- without an EFI binary the
-    /// image cannot boot at all.
+    /// image cannot boot at all.  The binary must come from the sysroot
+    /// (no host fallback).
     fn copy_efi_binary(root: &Path) -> Result<(), crate::error::Error> {
         let efi_name = "systemd-bootx64.efi";
         let sysroot_efi = root.join(format!("usr/lib/systemd/boot/efi/{efi_name}"));
-        let host_efi = PathBuf::from(format!("/usr/lib/systemd/boot/efi/{efi_name}"));
 
-        let source = if sysroot_efi.exists() {
-            sysroot_efi
-        } else if host_efi.exists() {
-            host_efi
-        } else {
+        if !sysroot_efi.exists() {
             return Err(crate::error::Error::InitError(format!(
-                "systemd-boot EFI binary not found in sysroot or host at usr/lib/systemd/boot/efi/{efi_name}"
+                "systemd-boot EFI binary not found in sysroot at {}",
+                sysroot_efi.display()
             )));
-        };
+        }
 
         let efi_dst = root.join("boot/EFI/BOOT");
         fs::create_dir_all(&efi_dst)?;
-        fs::copy(&source, efi_dst.join("BOOTX64.EFI"))?;
-        info!("Copied systemd-boot EFI binary from {}", source.display());
+        fs::copy(&sysroot_efi, efi_dst.join("BOOTX64.EFI"))?;
+        info!("Copied systemd-boot EFI binary from {}", sysroot_efi.display());
         Ok(())
     }
 
