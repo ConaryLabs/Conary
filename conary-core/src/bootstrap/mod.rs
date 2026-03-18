@@ -4,12 +4,14 @@
 //!
 //! This module provides the tooling to bootstrap a complete Conary system
 //! without relying on an existing package manager. The bootstrap process
-//! follows a staged approach aligned with Linux From Scratch 13:
+//! follows a 6-phase approach aligned with Linux From Scratch 13:
 //!
-//! - **Stage 1**: Self-hosted toolchain (cross-compiled from host)
-//! - **Base System**: Core packages (kernel, glibc, coreutils, networking)
-//! - **Conary**: Self-hosting (Rust + Conary built in-sysroot)
-//! - **Image**: Bootable image generation
+//! - **Phase 1 (CrossTools)**: Cross-toolchain (LFS Ch5)
+//! - **Phase 2 (TempTools)**: Temporary tools (LFS Ch6-7)
+//! - **Phase 3 (FinalSystem)**: Complete system (LFS Ch8)
+//! - **Phase 4 (SystemConfig)**: System configuration (LFS Ch9)
+//! - **Phase 5 (BootableImage)**: Bootable image (LFS Ch10)
+//! - **Phase 6 (Tier2)**: BLFS + Conary self-hosting
 //!
 //! # Architecture
 //!
@@ -18,21 +20,39 @@
 //!      │
 //!      ▼ (cross-compiles)
 //! ┌─────────────────────────────────────────────┐
-//! │  Stage 1: Self-hosted toolchain              │
-//! │  Produces: /conary/stage1/                   │
-//! │  Native gcc, glibc, binutils                 │
+//! │  Phase 1: Cross-toolchain (LFS Ch5)          │
+//! │  Produces: $LFS/tools/                       │
+//! │  Cross binutils, cross-GCC, glibc, libstdc++ │
 //! └─────────────────────────────────────────────┘
 //!      │
-//!      ▼ (builds)
+//!      ▼ (cross-compiles + chroot builds)
 //! ┌─────────────────────────────────────────────┐
-//! │  Base System                                 │
-//! │  Kernel, systemd, coreutils, networking...   │
+//! │  Phase 2: Temporary tools (LFS Ch6-7)        │
+//! │  17 cross-compiled + 6 chroot packages       │
 //! └─────────────────────────────────────────────┘
 //!      │
-//!      ▼
+//!      ▼ (builds inside chroot)
 //! ┌─────────────────────────────────────────────┐
-//! │  Bootable Image                              │
+//! │  Phase 3: Final system (LFS Ch8)             │
+//! │  77 packages -- complete Linux system        │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (configures)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 4: System configuration (LFS Ch9)     │
+//! │  Network, fstab, kernel, bootloader          │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (images)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 5: Bootable image (LFS Ch10)          │
 //! │  Ready to boot in VM or on hardware          │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (extends)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 6: Tier 2 (BLFS + Conary)             │
+//! │  Rust, LLVM, SQLite, Conary self-hosting     │
 //! └─────────────────────────────────────────────┘
 //! ```
 
@@ -239,6 +259,154 @@ impl Bootstrap {
         Ok(())
     }
 
+    // -----------------------------------------------------------------
+    // New 6-phase LFS-aligned pipeline methods
+    // -----------------------------------------------------------------
+
+    /// Build Phase 1: Cross-toolchain (LFS Chapter 5).
+    ///
+    /// Uses the host compiler to build a cross-toolchain targeting `LFS_TGT`.
+    /// The output lives under `$LFS/tools/` and is consumed by Phase 2.
+    pub fn build_cross_tools(&mut self) -> Result<Toolchain> {
+        let host = Toolchain::host()
+            .map_err(|e| anyhow::anyhow!("Host toolchain not found: {e}"))?;
+
+        let lfs_root = &self.config.lfs_root.clone();
+        std::fs::create_dir_all(lfs_root)?;
+
+        let builder = CrossToolsBuilder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            host,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let toolchain = builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;
+
+        Ok(toolchain)
+    }
+
+    /// Build Phase 2: Temporary tools (LFS Chapters 6-7).
+    ///
+    /// Uses the Phase 1 cross-toolchain to cross-compile utilities, then
+    /// sets up a chroot and builds additional packages natively inside it.
+    pub fn build_temp_tools(&mut self) -> Result<()> {
+        let cross_tc = self
+            .get_stage1_toolchain()
+            .ok_or_else(|| anyhow::anyhow!("Phase 1 cross-toolchain not found. Run cross-tools first."))?;
+
+        let lfs_root = &self.config.lfs_root.clone();
+
+        let builder = TempToolsBuilder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            cross_tc,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        builder.build_cross_packages()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder.setup_chroot()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder.build_chroot_packages()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::TempTools, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Build Phase 3: Final system (LFS Chapter 8).
+    ///
+    /// Builds all 77 packages of the complete LFS system inside the chroot.
+    pub fn build_final_system(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        // Use the system toolchain that is now available inside the chroot
+        let toolchain = Toolchain {
+            kind: ToolchainKind::System,
+            path: lfs_root.join("usr"),
+            target: self.config.triple().to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let mut builder = FinalSystemBuilder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            toolchain,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::FinalSystem, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Run Phase 4: System configuration (LFS Chapter 9).
+    ///
+    /// Configures network, fstab, kernel, and bootloader on the built system.
+    pub fn configure_system(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        system_config::configure_system(lfs_root)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::SystemConfig, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting).
+    ///
+    /// Builds additional packages needed for Conary to manage itself:
+    /// curl, cmake, LLVM, Rust, SQLite, OpenSSL, and Conary.
+    pub fn build_tier2(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        let toolchain = Toolchain {
+            kind: ToolchainKind::System,
+            path: lfs_root.join("usr"),
+            target: self.config.triple().to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = Tier2Builder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            toolchain,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Tier2, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Get the LFS root path from configuration.
+    pub fn lfs_root(&self) -> &Path {
+        &self.config.lfs_root
+    }
+
     /// Validate the full pipeline without building anything.
     pub fn dry_run(&self, recipe_dir: &Path) -> Result<DryRunReport> {
         let mut report = DryRunReport::default();
@@ -342,9 +510,16 @@ impl Bootstrap {
         self.stages.current_stage()
     }
 
-    /// Get the base system sysroot path if built
+    /// Get the base system sysroot path if built.
+    ///
+    /// Returns the LFS root from configuration if the FinalSystem stage
+    /// has been completed, otherwise falls back to the stage artifact path.
     pub fn get_sysroot(&self) -> Option<PathBuf> {
-        self.stages.get_artifact_path(BootstrapStage::FinalSystem)
+        if self.stages.is_complete(BootstrapStage::FinalSystem) {
+            Some(self.config.lfs_root.clone())
+        } else {
+            self.stages.get_artifact_path(BootstrapStage::FinalSystem)
+        }
     }
 
     /// Build a bootable image from the base system
