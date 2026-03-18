@@ -170,6 +170,22 @@ impl FileEntry {
         Ok(files)
     }
 
+    /// Return all file entries ordered by path.
+    ///
+    /// Used by the generation builder to collect every tracked file into the
+    /// EROFS image without per-trove round-trips.
+    pub fn find_all_ordered(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
+             trove_id, installed_at, component_id \
+             FROM files ORDER BY path",
+        )?;
+        let files = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(files)
+    }
+
     /// Find files matching a path pattern (LIKE query)
     pub fn find_by_path_pattern(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(

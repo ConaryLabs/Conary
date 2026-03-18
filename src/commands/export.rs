@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
+use conary_core::filesystem::CasStore;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
@@ -236,46 +237,25 @@ fn build_layer_tar(erofs_path: &Path, objects_dir: &Path, gen_dir: &Path) -> Res
 
 /// Collect CAS object hashes that belong to a generation.
 ///
-/// Walks the CAS objects directory and returns all hash strings found.
-/// In a full implementation this would cross-reference the generation's
-/// database state, but for now we include all CAS objects (the generation's
-/// EROFS image already encodes which objects it references).
+/// Uses `CasStore::iter_objects()` to walk the CAS directory.
+///
+/// TODO: This currently includes ALL CAS objects. In a full implementation it
+/// should cross-reference the generation's database state via
+/// `conary_core::generation::gc::live_cas_hashes()` to include only the
+/// objects referenced by the exported generation.
 fn collect_generation_cas_hashes(_gen_dir: &Path, objects_dir: &Path) -> Result<Vec<String>> {
-    let mut hashes = Vec::new();
-
     if !objects_dir.exists() {
-        return Ok(hashes);
+        return Ok(Vec::new());
     }
 
-    let entries = fs::read_dir(objects_dir)
-        .with_context(|| format!("Failed to read CAS directory {}", objects_dir.display()))?;
+    let cas = CasStore::new(objects_dir)
+        .with_context(|| format!("Failed to open CAS directory {}", objects_dir.display()))?;
 
-    for prefix_entry in entries {
-        let prefix_entry = prefix_entry?;
-        let prefix_name = prefix_entry.file_name();
-        let prefix_str = prefix_name.to_string_lossy();
-
-        // CAS prefix directories are exactly 2 hex chars
-        if prefix_str.len() != 2 || !prefix_str.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
-        }
-
-        if !prefix_entry.file_type()?.is_dir() {
-            continue;
-        }
-
-        let sub_entries = fs::read_dir(prefix_entry.path())?;
-        for suffix_entry in sub_entries {
-            let suffix_entry = suffix_entry?;
-            let suffix_name = suffix_entry.file_name();
-            let suffix_str = suffix_name.to_string_lossy();
-
-            if suffix_str.chars().all(|c| c.is_ascii_hexdigit()) {
-                let hash = format!("{prefix_str}{suffix_str}");
-                hashes.push(hash);
-            }
-        }
-    }
+    let mut hashes: Vec<String> = cas
+        .iter_objects()
+        .map(|r| r.map(|(hash, _path)| hash))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| "Failed to iterate CAS objects")?;
 
     hashes.sort();
     Ok(hashes)
@@ -726,8 +706,8 @@ mod tests {
         )
         .unwrap();
 
-        // Also add a non-hex file that should be skipped
-        fs::write(objects_dir.join("ab").join("not-a-hash"), b"skip").unwrap();
+        // Also add a temp file that should be skipped
+        fs::write(objects_dir.join("ab").join(".tmp_in_progress"), b"skip").unwrap();
 
         let hashes = collect_generation_cas_hashes(&gen_dir, &objects_dir).unwrap();
         assert_eq!(hashes.len(), 2);

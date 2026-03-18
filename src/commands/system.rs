@@ -5,6 +5,7 @@ use super::TroveSnapshot;
 use super::open_db;
 use anyhow::Result;
 use conary_core::db::paths::objects_dir;
+use conary_core::filesystem::CasStore;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -754,45 +755,12 @@ pub fn cmd_gc(
     let mut cas_objects: Vec<(PathBuf, String)> = Vec::new();
     let mut total_cas_size: u64 = 0;
 
-    for prefix_entry in fs::read_dir(objects_path)? {
-        let prefix_entry = prefix_entry?;
-        let prefix_path = prefix_entry.path();
-
-        if !prefix_path.is_dir() {
-            continue;
-        }
-
-        let prefix = prefix_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-
-        // Skip if not a 2-char hex prefix
-        if prefix.len() != 2 || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
-        }
-
-        for object_entry in fs::read_dir(&prefix_path)? {
-            let object_entry = object_entry?;
-            let object_path = object_entry.path();
-
-            if object_path.is_file() {
-                let suffix = object_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-
-                // Skip temp files
-                if suffix.ends_with(".tmp") {
-                    continue;
-                }
-
-                let hash = format!("{}{}", prefix, suffix);
-                let metadata = fs::metadata(&object_path)?;
-                total_cas_size += metadata.len();
-                cas_objects.push((object_path, hash));
-            }
-        }
+    let cas = CasStore::new(objects_path)?;
+    for result in cas.iter_objects() {
+        let (hash, path) = result?;
+        let metadata = fs::metadata(&path)?;
+        total_cas_size += metadata.len();
+        cas_objects.push((path, hash));
     }
     println!(
         "  Found {} objects in CAS ({} total)",
@@ -916,33 +884,22 @@ fn gc_orphaned_chunks(conn: &rusqlite::Connection, db_path: &str, dry_run: bool)
     let mut orphaned = 0usize;
     let mut freed = 0u64;
     if objects_dir.exists() {
-        for prefix_entry in std::fs::read_dir(&objects_dir)? {
-            let prefix_entry = prefix_entry?;
-            if !prefix_entry.file_type()?.is_dir() {
-                continue;
-            }
-            let prefix = prefix_entry.file_name().to_string_lossy().to_string();
-            if prefix.len() != 2 {
-                continue;
-            }
-            for file_entry in std::fs::read_dir(prefix_entry.path())? {
-                let file_entry = file_entry?;
-                let suffix = file_entry.file_name().to_string_lossy().to_string();
-                if suffix.ends_with(".tmp") {
-                    continue;
-                }
-                let hash = format!("{prefix}{suffix}");
-                if !referenced.contains(&hash) {
-                    let size = file_entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    if dry_run {
-                        println!("[dry-run] Would delete: {} ({} bytes)", hash, size);
-                    } else {
-                        let _ = std::fs::remove_file(file_entry.path());
-                        let _ = std::fs::remove_dir(prefix_entry.path());
+        let cas = CasStore::new(&objects_dir)?;
+        for result in cas.iter_objects() {
+            let (hash, path) = result?;
+            if !referenced.contains(&hash) {
+                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                if dry_run {
+                    println!("[dry-run] Would delete: {} ({} bytes)", hash, size);
+                } else {
+                    let _ = std::fs::remove_file(&path);
+                    // Try to remove empty parent directory
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::remove_dir(parent);
                     }
-                    orphaned += 1;
-                    freed += size;
                 }
+                orphaned += 1;
+                freed += size;
             }
         }
     }
