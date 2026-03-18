@@ -1617,7 +1617,7 @@ mod tests {
 
         let config = BootstrapConfig::new().with_skip_verify(true);
         let toolchain = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: tools_path,
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,

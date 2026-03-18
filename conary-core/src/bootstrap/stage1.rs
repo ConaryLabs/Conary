@@ -226,7 +226,7 @@ impl Stage1Builder {
         let stage1_prefix = self.sysroot.join("usr");
         let mut toolchain = Toolchain::from_prefix(&stage1_prefix)
             .map_err(|e| Stage1Error::BuildFailed("toolchain".to_string(), e.to_string()))?;
-        toolchain.kind = ToolchainKind::Stage1;
+        toolchain.kind = ToolchainKind::System;
 
         Ok(toolchain)
     }

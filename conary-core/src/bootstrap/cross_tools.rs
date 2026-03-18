@@ -154,7 +154,7 @@ impl CrossToolsBuilder {
         );
 
         Ok(Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::CrossTools,
             path: tools_path,
             target: LFS_TGT.to_string(),
             gcc_version: None,
@@ -326,7 +326,7 @@ mod tests {
             CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
         let toolchain = builder.build_all().unwrap();
 
-        assert_eq!(toolchain.kind, ToolchainKind::Stage1);
+        assert_eq!(toolchain.kind, ToolchainKind::CrossTools);
         assert_eq!(toolchain.target, LFS_TGT);
         assert!(toolchain.path.ends_with("tools"));
     }
