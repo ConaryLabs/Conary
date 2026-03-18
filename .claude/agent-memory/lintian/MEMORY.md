@@ -39,6 +39,36 @@
 - MCP endpoint at /mcp on :8082 requires admin scope
 - SSE broadcast channel bounded at 1024 -- adequate for admin API volume
 
+### Generation module (composefs-native branch, 2026-03-17)
+- `conary-core/src/generation/` extracted from CLI `src/commands/generation/`
+- builder.rs: `build_erofs_image` (composefs-rs feature-gated) + `build_generation_from_db` (high-level)
+- composefs.rs: runtime kernel capability detection (anyhow::Result, not crate::Result -- inconsistent)
+- metadata.rs: GenerationMetadata, EXCLUDED_DIRS, ROOT_SYMLINKS, path helpers (anyhow::Result)
+- mount.rs: MountOptions, mount/unmount, symlink management (crate::Result -- consistent)
+- New modules: etc_merge.rs (three-way /etc merge), gc.rs (CAS GC), delta.rs (zstd dictionary deltas)
+- composefs_rs_eval.rs: proof-of-concept tests only (test-only module)
+- EROFS images written as `root.erofs` (builder.rs line 218)
+- DB table is `system_states` not `generations` -- recovery code references wrong table
+- `composefs-rs` feature gate on conary-core, not on root crate -- `cargo check --features composefs-rs` won't work from root
+- composefs-rs is now a default feature of conary-core (Cargo.toml line 72)
+- `composefs_ops.rs` `rebuild_and_mount()` called after every install/remove/restore -- full EROFS rebuild every time
+- `build_generation_from_db` uses N+1 queries: list_all troves + find_by_trove per trove (should be single bulk SELECT)
+- `detect_kernel_version_from_db` calls `Trove::list_all` redundantly (builder already has the list)
+- `rebuild_and_mount` calls `collect_etc_files` twice on same DB state -- etc merge is always a no-op
+- `build_erofs_image` double-parses hex: `hex_to_digest` then `Sha256HashValue::from_hex` on same string
+- OCI export (`export.rs`) includes ALL CAS objects, not just generation's; builds full tar in memory
+- `is_excluded()` allocates via `format!` per comparison per file (hot inner loop)
+
+### Code quality issues (2026-03-17 review)
+- String literals need constants: "root.erofs" (10 sites), "composefs" (5 sites), ".conary-gen.json" (7 sites), EROFS magic 0xE0F5_E1E2 (9 sites)
+- CAS two-level walk duplicated: export.rs `collect_generation_cas_hashes` and gc.rs `gc_cas_objects` -- should share iterator
+- `hex_to_digest` tests copy-pasted from conary-core to src/commands/generation/builder.rs
+- `dir_stat`/`default_stat` Stat construction duplicated between builder.rs and composefs_rs_eval.rs
+- `walk_sysroot_to_cas` in image.rs uses `Vec<(String,String,u64,u32)>` tuple instead of `FileEntryRef`
+- `ImageBuilder.log: String` field is write-only (never read/returned) -- dead state
+- `accept_package_paths` has `let _ = a;` instead of `_` pattern binding
+- anyhow::Result vs crate::Result inconsistency: composefs.rs and metadata.rs use anyhow, rest uses crate
+
 ### conary-test patterns
 - `TestSuite` tracks failed IDs via HashMap but recomputes passed/failed/skipped counts via linear scan each time
 - `StepType` enum owns cloned strings from `TestStep` fields -- could borrow
@@ -63,7 +93,7 @@
 - `CapturedPatch` in provenance_capture.rs has unnecessary annotation (struct IS used)
 - federation.rs PeerRow/StatsRow have struct-level annotations but most fields are used -- should be field-level
 - provenance_capture.rs has 3 public methods (with_recipe_hash, record_git_commit, record_build_deps) that are planned API but not wired up yet
-- Transaction module has 2 dead fields (deployer, description) -- both are planned for future use
+- Transaction module: old dead fields (deployer, description) removed by composefs-native branch
 
 ## Review Findings (2026-03-08 full audit)
 - No SQL injection via format strings -- all DB queries use parameterized ?1 bindings
@@ -71,13 +101,16 @@
 - File headers compliant across all checked files
 - Path traversal properly guarded via safe_join() and sanitize_path() in filesystem/transaction modules
 - CAS atomic_store uses PID+counter temp names -- race-safe across threads/processes
-- Transaction journal CRC32 integrity checks are solid
+- Transaction journal CRC32 integrity checks are solid (journal.rs now deleted in composefs-native)
 - Bootstrap pipeline has 6+ expect() calls in production paths (base.rs) -- should be errors
 - `expand_env_vars()` leaks host env into sandboxed bootstrap builds (design issue, has TODO)
-- `num_milliseconds() as u64` in transaction finish can wrap on clock skew (P0)
+- `num_milliseconds() as u64` in transaction finish can wrap on clock skew (P0) -- module rewritten
 - Resolver uses `as u32` for pool indices -- safe at current scale but fragile
 - CPIO parser has proper MAX_FILE_SIZE and MAX_NAME_SIZE guards
-- Recovery module's symlink validation is more permissive than staging validation
+- Recovery module's symlink validation is more permissive than staging validation (recovery.rs now deleted)
+
+## Code Reuse Findings (composefs-native, 2026-03-17)
+- [composefs-native code reuse findings](code_reuse_composefs_native.md) -- 8 duplication issues across hashing, CAS walks, fsverity, kernel detection
 
 ## Bootstrap Pipeline Patterns (2026-03-16 bootable image spec review)
 - `populate_sysroot()` exists and is unit tested but never called from the build pipeline
