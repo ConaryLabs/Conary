@@ -12,6 +12,7 @@ pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
 pub mod pacman_query;
+pub mod query_common;
 pub mod registry;
 pub mod rpm;
 pub mod rpm_query;
@@ -26,7 +27,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-pub use rpm_query::{DependencyInfo, InstalledFileInfo, InstalledRpmInfo};
+pub use query_common::{DependencyInfo, InstalledFileInfo};
+pub use rpm_query::InstalledRpmInfo;
 pub use traits::{ExtractedFile, PackageFormat};
 
 /// Detect the system package manager
