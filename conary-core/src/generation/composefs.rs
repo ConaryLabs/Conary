@@ -11,6 +11,8 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use tracing::debug;
 
+use crate::filesystem::fsverity::{FsVerityError, enable_fsverity};
+
 /// Capabilities detected during preflight.
 #[derive(Debug)]
 pub struct ComposefsCaps {
@@ -33,76 +35,40 @@ pub fn supports_composefs() -> bool {
 
 /// Check if fs-verity is supported on the filesystem containing the given path.
 ///
-/// Creates a temporary file and attempts the `FS_IOC_ENABLE_VERITY` ioctl.
-/// Returns false (without error) if unsupported.
+/// Creates a temporary probe file and calls `enable_fsverity()` from the
+/// canonical implementation in `crate::filesystem::fsverity`. Returns false
+/// (without error) if the filesystem does not support verity.
 #[must_use]
 pub fn supports_fsverity(path: &Path) -> bool {
-    use std::os::unix::io::AsRawFd;
-
     // Use a unique temp file name to avoid races
     let pid = std::process::id();
     let test_path = path.join(format!(".conary-fsverity-probe-{pid}"));
 
     // Write content (fs-verity needs non-empty file on some implementations),
-    // then reopen read-only (fs-verity requires the file not be open for writing)
+    // then close the write handle so enable_fsverity can open read-only.
     if std::fs::write(&test_path, b"verity-probe").is_err() {
         return false;
     }
 
-    let file = match std::fs::File::open(&test_path) {
-        Ok(f) => f,
-        Err(_) => {
-            let _ = std::fs::remove_file(&test_path);
-            return false;
-        }
-    };
-
-    // FS_IOC_ENABLE_VERITY = _IOW('f', 0x85, struct fsverity_enable_arg)
-    // On x86_64: 0x40806685
-    const FS_IOC_ENABLE_VERITY: libc::c_ulong = 0x4080_6685;
-
-    #[repr(C)]
-    struct FsverityEnableArg {
-        version: u32,
-        hash_algorithm: u32,
-        block_size: u32,
-        salt_size: u32,
-        salt_ptr: u64,
-        sig_size: u32,
-        reserved1: u32,
-        sig_ptr: u64,
-        reserved2: [u64; 11],
-    }
-
-    let arg = FsverityEnableArg {
-        version: 1,
-        hash_algorithm: 1, // FS_VERITY_HASH_ALG_SHA256
-        block_size: 4096,
-        salt_size: 0,
-        salt_ptr: 0,
-        sig_size: 0,
-        reserved1: 0,
-        sig_ptr: 0,
-        reserved2: [0; 11],
-    };
-
-    let result = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_ENABLE_VERITY, &arg as *const _) };
-
-    // Close the file handle before cleanup
-    drop(file);
+    let result = enable_fsverity(&test_path);
     let _ = std::fs::remove_file(&test_path);
 
-    // Success (0) or EEXIST means fs-verity is supported
-    // ENOTSUP/EOPNOTSUPP means not supported
-    if result == 0 {
-        return true;
+    match result {
+        // Verity was successfully enabled on the probe file
+        Ok(true) => true,
+        // Already enabled (shouldn't happen on a fresh file, but means supported)
+        Ok(false) => true,
+        // Filesystem does not support fs-verity
+        Err(FsVerityError::NotSupported(_)) => false,
+        // Could not open the probe file (race / permissions)
+        Err(FsVerityError::Open { .. }) => false,
+        // Other ioctl error -- likely means verity is supported but something
+        // else went wrong (e.g., EBUSY, EPERM). Conservative: treat as supported.
+        Err(FsVerityError::IoctlFailed { .. }) => {
+            debug!("fs-verity probe got unexpected ioctl error, assuming supported");
+            true
+        }
     }
-
-    let err = std::io::Error::last_os_error();
-    let errno = err.raw_os_error().unwrap_or(0);
-    // EOPNOTSUPP = 95, ENOTSUP is the same on Linux
-    debug!("fs-verity probe returned errno {errno}");
-    errno != 95 // If not EOPNOTSUPP, verity is probably supported (got a different error)
 }
 
 /// Run composefs preflight checks.
