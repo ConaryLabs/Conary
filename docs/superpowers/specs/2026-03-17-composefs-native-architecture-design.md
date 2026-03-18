@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-17
-revision: 2
-summary: Rev 2 fixes -- EXCLUDED_DIRS alignment, /run and virtual FS in path table
+revision: 3
+summary: Incorporate ecosystem research -- mount-time digest, bloom filter, /etc merge, UKI, composefs-rs
 ---
 
 # Composefs-Native Architecture
@@ -91,7 +91,13 @@ generation. GC cleans up old ones.
                    increment generation number
 4. Build EROFS — query all FileEntry rows, feed to ErofsBuilder
                    write to /conary/generations/{N}/root.erofs
-5. Mount       — composefs mount, bind /usr, rebuild /etc overlay
+                   enable fs-verity on image, record digest in DB
+5. Mount       — composefs mount with digest verification:
+                   mount -t composefs -o basedir=/conary/objects,
+                     digest=<erofs_verity_digest>,verity=on,
+                     upperdir=/conary/etc-state/upper,
+                     workdir=/conary/etc-state/work
+                   bind-mount /usr read-only from composefs
 6. Symlink     — atomically update /conary/current -> N
 ```
 
@@ -153,7 +159,7 @@ The EROFS image is read-only. Mutable state lives outside it on separate mounts.
 | Path | Treatment |
 |---|---|
 | `/usr` | Read-only bind mount from composefs. All package-managed binaries, libraries, share. |
-| `/etc` | overlayfs: EROFS lower (package defaults) + persistent upper (user modifications) |
+| `/etc` | Handled by composefs `upperdir`/`workdir` mount options — EROFS lower (package defaults) + persistent upper (user modifications). No separate overlayfs mount needed. |
 | `/var` | Separate persistent mount. Never in the EROFS image. |
 | `/tmp`, `/run` | tmpfs. Never in the EROFS image. `/run` is writable for PIDs, daemon reload. |
 | `/home`, `/root` | Separate persistent mount. Never in the EROFS image. |
@@ -179,15 +185,20 @@ holds user modifications. overlayfs semantics handle the interaction:
   (no upper override exists)
 - User modifies `/etc/nginx/nginx.conf`: copy-up to upper, user version takes
   precedence
-- Package updates `/etc/nginx/nginx.conf`: new version in lower (new generation),
-  but upper override still wins. User is notified of the conflict (`.rpmnew`-style
-  mechanism or interactive merge prompt)
+- Package updates `/etc/nginx/nginx.conf`: three-way merge — compare previous
+  generation's lower, new generation's lower, and current upper. If only the package
+  changed (user didn't modify), the new package version wins silently. If only the
+  user changed, the user version wins. If both changed, the user is prompted to
+  resolve the conflict (with the option to accept package version, keep user version,
+  or merge). This follows the bootc/ostree model and is more robust than `.rpmnew`
+  sidecar files.
 - Package removes a file from `/etc`: gone from lower in new generation. If user had
   modified it, the upper copy persists as an orphan (GC can detect these)
 
-The `/etc` overlay is rebuilt on every transaction as part of the mount step (step 5
-in the transaction flow). This is the same as today's generation switch behavior,
-just applied to every transaction.
+The `/etc` overlay uses composefs's native `upperdir`/`workdir` mount options
+(no separate overlayfs mount needed). The three-way merge runs between steps 4 and 5
+in the transaction flow, comparing the previous and new EROFS images' `/etc` trees
+against the upper layer before mounting the new generation.
 
 ### Scriptlet Execution
 
@@ -210,10 +221,11 @@ is built and mounted but before the transaction is considered complete.
 1. Resolve
 2. Fetch
 3. DB Commit
-4. Build EROFS
-5. Mount (composefs + /etc overlay + /var)
-6. Run scriptlets (against newly mounted generation)
-7. Symlink update
+4. Build EROFS (enable fs-verity, record digest)
+5. Three-way /etc merge (previous lower vs new lower vs upper)
+6. Mount (composefs with digest, upperdir, workdir, verity=on)
+7. Run scriptlets (against newly mounted generation)
+8. Symlink update
 ```
 
 **Scriptlet failure handling:**
@@ -344,37 +356,96 @@ framing (manifest JSON, tar wrapping).
 ### Integrity Chain
 
 ```
-Package signature -> DB file_entries (hash) -> EROFS image (CAS digest xattrs) -> fs-verity (kernel reads)
+Package signature -> DB file_entries (hash) -> EROFS image (CAS digest xattrs)
+    -> mount-time digest verification -> fs-verity (kernel reads)
 ```
 
 Each layer verifies the next:
 - Package signatures verify metadata and hashes are authentic
 - The database stores trusted hashes from verified packages
 - The EROFS image embeds those hashes as CAS xattrs (deterministically derived from DB)
+- **Mount-time digest verification**: composefs's `digest` mount option validates the
+  EROFS image's fs-verity digest before mounting. The kernel refuses to mount a
+  tampered image. This is free — no code beyond passing the digest to the mount call.
+  The digest is stored in the database alongside the generation's SystemState.
 - fs-verity ensures every byte read from CAS matches the digest at the kernel level
 
-A compromised file on disk produces an I/O error, not bad data. Stronger than
-traditional package managers that verify at install time but trust the filesystem
-afterward.
+A compromised file on disk produces an I/O error, not bad data. A tampered EROFS
+image refuses to mount. Stronger than traditional package managers that verify at
+install time but trust the filesystem afterward.
 
-### EROFS Image Signing (Future)
+### EROFS Image Signing
 
-Since images are deterministic and small (~20-50MB):
-- Compute SHA-256 of the EROFS image
-- Sign with ed25519 key
-- Store signature alongside the image
-- Verify signature before mounting
+Since images are deterministic and small (~20-50MB), userspace signature verification
+is the recommended approach (per the composefs community and the fsverity maintainer,
+who advised against kernel-based `CONFIG_FS_VERITY_BUILTIN_SIGNATURES`):
 
-Closes the loop: verify that a generation was produced by a trusted build.
+- Enable fs-verity on the EROFS image file itself
+- Compute the fs-verity digest of the image
+- Sign the digest with an ed25519 key in userspace
+- Store the signature alongside the image (`root.erofs.sig`)
+- Before mounting, verify the signature against a trusted public key in userspace
+- Pass the verified digest to `mount -t composefs -o digest=<hash>` — the kernel
+  then enforces that the mounted image matches
 
-### Secure Boot Integration (Future)
+This follows the same pattern that OSTree/bootc uses for composefs signature
+validation. No kernel keyring or `CONFIG_FS_VERITY_BUILTIN_SIGNATURES` required.
 
-Signed EROFS image hash embedded in the boot chain. Dracut verifies the generation
-signature before mounting. Puts conaryOS in the same category as ChromeOS/Android
-verified boot, but with a real package manager underneath.
+### Secure Boot via UKI (Future)
 
-Image signing and secure boot are natural extensions of this architecture, not
+The natural secure boot integration path is Unified Kernel Images (UKI) — a single
+EFI binary containing kernel + initramfs + cmdline + composefs digest. The boot
+chain becomes:
+
+1. Firmware measures the UKI (Secure Boot / TPM)
+2. UKI contains the expected composefs digest in its cmdline or embedded metadata
+3. Initramfs (Dracut) mounts composefs with `-o digest=<hash>` from the UKI
+4. Kernel refuses to mount if the EROFS image doesn't match
+5. fs-verity verifies every CAS file read
+
+This extends the chain of trust from firmware through kernel to the entire userspace
+filesystem — the same model composefs-rs and bootc are converging on for Fedora
+Atomic and other immutable distros. Puts conaryOS in the same category as
+ChromeOS/Android verified boot, but with a real package manager underneath.
+
+Image signing and UKI integration are natural extensions of this architecture, not
 required for initial implementation.
+
+## EROFS Enhancements
+
+### Xattr Name Bloom Filter
+
+The Linux kernel (since ~5.19) supports a bloom filter in the EROFS superblock that
+accelerates negative xattr lookups. Since every file in a composefs image has
+`trusted.overlay.redirect` xattrs, workloads that probe for other xattrs (e.g.,
+`system.posix_acl_access` during `ls -l`) benefit significantly — up to 20%
+improvement in uncached metadata operations.
+
+`conary-erofs` should emit the `EROFS_FEATURE_COMPAT_XATTR_FILTER` flag and populate
+the bloom filter data in the superblock. The hash function is
+`xxh32(name, strlen(name), EROFS_XATTR_FILTER_SEED + index)`. This is a small,
+contained enhancement to `superblock.rs` and `xattr.rs`.
+
+### composefs-rs Compatibility
+
+The composefs-rs project (Rust, under `containers/composefs-rs`) is positioned to
+become the reference implementation of composefs, replacing the C implementation. It
+provides EROFS image building, OCI integration, fs-verity, and boot infrastructure.
+
+We maintain our own EROFS builder (`conary-erofs`) because it is standalone, has no
+external dependencies, and is tailored to our CAS-reference-only images. However, we
+must ensure our EROFS output is mountable by standard `mount.composefs` and
+compatible with the composefs ecosystem. Specifically:
+
+- EROFS superblock format and feature flags must match what the kernel expects
+- CAS xattr encoding (`trusted.overlay.redirect`) must match composefs conventions
+- fs-verity digest format must be interoperable
+
+The `verify` module in `conary-erofs` should include a compatibility check that
+validates images against `mount.composefs` expectations. If composefs-rs stabilizes
+and provides clear advantages (e.g., built-in OCI support, UKI generation), we
+should evaluate adopting it as a dependency rather than maintaining a parallel
+implementation.
 
 ## Code Impact
 
@@ -400,7 +471,7 @@ required for initial implementation.
 
 | Module | Reason |
 |---|---|
-| `conary-erofs/` | Already does exactly what's needed. No changes. |
+| `conary-erofs/` | Minor enhancement: add xattr name bloom filter to superblock (see EROFS Enhancements below). Core builder logic unchanged. |
 | `conary-core/src/filesystem/cas.rs` | CAS is the right abstraction. |
 | `conary-core/src/filesystem/vfs/` | Still used for preflight conflict detection. |
 | `conary-core/src/resolver/` | Dependency resolution is orthogonal to deployment. |
@@ -417,7 +488,9 @@ required for initial implementation.
 | CAS GC (revised) | Liveness from DB query instead of filesystem nlink count |
 | EROFS delta support | Binary diff/patch between generation images |
 | OCI export | Wrap EROFS + CAS as OCI container image |
-| Image signing (future) | Sign/verify EROFS images |
+| /etc three-way merge | Compare previous/new EROFS lower + upper, resolve conflicts |
+| Image signing (future) | Userspace ed25519 signature verification of EROFS images |
+| UKI integration (future) | Embed composefs digest in Unified Kernel Image for measured boot |
 
 ### Net Effect
 
