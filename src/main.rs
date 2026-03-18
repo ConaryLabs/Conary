@@ -1253,24 +1253,6 @@ fn run() -> Result<()> {
 
             cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose),
 
-            cli::BootstrapCommands::Stage0 {
-                work_dir,
-                config,
-                jobs,
-                verbose,
-                download_only,
-                clean,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage0(
-                &work_dir,
-                config,
-                jobs,
-                verbose,
-                download_only,
-                clean,
-                skip_verify,
-            ),
-
             cli::BootstrapCommands::Stage1 {
                 work_dir,
                 recipe_dir,
@@ -1278,20 +1260,6 @@ fn run() -> Result<()> {
                 verbose,
                 skip_verify,
             } => commands::cmd_bootstrap_stage1(
-                &work_dir,
-                recipe_dir.as_deref(),
-                jobs,
-                verbose,
-                skip_verify,
-            ),
-
-            cli::BootstrapCommands::Stage2 {
-                work_dir,
-                recipe_dir,
-                jobs,
-                verbose,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage2(
                 &work_dir,
                 recipe_dir.as_deref(),
                 jobs,

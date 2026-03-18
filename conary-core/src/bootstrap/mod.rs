@@ -4,24 +4,17 @@
 //!
 //! This module provides the tooling to bootstrap a complete Conary system
 //! without relying on an existing package manager. The bootstrap process
-//! follows a staged approach:
+//! follows a staged approach aligned with Linux From Scratch 13:
 //!
-//! - **Stage 0**: Cross-compilation toolchain (built with crosstool-ng)
-//! - **Stage 1**: Self-hosted toolchain (built with Stage 0)
-//! - **Stage 2**: Fully native toolchain (optional rebuild for purity)
-//! - **Final**: Production packages built with Stage 1/2 toolchain
+//! - **Stage 1**: Self-hosted toolchain (cross-compiled from host)
+//! - **Base System**: Core packages (kernel, glibc, coreutils, networking)
+//! - **Conary**: Self-hosting (Rust + Conary built in-sysroot)
+//! - **Image**: Bootable image generation
 //!
 //! # Architecture
 //!
 //! ```text
-//! Host System (any Linux)
-//!      │
-//!      ▼
-//! ┌─────────────────────────────────────────────┐
-//! │  Stage 0: crosstool-ng                       │
-//! │  Produces: /tools/x86_64-conary-linux-gnu/   │
-//! │  Static cross-compiler (gcc, glibc, binutils)│
-//! └─────────────────────────────────────────────┘
+//! Host System (any Linux with gcc)
 //!      │
 //!      ▼ (cross-compiles)
 //! ┌─────────────────────────────────────────────┐
@@ -50,9 +43,7 @@ mod conary_stage;
 mod config;
 mod image;
 pub(crate) mod repart;
-mod stage0;
 mod stage1;
-mod stage2;
 mod stages;
 mod toolchain;
 
@@ -63,9 +54,7 @@ pub use build_runner::{BuildRunnerError, PackageBuildRunner};
 pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use config::{BootstrapConfig, TargetArch};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
-pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
-pub use stage2::{Stage2Builder, Stage2Error, Stage2Package, Stage2PackageStatus};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use toolchain::{Toolchain, ToolchainKind};
 
@@ -160,37 +149,17 @@ impl Bootstrap {
         &mut self.stages
     }
 
-    /// Check if crosstool-ng is available
+    /// Check if prerequisites are available
     pub fn check_prerequisites(&self) -> Result<Prerequisites> {
         Prerequisites::check()
     }
 
-    /// Build Stage 0 toolchain using crosstool-ng
-    pub fn build_stage0(&mut self) -> Result<Toolchain> {
-        let mut builder = Stage0Builder::new(&self.work_dir, &self.config)?;
-        let toolchain = builder.build()?;
-
-        self.stages
-            .mark_complete(BootstrapStage::Stage0, &toolchain.path)?;
-
-        Ok(toolchain)
-    }
-
-    /// Get the Stage 0 toolchain if it's already built
-    pub fn get_stage0_toolchain(&self) -> Option<Toolchain> {
-        self.stages
-            .get_artifact_path(BootstrapStage::Stage0)
-            .and_then(|p| Toolchain::from_prefix(&p).ok())
-    }
-
-    /// Build Stage 1 toolchain using Stage 0
+    /// Build Stage 1 toolchain using the host cross-compiler
     pub fn build_stage1(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
-        // Get Stage 0 toolchain
-        let stage0 = self
-            .get_stage0_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Stage 0 toolchain not found. Run stage0 first."))?;
+        let host = Toolchain::host()
+            .map_err(|e| anyhow::anyhow!("Host toolchain not found: {e}"))?;
 
-        let mut builder = Stage1Builder::new(&self.work_dir, &self.config, stage0)?;
+        let mut builder = Stage1Builder::new(&self.work_dir, &self.config, host)?;
         builder.load_recipes(recipe_dir)?;
 
         let toolchain = builder.build()?;
@@ -205,35 +174,6 @@ impl Bootstrap {
     pub fn get_stage1_toolchain(&self) -> Option<Toolchain> {
         self.stages
             .get_artifact_path(BootstrapStage::Stage1)
-            .and_then(|p| Toolchain::from_prefix(&p).ok())
-    }
-
-    /// Build Stage 2 (reproducibility rebuild using Stage 1 toolchain).
-    ///
-    /// Rebuilds the same 5 packages as Stage 1 using the Stage 1 compiler
-    /// instead of the Stage 0 cross-compiler. This verifies that the
-    /// toolchain can reproduce itself.
-    pub fn build_stage2(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
-        let stage1 = self
-            .get_stage1_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Stage 1 toolchain not found. Run stage1 first."))?;
-
-        let mut builder = Stage2Builder::new(&self.work_dir, &self.config, stage1)?;
-        builder.load_recipes(recipe_dir.as_ref())?;
-        builder.validate_toolchain()?;
-
-        let toolchain = builder.build()?;
-
-        self.stages
-            .mark_complete(BootstrapStage::Stage2, &toolchain.path)?;
-
-        Ok(toolchain)
-    }
-
-    /// Get the Stage 2 toolchain if it's already built
-    pub fn get_stage2_toolchain(&self) -> Option<Toolchain> {
-        self.stages
-            .get_artifact_path(BootstrapStage::Stage2)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
 

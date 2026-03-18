@@ -213,6 +213,7 @@ pub fn substitute_build_vars(
 /// network isolation, and the provided environment variables.
 ///
 /// Returns `(exit_code, stdout, stderr)`.
+#[allow(dead_code)]
 pub fn run_sandboxed_command(
     cmd: &str,
     workdir: &Path,
