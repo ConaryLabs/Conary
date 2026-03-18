@@ -83,6 +83,37 @@ impl DependencyEntry {
         Ok(id)
     }
 
+    /// Batch insert multiple dependency entries efficiently
+    ///
+    /// Uses a prepared statement for much better performance than individual
+    /// inserts when recording dependencies for many packages at once.
+    ///
+    /// Caller must wrap this in a transaction for atomicity.
+    pub fn batch_insert(conn: &Connection, entries: &[Self]) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO dependencies (trove_id, depends_on_name, depends_on_version, \
+             dependency_type, version_constraint, kind) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+
+        for entry in entries {
+            stmt.execute(params![
+                &entry.trove_id,
+                &entry.depends_on_name,
+                &entry.depends_on_version,
+                &entry.dependency_type,
+                &entry.version_constraint,
+                &entry.kind,
+            ])?;
+        }
+
+        Ok(entries.len())
+    }
+
     /// Find all dependencies for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
         let sql = format!(

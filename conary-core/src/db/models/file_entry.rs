@@ -252,6 +252,39 @@ impl FileEntry {
         Ok(())
     }
 
+    /// Batch insert or replace multiple file entries efficiently
+    ///
+    /// Uses a prepared statement for much better performance than individual
+    /// inserts when installing packages with many files.
+    ///
+    /// Caller must wrap this in a transaction for atomicity.
+    pub fn batch_insert(conn: &Connection, entries: &[Self]) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, \
+             group_name, trove_id, component_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+
+        for entry in entries {
+            stmt.execute(params![
+                &entry.path,
+                &entry.sha256_hash,
+                &entry.size,
+                &entry.permissions,
+                &entry.owner,
+                &entry.group_name,
+                &entry.trove_id,
+                &entry.component_id,
+            ])?;
+        }
+
+        Ok(entries.len())
+    }
+
     /// Convert a database row to a FileEntry
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {

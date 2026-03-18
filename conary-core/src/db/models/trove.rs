@@ -252,6 +252,47 @@ impl Trove {
         Ok(id)
     }
 
+    /// Batch insert multiple troves efficiently
+    ///
+    /// Uses a prepared statement for much better performance than individual
+    /// inserts when installing many packages at once (e.g., system adopt).
+    ///
+    /// Caller must wrap this in a transaction for atomicity.
+    pub fn batch_insert(conn: &Connection, troves: &mut [Self]) -> Result<usize> {
+        if troves.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO troves (name, version, type, architecture, description, \
+             installed_by_changeset_id, install_source, install_reason, flavor_spec, \
+             pinned, selection_reason, label_id, source_distro, version_scheme) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        )?;
+
+        for trove in troves.iter_mut() {
+            stmt.execute(params![
+                &trove.name,
+                &trove.version,
+                trove.trove_type.as_str(),
+                &trove.architecture,
+                &trove.description,
+                &trove.installed_by_changeset_id,
+                trove.install_source.as_str(),
+                trove.install_reason.as_str(),
+                &trove.flavor_spec,
+                trove.pinned,
+                &trove.selection_reason,
+                &trove.label_id,
+                &trove.source_distro,
+                &trove.version_scheme,
+            ])?;
+            trove.id = Some(conn.last_insert_rowid());
+        }
+
+        Ok(troves.len())
+    }
+
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let sql = format!("SELECT {} FROM troves WHERE id = ?1", Self::COLUMNS);
