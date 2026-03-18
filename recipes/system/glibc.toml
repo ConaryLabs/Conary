@@ -1,0 +1,123 @@
+# recipes/system/glibc.toml
+#
+# LFS 13 Section 8.5 — Glibc-2.43
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/glibc.html
+#
+# The GNU C Library — the most critical package in the system. Provides
+# the core C library functions (system calls, string handling, math, etc.)
+# that virtually all programs depend on. Includes locale generation,
+# timezone data installation, and nsswitch/ld.so configuration.
+
+[package]
+name = "glibc"
+version = "2.43"
+release = "1"
+summary = "GNU C Library"
+description = """
+The GNU C Library (glibc) provides the core system libraries and
+headers needed by virtually all programs. This final-system build
+includes full locale support, timezone data, and NSS configuration
+for systemd integration.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://www.gnu.org/software/libc/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
+checksum = "md5:7ec2588300b299215a65aec7e6afa04f"
+
+[[source.patches]]
+url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
+checksum = "md5:9a5997c3452909b1769918c759eff8a2"
+
+[build]
+requires = ["man-pages", "iana-etc"]
+makedepends = ["binutils", "gcc", "linux-headers", "python"]
+chroot = true
+
+configure = """
+# Apply FHS compliance patch
+patch -Np1 -i ../glibc-fhs-1.patch
+
+mkdir -v build
+cd build
+
+# Set rootsbindir to /usr/sbin for FHS compliance
+echo "rootsbindir=/usr/sbin" > configparms
+
+../configure --prefix=/usr                   \
+             --disable-werror                \
+             --disable-nscd                  \
+             libc_cv_slibdir=/usr/lib        \
+             --enable-stack-protector=strong  \
+             --enable-kernel=5.4
+"""
+
+make = """
+cd build
+make -j%(jobs)s
+"""
+
+install = """
+cd build
+
+# Prevent warnings about missing /etc/ld.so.conf
+touch /etc/ld.so.conf
+
+# Skip the test-installation sanity check (requires full Perl)
+sed '/test-installation/s@$(PERL)@echo not running@' -i ../Makefile
+
+make install
+
+# Fix the hardcoded path to the executable loader in the ldd script
+sed '/RTLDLIST=/s@/usr@@g' -i /usr/bin/ldd
+
+# Install all locales (needed for test suites of other packages)
+make localedata/install-locales
+
+# Install timezone data
+tar -xf ../../tzdata%(tzdata_version)s.tar.gz
+
+ZONEINFO=/usr/share/zoneinfo
+mkdir -pv $ZONEINFO/{posix,right}
+
+for tz in etcetera southamerica northamerica europe africa \
+          antarctica asia australasia backward; do
+    zic -L /dev/null   -d $ZONEINFO       ${tz}
+    zic -L /dev/null   -d $ZONEINFO/posix ${tz}
+    zic -L leapseconds -d $ZONEINFO/right ${tz}
+done
+
+cp -v zone.tab zone1970.tab iso3166.tab $ZONEINFO
+zic -d $ZONEINFO -p America/New_York
+
+# Default to UTC timezone (can be changed later)
+ln -sfv /usr/share/zoneinfo/UTC /etc/localtime
+
+# Create /etc/nsswitch.conf for systemd
+cat > /etc/nsswitch.conf << "NSSWITCH"
+passwd: files systemd
+group: files systemd
+shadow: files systemd
+
+hosts: mymachines resolve [!UNAVAIL=return] files myhostname dns
+networks: files
+
+protocols: files
+services: files
+ethers: files
+rpc: files
+NSSWITCH
+
+# Create /etc/ld.so.conf
+cat > /etc/ld.so.conf << "LDCONF"
+/usr/local/lib
+/opt/lib
+include /etc/ld.so.conf.d/*.conf
+LDCONF
+mkdir -pv /etc/ld.so.conf.d
+"""
+
+[variables]
+jobs = "$(nproc)"
+tzdata_version = "2026a"

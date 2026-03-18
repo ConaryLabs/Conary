@@ -1,0 +1,64 @@
+# recipes/system/binutils.toml
+#
+# LFS 13 Section 8.18 — Binutils-2.46.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/binutils.html
+#
+# Final system build of GNU Binutils — the linker, assembler, and
+# related tools. Built with shared libraries, 64-bit BFD support,
+# GNU hash style, and system zlib.
+
+[package]
+name = "binutils"
+version = "2.46.0"
+release = "1"
+summary = "GNU binary utilities"
+description = """
+GNU Binutils provides the linker (ld), assembler (as), and related
+tools for creating and manipulating binary object files. This final
+system build enables shared libraries, 64-bit BFD, plugins, and
+the GNU hash style for faster dynamic linking.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/binutils/"
+
+[source]
+archive = "https://sourceware.org/pub/binutils/releases/binutils-%(version)s.tar.xz"
+checksum = "md5:81bb6810bcd1119819dc0804956e1c92"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+mkdir -v build
+cd build
+
+../configure --prefix=/usr       \
+             --sysconfdir=/etc   \
+             --enable-ld=default \
+             --enable-plugins    \
+             --enable-shared     \
+             --disable-werror    \
+             --enable-64-bit-bfd \
+             --enable-new-dtags  \
+             --with-system-zlib  \
+             --enable-default-hash-style=gnu
+"""
+
+make = """
+cd build
+make tooldir=/usr -j%(jobs)s
+"""
+
+install = """
+cd build
+make tooldir=/usr install
+
+# Remove static libraries and unnecessary documentation
+rm -rfv /usr/lib/lib{bfd,ctf,ctf-nobfd,gprofng,opcodes,sframe}.a \
+        /usr/share/doc/gprofng/
+"""
+
+[variables]
+jobs = "$(nproc)"

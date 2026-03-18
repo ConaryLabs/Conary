@@ -1,0 +1,46 @@
+# recipes/system/grep.toml
+#
+# LFS 13 Section 8.33 — Grep-3.12
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/grep.html
+#
+# GNU grep — pattern matching utility for searching file contents.
+
+[package]
+name = "grep"
+version = "3.12"
+release = "1"
+summary = "GNU pattern matching utility"
+description = """
+Grep searches input files for lines containing a match to a given
+pattern. It is one of the most commonly used Unix utilities. This
+package also provides egrep and fgrep as shell script wrappers.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/grep/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/grep/grep-%(version)s.tar.xz"
+checksum = "md5:5d9301ed9d209c4a88c8d3a6fd08b9ac"
+
+[build]
+requires = ["glibc", "pcre2"]
+makedepends = []
+chroot = true
+
+configure = """
+# Suppress deprecation warnings for egrep/fgrep that can cause test failures
+sed -i "s/echo/#echo/" src/egrep.sh
+
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

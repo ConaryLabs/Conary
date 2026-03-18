@@ -1,0 +1,39 @@
+# recipes/system/iana-etc.toml
+#
+# LFS 13 Section 8.4 — Iana-Etc-20260306
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/iana-etc.html
+#
+# IANA service name and transport protocol port number registry.
+# No compilation — just copy the protocol/service databases into /etc.
+
+[package]
+name = "iana-etc"
+version = "20260306"
+release = "1"
+summary = "IANA protocol and service name databases"
+description = """
+The Iana-Etc package provides data for network services and protocols.
+It contains /etc/protocols (protocol numbers) and /etc/services
+(port numbers for network services) as assigned by IANA.
+"""
+license = "MIT"
+homepage = "https://github.com/Mic92/iana-etc"
+
+[source]
+archive = "https://github.com/Mic92/iana-etc/releases/download/%(version)s/iana-etc-%(version)s.tar.gz"
+checksum = "md5:5f5a1a8d3c4545bc796f5252a2140dd7"
+
+[build]
+requires = []
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = ""
+
+install = """
+cp -v services protocols /etc
+"""
+
+[variables]

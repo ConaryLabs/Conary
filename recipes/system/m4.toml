@@ -1,0 +1,45 @@
+# recipes/system/m4.toml
+#
+# LFS 13 Section 8.14 — M4-1.4.21
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/m4.html
+#
+# GNU M4 macro processor — needed by Autoconf, Automake, Bison,
+# and other build tools.
+
+[package]
+name = "m4"
+version = "1.4.21"
+release = "1"
+summary = "GNU macro processor"
+description = """
+GNU M4 is an implementation of the traditional Unix macro processor.
+It is used by Autoconf, Automake, and other GNU build tools to
+process configuration templates. M4 copies its input to the output,
+expanding macros as encountered.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/m4/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/m4/m4-%(version)s.tar.xz"
+checksum = "md5:8051eef7239b2f187791f2ab0034d6b7"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,47 @@
+# recipes/system/libcap.toml
+#
+# LFS 13 Section 8.24 — Libcap-2.77
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/libcap.html
+#
+# POSIX capabilities library. Implements the user-space interface to
+# POSIX 1003.1e capabilities. Uses make directly, not autotools.
+# The sed prevents installation of static libraries.
+
+[package]
+name = "libcap"
+version = "2.77"
+release = "1"
+summary = "POSIX capabilities library"
+description = """
+Libcap implements the POSIX 1003.1e capabilities available in Linux
+kernels. These capabilities partition the all-powerful root privilege
+into a set of distinct privileges, allowing fine-grained control of
+what privileged operations a process can perform.
+"""
+license = "BSD-3-Clause AND GPL-2.0-only"
+homepage = "https://sites.google.com/site/fullycapable/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-%(version)s.tar.xz"
+checksum = "md5:58048c92f90ef8513c17fb9c24c2c1bd"
+
+[build]
+requires = ["glibc", "attr"]
+makedepends = []
+chroot = true
+
+configure = """
+# Prevent installation of the static library
+sed -i '/install -m.*STA/d' libcap/Makefile
+"""
+
+make = """
+make prefix=/usr lib=lib -j%(jobs)s
+"""
+
+install = """
+make prefix=/usr lib=lib install
+"""
+
+[variables]
+jobs = "$(nproc)"

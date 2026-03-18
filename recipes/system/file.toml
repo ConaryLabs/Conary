@@ -1,0 +1,45 @@
+# recipes/system/file.toml
+#
+# LFS 13 Section 8.11 — File-5.47
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/file.html
+#
+# Utility to determine file types by examining file contents using
+# magic number tests, filesystem tests, and language tests.
+
+[package]
+name = "file"
+version = "5.47"
+release = "1"
+summary = "File type identification utility"
+description = """
+The File package contains a utility for determining the type of a given
+file or files. It tests each file against magic number patterns, filesystem
+tests, and language tests to classify it. The libmagic library provides
+the same functionality for other programs.
+"""
+license = "BSD-2-Clause"
+homepage = "https://www.darwinsys.com/file/"
+
+[source]
+archive = "https://astron.com/pub/file/file-%(version)s.tar.gz"
+checksum = "md5:1023ef52a2fb64acdf80211e469d6939"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

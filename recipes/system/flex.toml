@@ -1,0 +1,51 @@
+# recipes/system/flex.toml
+#
+# LFS 13 Section 8.16 — Flex-2.6.4
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/flex.html
+#
+# Fast lexical analyzer generator. Creates a 'lex' compatibility
+# symlink for programs that expect the traditional lex command.
+
+[package]
+name = "flex"
+version = "2.6.4"
+release = "1"
+summary = "Fast lexical analyzer generator"
+description = """
+Flex is a tool for generating scanners (programs which recognize
+lexical patterns in text). It reads input files specifying the scanner
+description and generates a C source file implementing the scanner.
+A 'lex' symlink is created for compatibility.
+"""
+license = "BSD-2-Clause"
+homepage = "https://github.com/westes/flex"
+
+[source]
+archive = "https://github.com/westes/flex/releases/download/v%(version)s/flex-%(version)s.tar.gz"
+checksum = "md5:2882e3179748cc9f9c23ec593d6adc8d"
+
+[build]
+requires = ["glibc", "m4"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr    \
+            --disable-static \
+            --docdir=/usr/share/doc/flex-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Create lex compatibility symlinks
+ln -sv flex /usr/bin/lex
+ln -sv flex.1 /usr/share/man/man1/lex.1
+"""
+
+[variables]
+jobs = "$(nproc)"

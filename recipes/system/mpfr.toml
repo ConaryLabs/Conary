@@ -1,0 +1,51 @@
+# recipes/system/mpfr.toml
+#
+# LFS 13 Section 8.20 — MPFR-4.2.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/mpfr.html
+#
+# GNU Multiple Precision Floating-Point Reliable library. Built on top
+# of GMP, provides correctly rounded multi-precision floating-point
+# computations. Required by GCC.
+
+[package]
+name = "mpfr"
+version = "4.2.2"
+release = "1"
+summary = "Multiple Precision Floating-Point Reliable library"
+description = """
+The MPFR library is a C library for multiple-precision floating-point
+computations with correct rounding. It is based on GMP and provides
+the mathematical functions needed by GCC for compile-time floating-point
+evaluation.
+"""
+license = "LGPL-3.0-or-later"
+homepage = "https://www.mpfr.org/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/mpfr/mpfr-%(version)s.tar.xz"
+checksum = "md5:7c32c39b8b6e3ae85f25156228156061"
+
+[build]
+requires = ["glibc", "gmp"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr        \
+            --disable-static     \
+            --enable-thread-safe \
+            --docdir=/usr/share/doc/mpfr-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+make html
+"""
+
+install = """
+make install
+make install-html
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,79 @@
+# recipes/system/bzip2.toml
+#
+# LFS 13 Section 8.7 — Bzip2-1.0.8
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/bzip2.html
+#
+# Block-sorting file compressor. Does NOT use autotools — builds via
+# Makefile directly. Requires sed patches for correct symlink and man
+# page paths, plus a two-stage build (shared library, then static tools).
+
+[package]
+name = "bzip2"
+version = "1.0.8"
+release = "1"
+summary = "Block-sorting file compressor"
+description = """
+Bzip2 is a freely available, patent-free, high-quality data compressor.
+It compresses files using the Burrows-Wheeler block sorting text
+compression algorithm, and Huffman coding. Compression is generally
+considerably better than that achieved by conventional LZ77/LZ78-based
+compressors.
+"""
+license = "bzip2-1.0.6"
+homepage = "https://sourceware.org/bzip2/"
+
+[source]
+archive = "https://www.sourceware.org/pub/bzip2/bzip2-%(version)s.tar.gz"
+checksum = "md5:67e051268d0c475ea773822f7500d0e5"
+
+[[source.patches]]
+url = "https://www.linuxfromscratch.org/patches/lfs/development/bzip2-1.0.8-install_docs-1.patch"
+checksum = "md5:6a5ac7e89b791aae556de0f745916f7f"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+# Apply documentation installation patch
+patch -Np1 -i ../bzip2-1.0.8-install_docs-1.patch
+
+# Fix symlink creation to use relative paths
+sed -i 's@\\(ln -s -f \\)$(PREFIX)/bin/@\\1@' Makefile
+
+# Fix man page installation path
+sed -i "s@(PREFIX)/man@(PREFIX)/share/man@g" Makefile
+"""
+
+make = """
+# First build the shared library
+make -f Makefile-libbz2_so
+make clean
+
+# Then build the static programs
+make -j%(jobs)s
+"""
+
+install = """
+make PREFIX=/usr install
+
+# Install the shared library
+cp -av libbz2.so.* /usr/lib
+ln -sfv libbz2.so.%(version)s /usr/lib/libbz2.so
+ln -sfv libbz2.so.%(version)s /usr/lib/libbz2.so.1
+
+# Replace the statically linked bzip2 with the shared version
+cp -v bzip2-shared /usr/bin/bzip2
+
+# Create compatibility symlinks
+for i in /usr/bin/{bzcat,bunzip2}; do
+    ln -sfv bzip2 $i
+done
+
+# Remove static library
+rm -fv /usr/lib/libbz2.a
+"""
+
+[variables]
+jobs = "$(nproc)"
