@@ -90,10 +90,7 @@ impl MergePlan {
 fn sha256_of_file(path: &Path) -> crate::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let hash = hash_reader(HashAlgorithm::Sha256, &mut file).map_err(|e| {
-        crate::error::Error::IoError(format!(
-            "Failed to hash {}: {e}",
-            path.display()
-        ))
+        crate::error::Error::IoError(format!("Failed to hash {}: {e}", path.display()))
     })?;
     Ok(hash.value)
 }
@@ -155,7 +152,10 @@ pub fn plan_etc_merge(
 
     debug!(
         total = actions.len(),
-        conflicts = actions.values().filter(|a| matches!(a, MergeAction::Conflict { .. })).count(),
+        conflicts = actions
+            .values()
+            .filter(|a| matches!(a, MergeAction::Conflict { .. }))
+            .count(),
         "etc merge plan computed"
     );
 
@@ -331,10 +331,8 @@ mod tests {
         let upper = TempDir::new().unwrap();
         let hash = sha(b"original content");
 
-        let prev: HashMap<String, String> =
-            [("etc/resolv.conf".into(), hash.clone())].into();
-        let new: HashMap<String, String> =
-            [("etc/resolv.conf".into(), hash)].into();
+        let prev: HashMap<String, String> = [("etc/resolv.conf".into(), hash.clone())].into();
+        let new: HashMap<String, String> = [("etc/resolv.conf".into(), hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         // Unchanged entries are omitted from the plan.
@@ -352,10 +350,8 @@ mod tests {
         let old_hash = sha(b"old content");
         let new_hash = sha(b"new content");
 
-        let prev: HashMap<String, String> =
-            [("etc/nginx/nginx.conf".into(), old_hash)].into();
-        let new: HashMap<String, String> =
-            [("etc/nginx/nginx.conf".into(), new_hash)].into();
+        let prev: HashMap<String, String> = [("etc/nginx/nginx.conf".into(), old_hash)].into();
+        let new: HashMap<String, String> = [("etc/nginx/nginx.conf".into(), new_hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         assert_eq!(plan.actions.len(), 1);
@@ -377,17 +373,12 @@ mod tests {
         let user_content = b"user modified content";
         write_upper_file(upper.path(), "etc/hosts", user_content);
 
-        let prev: HashMap<String, String> =
-            [("etc/hosts".into(), base_hash.clone())].into();
-        let new: HashMap<String, String> =
-            [("etc/hosts".into(), base_hash)].into();
+        let prev: HashMap<String, String> = [("etc/hosts".into(), base_hash.clone())].into();
+        let new: HashMap<String, String> = [("etc/hosts".into(), base_hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         assert_eq!(plan.actions.len(), 1);
-        assert_eq!(
-            plan.actions[Path::new("etc/hosts")],
-            MergeAction::KeepUser,
-        );
+        assert_eq!(plan.actions[Path::new("etc/hosts")], MergeAction::KeepUser,);
         assert!(!plan.has_conflicts());
     }
 
@@ -438,8 +429,7 @@ mod tests {
         let new_hash = sha(b"brand new config");
 
         let prev: HashMap<String, String> = HashMap::new();
-        let new: HashMap<String, String> =
-            [("etc/newpkg.conf".into(), new_hash)].into();
+        let new: HashMap<String, String> = [("etc/newpkg.conf".into(), new_hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         assert_eq!(plan.actions.len(), 1);
@@ -461,8 +451,7 @@ mod tests {
         let user_content = b"user tweaked it";
         write_upper_file(upper.path(), "etc/obsolete.conf", user_content);
 
-        let prev: HashMap<String, String> =
-            [("etc/obsolete.conf".into(), base_hash)].into();
+        let prev: HashMap<String, String> = [("etc/obsolete.conf".into(), base_hash)].into();
         let new: HashMap<String, String> = HashMap::new();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
@@ -483,10 +472,8 @@ mod tests {
         let hash_a = sha(b"aaa");
         let hash_b = sha(b"bbb");
 
-        let prev: HashMap<String, String> =
-            [("etc/a.conf".into(), hash_a)].into();
-        let new: HashMap<String, String> =
-            [("etc/a.conf".into(), hash_b)].into();
+        let prev: HashMap<String, String> = [("etc/a.conf".into(), hash_a)].into();
+        let new: HashMap<String, String> = [("etc/a.conf".into(), hash_b)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         // AcceptPackage, not a conflict.
@@ -505,10 +492,8 @@ mod tests {
         let hash = sha(content);
         write_upper_file(upper.path(), "etc/unchanged.conf", content);
 
-        let prev: HashMap<String, String> =
-            [("etc/unchanged.conf".into(), hash.clone())].into();
-        let new: HashMap<String, String> =
-            [("etc/unchanged.conf".into(), hash)].into();
+        let prev: HashMap<String, String> = [("etc/unchanged.conf".into(), hash.clone())].into();
+        let new: HashMap<String, String> = [("etc/unchanged.conf".into(), hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         // The upper file matches the base -- no meaningful change.
@@ -527,10 +512,8 @@ mod tests {
         let new_hash = sha(new_content);
         write_upper_file(upper.path(), "etc/converged.conf", new_content);
 
-        let prev: HashMap<String, String> =
-            [("etc/converged.conf".into(), base_hash)].into();
-        let new: HashMap<String, String> =
-            [("etc/converged.conf".into(), new_hash)].into();
+        let prev: HashMap<String, String> = [("etc/converged.conf".into(), base_hash)].into();
+        let new: HashMap<String, String> = [("etc/converged.conf".into(), new_hash)].into();
 
         let plan = plan_etc_merge(&prev, &new, upper.path()).unwrap();
         assert_eq!(

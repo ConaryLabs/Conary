@@ -328,10 +328,7 @@ impl TransactionEngine {
                     return self.mount_and_link(gen_num);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Recovery: rebuild from DB failed ({}), trying step 3",
-                        e
-                    );
+                    tracing::warn!("Recovery: rebuild from DB failed ({}), trying step 3", e);
                 }
             }
         } else {
@@ -375,7 +372,10 @@ impl TransactionEngine {
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
 
-        tracing::info!("Recovery: generation {} mounted and symlink updated", gen_num);
+        tracing::info!(
+            "Recovery: generation {} mounted and symlink updated",
+            gen_num
+        );
         Ok(())
     }
 
@@ -389,13 +389,7 @@ impl TransactionEngine {
         let mut candidates: Vec<i64> = std::fs::read_dir(&self.config.generations_dir)
             .ok()?
             .flatten()
-            .filter_map(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .parse::<i64>()
-                    .ok()
-            })
+            .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
             .collect();
 
         // Sort descending — try newest first
