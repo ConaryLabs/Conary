@@ -83,70 +83,126 @@ pub struct ChunkRef {
     pub offset: u64,
 }
 
-/// Map non-success HTTP status codes to domain errors.
+/// Shared core logic for Remi clients.
 ///
-/// Shared between sync and async clients for 404, 503, and unexpected statuses.
-fn map_http_error(status: u16, body: String, name: &str, distro: &str) -> Error {
-    match status {
-        404 => Error::NotFound(format!(
-            "Package '{}' not found in {} repositories",
-            name, distro
-        )),
-        503 => Error::DownloadError("Remi conversion queue is full, try again later".to_string()),
-        _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
-    }
+/// Handles URL construction, HTTP status mapping, and job status parsing.
+/// Used by both `RemiClient` (sync) and `AsyncRemiClient` (async) to avoid
+/// duplicating these operations.
+struct RemiClientCore {
+    base_url: String,
 }
 
-/// Construct a package URL with optional version query parameter
-///
-/// Shared between sync and async clients.
-fn build_package_url(base_url: &str, distro: &str, name: &str, version: Option<&str>) -> String {
-    let encoded_distro = urlencoding::encode(distro);
-    let encoded_name = urlencoding::encode(name);
-    let base = format!("{base_url}/v1/{encoded_distro}/packages/{encoded_name}");
-    if let Some(v) = version {
-        let encoded_version = urlencoding::encode(v);
-        format!("{base}?version={encoded_version}")
-    } else {
-        base
+impl RemiClientCore {
+    /// Create a new core, validating and normalizing the base URL.
+    fn new(base_url: &str) -> Result<Self> {
+        crate::repository::client::validate_url_scheme(base_url)?;
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+        })
     }
-}
 
-fn build_download_url(base_url: &str, distro: &str, name: &str, version: Option<&str>) -> String {
-    let package_url = build_package_url(base_url, distro, name, version);
-    if let Some((path, query)) = package_url.split_once('?') {
-        format!("{path}/download?{query}")
-    } else {
-        format!("{package_url}/download")
+    /// Construct a package URL with optional version query parameter.
+    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
+        let encoded_distro = urlencoding::encode(distro);
+        let encoded_name = urlencoding::encode(name);
+        let base = format!(
+            "{}/v1/{encoded_distro}/packages/{encoded_name}",
+            self.base_url
+        );
+        if let Some(v) = version {
+            let encoded_version = urlencoding::encode(v);
+            format!("{base}?version={encoded_version}")
+        } else {
+            base
+        }
+    }
+
+    /// Construct a direct download URL.
+    fn download_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
+        let package_url = self.package_url(distro, name, version);
+        if let Some((path, query)) = package_url.split_once('?') {
+            format!("{path}/download?{query}")
+        } else {
+            format!("{package_url}/download")
+        }
+    }
+
+    /// Construct a job poll URL.
+    fn job_url(&self, job_id: &str) -> String {
+        format!("{}/v1/jobs/{}", self.base_url, job_id)
+    }
+
+    /// Construct a chunk URL.
+    fn chunk_url(&self, hash: &str) -> String {
+        format!("{}/v1/chunks/{}", self.base_url, hash)
+    }
+
+    /// Construct a health check URL.
+    fn health_url(&self) -> String {
+        format!("{}/health", self.base_url)
+    }
+
+    /// Map non-success HTTP status codes to domain errors.
+    fn map_http_error(&self, status: u16, body: String, name: &str, distro: &str) -> Error {
+        match status {
+            404 => Error::NotFound(format!(
+                "Package '{}' not found in {} repositories",
+                name, distro
+            )),
+            503 => {
+                Error::DownloadError("Remi conversion queue is full, try again later".to_string())
+            }
+            _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
+        }
+    }
+
+    /// Check whether a job status indicates completion (ready or failed).
+    ///
+    /// Returns `Some(Ok(manifest))` for ready, `Some(Err(...))` for failed,
+    /// `None` for still in progress.
+    #[allow(dead_code)]
+    fn check_job_completion(&self, status: &JobStatus) -> Option<Result<PackageManifest>> {
+        match status.status.as_str() {
+            "ready" => {
+                info!("Conversion complete for job {}", status.job_id);
+                status
+                    .manifest
+                    .clone()
+                    .map(|m| Some(Ok(m)))
+                    .unwrap_or(None)
+            }
+            "failed" => {
+                let error_msg = status
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                Some(Err(Error::DownloadError(format!(
+                    "Conversion failed: {}",
+                    error_msg
+                ))))
+            }
+            _ => None,
+        }
     }
 }
 
 /// Client for interacting with a Remi server
 pub struct RemiClient {
     client: Client,
-    base_url: String,
+    core: RemiClientCore,
 }
 
 impl RemiClient {
     /// Create a new Remi client
     pub fn new(base_url: &str) -> Result<Self> {
-        // Validate URL scheme to prevent SSRF (reject non-HTTP(S) URLs)
-        crate::repository::client::validate_url_scheme(base_url)?;
+        let core = RemiClientCore::new(base_url)?;
 
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| Error::InitError(format!("Failed to create HTTP client: {e}")))?;
 
-        // Normalize base URL (remove trailing slash)
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        Ok(Self { client, base_url })
-    }
-
-    /// Construct a package URL with optional version query parameter
-    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
-        build_package_url(&self.base_url, distro, name, version)
+        Ok(Self { client, core })
     }
 
     /// Request a package from the Remi
@@ -159,7 +215,7 @@ impl RemiClient {
         name: &str,
         version: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.package_url(distro, name, version);
+        let url = self.core.package_url(distro, name, version);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -192,7 +248,7 @@ impl RemiClient {
             }
             status => {
                 let body = response.text().unwrap_or_default();
-                Err(map_http_error(status, body, name, distro))
+                Err(self.core.map_http_error(status, body, name, distro))
             }
         }
     }
@@ -202,7 +258,7 @@ impl RemiClient {
     /// Retries up to 3 times on transient errors (5xx, timeout, connection
     /// refused) with exponential backoff. 4xx errors fail immediately.
     fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
-        let url = format!("{}/v1/jobs/{}", self.base_url, job_id);
+        let url = self.core.job_url(job_id);
         let start = std::time::Instant::now();
         let max_transient_retries: u32 = 3;
 
@@ -304,7 +360,7 @@ impl RemiClient {
                     }
 
                     // Re-request to get manifest (direct request, not recursive poll)
-                    let url = self.package_url(
+                    let url = self.core.package_url(
                         &status.distro,
                         &status.package,
                         status.version.as_deref(),
@@ -380,7 +436,7 @@ impl RemiClient {
         let retry_config = crate::repository::retry::RetryConfig::quick();
 
         for chunk in &manifest.chunks {
-            let url = format!("{}/v1/chunks/{}", self.base_url, chunk.hash);
+            let url = self.core.chunk_url(&chunk.hash);
             debug!("Downloading chunk: {} ({} bytes)", chunk.hash, chunk.size);
 
             let data = crate::repository::retry::with_retry(&retry_config, || {
@@ -508,7 +564,7 @@ impl RemiClient {
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Use the direct download endpoint
-        let url = build_download_url(&self.base_url, distro, name, version);
+        let url = self.core.download_url(distro, name, version);
 
         info!("Downloading CCS package from Remi: {}", url);
 
@@ -572,7 +628,7 @@ impl RemiClient {
             }
             status => {
                 let body = response.text().unwrap_or_default();
-                Err(map_http_error(status, body, name, distro))
+                Err(self.core.map_http_error(status, body, name, distro))
             }
         }
     }
@@ -666,7 +722,7 @@ impl RemiClient {
 
     /// Check if Remi is healthy
     pub fn health_check(&self) -> Result<bool> {
-        let url = format!("{}/health", self.base_url);
+        let url = self.core.health_url();
         match self.client.get(&url).send() {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
@@ -689,27 +745,19 @@ impl RemiClient {
 #[cfg(feature = "server")]
 pub struct AsyncRemiClient {
     http_client: reqwest::Client,
-    base_url: String,
+    core: RemiClientCore,
     chunk_fetcher: Arc<CompositeChunkFetcher>,
 }
 
 #[cfg(feature = "server")]
 impl AsyncRemiClient {
-    /// Construct a package URL with optional version query parameter
-    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
-        build_package_url(&self.base_url, distro, name, version)
-    }
-
     /// Create a new async Remi client
     ///
     /// # Arguments
     /// * `base_url` - Base URL of the Remi server
     /// * `cache_dir` - Directory for local chunk cache
     pub fn new(base_url: &str, cache_dir: impl AsRef<Path>) -> Result<Self> {
-        // Validate URL scheme to prevent SSRF (reject non-HTTP(S) URLs)
-        crate::repository::client::validate_url_scheme(base_url)?;
-
-        let base_url = base_url.trim_end_matches('/').to_string();
+        let core = RemiClientCore::new(base_url)?;
 
         let http_client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -719,12 +767,12 @@ impl AsyncRemiClient {
         // Build chunk fetcher: local cache -> HTTP
         let chunk_fetcher = ChunkFetcherBuilder::new()
             .with_local_cache(&cache_dir)
-            .with_http_concurrent(&base_url, 16)? // 16 concurrent HTTP/2 streams
+            .with_http_concurrent(&core.base_url, 16)? // 16 concurrent HTTP/2 streams
             .build();
 
         Ok(Self {
             http_client,
-            base_url,
+            core,
             chunk_fetcher: Arc::new(chunk_fetcher),
         })
     }
@@ -733,7 +781,7 @@ impl AsyncRemiClient {
     ///
     /// Allows injecting custom fetcher chains for testing or special configurations.
     pub fn with_fetcher(base_url: &str, fetcher: CompositeChunkFetcher) -> Result<Self> {
-        let base_url = base_url.trim_end_matches('/').to_string();
+        let core = RemiClientCore::new(base_url)?;
 
         let http_client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -742,7 +790,7 @@ impl AsyncRemiClient {
 
         Ok(Self {
             http_client,
-            base_url,
+            core,
             chunk_fetcher: Arc::new(fetcher),
         })
     }
@@ -757,7 +805,7 @@ impl AsyncRemiClient {
         name: &str,
         version: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.package_url(distro, name, version);
+        let url = self.core.package_url(distro, name, version);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -790,14 +838,14 @@ impl AsyncRemiClient {
             }
             status => {
                 let body = response.text().await.unwrap_or_default();
-                Err(map_http_error(status, body, name, distro))
+                Err(self.core.map_http_error(status, body, name, distro))
             }
         }
     }
 
     /// Poll for job completion (async version)
     async fn poll_for_completion_async(&self, job_id: &str) -> Result<PackageManifest> {
-        let url = format!("{}/v1/jobs/{}", self.base_url, job_id);
+        let url = self.core.job_url(job_id);
         let start = std::time::Instant::now();
 
         loop {
@@ -953,7 +1001,7 @@ impl AsyncRemiClient {
 
     /// Check if Remi is healthy
     pub async fn health_check(&self) -> Result<bool> {
-        let url = format!("{}/health", self.base_url);
+        let url = self.core.health_url();
         match self.http_client.get(&url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
@@ -974,11 +1022,11 @@ mod tests {
     fn test_base_url_normalization() {
         // With trailing slash
         let client = RemiClient::new("http://localhost:8080/").unwrap();
-        assert_eq!(client.base_url, "http://localhost:8080");
+        assert_eq!(client.core.base_url, "http://localhost:8080");
 
         // Without trailing slash
         let client = RemiClient::new("http://localhost:8080").unwrap();
-        assert_eq!(client.base_url, "http://localhost:8080");
+        assert_eq!(client.core.base_url, "http://localhost:8080");
     }
 
     #[test]
@@ -1001,13 +1049,15 @@ mod tests {
 
     #[test]
     fn test_build_package_url_without_version() {
-        let url = build_package_url("http://remi:8080", "arch", "nginx", None);
+        let core = RemiClientCore::new("http://remi:8080").unwrap();
+        let url = core.package_url("arch", "nginx", None);
         assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx");
     }
 
     #[test]
     fn test_build_package_url_with_version() {
-        let url = build_package_url("http://remi:8080", "arch", "nginx", Some("1.24.0"));
+        let core = RemiClientCore::new("http://remi:8080").unwrap();
+        let url = core.package_url("arch", "nginx", Some("1.24.0"));
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx?version=1.24.0"
@@ -1016,7 +1066,8 @@ mod tests {
 
     #[test]
     fn test_build_download_url_with_version() {
-        let url = build_download_url("http://remi:8080", "arch", "nginx", Some("1.24.0"));
+        let core = RemiClientCore::new("http://remi:8080").unwrap();
+        let url = core.download_url("arch", "nginx", Some("1.24.0"));
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx/download?version=1.24.0"
@@ -1049,11 +1100,11 @@ mod tests {
 
             // With trailing slash
             let client = AsyncRemiClient::new("http://localhost:8080/", temp_dir.path()).unwrap();
-            assert_eq!(client.base_url, "http://localhost:8080");
+            assert_eq!(client.core.base_url, "http://localhost:8080");
 
             // Without trailing slash
             let client = AsyncRemiClient::new("http://localhost:8080", temp_dir.path()).unwrap();
-            assert_eq!(client.base_url, "http://localhost:8080");
+            assert_eq!(client.core.base_url, "http://localhost:8080");
         }
 
         #[test]
@@ -1065,7 +1116,7 @@ mod tests {
             let fetcher = CompositeChunkFetcher::new(vec![Arc::new(cache)]);
 
             let client = AsyncRemiClient::with_fetcher("http://localhost:8080", fetcher).unwrap();
-            assert_eq!(client.base_url, "http://localhost:8080");
+            assert_eq!(client.core.base_url, "http://localhost:8080");
         }
 
         #[tokio::test]
