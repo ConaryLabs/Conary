@@ -1,0 +1,61 @@
+# recipes/system/inetutils.toml
+#
+# LFS 13 Section 8.39 — Inetutils-2.7
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/inetutils.html
+#
+# GNU network utilities — provides hostname, ifconfig, ping, telnet,
+# traceroute, and other basic networking tools. Legacy insecure programs
+# (rcp, rlogin, rsh, etc.) and server daemons are disabled.
+
+[package]
+name = "inetutils"
+version = "2.7"
+release = "1"
+summary = "GNU network utilities"
+description = """
+The Inetutils package contains programs for basic networking. It
+provides hostname, ifconfig, ping, ping6, telnet, traceroute, and
+other common network utilities. Legacy insecure programs and server
+daemons are disabled.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/inetutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/inetutils/inetutils-%(version)s.tar.gz"
+checksum = "md5:eed294e7b170cbbb0ff86493ef4c1273"
+
+[build]
+requires = ["glibc", "ncurses", "readline"]
+makedepends = []
+chroot = true
+
+configure = """
+# Fix a build issue with termcap detection
+sed -i 's/def HAVE_TERMCAP_TGETENT/ 1/' telnet/telnet.c
+
+./configure --prefix=/usr        \
+            --bindir=/usr/bin    \
+            --localstatedir=/var \
+            --disable-logger     \
+            --disable-whois      \
+            --disable-rcp        \
+            --disable-rexec      \
+            --disable-rlogin     \
+            --disable-rsh        \
+            --disable-servers
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Move ifconfig to /usr/sbin where it is traditionally expected
+mv -v /usr/{,s}bin/ifconfig
+"""
+
+[variables]
+jobs = "$(nproc)"

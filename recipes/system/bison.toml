@@ -1,0 +1,45 @@
+# recipes/system/bison.toml
+#
+# LFS 13 Section 8.32 — Bison-3.8.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/bison.html
+#
+# GNU parser generator — converts grammar descriptions into C parsers.
+# Required by many packages that generate parsers from grammar files.
+
+[package]
+name = "bison"
+version = "3.8.2"
+release = "1"
+summary = "GNU parser generator"
+description = """
+Bison is a general-purpose parser generator that converts an annotated
+context-free grammar into a C or C++ parser. It is largely compatible
+with Yacc and is used by many programs to generate their parsers.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bison/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/bison/bison-%(version)s.tar.xz"
+checksum = "md5:c28f119f405a2304ff0a7ccdcc629713"
+
+[build]
+requires = ["glibc", "m4"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr \
+            --docdir=/usr/share/doc/bison-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

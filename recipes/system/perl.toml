@@ -1,0 +1,66 @@
+# recipes/system/perl.toml
+#
+# LFS 13 Section 8.41 — Perl-5.42.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/perl.html
+#
+# Practical Extraction and Report Language. Full system build with
+# shared library, threading, and system zlib/bzip2. Uses Perl's own
+# Configure script (capital C) with -des for non-interactive mode.
+
+[package]
+name = "perl"
+version = "5.42.1"
+release = "1"
+summary = "Practical Extraction and Report Language"
+description = """
+Perl is a highly capable, feature-rich programming language. It
+combines features from C, sed, awk, and shell scripting. This full
+system build includes shared library support, threading, and uses
+the system-installed zlib and bzip2 libraries.
+"""
+license = "Artistic-1.0 OR GPL-1.0-or-later"
+homepage = "https://www.perl.org/"
+
+[source]
+archive = "https://www.cpan.org/src/5.0/perl-%(version)s.tar.xz"
+checksum = "md5:aea480078218bcc6d6636a622c7d187d"
+
+[build]
+requires = ["glibc", "zlib", "bzip2", "gdbm"]
+makedepends = []
+chroot = true
+
+configure = """
+# Use system zlib and bzip2 instead of bundled copies
+export BUILD_ZLIB=False
+export BUILD_BZIP2=0
+
+sh Configure -des                                          \
+             -D prefix=/usr                                \
+             -D vendorprefix=/usr                          \
+             -D privlib=/usr/lib/perl5/5.42/core_perl      \
+             -D archlib=/usr/lib/perl5/5.42/core_perl      \
+             -D sitelib=/usr/lib/perl5/5.42/site_perl      \
+             -D sitearch=/usr/lib/perl5/5.42/site_perl     \
+             -D vendorlib=/usr/lib/perl5/5.42/vendor_perl  \
+             -D vendorarch=/usr/lib/perl5/5.42/vendor_perl \
+             -D man1dir=/usr/share/man/man1                \
+             -D man3dir=/usr/share/man/man3                \
+             -D pager="/usr/bin/less -isR"                 \
+             -D useshrplib                                 \
+             -D usethreads
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Unset build variables
+unset BUILD_ZLIB BUILD_BZIP2
+"""
+
+[variables]
+jobs = "$(nproc)"

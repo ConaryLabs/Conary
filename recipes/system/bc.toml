@@ -1,0 +1,46 @@
+# recipes/system/bc.toml
+#
+# LFS 13 Section 8.15 — Bc-7.0.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/bc.html
+#
+# Arbitrary precision calculator language. Uses its own configure script
+# (not autotools). The -G flag omits parts of the test suite that
+# require the installed bc, -O3 sets optimization, -r enables readline.
+
+[package]
+name = "bc"
+version = "7.0.3"
+release = "1"
+summary = "Arbitrary precision calculator language"
+description = """
+Bc is an arbitrary precision numeric processing language. It includes
+an interactive calculator with readline support. This implementation
+by Gavin Howard is a complete rewrite that is significantly faster
+than the traditional GNU bc.
+"""
+license = "BSD-2-Clause"
+homepage = "https://git.gavinhoward.com/gavin/bc"
+
+[source]
+archive = "https://github.com/gavinhoward/bc/releases/download/%(version)s/bc-%(version)s.tar.xz"
+checksum = "md5:ad4db5a0eb4fdbb3f6813be4b6b3da74"
+
+[build]
+requires = ["glibc", "readline"]
+makedepends = []
+chroot = true
+
+configure = """
+CC='gcc -std=c99' ./configure --prefix=/usr -G -O3 -r
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"
