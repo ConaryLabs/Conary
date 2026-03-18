@@ -12,6 +12,30 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, warn};
 
+/// Build context determines how configure/make are invoked.
+///
+/// Each bootstrap phase has different requirements for how packages are built:
+/// cross-compilation uses `--host` and `--build` flags with a sysroot,
+/// chroot builds run inside an isolated root, and native builds use the
+/// host system directly.
+#[derive(Debug, Clone)]
+pub enum BuildContext {
+    /// Cross-compilation: `--host=$LFS_TGT --build=$(config.guess)`
+    Cross {
+        /// Target triplet (e.g., "x86_64-conary-linux-gnu")
+        host: String,
+        /// Sysroot path (e.g., /mnt/lfs)
+        sysroot: PathBuf,
+    },
+    /// Native build inside chroot
+    Chroot {
+        /// Chroot root path
+        root: PathBuf,
+    },
+    /// Native build on host (default, current behavior)
+    Native,
+}
+
 /// Errors from the shared build runner
 #[derive(Debug, thiserror::Error)]
 pub enum BuildRunnerError {
@@ -39,6 +63,8 @@ pub struct PackageBuildRunner {
     sources_dir: PathBuf,
     /// Whether to skip checksum verification
     skip_verify: bool,
+    /// Optional build context for cross-compilation or chroot builds
+    context: Option<BuildContext>,
 }
 
 impl PackageBuildRunner {
@@ -47,7 +73,23 @@ impl PackageBuildRunner {
         Self {
             sources_dir: sources_dir.to_path_buf(),
             skip_verify: config.skip_verify,
+            context: None,
         }
+    }
+
+    /// Set the build context for cross-compilation or chroot builds.
+    ///
+    /// Returns `self` for builder-style chaining. When no context is set
+    /// (the default), the runner uses native build behavior.
+    #[must_use]
+    pub fn with_context(mut self, context: BuildContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    /// Get the current build context, if any.
+    pub fn context(&self) -> Option<&BuildContext> {
+        self.context.as_ref()
     }
 
     /// Fetch the primary source archive for a package, returning the local path.
