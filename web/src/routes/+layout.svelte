@@ -71,7 +71,7 @@
 			</div>
 			<div class="footer-bottom">
 				<span class="footer-prompt">$</span>
-				<span class="footer-text">conary -- the cross-distribution package manager</span>
+				<span class="footer-text">conary -- the cross-distribution system manager</span>
 			</div>
 		</div>
 	</footer>

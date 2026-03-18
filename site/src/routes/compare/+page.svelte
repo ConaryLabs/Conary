@@ -54,12 +54,20 @@
 							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
-							<td class="feature-name">Atomic transactions</td>
+							<td class="feature-name">Composefs-native transactions</td>
 							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
-							<td><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+						</tr>
+						<tr>
+							<td class="feature-name">Kernel-enforced integrity (fs-verity)</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
 							<td class="feature-name">Declarative system model</td>
@@ -150,14 +158,16 @@
 				<p>
 					apt is the workhorse of the Debian ecosystem -- battle-tested and reliable. Conary
 					doesn't replace apt on Debian systems; it sits alongside it. The key differences:
-					Conary adds content-addressable storage for deduplication, binary delta updates to
-					reduce bandwidth, atomic transactions that survive crashes, and the ability to manage
-					Fedora or Arch packages on the same machine.
+					Conary builds immutable EROFS generations with kernel-enforced integrity (fs-verity),
+					adds content-addressable storage for deduplication, binary delta updates to
+					reduce bandwidth, and the ability to manage Fedora or Arch packages on the same machine.
+					Every operation produces a new composefs-mounted generation -- instant rollback by
+					remounting the previous one.
 				</p>
 				<p>
 					If you only run Ubuntu and don't need cross-distro support, apt works great. Conary
-					becomes valuable when you want unified management, disk savings from CAS, or crash
-					safety.
+					becomes valuable when you want immutable system generations, unified management,
+					disk savings from CAS, or kernel-verified integrity.
 				</p>
 			</div>
 
@@ -165,10 +175,12 @@
 				<h2>vs. dnf <span class="detail-distro">(Fedora / RHEL)</span></h2>
 				<p>
 					dnf is a capable package manager with delta RPM support and a SAT solver. Conary
-					shares the SAT-based approach (via resolvo) and adds CAS deduplication, full
-					atomic transactions (not just RPM's limited rollback), and cross-distro package
-					management. dnf's delta RPM support is partial -- it depends on upstream providing
-					delta files. Conary generates binary deltas on-demand from any two versions.
+					shares the SAT-based approach (via resolvo) and adds CAS deduplication, immutable
+					EROFS generations with composefs mounts, and cross-distro package management.
+					dnf's delta RPM support is partial -- it depends on upstream providing
+					delta files. Conary generates EROFS binary deltas on-demand from any two versions.
+					Every dnf transaction mutates the filesystem in place; every Conary transaction
+					produces a new verified generation that can be rolled back instantly.
 				</p>
 			</div>
 
@@ -176,10 +188,10 @@
 				<h2>vs. pacman <span class="detail-distro">(Arch Linux)</span></h2>
 				<p>
 					pacman is fast, minimal, and trusts the user. Conary respects that philosophy while
-					adding features pacman lacks: atomic transactions (no more broken systems from
-					interrupted updates), content-addressable storage, dependency resolution through SAT
-					solving, and the ability to install packages from Fedora or Ubuntu repos alongside
-					Arch packages.
+					adding features pacman lacks: composefs-native transactions that produce immutable EROFS
+					images (no more broken systems from interrupted updates), kernel-enforced integrity via
+					fs-verity, content-addressable storage, dependency resolution through SAT solving,
+					and the ability to install packages from Fedora or Ubuntu repos alongside Arch packages.
 				</p>
 			</div>
 
@@ -229,7 +241,7 @@
 			<div class="detail-card animate-in" style="--stagger: 11">
 				<h2>Where Conary Is Still Early</h2>
 				<p>
-					Conary is a 0.3.0 release. apt, dnf, and pacman have decades of battle-testing,
+					Conary is a 0.6.0 release. apt, dnf, and pacman have decades of battle-testing,
 					ecosystem integration, and institutional trust. Nix has a large and active community
 					building custom packages.
 				</p>

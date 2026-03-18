@@ -13,8 +13,10 @@
 		</p>
 
 		<p class="animate-in" style="--stagger: 2">
-			It introduces the CCS (Conary Container Store) format for enhanced package metadata,
-			content-addressable storage, and reproducible installations.
+			Every operation produces an immutable EROFS image mounted via Linux composefs,
+			with kernel-enforced integrity (fs-verity) on every file read. Conary uses the
+			CCS (Conary Container Store) native format with content-addressable storage and
+			EROFS binary deltas for efficient updates.
 		</p>
 
 		<h2>What is Remi?</h2>
@@ -31,6 +33,14 @@
 
 		<div class="features-grid">
 			<div class="feature">
+				<h3>Composefs-native</h3>
+				<p>Every operation builds an immutable EROFS image mounted via composefs</p>
+			</div>
+			<div class="feature">
+				<h3>Kernel-enforced integrity</h3>
+				<p>fs-verity on every file -- the kernel verifies content on each read</p>
+			</div>
+			<div class="feature">
 				<h3>Cross-distribution</h3>
 				<p>Manage packages from Fedora, Arch, and Ubuntu with a single tool</p>
 			</div>
@@ -39,16 +49,8 @@
 				<p>Deduplicate files across packages using CAS</p>
 			</div>
 			<div class="feature">
-				<h3>Binary deltas</h3>
-				<p>Download only what changed between package versions</p>
-			</div>
-			<div class="feature">
-				<h3>Atomic transactions</h3>
-				<p>Install, remove, and rollback operations are crash-safe</p>
-			</div>
-			<div class="feature">
-				<h3>Hermetic builds</h3>
-				<p>Reproducible package builds with network isolation</p>
+				<h3>Instant rollback</h3>
+				<p>Remount a previous generation -- no file copying, no rebuilding</p>
 			</div>
 			<div class="feature">
 				<h3>CAS federation</h3>

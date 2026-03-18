@@ -18,9 +18,10 @@
 		<div class="install-block animate-in" style="--stagger: 3">
 			<h2>Build from Source</h2>
 			<p class="install-note">
-				Requires Rust 1.94+, SQLite development headers, and Linux.
-				Conary uses Linux-specific kernel APIs (namespaces, landlock, seccomp)
-				and does not currently build on macOS or Windows.
+				Requires Rust 1.94+, SQLite development headers, and Linux 6.2+ with
+				composefs and EROFS support. Conary uses Linux-specific kernel APIs
+				(composefs, fs-verity, namespaces, landlock, seccomp) and does not
+				currently build on macOS or Windows.
 			</p>
 			<div class="terminal">
 				<div class="terminal-header">
@@ -66,7 +67,7 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.5.0</div>
+					<div class="terminal-line t-output">conary 0.6.0</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -91,25 +92,28 @@
 				</div>
 			</div>
 		</div>
-		<!-- Distribution packages (coming soon) -->
+		<!-- Distribution packages -->
 		<div class="install-block animate-in" style="--stagger: 11">
 			<h2>Distribution Packages</h2>
 			<p class="install-note">
-				Native packages for Fedora, Arch, and Ubuntu/Debian are planned.
-				For now, build from source above.
+				Native RPM, DEB, and Arch packages are built by CI on each release and
+				published to the Remi package server. Direct repository integration is
+				in progress -- for now, download from
+				<a href="https://github.com/ConaryLabs/Conary/releases">GitHub Releases</a>
+				or build from source above.
 			</p>
-			<div class="distro-cards coming-soon">
+			<div class="distro-cards">
 				<div class="distro-card distro-fedora">
-					<div class="distro-badge">Fedora <span class="soon-tag">Coming Soon</span></div>
-					<p class="distro-note">Fedora 39+ / RHEL 9+</p>
+					<div class="distro-badge">Fedora</div>
+					<p class="distro-note">Fedora 43+ / RPM-based</p>
 				</div>
 				<div class="distro-card distro-arch">
-					<div class="distro-badge">Arch Linux <span class="soon-tag">Coming Soon</span></div>
-					<p class="distro-note">AUR package</p>
+					<div class="distro-badge">Arch Linux</div>
+					<p class="distro-note">PKGBUILD package</p>
 				</div>
 				<div class="distro-card distro-ubuntu">
-					<div class="distro-badge">Ubuntu / Debian <span class="soon-tag">Coming Soon</span></div>
-					<p class="distro-note">Ubuntu 22.04+ / Debian 12+</p>
+					<div class="distro-badge">Ubuntu / Debian</div>
+					<p class="distro-note">Ubuntu 24.04+ / Debian 12+</p>
 				</div>
 			</div>
 		</div>

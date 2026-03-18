@@ -1,6 +1,6 @@
 <svelte:head>
 	<title>Conary - The Cross-Distribution System Manager</title>
-	<meta name="description" content="Build immutable system generations from your installed packages. Unified system management across Fedora, Arch, and Ubuntu with atomic transactions and on-demand format conversion." />
+	<meta name="description" content="Build immutable EROFS system generations with kernel-enforced integrity. Unified system management across Fedora, Arch, and Ubuntu with composefs-native transactions and on-demand format conversion." />
 </svelte:head>
 
 <!-- Hero -->
@@ -13,8 +13,8 @@
 			One system manager for every Linux distro
 		</p>
 		<p class="hero-desc animate-in" style="--stagger: 3">
-			Build immutable system generations from your installed packages.
-			Switch between system states live, without rebooting.
+			Every install produces an EROFS image mounted via composefs.
+			Kernel-enforced integrity on every file read. Instant rollback by remounting a previous generation.
 			Install RPM, DEB, and Arch packages with the same tool.
 			68,000+ packages available today.
 		</p>
@@ -71,10 +71,11 @@
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 12">
-				<h3>Atomic Transactions</h3>
+				<h3>Composefs-Native Transactions</h3>
 				<p>
-					Every install, remove, and upgrade is a crash-safe atomic transaction.
-					Power loss mid-update? Conary recovers automatically on next boot.
+					Every install, remove, and upgrade builds a new EROFS image and
+					atomically switches the composefs mount. Power loss mid-update?
+					The previous generation is still intact -- remount and continue.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 13">
@@ -99,17 +100,18 @@
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 16">
-				<h3>System Model</h3>
+				<h3>Kernel-Enforced Integrity</h3>
 				<p>
-					Declare the packages your system should have. Conary computes the difference
-					and applies it. Reproducible systems from a single file.
+					fs-verity on every file in every generation. The kernel verifies
+					content hashes on each read -- tampered files cause I/O errors,
+					not silent corruption.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 17">
-				<h3>Bootstrap</h3>
+				<h3>Declarative System Model</h3>
 				<p>
-					Build a complete system from scratch. Staged pipeline from
-					cross-compiler to self-hosted toolchain to bootable image.
+					Declare the packages your system should have. Conary computes the difference,
+					builds a new EROFS generation, and switches to it atomically.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 18">
@@ -117,6 +119,13 @@
 				<p>
 					Remi, the conversion proxy, transparently converts upstream RPM/DEB/Arch
 					packages into CCS format. No upstream changes required.
+				</p>
+			</div>
+			<div class="feature-card animate-in" style="--stagger: 19">
+				<h3>OCI Export</h3>
+				<p>
+					Export any generation or package set as an OCI container image,
+					compatible with podman and docker. Ship your exact system state.
 				</p>
 			</div>
 		</div>
@@ -141,40 +150,22 @@
 				</div>
 				<div class="terminal-line t-output">Resolving dependencies...</div>
 				<div class="terminal-line t-output">Installing 3 packages (12.4 MB)</div>
-				<div class="terminal-line t-output t-success">Transaction complete.</div>
+				<div class="terminal-line t-output">Building EROFS image...</div>
+				<div class="terminal-line t-output t-success">Generation 4 built. Switched.</div>
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary search "web server"</span>
+					<span class="t-cmd">conary generation list</span>
 				</div>
-				<div class="terminal-line t-output">
-					<span class="t-pkg">nginx</span>
-					<span class="t-ver">1.27.3</span>
-					<span class="t-desc">HTTP and reverse proxy server</span>
-				</div>
-				<div class="terminal-line t-output">
-					<span class="t-pkg">caddy</span>
-					<span class="t-ver">2.8.4</span>
-					<span class="t-desc">Fast, multi-platform web server with automatic HTTPS</span>
-				</div>
-				<div class="terminal-line t-output">
-					<span class="t-pkg">lighttpd</span>
-					<span class="t-ver">1.4.76</span>
-					<span class="t-desc">Lightweight high-performance web server</span>
-				</div>
+				<div class="terminal-line t-output">  4  [active]  142 packages  847 MB  Added nginx</div>
+				<div class="terminal-line t-output">  3            141 packages  832 MB  System update</div>
+				<div class="terminal-line t-output">  2            139 packages  810 MB  Initial setup</div>
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary model diff</span>
+					<span class="t-cmd">conary generation rollback</span>
 				</div>
-				<div class="terminal-line t-output">3 packages to install, 0 to remove</div>
-				<div class="terminal-line t-blank"></div>
-				<div class="terminal-line">
-					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary generation build --summary "Added nginx"</span>
-				</div>
-				<div class="terminal-line t-output">Building generation 3...</div>
-				<div class="terminal-line t-output t-success">Generation 3 built (142 packages, 847 MB)</div>
+				<div class="terminal-line t-output t-success">Switched to generation 3. Instant.</div>
 			</div>
 		</div>
 	</div>
@@ -230,12 +221,20 @@
 						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 					<tr>
-						<td class="feature-name">Atomic transactions</td>
+						<td class="feature-name">Composefs-native transactions</td>
 						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
-						<td><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+					</tr>
+					<tr>
+						<td class="feature-name">Kernel-enforced integrity</td>
+						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
+						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 					<tr>
 						<td class="feature-name">Declarative system model</td>
