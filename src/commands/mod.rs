@@ -22,6 +22,7 @@ mod install;
 mod label;
 mod model;
 pub mod progress;
+mod package_parsing;
 mod provenance;
 mod query;
 mod replatform_rendering;
