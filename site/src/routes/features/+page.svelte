@@ -57,8 +57,8 @@
 					Stage 0 cross-compiles the toolchain, Stage 1 builds a self-hosted compiler,
 					optional Stage 2 eliminates host contamination, BaseSystem assembles core
 					userspace with per-package checkpointing, and Image produces bootable media
-					via systemd-repart (rootless, fallback to sfdisk/mkfs). Based on LFS 12.4
-					with binutils 2.45, GCC 15.2.0, glibc 2.42, and kernel 6.16.1. Supports
+					via systemd-repart (rootless, fallback to sfdisk/mkfs). Based on LFS 13
+					with GCC 15.2.0. Outputs EROFS images + CAS store + SQLite DB. Supports
 					x86_64, aarch64, and riscv64 targets. Dry-run mode validates the full
 					pipeline without writing anything.
 				</p>
@@ -78,17 +78,35 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>Snapshots and Rollback</h3>
+				<h3>Instant Rollback</h3>
 				<p>
-					Every install and remove creates a numbered system state snapshot. Compare any
-					two snapshots and roll back to any previous state.
+					Every generation is an immutable EROFS image. Rolling back remounts a
+					previous generation -- no file copying, no rebuilding. The kernel verifies
+					integrity via fs-verity on every file read.
 				</p>
 				<div class="feature-code">
-					<code>conary system state list</code>
-					<code>conary system state diff 5 8</code>
-					<code>conary system state restore 5</code>
-					<code>conary system state prune --keep 10</code>
+					<code>conary generation rollback</code>
+					<code>conary generation switch 2</code>
+					<code>conary generation list</code>
+					<code>conary generation gc --keep 3</code>
 				</div>
+			</div>
+
+			<div class="feature-card">
+				<h3>/etc Three-Way Merge</h3>
+				<p>
+					Configuration files in /etc are handled with a three-way merge (bootc model).
+					User modifications survive generation switches while upstream changes are
+					integrated cleanly.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3>Boot Recovery</h3>
+				<p>
+					4-step fallback if the active generation fails to boot: try previous generation,
+					scan for any valid generation, emergency shell, Dracut module for early-boot repair.
+				</p>
 			</div>
 		</div>
 
@@ -210,11 +228,22 @@
 			<div class="feature-card">
 				<h3>OCI Export</h3>
 				<p>
-					Export packages as OCI container images compatible with podman and docker.
+					Export any generation or package set as an OCI container image compatible
+					with podman and docker. Ship your exact verified system state as a container.
 				</p>
 				<div class="feature-code">
+					<code>conary export --oci</code>
 					<code>conary ccs export nginx --format oci</code>
 				</div>
+			</div>
+
+			<div class="feature-card">
+				<h3>EROFS Binary Deltas</h3>
+				<p>
+					Upgrade generations by downloading EROFS binary deltas instead of full images.
+					Combined with CAS-level deduplication, updates transfer only the blocks
+					that actually changed.
+				</p>
 			</div>
 
 			<div class="feature-card">
@@ -241,6 +270,8 @@
 				<p>
 					Files stored by SHA-256 hash with XXH128 for fast dedup checks. Automatic
 					deduplication across packages. FastCDC chunking for efficient distribution.
+					CAS garbage collection uses DB reference counts -- only unreferenced chunks
+					are reclaimed.
 				</p>
 				<div class="feature-code">
 					<code>conary system verify</code>

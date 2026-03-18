@@ -60,10 +60,11 @@
 				with no upstream changes required.
 			</p>
 			<p>
-				Under the hood, Conary uses content-addressable storage (SHA-256 + XXH128) for
-				file-level deduplication, a SAT-based dependency resolver (via resolvo), zstd-compressed
-				binary deltas for efficient updates, and a journal-based transaction engine that
-				guarantees crash safety.
+				Under the hood, every install, remove, or upgrade builds a new EROFS image and
+				atomically switches the composefs mount. Content-addressable storage (SHA-256 + XXH128)
+				handles file-level deduplication, a SAT-based dependency resolver (via resolvo) solves
+				dependencies, and EROFS binary deltas keep updates small. The kernel enforces integrity
+				via fs-verity on every file read -- tampered files cause I/O errors, not silent corruption.
 			</p>
 		</div>
 
@@ -75,8 +76,8 @@
 					<p>Content-addressable storage. Files stored by hash, not by package. Identical files are automatically deduplicated.</p>
 				</div>
 				<div class="arch-item">
-					<h3>Transaction Engine</h3>
-					<p>Every operation is atomic and crash-safe. Journal-based recovery on boot if interrupted.</p>
+					<h3>Composefs Transactions</h3>
+					<p>Every operation builds a new EROFS image and switches the composefs mount. Previous generation remains intact for instant rollback.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Resolver</h3>
@@ -110,7 +111,11 @@
 			<div class="tech-list">
 				<div class="tech-item">
 					<span class="tech-label">Language</span>
-					<span class="tech-value">Rust (Edition 2024)</span>
+					<span class="tech-value">Rust (Edition 2024), 5-crate workspace</span>
+				</div>
+				<div class="tech-item">
+					<span class="tech-label">Filesystem</span>
+					<span class="tech-value">EROFS + composefs (composefs-rs), fs-verity</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
