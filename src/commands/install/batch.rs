@@ -186,10 +186,12 @@ impl<'a> BatchInstaller<'a> {
         let mut engine =
             TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
-        // Recover any incomplete transactions
-        engine
-            .recover(&conn)
-            .context("Failed to recover incomplete transactions")?;
+        // Recover any incomplete transactions (only if generations exist)
+        if engine.config().generations_dir.exists() {
+            engine
+                .recover(&conn)
+                .context("Failed to recover incomplete transactions")?;
+        }
 
         // Build transaction description
         let tx_description = if package_count == 1 {
