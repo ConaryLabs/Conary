@@ -150,6 +150,8 @@ impl ConvertedPackage {
     }
 
     /// Create from a database row
+    ///
+    /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get(0)?,
@@ -160,21 +162,19 @@ impl ConvertedPackage {
             conversion_fidelity: row.get(5)?,
             detected_hooks: row.get(6)?,
             converted_at: row.get(7)?,
-            // Enhancement fields (v36)
-            enhancement_version: row.get(8).unwrap_or(0),
-            inferred_caps_json: row.get(9).ok(),
-            extracted_provenance_json: row.get(10).ok(),
-            enhancement_status: row.get(11).unwrap_or_else(|_| "pending".to_string()),
-            enhancement_error: row.get(12).ok(),
-            enhancement_attempted_at: row.get(13).ok(),
-            // Server-side fields (v38)
-            package_name: row.get(14).ok(),
-            package_version: row.get(15).ok(),
-            distro: row.get(16).ok(),
-            chunk_hashes_json: row.get(17).ok(),
-            total_size: row.get(18).ok(),
-            content_hash: row.get(19).ok(),
-            ccs_path: row.get(20).ok(),
+            enhancement_version: row.get(8)?,
+            inferred_caps_json: row.get(9)?,
+            extracted_provenance_json: row.get(10)?,
+            enhancement_status: row.get(11)?,
+            enhancement_error: row.get(12)?,
+            enhancement_attempted_at: row.get(13)?,
+            package_name: row.get(14)?,
+            package_version: row.get(15)?,
+            distro: row.get(16)?,
+            chunk_hashes_json: row.get(17)?,
+            total_size: row.get(18)?,
+            content_hash: row.get(19)?,
+            ccs_path: row.get(20)?,
         })
     }
 

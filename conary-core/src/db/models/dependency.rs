@@ -205,6 +205,8 @@ impl DependencyEntry {
     }
 
     /// Convert a database row to a DependencyEntry
+    ///
+    /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
@@ -213,9 +215,7 @@ impl DependencyEntry {
             depends_on_version: row.get(3)?,
             dependency_type: row.get(4)?,
             version_constraint: row.get(5)?,
-            kind: row
-                .get::<_, Option<String>>(6)?
-                .unwrap_or_else(|| "package".to_string()),
+            kind: row.get::<_, String>(6)?,
         })
     }
 
