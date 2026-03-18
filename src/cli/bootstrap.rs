@@ -175,4 +175,116 @@ pub enum BootstrapCommands {
         #[arg(long)]
         sources: bool,
     },
+
+    /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
+    #[command(name = "cross-tools")]
+    CrossTools {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Build Phase 2: Temporary tools (LFS Chapters 6-7)
+    #[command(name = "temp-tools")]
+    TempTools {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Build Phase 3: Final system (LFS Chapter 8)
+    #[command(name = "system")]
+    System {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Run Phase 4: System configuration (LFS Chapter 9)
+    #[command(name = "config")]
+    Config {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Show verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
+    #[command(name = "tier2")]
+    Tier2 {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
 }

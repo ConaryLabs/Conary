@@ -1325,6 +1325,72 @@ fn run() -> Result<()> {
                 stage,
                 sources,
             } => commands::cmd_bootstrap_clean(&work_dir, stage, sources),
+
+            cli::BootstrapCommands::CrossTools {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_cross_tools(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::TempTools {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_temp_tools(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::System {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_system(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::Config {
+                work_dir,
+                lfs_root,
+                verbose,
+            } => commands::cmd_bootstrap_config(
+                &work_dir,
+                verbose,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::Tier2 {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_tier2(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
         },
 
         Some(cli::Commands::Provenance(cmd)) => match cmd {
