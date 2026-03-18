@@ -28,62 +28,8 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
-    /// Build Stage 0 cross-compilation toolchain
-    Stage0 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Path to custom crosstool-ng config
-        #[arg(short, long)]
-        config: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Only download sources, don't build
-        #[arg(long)]
-        download_only: bool,
-
-        /// Clean work directory before building
-        #[arg(long)]
-        clean: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
     /// Build Stage 1 self-hosted toolchain
     Stage1 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
-    /// Build Stage 2 (reproducibility rebuild)
-    Stage2 {
         /// Directory for bootstrap work
         #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
         work_dir: String,

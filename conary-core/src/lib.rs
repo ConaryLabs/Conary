@@ -43,8 +43,8 @@ pub use automation::{
     ActionDecision, ActionStatus, AiSuggestion, AutomationManager, AutomationSummary, PendingAction,
 };
 pub use bootstrap::{
-    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, Stage0Builder, StageManager,
-    TargetArch, Toolchain, ToolchainKind,
+    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, StageManager, TargetArch, Toolchain,
+    ToolchainKind,
 };
 pub use capability::enforcement::{
     EnforcementError, EnforcementMode, EnforcementPolicy, EnforcementReport, EnforcementSupport,
