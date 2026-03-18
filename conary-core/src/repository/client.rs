@@ -7,6 +7,7 @@
 
 use crate::compression::{CompressionFormat, decompress_auto};
 use crate::error::{Error, Result};
+use crate::repository::error_helpers::ResultExt;
 use indicatif::ProgressBar;
 use rand::Rng;
 use reqwest::blocking::Client;
@@ -153,14 +154,14 @@ fn stream_response_to_file(
     loop {
         let bytes_read = response
             .read(&mut buffer)
-            .map_err(|e| Error::IoError(format!("Failed to read response: {e}")))?;
+            .io_context("read response stream")?;
 
         if bytes_read == 0 {
             break;
         }
 
         file.write_all(&buffer[..bytes_read])
-            .map_err(|e| Error::IoError(format!("Failed to write data: {e}")))?;
+            .io_context("write download data")?;
 
         downloaded += bytes_read as u64;
 
@@ -306,7 +307,7 @@ impl RepositoryClient {
             .get(url)
             .timeout(self.timeouts.metadata)
             .send()
-            .map_err(|e| Error::DownloadError(format!("Failed to fetch {}: {}", url, e)))?;
+            .download_context(url)?;
 
         if !response.status().is_success() {
             return Err(Error::DownloadError(format!(
@@ -326,9 +327,7 @@ impl RepositoryClient {
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .map_err(|e| Error::DownloadError(format!("Failed to read response: {}", e)))?;
+        let bytes = response.bytes().download_context(url)?;
 
         if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
             return Err(Error::DownloadError(format!(
@@ -358,9 +357,8 @@ impl RepositoryClient {
         let bytes = self.download_to_bytes(url)?;
 
         // Auto-detect and decompress
-        let decompressed = decompress_auto(&bytes).map_err(|e| {
-            Error::ParseError(format!("Failed to decompress data from {}: {}", url, e))
-        })?;
+        let decompressed = decompress_auto(&bytes)
+            .parse_context(&format!("decompress data from {url}"))?;
 
         debug!(
             "Decompressed {} bytes -> {} bytes",
@@ -375,9 +373,7 @@ impl RepositoryClient {
     /// Convenience method that decompresses and converts to String.
     pub fn fetch_and_decompress_string(&self, url: &str) -> Result<String> {
         let bytes = self.fetch_and_decompress(url)?;
-        String::from_utf8(bytes).map_err(|e| {
-            Error::ParseError(format!("Invalid UTF-8 in response from {}: {}", url, e))
-        })
+        String::from_utf8(bytes).parse_context(&format!("UTF-8 from {url}"))
     }
 
     /// Fetch data, optionally decompressing based on URL extension

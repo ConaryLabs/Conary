@@ -13,6 +13,7 @@
 mod client;
 mod dependencies;
 mod download;
+pub(crate) mod error_helpers;
 mod management;
 mod metadata;
 pub mod metalink;
