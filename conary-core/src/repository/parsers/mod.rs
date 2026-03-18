@@ -8,6 +8,7 @@
 //! - Fedora/RPM: repomd.xml and primary.xml files
 
 pub mod arch;
+pub mod common;
 pub mod debian;
 pub mod fedora;
 
