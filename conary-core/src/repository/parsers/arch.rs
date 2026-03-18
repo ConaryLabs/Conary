@@ -18,8 +18,7 @@ use std::io::Read;
 use tar::Archive;
 use tracing::{debug, info, warn};
 
-/// Maximum allowed package size (5 GB)
-const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+use super::common::{self, MAX_PACKAGE_SIZE};
 
 /// Arch Linux repository parser
 pub struct ArchParser {
@@ -175,20 +174,7 @@ impl ArchParser {
                     Self::classify_arch_provide(&prov_name)
                 };
 
-                // Extract version from constraint like "=3-64" or ">=1.0"
-                let prov_version = if prov_constraint.is_empty() {
-                    None
-                } else {
-                    let trimmed = prov_constraint.trim();
-                    let ver_part = trimmed
-                        .strip_prefix(">=")
-                        .or_else(|| trimmed.strip_prefix("<="))
-                        .or_else(|| trimmed.strip_prefix('>'))
-                        .or_else(|| trimmed.strip_prefix('<'))
-                        .or_else(|| trimmed.strip_prefix('='))
-                        .unwrap_or(trimmed);
-                    Some(ver_part.trim().to_string())
-                };
+                let prov_version = common::extract_version_from_constraint(&prov_constraint);
 
                 provides.push(RepositoryProvide {
                     name: prov_name,
@@ -248,14 +234,11 @@ impl ArchParser {
         let architecture = desc_fields.get("ARCH").and_then(|v| v.first()).cloned();
         let description = desc_fields.get("DESC").and_then(|v| v.first()).cloned();
 
-        if filename.contains("..") || filename.starts_with('/') || filename.contains("://") {
-            return Err(Error::ParseError(format!(
-                "Suspicious filename in Arch database: {}",
-                filename
-            )));
+        if let Err(msg) = common::validate_filename(&filename) {
+            return Err(Error::ParseError(msg));
         }
 
-        let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), filename);
+        let download_url = common::join_repo_url(repo_url, &filename);
 
         let mut extra = serde_json::Map::new();
         if let Some(url) = desc_fields.get("URL").and_then(|v| v.first()) {
@@ -330,16 +313,7 @@ impl ArchParser {
     /// Parse dependency string into name and constraint
     /// Format: "package>=1.0" or "package=1.0" or "package<2.0" or just "package"
     fn parse_dependency_string(&self, dep: &str) -> (String, String) {
-        for op in &[">=", "<=", "=", "<", ">"] {
-            if let Some(pos) = dep.find(op) {
-                let name = dep[..pos].to_string();
-                let version = dep[pos..].to_string();
-                return (name, version);
-            }
-        }
-
-        // No version constraint
-        (dep.to_string(), String::new())
+        common::split_dependency(dep)
     }
 }
 

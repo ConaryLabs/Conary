@@ -5,6 +5,7 @@
 //! Parses Fedora-style repomd.xml and primary.xml files which contain
 //! RPM package metadata in XML format.
 
+use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -442,8 +443,6 @@ impl PackageBuilder {
             .parse()
             .map_err(|e| Error::ParseError(format!("Invalid size: {}", e)))?;
 
-        // Validate size - reject unreasonably large packages (>5GB)
-        const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024; // 5GB
         if size > MAX_PACKAGE_SIZE {
             return Err(Error::ParseError(format!(
                 "Package size {} exceeds maximum allowed (5GB)",
@@ -455,22 +454,11 @@ impl PackageBuilder {
             .location
             .ok_or_else(|| Error::ParseError("Missing location".to_string()))?;
 
-        // Validate location to prevent path traversal attacks
-        // Location should be a relative path within the repository
-        if location.contains("..") {
-            return Err(Error::ParseError(format!(
-                "Invalid location (path traversal): {}",
-                location
-            )));
-        }
-        if location.starts_with('/') || location.contains("://") {
-            return Err(Error::ParseError(format!(
-                "Invalid location (not relative path): {}",
-                location
-            )));
+        if let Err(msg) = common::validate_filename(&location) {
+            return Err(Error::ParseError(msg));
         }
 
-        let download_url = format!("{}/{}", base_url.trim_end_matches('/'), location);
+        let download_url = common::join_repo_url(base_url, &location);
 
         let checksum_type = match self.checksum_type.as_deref() {
             Some("sha256") => ChecksumType::Sha256,
@@ -527,21 +515,7 @@ impl PackageBuilder {
                 classify_rpm_provide(prov_name)
             };
 
-            let prov_version = if prov_constraint.is_empty() {
-                None
-            } else {
-                // Constraint is "= 1.2.3" -- extract just the version part
-                let trimmed = prov_constraint.trim();
-                let ver_part = trimmed
-                    .strip_prefix("= ")
-                    .or_else(|| trimmed.strip_prefix(">="))
-                    .or_else(|| trimmed.strip_prefix("<="))
-                    .or_else(|| trimmed.strip_prefix('>'))
-                    .or_else(|| trimmed.strip_prefix('<'))
-                    .or_else(|| trimmed.strip_prefix('='))
-                    .unwrap_or(trimmed);
-                Some(ver_part.trim().to_string())
-            };
+            let prov_version = common::extract_version_from_constraint(prov_constraint);
 
             let native_text = if prov_constraint.is_empty() {
                 prov_name.clone()

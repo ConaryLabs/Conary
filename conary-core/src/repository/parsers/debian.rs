@@ -5,6 +5,7 @@
 //! Parses Debian-style Packages.gz files which use RFC 822-like format
 //! (similar to email headers with key: value pairs).
 
+use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -106,17 +107,7 @@ impl DebianParser {
     /// Parse a single dependency string
     /// Format: "package (>= 1.0)" or "package (= 1.0-1)" or "package"
     fn parse_dependency(&self, dep: &str) -> Option<(String, String)> {
-        if let Some(paren_pos) = dep.find('(') {
-            let name = dep[..paren_pos].trim().to_string();
-            let constraint = dep[paren_pos + 1..]
-                .trim_end_matches(')')
-                .trim()
-                .to_string();
-            Some((name, constraint))
-        } else {
-            // No version constraint
-            Some((dep.trim().to_string(), String::new()))
-        }
+        Some(common::split_dependency(dep))
     }
 
     /// Parse a Debian dependency field into structured requirement groups.
@@ -178,22 +169,7 @@ impl DebianParser {
             let (name, version) = if let Some(paren_pos) = provide.find('(') {
                 let pname = provide[..paren_pos].trim();
                 let constraint = provide[paren_pos + 1..].trim_end_matches(')').trim();
-                // Extract version from constraint like "= 1.0"
-                let ver = constraint
-                    .strip_prefix("= ")
-                    .or_else(|| constraint.strip_prefix(">="))
-                    .or_else(|| constraint.strip_prefix("<="))
-                    .or_else(|| constraint.strip_prefix(">> "))
-                    .or_else(|| constraint.strip_prefix("<< "))
-                    .or_else(|| constraint.strip_prefix('='))
-                    .unwrap_or(constraint)
-                    .trim();
-                let v = if ver.is_empty() {
-                    None
-                } else {
-                    Some(ver.to_string())
-                };
-                (pname, v)
+                (pname, common::extract_version_from_constraint(constraint))
             } else {
                 (provide, None)
             };
@@ -214,8 +190,6 @@ impl DebianParser {
         repo_url: &str,
         entry: DebianPackageEntry,
     ) -> Result<PackageMetadata> {
-        const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
-
         let size: u64 = entry
             .size
             .parse()
@@ -234,17 +208,11 @@ impl DebianParser {
             Vec::new()
         };
 
-        if entry.filename.contains("..")
-            || entry.filename.starts_with('/')
-            || entry.filename.contains("://")
-        {
-            return Err(Error::ParseError(format!(
-                "Suspicious filename in Packages file: {}",
-                entry.filename
-            )));
+        if let Err(msg) = common::validate_filename(&entry.filename) {
+            return Err(Error::ParseError(msg));
         }
 
-        let download_url = format!("{}/{}", repo_url.trim_end_matches('/'), entry.filename);
+        let download_url = common::join_repo_url(repo_url, &entry.filename);
 
         // Build structured requirements
         let mut requirements = Vec::new();
