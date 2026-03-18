@@ -357,8 +357,8 @@ impl RepositoryClient {
         let bytes = self.download_to_bytes(url)?;
 
         // Auto-detect and decompress
-        let decompressed = decompress_auto(&bytes)
-            .parse_context(&format!("decompress data from {url}"))?;
+        let decompressed =
+            decompress_auto(&bytes).parse_context(&format!("decompress data from {url}"))?;
 
         debug!(
             "Decompressed {} bytes -> {} bytes",
