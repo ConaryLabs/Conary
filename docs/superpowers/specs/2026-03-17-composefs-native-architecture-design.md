@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-17
 revision: 2
-summary: Unified design for composefs/EROFS-native architecture throughout Conary
+summary: Rev 2 fixes -- EXCLUDED_DIRS alignment, /run and virtual FS in path table
 ---
 
 # Composefs-Native Architecture
@@ -155,15 +155,19 @@ The EROFS image is read-only. Mutable state lives outside it on separate mounts.
 | `/usr` | Read-only bind mount from composefs. All package-managed binaries, libraries, share. |
 | `/etc` | overlayfs: EROFS lower (package defaults) + persistent upper (user modifications) |
 | `/var` | Separate persistent mount. Never in the EROFS image. |
-| `/tmp` | tmpfs. Never in the EROFS image. |
+| `/tmp`, `/run` | tmpfs. Never in the EROFS image. `/run` is writable for PIDs, daemon reload. |
 | `/home`, `/root` | Separate persistent mount. Never in the EROFS image. |
 | `/srv`, `/opt` | Separate persistent mounts. Never in the EROFS image. |
+| `/proc`, `/sys`, `/dev` | Virtual filesystems. Never in the EROFS image. |
+| `/mnt`, `/media` | Mount points. Never in the EROFS image. |
 | `/bin`, `/sbin`, `/lib`, `/lib64` | Symlinks to `/usr/*` (USR merge). Included in EROFS as symlinks. |
 
-The EROFS builder excludes `/var`, `/tmp`, `/home`, `/root`, `/srv`, `/opt` from the
-image. Only `/usr` content and root-level USR-merge symlinks are included. The
-existing `is_excluded()` function in `builder.rs` already filters these paths; this
-continues unchanged.
+The EROFS builder's `EXCLUDED_DIRS` list will be updated as part of this work. The
+current list (`home`, `proc`, `sys`, `dev`, `run`, `tmp`, `mnt`, `media`, `var/lib`)
+was a compromise for the mutable-root model. In the composefs-native model, the
+exclusion list becomes: `var`, `tmp`, `run`, `home`, `root`, `srv`, `opt`, `proc`,
+`sys`, `dev`, `mnt`, `media`. The change from `var/lib` to `var` (full directory)
+reflects that all of `/var` is a separate persistent mount.
 
 **/etc overlay behavior during transactions:**
 
