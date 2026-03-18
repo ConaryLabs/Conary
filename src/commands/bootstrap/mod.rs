@@ -439,32 +439,22 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
 
     match current {
         BootstrapStage::CrossTools => {
-            cmd_bootstrap_stage1(work_dir, None, None, verbose, false)
+            cmd_bootstrap_cross_tools(work_dir, None, verbose, false, None)
         }
         BootstrapStage::TempTools => {
-            // TODO: wire up temp-tools build once implemented
-            println!("[OK] Phase 2 (temp-tools) -- not yet implemented.");
-            Ok(())
+            cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None)
         }
-        BootstrapStage::FinalSystem => cmd_bootstrap_base(
-            work_dir,
-            "/conary/sysroot",
-            None,
-            verbose,
-            false,
-            None,
-            None,
-        ),
+        BootstrapStage::FinalSystem => {
+            cmd_bootstrap_system(work_dir, None, verbose, false, None)
+        }
         BootstrapStage::SystemConfig => {
-            // TODO: wire up system configuration once implemented
-            println!("[OK] Phase 4 (system-config) -- not yet implemented.");
-            Ok(())
+            cmd_bootstrap_config(work_dir, verbose, None)
         }
         BootstrapStage::BootableImage => {
             cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G")
         }
         BootstrapStage::Tier2 => {
-            cmd_bootstrap_conary(work_dir, None, verbose, false, false)
+            cmd_bootstrap_tier2(work_dir, None, verbose, false, None)
         }
     }
 }
@@ -514,6 +504,187 @@ pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) ->
             report.errors.len()
         ))
     }
+}
+
+/// Build Phase 1: Cross-toolchain (LFS Chapter 5)
+pub fn cmd_bootstrap_cross_tools(
+    work_dir: &str,
+    jobs: Option<usize>,
+    verbose: bool,
+    skip_verify: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Building Phase 1: Cross-Toolchain (LFS Ch5)...");
+    println!("  Work directory: {}", work_dir);
+
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
+
+    println!("\nThis will build the cross-toolchain using the host compiler.");
+    println!("Build order: binutils-pass1 -> gcc-pass1 -> linux-headers -> glibc -> libstdc++\n");
+
+    let toolchain = bootstrap.build_cross_tools()?;
+
+    println!("\n[OK] Phase 1 cross-toolchain built successfully!");
+    println!("  Path: {}", toolchain.path.display());
+    println!("  Target: {}", toolchain.target);
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap temp-tools' to build Phase 2 temporary tools");
+
+    Ok(())
+}
+
+/// Build Phase 2: Temporary tools (LFS Chapters 6-7)
+pub fn cmd_bootstrap_temp_tools(
+    work_dir: &str,
+    jobs: Option<usize>,
+    verbose: bool,
+    skip_verify: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Building Phase 2: Temporary Tools (LFS Ch6-7)...");
+    println!("  Work directory: {}", work_dir);
+
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
+
+    println!("\nThis will cross-compile 17 packages and build 6 in the chroot.\n");
+
+    bootstrap.build_temp_tools()?;
+
+    println!("\n[OK] Phase 2 temporary tools built successfully!");
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap system' to build Phase 3 final system");
+
+    Ok(())
+}
+
+/// Build Phase 3: Final system (LFS Chapter 8)
+pub fn cmd_bootstrap_system(
+    work_dir: &str,
+    jobs: Option<usize>,
+    verbose: bool,
+    skip_verify: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Building Phase 3: Final System (LFS Ch8)...");
+    println!("  Work directory: {}", work_dir);
+
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
+
+    println!("\nThis will build all 77 packages of the final LFS system.\n");
+
+    bootstrap.build_final_system()?;
+
+    println!("\n[OK] Phase 3 final system built successfully!");
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap config' to configure the system for booting");
+
+    Ok(())
+}
+
+/// Run Phase 4: System configuration (LFS Chapter 9)
+pub fn cmd_bootstrap_config(
+    work_dir: &str,
+    verbose: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Running Phase 4: System Configuration (LFS Ch9)...");
+    println!("  Work directory: {}", work_dir);
+
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose);
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
+
+    println!("\nConfiguring network, fstab, kernel, and bootloader...\n");
+
+    bootstrap.configure_system()?;
+
+    println!("\n[OK] Phase 4 system configuration complete!");
+
+    println!("\nNext steps:");
+    println!("  Run 'conary bootstrap image' to generate a bootable image");
+
+    Ok(())
+}
+
+/// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
+pub fn cmd_bootstrap_tier2(
+    work_dir: &str,
+    jobs: Option<usize>,
+    verbose: bool,
+    skip_verify: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Building Phase 6: Tier-2 Packages (BLFS + Conary)...");
+    println!("  Work directory: {}", work_dir);
+
+    let mut config = BootstrapConfig::new()
+        .with_verbose(verbose)
+        .with_skip_verify(skip_verify);
+    if let Some(j) = jobs {
+        config = config.with_jobs(j);
+    }
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
+
+    println!("\nThis will build 8 additional packages: curl, cmake, LLVM, Rust,");
+    println!("SQLite, OpenSSL, Conary, and conary-server.\n");
+
+    bootstrap.build_tier2()?;
+
+    println!("\n[OK] Phase 6 Tier-2 packages built successfully!");
+    println!("  The system is now self-hosting.");
+
+    Ok(())
 }
 
 /// Clean bootstrap work directory
