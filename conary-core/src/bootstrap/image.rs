@@ -439,7 +439,7 @@ impl ImageBuilder {
     ///
     /// This is the convenience entry point for Phase 5. It chains:
     ///
-    /// 1. `BaseBuilder::finalize_sysroot()` -- verify kernel installed, write
+    /// 1. `system_config::configure_system()` -- verify kernel installed, write
     ///    BLS entry, copy EFI binary (called by the orchestrator before this)
     /// 2. `build()` -- run systemd-repart to create GPT image, convert to qcow2
     ///
@@ -482,7 +482,7 @@ impl ImageBuilder {
         if !efi_binary.exists() {
             return Err(ImageError::CreationFailed(
                 "EFI binary not found at boot/EFI/BOOT/BOOTX64.EFI. \
-                 Run BaseBuilder::finalize_sysroot() first."
+                 Run system_config::configure_system() first."
                     .to_string(),
             ));
         }
@@ -492,7 +492,7 @@ impl ImageBuilder {
         if !bls_entry.exists() {
             return Err(ImageError::CreationFailed(
                 "BLS entry not found at boot/loader/entries/conaryos.conf. \
-                 Run BaseBuilder::finalize_sysroot() first."
+                 Run system_config::configure_system() first."
                     .to_string(),
             ));
         }
@@ -1036,7 +1036,7 @@ tmpfs              /tmp           tmpfs   defaults,nosuid   0      0
 
     /// Set up EFI boot structure.
     ///
-    /// Boot setup is now handled by `BaseBuilder::finalize_sysroot()` in base.rs.
+    /// Boot setup is now handled by `system_config::configure_system()` in base.rs.
     /// systemd-repart's `CopyFiles=/boot:/` copies the bootloader, kernel,
     /// initramfs, and loader config from the sysroot to the ESP.
     fn setup_efi_boot(&self, _mount_dir: &Path) -> Result<(), ImageError> {
@@ -1247,7 +1247,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
     ///
     /// Busybox source: prefers host system's static busybox, falls back to error
     /// asking user to install the `busybox-static` package.
-    #[allow(dead_code)] // Deprecated: use BaseBuilder::finalize_sysroot() + dracut instead
+    #[allow(dead_code)] // Deprecated: use system_config::configure_system() + dracut instead
     pub fn generate_initramfs(&self, sources_dir: &Path) -> Result<PathBuf, ImageError> {
         let initramfs_root = self.work_dir.join("initramfs");
         let output = self.sysroot.join("boot/initramfs.img");

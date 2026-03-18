@@ -37,7 +37,7 @@ pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> 
     );
     println!("\nNext steps:");
     println!("  1. Run 'conary bootstrap check' to verify prerequisites");
-    println!("  2. Run 'conary bootstrap stage0' to build the cross-toolchain");
+    println!("  2. Run 'conary bootstrap cross-tools' to build the cross-toolchain");
 
     Ok(())
 }
@@ -70,7 +70,7 @@ pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
 
     if prereqs.all_present() {
         println!("[OK] All prerequisites are satisfied.");
-        println!("\nYou can proceed with 'conary bootstrap stage1' to build the toolchain.");
+        println!("\nYou can proceed with 'conary bootstrap cross-tools' to build the cross-toolchain.");
     } else {
         println!("[MISSING] Some prerequisites are not installed:");
         for missing in prereqs.missing() {
@@ -83,193 +83,6 @@ pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
             println!("  Install gcc, make, and git using your distribution's package manager.");
         }
     }
-
-    Ok(())
-}
-
-/// Build Stage 1 self-hosted toolchain
-pub fn cmd_bootstrap_stage1(
-    work_dir: &str,
-    recipe_dir: Option<&str>,
-    jobs: Option<usize>,
-    verbose: bool,
-    skip_verify: bool,
-) -> Result<()> {
-    println!("Building Stage 1 toolchain...");
-    println!("  Work directory: {}", work_dir);
-
-    // Build config with user-specified options
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
-    if let Some(j) = jobs {
-        config = config.with_jobs(j);
-    }
-
-    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
-
-    // Determine recipe directory
-    let recipe_path = recipe_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("recipes/core"));
-
-    if !recipe_path.exists() {
-        println!(
-            "[ERROR] Recipe directory not found: {}",
-            recipe_path.display()
-        );
-        println!("Specify --recipe-dir or ensure recipes/core exists.");
-        return Err(anyhow::anyhow!("Recipe directory not found"));
-    }
-
-    println!("  Recipe directory: {}", recipe_path.display());
-
-    // Build Stage 1
-    println!("\nThis will build the self-hosted toolchain using the host compiler.");
-    println!("Build order: linux-headers -> binutils -> gcc-pass1 -> glibc -> gcc-pass2\n");
-
-    let stage1_toolchain = bootstrap.build_stage1(&recipe_path)?;
-
-    println!("\n[OK] Stage 1 toolchain built successfully!");
-    println!("  Path: {}", stage1_toolchain.path.display());
-    println!("  Target: {}", stage1_toolchain.target);
-    if let Some(ref ver) = stage1_toolchain.gcc_version {
-        println!("  GCC: {}", ver);
-    }
-
-    println!("\nNext steps:");
-    println!("  Run 'conary bootstrap base' to build the base system packages");
-
-    Ok(())
-}
-
-/// Build base system packages
-pub fn cmd_bootstrap_base(
-    work_dir: &str,
-    root: &str,
-    recipe_dir: Option<&str>,
-    verbose: bool,
-    skip_verify: bool,
-    package: Option<&str>,
-    tier: Option<&str>,
-) -> Result<()> {
-    println!("Building base system...");
-    println!("  Work directory: {}", work_dir);
-    println!("  Target root: {}", root);
-
-    // Build config with user-specified options
-    let config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
-
-    // Check if Stage 1 is complete
-    let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
-
-    let Some(toolchain) = bootstrap.get_stage1_toolchain() else {
-        println!("[ERROR] Stage 1 toolchain not found.");
-        println!("Run 'conary bootstrap stage1' first.");
-        return Err(anyhow::anyhow!("Stage 1 not complete"));
-    };
-    println!("  Using Stage 1 toolchain: {}", toolchain.path.display());
-
-    // Determine recipe directory
-    let recipe_path = recipe_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("recipes/core"));
-
-    if !recipe_path.exists() {
-        println!(
-            "[ERROR] Recipe directory not found: {}",
-            recipe_path.display()
-        );
-        println!("Specify --recipe-dir or ensure recipes/core exists.");
-        return Err(anyhow::anyhow!("Recipe directory not found"));
-    }
-
-    println!("  Recipe directory: {}", recipe_path.display());
-
-    if let Some(pkg) = package {
-        println!("  Building single package: {}", pkg);
-    }
-    if let Some(t) = tier {
-        println!("  Building tier: {}", t);
-    }
-
-    // Build base system
-    println!("\nThis will build the complete base system (~52 packages).");
-    println!("Phases: Libraries -> Dev Tools -> Core System -> Userland -> Boot\n");
-
-    let summary = bootstrap.build_base(&recipe_path, root)?;
-
-    println!("\n[OK] Base system build complete!");
-    println!("  Target root: {}", root);
-    println!("  {}", summary);
-
-    if summary.failed > 0 {
-        println!(
-            "\n[WARN] {} packages failed (see logs in {}/base/logs/)",
-            summary.failed, work_dir
-        );
-    }
-
-    // Populate sysroot with system config (passwd, fstab, SSH, systemd targets)
-    println!("\nPopulating sysroot with system configuration...");
-    let sysroot_path = std::path::PathBuf::from(root);
-    conary_core::bootstrap::BaseBuilder::populate_sysroot(&sysroot_path)?;
-
-    // Finalize: kernel, initramfs, bootloader, SSH keys
-    println!("Finalizing sysroot (kernel, initramfs, bootloader, SSH keys)...");
-    conary_core::bootstrap::BaseBuilder::finalize_sysroot(&sysroot_path)?;
-
-    println!("\nNext steps:");
-    println!("  Run 'conary bootstrap image' to generate a bootable image");
-
-    Ok(())
-}
-
-/// Build Conary stage (Rust + self-hosting)
-pub fn cmd_bootstrap_conary(
-    work_dir: &str,
-    _root: Option<&str>,
-    verbose: bool,
-    skip: bool,
-    _skip_verify: bool,
-) -> Result<()> {
-    if skip {
-        println!("[SKIP] Conary stage skipped (--skip flag)");
-        return Ok(());
-    }
-
-    println!("Building Conary stage (Rust + self-hosting)...");
-    println!("  Work directory: {}", work_dir);
-
-    // Check if base system is complete
-    let mut bootstrap = Bootstrap::new(work_dir)?;
-
-    let Some(sysroot) = bootstrap.get_sysroot() else {
-        println!("[ERROR] Base system not found.");
-        println!("Run 'conary bootstrap base' first.");
-        return Err(anyhow::anyhow!("Base system not complete"));
-    };
-    println!("  Sysroot: {}", sysroot.display());
-
-    println!("\nThis will build Rust from source and compile Conary.");
-    println!("The system will be self-hosting after this stage.\n");
-
-    bootstrap.build_conary_stage()?;
-
-    println!("\n[COMPLETE] Conary stage built successfully!");
-    println!("  The system is now self-hosting.");
-
-    if verbose {
-        println!("\nPackages built:");
-        for name in conary_core::bootstrap::ConaryStageBuilder::package_names() {
-            println!("  - {}", name);
-        }
-    }
-
-    println!("\nNext steps:");
-    println!("  Run 'conary bootstrap image' to generate a bootable image");
 
     Ok(())
 }
@@ -319,7 +132,7 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
     let bootstrap = Bootstrap::new(work_dir)?;
     let Some(sysroot) = bootstrap.get_sysroot() else {
         println!("[ERROR] Base system not found.");
-        println!("Run 'conary bootstrap base' first to build the base system.");
+        println!("Run 'conary bootstrap system' first to build the base system.");
         return Err(anyhow::anyhow!("Base system not complete"));
     };
     println!("  Base system: {}", sysroot.display());
@@ -471,10 +284,10 @@ pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) ->
         .dry_run(&recipe_path)
         .map_err(|e| anyhow::anyhow!("Dry run failed: {e}"))?;
 
-    println!("Stage 1 recipes: {}", report.stage1_count);
-    println!("Base recipes:    {}", report.base_count);
-    println!("Conary recipes:  {}", report.conary_count);
-    println!("Graph resolved:  {}", report.graph_resolved);
+    println!("Cross-tools recipes: {}", report.cross_tools_count);
+    println!("System recipes:      {}", report.system_count);
+    println!("Tier-2 recipes:      {}", report.tier2_count);
+    println!("Graph resolved:      {}", report.graph_resolved);
 
     if report.placeholder_count > 0 {
         println!(
@@ -676,8 +489,8 @@ pub fn cmd_bootstrap_tier2(
 
     let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
-    println!("\nThis will build 8 additional packages: curl, cmake, LLVM, Rust,");
-    println!("SQLite, OpenSSL, Conary, and conary-server.\n");
+    println!("\nThis will build 8 additional packages: PAM, OpenSSH, make-ca,");
+    println!("curl, sudo, nano, Rust, and Conary.\n");
 
     bootstrap.build_tier2()?;
 

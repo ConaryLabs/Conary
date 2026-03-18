@@ -1253,52 +1253,6 @@ fn run() -> Result<()> {
 
             cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose),
 
-            cli::BootstrapCommands::Stage1 {
-                work_dir,
-                recipe_dir,
-                jobs,
-                verbose,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage1(
-                &work_dir,
-                recipe_dir.as_deref(),
-                jobs,
-                verbose,
-                skip_verify,
-            ),
-
-            cli::BootstrapCommands::Base {
-                work_dir,
-                root,
-                recipe_dir,
-                verbose,
-                skip_verify,
-                package,
-                tier,
-            } => commands::cmd_bootstrap_base(
-                &work_dir,
-                &root,
-                recipe_dir.as_deref(),
-                verbose,
-                skip_verify,
-                package.as_deref(),
-                tier.as_deref(),
-            ),
-
-            cli::BootstrapCommands::Conary {
-                work_dir,
-                root,
-                verbose,
-                skip,
-                skip_verify,
-            } => commands::cmd_bootstrap_conary(
-                &work_dir,
-                root.as_deref(),
-                verbose,
-                skip,
-                skip_verify,
-            ),
-
             cli::BootstrapCommands::Image {
                 work_dir,
                 output,

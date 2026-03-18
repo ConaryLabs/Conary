@@ -28,83 +28,6 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
-    /// Build Stage 1 self-hosted toolchain
-    Stage1 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
-    /// Build base system packages
-    Base {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Target root directory for installation
-        #[arg(long, default_value = "/conary/sysroot")]
-        root: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-
-        /// Build a single package by name
-        #[arg(short = 'P', long)]
-        package: Option<String>,
-
-        /// Build only packages for a specific tier (a, b, c)
-        #[arg(long)]
-        tier: Option<String>,
-    },
-
-    /// Build Conary stage (Rust + self-hosting)
-    Conary {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Target root directory (sysroot)
-        #[arg(long)]
-        root: Option<String>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip this stage
-        #[arg(long)]
-        skip: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
     /// Generate bootable image
     Image {
         /// Directory for bootstrap work
@@ -167,7 +90,7 @@ pub enum BootstrapCommands {
         #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
         work_dir: String,
 
-        /// Only clean specific stage (stage0, stage1, base, image)
+        /// Only clean specific stage (cross-tools, temp-tools, system, image)
         #[arg(short, long)]
         stage: Option<String>,
 
