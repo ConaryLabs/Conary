@@ -46,10 +46,10 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let staging = "/conary/mnt-new";
 
     // Step 0: Unmount old composefs mount if present
-    if Path::new(old_mnt).exists() {
-        if let Err(e) = unmount_generation(Path::new(old_mnt)) {
-            warn!("Failed to unmount old composefs at {old_mnt}: {e}");
-        }
+    if Path::new(old_mnt).exists()
+        && let Err(e) = unmount_generation(Path::new(old_mnt))
+    {
+        warn!("Failed to unmount old composefs at {old_mnt}: {e}");
     }
 
     // Step 1: Mount new generation's composefs at staging point

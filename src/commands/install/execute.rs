@@ -1,103 +1,19 @@
 // src/commands/install/execute.rs
-//! Transaction execution helpers - file deployment and rollback
+//! Transaction execution helpers - CAS storage and file tracking
+//!
+//! In the composefs-native model, files are stored in CAS and tracked in the DB.
+//! Filesystem deployment happens via EROFS image build + composefs mount, not
+//! direct file deployment. These helpers handle the CAS/DB side.
 
 use anyhow::Result;
 use conary_core::transaction::{ExtractedFile as TxExtractedFile, FileToRemove};
 use rusqlite::Connection;
 use std::collections::HashSet;
-use tracing::{info, warn};
-
-/// Deploy files to filesystem with rollback capability
-///
-/// Returns the list of (path, hash, size, mode) for all deployed files
-///
-/// NOTE: This function is kept for backwards compatibility with other code paths.
-/// The main install flow now uses TransactionEngine for crash-safe operations.
-#[allow(dead_code)]
-pub fn deploy_files(
-    deployer: &conary_core::filesystem::FileDeployer,
-    extracted_files: &[conary_core::packages::traits::ExtractedFile],
-    is_upgrade: bool,
-    conn: &Connection,
-    pkg_name: &str,
-) -> Result<Vec<(String, String, i64, i32)>> {
-    // Phase 1: Check file conflicts BEFORE any changes
-    for file in extracted_files {
-        if deployer.file_exists(&file.path) {
-            if let Some(existing) =
-                conary_core::db::models::FileEntry::find_by_path(conn, &file.path)?
-            {
-                let owner_trove =
-                    conary_core::db::models::Trove::find_by_id(conn, existing.trove_id)?;
-                if let Some(owner) = owner_trove
-                    && owner.name != pkg_name
-                {
-                    return Err(anyhow::anyhow!(
-                        "File conflict: {} is owned by package {}",
-                        file.path,
-                        owner.name
-                    ));
-                }
-            } else if !is_upgrade {
-                return Err(anyhow::anyhow!(
-                    "File conflict: {} exists but is not tracked by any package",
-                    file.path
-                ));
-            }
-        }
-    }
-
-    // Phase 2: Store content in CAS and pre-compute hashes
-    let mut file_hashes: Vec<(String, String, i64, i32)> =
-        Vec::with_capacity(extracted_files.len());
-    for file in extracted_files {
-        let hash = deployer.cas().store(&file.content)?;
-        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
-    }
-
-    // Phase 3: Deploy files, tracking what we've deployed for rollback
-    let mut deployed_files: Vec<String> = Vec::with_capacity(extracted_files.len());
-    let deploy_result: Result<()> = (|| {
-        for (path, hash, _size, mode) in &file_hashes {
-            deployer.deploy_file(path, hash, *mode as u32)?;
-            deployed_files.push(path.clone());
-        }
-        Ok(())
-    })();
-
-    // If deployment failed, rollback deployed files
-    if let Err(e) = deploy_result {
-        warn!(
-            "File deployment failed, rolling back {} deployed files",
-            deployed_files.len()
-        );
-        for path in &deployed_files {
-            if let Err(remove_err) = deployer.remove_file(path) {
-                warn!("Failed to rollback file {}: {}", path, remove_err);
-            }
-        }
-        return Err(anyhow::anyhow!("File deployment failed: {}", e));
-    }
-
-    info!("Successfully deployed {} files", deployed_files.len());
-    Ok(file_hashes)
-}
-
-/// Rollback deployed files on failure (legacy - kept for non-transaction code paths)
-#[allow(dead_code)]
-pub fn rollback_deployed_files(
-    deployer: &conary_core::filesystem::FileDeployer,
-    files: &[(String, String, i64, i32)],
-) {
-    warn!("Rolling back {} deployed files", files.len());
-    for (path, _, _, _) in files {
-        if let Err(e) = deployer.remove_file(path) {
-            warn!("Failed to rollback file {}: {}", path, e);
-        }
-    }
-}
 
 /// Convert package ExtractedFile to transaction ExtractedFile
+///
+/// Preserved for batch install compatibility (PreparedPackage uses ExtractedFile).
+#[allow(dead_code)]
 pub fn convert_extracted_files(
     files: &[conary_core::packages::traits::ExtractedFile],
 ) -> Vec<TxExtractedFile> {

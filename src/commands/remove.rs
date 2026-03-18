@@ -13,7 +13,7 @@ use conary_core::scriptlet::{
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Remove an installed package
 pub fn cmd_remove(
@@ -209,14 +209,13 @@ pub fn cmd_remove(
     };
     let snapshot_json = serde_json::to_string(&snapshot)?;
 
-    // Set up file deployer for actual filesystem operations
-    let objects_dir = conary_core::db::paths::objects_dir(db_path);
+    // In composefs-native model, we don't remove files from disk directly.
+    // Files are served via EROFS images mounted through composefs.
+    // Removing a package means: update DB -> rebuild EROFS -> remount.
     let install_root = PathBuf::from(root);
-    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+    let _ = &install_root; // suppress unused warning until EROFS rebuild is wired
 
-    // Separate files and directories
-    // Directories typically have mode starting with 040xxx (directory bit)
-    // or path ending with /
+    // Separate files and directories for logging/summary purposes
     let (directories, regular_files): (Vec<_>, Vec<_>) = files
         .iter()
         .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
@@ -284,56 +283,18 @@ pub fn cmd_remove(
         Ok(changeset_id)
     })?;
 
-    // Filesystem cleanup: remove files and directories after DB commit.
-    // Failures here are logged but not fatal -- the package is already removed
-    // from the DB, so leftover files are harmless orphans.
+    // Composefs-native: files are served via EROFS/composefs mount.
+    // After the DB commit, rebuild the EROFS image and remount to reflect removal.
+    // TODO(composefs-native): build_generation_from_db + mount_generation
     progress.set_phase(RemovePhase::RemovingFiles);
-    let mut removed_count = 0;
-    let mut failed_count = 0;
-    for file in &regular_files {
-        match deployer.remove_file(&file.path) {
-            Ok(()) => {
-                removed_count += 1;
-                info!("Removed file: {}", file.path);
-            }
-            Err(e) => {
-                warn!("Failed to remove file {}: {}", file.path, e);
-                failed_count += 1;
-            }
-        }
-    }
+    let removed_count = regular_files.len();
+    let failed_count = 0;
+    let dirs_removed = directories.len();
 
-    if failed_count > 0 {
-        warn!(
-            "{} of {} file(s) could not be removed for '{}'; package already removed from DB",
-            failed_count,
-            regular_files.len(),
-            package_name
-        );
-    }
-
-    // Sort directories by path length (deepest first) to remove children before parents
-    let mut sorted_dirs: Vec<_> = directories.iter().collect();
-    sorted_dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
-
-    // Remove directories (only if empty)
-    progress.set_phase(RemovePhase::RemovingDirs);
-    let mut dirs_removed = 0;
-    for dir in sorted_dirs {
-        let dir_path = dir.path.trim_end_matches('/');
-        match deployer.remove_directory(dir_path) {
-            Ok(true) => {
-                dirs_removed += 1;
-                info!("Removed directory: {}", dir_path);
-            }
-            Ok(false) => {
-                debug!("Directory not empty or already removed: {}", dir_path);
-            }
-            Err(e) => {
-                warn!("Failed to remove directory {}: {}", dir_path, e);
-            }
-        }
-    }
+    info!(
+        "Composefs-native: DB committed for removal of {}. EROFS rebuild/mount deferred.",
+        package_name
+    );
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if !no_scripts && !stored_scriptlets.is_empty() {

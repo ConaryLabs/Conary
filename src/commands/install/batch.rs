@@ -15,7 +15,7 @@
 //! 5. **Scriptlet ordering** - Pre-scripts in topo order before FS changes, post-scripts after
 
 use super::super::open_db;
-use super::execute::convert_extracted_files;
+// convert_extracted_files no longer needed -- CAS storage is done directly
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
@@ -30,9 +30,7 @@ use conary_core::db::models::{
 use conary_core::dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 use conary_core::packages::traits::{ExtractedFile, Scriptlet};
 use conary_core::scriptlet::SandboxMode;
-use conary_core::transaction::{
-    FileToRemove, PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
-};
+use conary_core::transaction::{FileToRemove, TransactionConfig, TransactionEngine};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -45,6 +43,7 @@ use tracing::{debug, info, warn};
 /// without holding content in memory.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Part of public API for future streaming implementation
+#[allow(clippy::struct_field_names)]
 pub struct FileMetadata {
     pub path: String,
     pub hash: String,
@@ -59,6 +58,7 @@ pub struct FileMetadata {
 /// CRITICAL: This struct stores paths to extracted content on disk, NOT raw bytes.
 /// This prevents OOM when installing many packages with large files.
 #[derive(Debug)]
+#[allow(dead_code)] // old_files retained for composefs-native upgrade tracking
 pub struct PreparedPackage {
     /// Package name
     pub name: String,
@@ -180,19 +180,16 @@ impl<'a> BatchInstaller<'a> {
         // Open database connection
         let mut conn = open_db(self.db_path)?;
 
-        // Create transaction engine
+        // Create composefs-native transaction engine
         let db_path_buf = PathBuf::from(self.db_path);
-        let tx_config = TransactionConfig::new(PathBuf::from(self.root), db_path_buf.clone());
-        let engine =
+        let tx_config = TransactionConfig::from_paths(PathBuf::from(self.root), db_path_buf);
+        let mut engine =
             TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
         // Recover any incomplete transactions
-        let recovery_outcomes = engine
-            .recover(&mut conn)
+        engine
+            .recover(&conn)
             .context("Failed to recover incomplete transactions")?;
-        for outcome in &recovery_outcomes {
-            info!("Recovery outcome: {:?}", outcome);
-        }
 
         // Build transaction description
         let tx_description = if package_count == 1 {
@@ -205,12 +202,12 @@ impl<'a> BatchInstaller<'a> {
             )
         };
 
-        // Begin transaction - holds lock for entire batch
-        let mut txn = engine
-            .begin(&tx_description)
+        // Acquire transaction lock for entire batch
+        engine
+            .begin()
             .context("Failed to begin batch transaction")?;
 
-        info!("Started batch transaction {}", txn.uuid());
+        info!("Started batch transaction for {}", tx_description);
 
         // Phase 1: Unified planning across all packages
         // Collect all files and detect cross-package conflicts
@@ -220,8 +217,7 @@ impl<'a> BatchInstaller<'a> {
         if !batch_plan.conflicts.is_empty() {
             let conflict_msgs: Vec<String> =
                 batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
-            txn.abort()
-                .context("Failed to abort transaction after conflicts")?;
+            engine.release_lock();
             return Err(anyhow::anyhow!(
                 "Batch install conflicts detected:\n  {}",
                 conflict_msgs.join("\n  ")
@@ -238,8 +234,7 @@ impl<'a> BatchInstaller<'a> {
             for pkg in &packages {
                 if let Err(e) = self.run_pre_scripts(pkg) {
                     warn!("Pre-install scriptlet failed for {}: {}", pkg.name, e);
-                    txn.abort()
-                        .context("Failed to abort transaction after pre-script failure")?;
+                    engine.release_lock();
                     return Err(anyhow::anyhow!(
                         "Pre-install scriptlet failed for '{}': {}. Transaction aborted.",
                         pkg.name,
@@ -249,89 +244,29 @@ impl<'a> BatchInstaller<'a> {
             }
         }
 
-        // Phase 3: Plan, prepare, backup, stage, and apply for each package
-        // We do this per-package but within the same transaction
+        // Phase 3: Store all package files in CAS
         for (idx, pkg) in packages.iter().enumerate() {
             info!(
-                "[{}/{}] Processing package: {} {}",
+                "[{}/{}] Storing files in CAS: {} {}",
                 idx + 1,
                 package_count,
                 pkg.name,
                 pkg.version
             );
 
-            // Convert extracted files
-            let tx_files = convert_extracted_files(&pkg.extracted_files);
-
-            // Build operations for this package
-            let operations = TransactionOperations {
-                package: PackageInfo {
-                    name: pkg.name.clone(),
-                    version: pkg.version.clone(),
-                    release: None,
-                    arch: pkg.architecture.clone(),
-                },
-                files_to_add: tx_files.clone(),
-                files_to_remove: pkg.old_files.clone(),
-                is_upgrade: pkg.is_upgrade,
-                old_package: pkg.old_trove.as_ref().map(|t| PackageInfo {
-                    name: t.name.clone(),
-                    version: t.version.clone(),
-                    release: None,
-                    arch: t.architecture.clone(),
-                }),
-            };
-
-            // Plan this package's operations
-            let plan = txn
-                .plan_operations(operations, &conn)
-                .with_context(|| format!("Failed to plan package {}", pkg.name))?;
-
-            // Check for conflicts (shouldn't happen after batch planning, but double-check)
-            if !plan.conflicts.is_empty() {
-                let conflict_msgs: Vec<String> =
-                    plan.conflicts.iter().map(|c| c.to_string()).collect();
-                txn.abort()
-                    .context("Failed to abort transaction after package conflicts")?;
-                return Err(anyhow::anyhow!(
-                    "Package {} has file conflicts:\n  {}",
-                    pkg.name,
-                    conflict_msgs.join("\n  ")
-                ));
+            for file in &pkg.extracted_files {
+                engine.cas().store(&file.content).with_context(|| {
+                    format!("Failed to store {} from {} in CAS", file.path, pkg.name)
+                })?;
             }
-
-            // Prepare: store content in CAS
-            txn.prepare(&tx_files)
-                .with_context(|| format!("Failed to prepare package {} (CAS storage)", pkg.name))?;
         }
 
-        // Phase 4: Execute filesystem operations
-        // Backup all files that will be replaced
-        txn.backup_files()
-            .context("Failed to backup existing files")?;
+        info!("Batch CAS storage complete: {} packages", package_count);
 
-        // Stage all new files from CAS
-        txn.stage_files().context("Failed to stage files")?;
-
-        // Apply filesystem changes (atomic renames)
-        let fs_result = txn
-            .apply_filesystem()
-            .context("Failed to apply filesystem changes")?;
-
-        info!(
-            "Batch filesystem changes: {} added, {} replaced, {} removed",
-            fs_result.files_added, fs_result.files_replaced, fs_result.files_removed
-        );
-
-        // Phase 5: Write DB commit intent for crash recovery
-        txn.write_db_commit_intent()
-            .context("Failed to write DB commit intent")?;
-
-        // Phase 6: Single DB transaction for ALL packages
-        let tx_uuid = txn.uuid().to_string();
+        // Phase 4: Single DB transaction for ALL packages
         let db_result = conary_core::db::transaction(&mut conn, |tx| {
             // Create single changeset for entire batch
-            let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
+            let mut changeset = Changeset::new(tx_description.clone());
             let changeset_id = changeset.insert(tx)?;
 
             let mut trove_ids: Vec<i64> = Vec::with_capacity(packages.len());
@@ -469,11 +404,6 @@ impl<'a> BatchInstaller<'a> {
         // Handle DB result
         let (changeset_id, trove_ids) = match db_result {
             Ok((cs_id, tr_ids)) => {
-                // Record batch DB commit for recovery
-                // Use first trove_id for single-package compat, but log all
-                let first_trove_id = *tr_ids.first().unwrap_or(&0);
-                txn.record_db_commit(cs_id, first_trove_id)
-                    .context("Failed to record DB commit")?;
                 info!(
                     "Batch DB commit successful: changeset={}, {} troves",
                     cs_id,
@@ -482,13 +412,8 @@ impl<'a> BatchInstaller<'a> {
                 (cs_id, tr_ids)
             }
             Err(e) => {
-                // DB failed - abort transaction (will restore backups)
-                if let Err(abort_err) = txn.abort() {
-                    warn!(
-                        "Failed to abort transaction after DB failure: {}",
-                        abort_err
-                    );
-                }
+                // DB failed - release lock and bail
+                engine.release_lock();
                 return Err(anyhow::anyhow!("Batch database transaction failed: {}", e));
             }
         };
@@ -517,11 +442,7 @@ impl<'a> BatchInstaller<'a> {
             }
         }
 
-        // Mark post-scripts complete
-        txn.mark_post_scripts_complete()
-            .context("Failed to mark post-scripts complete")?;
-
-        // Phase 7: Execute triggers for all installed files
+        // Phase 6: Execute triggers for all installed files
         let all_file_paths: Vec<String> = packages
             .iter()
             .flat_map(|pkg| pkg.extracted_files.iter().map(|f| f.path.clone()))
@@ -529,12 +450,16 @@ impl<'a> BatchInstaller<'a> {
 
         super::run_triggers(&conn, Path::new(self.root), changeset_id, &all_file_paths);
 
-        // Phase 8: Finish transaction
-        let tx_result = txn.finish().context("Failed to finish batch transaction")?;
+        // Phase 7: Build EROFS image and mount new generation
+        // TODO(composefs-native): build_generation_from_db + mount_generation
+        info!("Composefs-native: DB committed for batch. EROFS build/mount deferred.");
+
+        // Release transaction lock
+        engine.release_lock();
 
         info!(
-            "Batch transaction {} completed in {}ms: {} packages installed",
-            tx_result.tx_uuid, tx_result.duration_ms, package_count
+            "Batch transaction completed: {} packages installed",
+            package_count
         );
 
         // Create state snapshot

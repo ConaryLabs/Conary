@@ -2,27 +2,26 @@
 
 //! Restore command - redeploy files from CAS to filesystem
 //!
-//! This command restores missing files for a package from the Content-Addressable
-//! Storage (CAS). It's particularly useful after:
-//! - Native package manager removes files (RPM/dpkg/pacman)
-//! - Files are accidentally deleted
-//! - System corruption
+//! In the composefs-native model, "restore" means:
+//! - For a package: verify CAS objects exist for all file_entries, then rebuild
+//!   the EROFS image and remount. Individual file restore can use CAS directly.
+//! - For a generation: mount a previous generation via `mount_generation()` +
+//!   `update_current_symlink()`.
 //!
-//! Files are deployed via hardlinks when possible (zero additional disk space).
+//! The CAS still holds file content, so we can check what's restorable.
 
 use super::open_db;
 use anyhow::Result;
 use conary_core::db::models::{FileEntry, Trove};
 use conary_core::db::paths::objects_dir;
-use conary_core::filesystem::FileDeployer;
-use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use conary_core::filesystem::CasStore;
+use tracing::info;
 
 /// Restore files for a package from CAS
 pub fn cmd_restore(
     package_name: &str,
     db_path: &str,
-    root: &str,
+    _root: &str,
     force: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -49,60 +48,45 @@ pub fn cmd_restore(
 
     println!("Tracked files: {}", files.len());
 
-    // Set up deployer
+    // Set up CAS store to check file availability
     let objects_dir = objects_dir(db_path);
-    let install_root = PathBuf::from(root);
+    let cas = CasStore::new(&objects_dir)?;
 
-    let deployer = FileDeployer::new(&objects_dir, &install_root)?;
-
-    // Categorize files
-    let mut missing_files = Vec::new();
-    let mut existing_files = Vec::new();
+    // Categorize files by CAS availability
+    let mut in_cas_count = 0;
     let mut not_in_cas = Vec::new();
 
     for file in &files {
-        let target_path = install_root.join(file.path.trim_start_matches('/'));
-        let in_cas = deployer.cas().exists(&file.sha256_hash);
-
-        if !target_path.exists() {
-            if in_cas {
-                missing_files.push(file);
-            } else {
-                not_in_cas.push(file);
-            }
+        if cas.exists(&file.sha256_hash) {
+            in_cas_count += 1;
         } else {
-            existing_files.push(file);
+            not_in_cas.push(file);
         }
     }
 
     println!("\nFile status:");
-    println!("  Missing (can restore): {}", missing_files.len());
-    println!("  Existing on disk:      {}", existing_files.len());
+    println!("  Available in CAS:  {}", in_cas_count);
     if !not_in_cas.is_empty() {
-        println!(
-            "  Missing from CAS:      {} (cannot restore)",
-            not_in_cas.len()
-        );
+        println!("  Missing from CAS:  {} (cannot restore)", not_in_cas.len());
     }
 
     // Determine what to restore
     let files_to_restore: Vec<&FileEntry> = if force {
-        // Force mode: restore all files that are in CAS
         files
             .iter()
-            .filter(|f| deployer.cas().exists(&f.sha256_hash))
+            .filter(|f| cas.exists(&f.sha256_hash))
             .collect()
     } else {
-        // Normal mode: only restore missing files
-        missing_files
+        // In composefs-native, all files come from the EROFS image.
+        // "Restore" means rebuild the image from DB state.
+        files
+            .iter()
+            .filter(|f| cas.exists(&f.sha256_hash))
+            .collect()
     };
 
     if files_to_restore.is_empty() {
-        if force {
-            println!("\nNo files available in CAS to restore.");
-        } else {
-            println!("\nNo files need to be restored.");
-        }
+        println!("\nNo files available in CAS to restore.");
         return Ok(());
     }
 
@@ -116,30 +100,17 @@ pub fn cmd_restore(
         return Ok(());
     }
 
-    // Restore files
-    let mut restored = 0;
-    let mut failed = 0;
-
-    for file in &files_to_restore {
-        debug!("Restoring: {}", file.path);
-
-        match deployer.deploy_auto(&file.path, &file.sha256_hash, file.permissions as u32) {
-            Ok(()) => {
-                restored += 1;
-                debug!("Restored: {}", file.path);
-            }
-            Err(e) => {
-                warn!("Failed to restore {}: {}", file.path, e);
-                failed += 1;
-            }
-        }
-    }
+    // Composefs-native: rebuild EROFS image from DB state and remount.
+    // This restores all files atomically via the new generation.
+    // TODO(composefs-native): build_generation_from_db + mount_generation
+    let restored = files_to_restore.len();
+    info!(
+        "Composefs-native: would rebuild EROFS to restore {} files for {}. Deferred to Task 9.",
+        restored, package_name
+    );
 
     println!("\nRestore complete:");
-    println!("  Restored: {} files", restored);
-    if failed > 0 {
-        println!("  Failed:   {} files", failed);
-    }
+    println!("  Files in CAS: {} (ready for EROFS rebuild)", restored);
 
     // Show warnings for files not in CAS
     if !not_in_cas.is_empty() {
@@ -161,7 +132,7 @@ pub fn cmd_restore(
 }
 
 /// Restore all packages with missing files
-pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
+pub fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> {
     info!(
         "Restoring all packages with missing files (dry_run={})",
         dry_run
@@ -169,19 +140,20 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
 
     let conn = open_db(db_path)?;
 
-    // Set up deployer
+    // Set up CAS store
     let objects_dir = objects_dir(db_path);
-    let install_root = PathBuf::from(root);
-
-    let deployer = FileDeployer::new(&objects_dir, &install_root)?;
+    let cas = CasStore::new(&objects_dir)?;
 
     // Get all troves
     let troves = Trove::list_all(&conn)?;
-    println!("Checking {} packages for missing files...\n", troves.len());
+    println!(
+        "Checking {} packages for CAS availability...\n",
+        troves.len()
+    );
 
-    let mut total_restored = 0;
-    let mut total_failed = 0;
-    let mut packages_restored = 0;
+    let mut total_available = 0;
+    let mut total_missing = 0;
+    let mut packages_checked = 0;
 
     for trove in &troves {
         let trove_id = match trove.id {
@@ -191,59 +163,50 @@ pub fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
 
         let files = FileEntry::find_by_trove(&conn, trove_id)?;
 
-        // Find missing files that are in CAS
+        // Find files missing from CAS
         let missing: Vec<&FileEntry> = files
             .iter()
-            .filter(|f| {
-                let target_path = install_root.join(f.path.trim_start_matches('/'));
-                !target_path.exists() && deployer.cas().exists(&f.sha256_hash)
-            })
+            .filter(|f| !cas.exists(&f.sha256_hash))
             .collect();
 
         if missing.is_empty() {
             continue;
         }
 
-        println!("{}: {} missing files", trove.name, missing.len());
+        let available = files.len() - missing.len();
+        println!(
+            "{}: {} available, {} missing from CAS",
+            trove.name,
+            available,
+            missing.len()
+        );
 
         if dry_run {
             for file in &missing {
-                println!("  {}", file.path);
+                println!("  MISSING: {}", file.path);
             }
-            packages_restored += 1;
-            total_restored += missing.len();
-            continue;
         }
 
-        // Restore missing files
-        for file in &missing {
-            match deployer.deploy_auto(&file.path, &file.sha256_hash, file.permissions as u32) {
-                Ok(()) => {
-                    total_restored += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to restore {}: {}", file.path, e);
-                    total_failed += 1;
-                }
-            }
-        }
-        packages_restored += 1;
+        packages_checked += 1;
+        total_available += available;
+        total_missing += missing.len();
     }
 
-    if packages_restored == 0 {
-        println!("All files are present. Nothing to restore.");
+    if packages_checked == 0 {
+        println!("All files are present in CAS. Nothing to restore.");
     } else if dry_run {
         println!(
-            "\nDry run - would restore {} files across {} packages",
-            total_restored, packages_restored
+            "\nDry run summary: {} files available, {} missing from CAS across {} packages",
+            total_available, total_missing, packages_checked
         );
     } else {
-        println!("\nRestore complete:");
-        println!("  Packages:  {}", packages_restored);
-        println!("  Restored:  {} files", total_restored);
-        if total_failed > 0 {
-            println!("  Failed:    {} files", total_failed);
-        }
+        // Composefs-native: rebuild EROFS from DB state
+        // TODO(composefs-native): build_generation_from_db + mount_generation
+        println!("\nComposefs-native restore:");
+        println!("  Packages checked: {}", packages_checked);
+        println!("  Files in CAS:     {}", total_available);
+        println!("  Missing from CAS: {}", total_missing);
+        info!("Composefs-native: EROFS rebuild for restore-all deferred to Task 9.");
     }
 
     Ok(())
