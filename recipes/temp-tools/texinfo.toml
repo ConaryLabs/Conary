@@ -1,0 +1,45 @@
+# recipes/temp-tools/texinfo.toml
+#
+# LFS 13 Section 7.11 — Texinfo-7.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter07/texinfo.html
+#
+# GNU Texinfo documentation system for the temporary toolchain.
+# Provides makeinfo needed by many GNU package builds.
+# Built natively in chroot.
+
+[package]
+name = "texinfo"
+version = "7.3"
+release = "1"
+summary = "GNU documentation system (temporary tools)"
+description = """
+The Texinfo package contains programs for reading, writing, and
+converting info pages. Many GNU packages produce documentation in
+the Texinfo format, so this is needed by their build systems.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/texinfo/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/texinfo/texinfo-%(version)s.tar.xz"
+checksum = "md5:915a09fcdfc2bf0f5ecf9e556d5698ff"
+
+[build]
+requires = ["gcc-pass2", "binutils-pass2", "glibc", "bash", "coreutils", "make", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,47 @@
+# recipes/temp-tools/findutils.toml
+#
+# LFS 13 Section 6.8 — Findutils-4.10.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/findutils.html
+#
+# GNU find, xargs, and locate for the temporary toolchain.
+
+[package]
+name = "findutils"
+version = "4.10.0"
+release = "1"
+summary = "GNU find utilities (temporary tools)"
+description = """
+The Findutils package contains programs to find files. These programs
+are provided to search directory trees and to create, maintain, and
+search databases (often faster than the recursive find, but unreliable
+unless the database has been recently updated).
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/findutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/findutils/findutils-%(version)s.tar.xz"
+checksum = "md5:870cfd71c07d37ebe56f9f4aaf4ad872"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr                   \
+            --localstatedir=/var/lib/locate \
+            --host=$LFS_TGT                 \
+            --build=$(build-aux/config.guess)
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

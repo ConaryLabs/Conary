@@ -1,0 +1,48 @@
+# recipes/temp-tools/diffutils.toml
+#
+# LFS 13 Section 6.6 — Diffutils-3.12
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/diffutils.html
+#
+# GNU diff utilities for the temporary toolchain. The strcasecmp
+# cross-compilation workaround is needed because the runtime check
+# cannot execute during cross-compilation.
+
+[package]
+name = "diffutils"
+version = "3.12"
+release = "1"
+summary = "GNU file comparison utilities (temporary tools)"
+description = """
+The Diffutils package contains programs that show the differences
+between files or directories. This cross-compiled version provides
+diff, cmp, sdiff, and diff3 for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/diffutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/diffutils/diffutils-%(version)s.tar.xz"
+checksum = "md5:d1b18b20868fb561f77861cd90b05de4"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr \
+            --host=$LFS_TGT \
+            --build=$(./build-aux/config.guess) \
+            gl_cv_func_strcasecmp_works=y
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

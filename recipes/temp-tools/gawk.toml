@@ -1,0 +1,49 @@
+# recipes/temp-tools/gawk.toml
+#
+# LFS 13 Section 6.9 — Gawk-5.4.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/gawk.html
+#
+# GNU AWK for the temporary toolchain. The sed command removes the
+# extras directory which contains files not needed for the temporary
+# build.
+
+[package]
+name = "gawk"
+version = "5.4.0"
+release = "1"
+summary = "GNU AWK pattern scanning language (temporary tools)"
+description = """
+GNU AWK is a pattern scanning and processing language. This
+cross-compiled version provides awk for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gawk/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gawk/gawk-%(version)s.tar.xz"
+checksum = "md5:c07cc9beb6c3bf83274741d0c9489357"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+# Remove unnecessary extras from the build
+sed -i 's/extras//' Makefile.in
+
+./configure --prefix=/usr \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess)
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

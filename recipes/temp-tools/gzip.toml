@@ -1,0 +1,43 @@
+# recipes/temp-tools/gzip.toml
+#
+# LFS 13 Section 6.11 — Gzip-1.14
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/gzip.html
+#
+# GNU gzip compression for the temporary toolchain.
+
+[package]
+name = "gzip"
+version = "1.14"
+release = "1"
+summary = "GNU compression utility (temporary tools)"
+description = """
+The Gzip package contains programs for compressing and decompressing
+files. This cross-compiled version provides gzip and gunzip for the
+temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gzip/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gzip/gzip-%(version)s.tar.xz"
+checksum = "md5:4bf5a10f287501ee8e8ebe00ef62b2c2"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr --host=$LFS_TGT
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"
