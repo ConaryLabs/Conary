@@ -91,6 +91,11 @@ pub enum ImageFormat {
     Qcow2,
     /// Hybrid ISO (BIOS + UEFI bootable)
     Iso,
+    /// Composefs-native: EROFS image + CAS store + SQLite DB
+    ///
+    /// Produces the same artifact type as a runtime generation.
+    /// The bootstrap output is "generation 1."
+    Erofs,
 }
 
 impl FromStr for ImageFormat {
@@ -102,6 +107,7 @@ impl FromStr for ImageFormat {
             "raw" => Ok(Self::Raw),
             "qcow2" => Ok(Self::Qcow2),
             "iso" => Ok(Self::Iso),
+            "erofs" | "composefs" => Ok(Self::Erofs),
             _ => Err(ImageError::InvalidFormat(s.to_string())),
         }
     }
@@ -114,6 +120,7 @@ impl ImageFormat {
             Self::Raw => "img",
             Self::Qcow2 => "qcow2",
             Self::Iso => "iso",
+            Self::Erofs => "erofs",
         }
     }
 }
@@ -124,6 +131,7 @@ impl std::fmt::Display for ImageFormat {
             Self::Raw => write!(f, "raw"),
             Self::Qcow2 => write!(f, "qcow2"),
             Self::Iso => write!(f, "iso"),
+            Self::Erofs => write!(f, "erofs"),
         }
     }
 }
@@ -285,6 +293,10 @@ impl ImageTools {
                         "mksquashfs (for squashfs creation)".to_string(),
                     ));
                 }
+            }
+            ImageFormat::Erofs => {
+                // EROFS building uses composefs-rs in userspace -- no external tools required.
+                // The composefs-rs feature gate is checked at compile time.
             }
         }
         Ok(())
@@ -508,10 +520,258 @@ impl ImageBuilder {
             ImageFormat::Raw => self.build_raw()?,
             ImageFormat::Qcow2 => self.build_qcow2()?,
             ImageFormat::Iso => self.build_iso()?,
+            ImageFormat::Erofs => self.build_erofs_generation()?,
         };
 
         info!("Image built successfully: {:?}", result.path);
         Ok(result)
+    }
+
+    /// Build composefs-native output: EROFS image + CAS store + SQLite DB.
+    ///
+    /// This produces the same artifact type as a runtime generation. The
+    /// bootstrap output becomes "generation 1." The output directory contains:
+    ///
+    /// - `objects/` -- CAS store with all file content
+    /// - `generations/1/root.erofs` -- EROFS image referencing CAS objects
+    /// - `generations/1/.conary-gen.json` -- generation metadata
+    /// - `db.sqlite3` -- SQLite database with trove + file records
+    ///
+    /// No external tools are needed -- composefs-rs builds EROFS in userspace.
+    fn build_erofs_generation(&mut self) -> Result<ImageResult, ImageError> {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+        use crate::generation::builder::{FileEntryRef, build_erofs_image};
+        use crate::generation::metadata::GenerationMetadata;
+
+        self.log_line("Building composefs-native output (EROFS + CAS + DB)");
+
+        // Create output directory structure (clone to avoid borrow conflict with &mut self)
+        let output_dir = self.output.clone();
+        fs::create_dir_all(&output_dir)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to create output dir: {e}")))?;
+
+        let objects_dir = output_dir.join("objects");
+        let generations_dir = output_dir.join("generations");
+        let gen_dir = generations_dir.join("1");
+        fs::create_dir_all(&gen_dir)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to create gen dir: {e}")))?;
+
+        // Step 1: Create CAS store and walk the sysroot
+        self.log_line("Scanning sysroot and storing files in CAS");
+        let cas = CasStore::new(&objects_dir)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to create CAS store: {e}")))?;
+
+        let mut file_entries: Vec<(String, String, u64, u32)> = Vec::new();
+        self.walk_sysroot_to_cas(&cas, &self.sysroot.clone(), &mut file_entries)?;
+
+        let file_count = file_entries.len();
+        self.log_line(&format!("Stored {file_count} files in CAS"));
+
+        // Step 2: Create and initialize SQLite database
+        self.log_line("Creating SQLite database with schema");
+        let db_path = output_dir.join("db.sqlite3");
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to create database: {e}")))?;
+        migrate(&conn)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to initialize schema: {e}")))?;
+
+        // Step 3: Insert a bootstrap trove and file entries
+        self.log_line("Inserting trove and file records");
+        let mut trove = Trove::new(
+            "conaryos-base".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        trove.description = Some("conaryOS base system (bootstrapped from LFS)".to_string());
+        trove.architecture = Some(self.config.target_arch.to_string());
+        let trove_id = trove
+            .insert(&conn)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to insert trove: {e}")))?;
+
+        for (path, hash, size, permissions) in &file_entries {
+            #[allow(clippy::cast_possible_wrap)]
+            let mut fe = FileEntry::new(
+                path.clone(),
+                hash.clone(),
+                *size as i64,
+                *permissions as i32,
+                trove_id,
+            );
+            fe.insert_or_replace(&conn).map_err(|e| {
+                ImageError::CreationFailed(format!("Failed to insert file entry {path}: {e}"))
+            })?;
+        }
+
+        // Step 4: Build EROFS image from file entries
+        self.log_line("Building EROFS image");
+        let erofs_entries: Vec<FileEntryRef> = file_entries
+            .iter()
+            .map(|(path, hash, size, perms)| FileEntryRef {
+                path: path.clone(),
+                sha256_hash: hash.clone(),
+                size: *size,
+                permissions: *perms,
+            })
+            .collect();
+
+        let build_result = build_erofs_image(&erofs_entries, &gen_dir)
+            .map_err(|e| ImageError::CreationFailed(format!("Failed to build EROFS image: {e}")))?;
+
+        // Step 5: Write generation metadata
+        self.log_line("Writing generation metadata");
+        #[allow(clippy::cast_possible_wrap)]
+        let metadata = GenerationMetadata {
+            generation: 1,
+            format: "composefs".to_string(),
+            erofs_size: Some(build_result.image_size as i64),
+            cas_objects_referenced: Some(build_result.cas_objects_referenced as i64),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            package_count: 1,
+            kernel_version: detect_kernel_in_sysroot(&self.sysroot),
+            summary: "Bootstrap generation 1 (LFS base system)".to_string(),
+        };
+        metadata.write_to(&gen_dir).map_err(|e| {
+            ImageError::CreationFailed(format!("Failed to write generation metadata: {e}"))
+        })?;
+
+        // Create "current" symlink
+        #[cfg(unix)]
+        {
+            let current_link = output_dir.join("current");
+            let _ = fs::remove_file(&current_link);
+            std::os::unix::fs::symlink("generations/1", &current_link).map_err(|e| {
+                ImageError::CreationFailed(format!("Failed to create current symlink: {e}"))
+            })?;
+        }
+
+        // Close DB connection before reporting
+        drop(conn);
+
+        let erofs_size = build_result.image_size;
+        let objects_size = dir_size(&objects_dir);
+        let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+        let total_size = erofs_size + objects_size + db_size;
+
+        self.log_line(&format!(
+            "Generation 1 complete: EROFS={erofs_size} bytes, CAS={objects_size} bytes, \
+             DB={db_size} bytes, files={file_count}"
+        ));
+
+        Ok(ImageResult {
+            path: output_dir.clone(),
+            format: ImageFormat::Erofs,
+            size: total_size,
+            efi_bootable: false, // Not directly bootable -- needs qcow2 wrapper
+            bios_bootable: false,
+            method: "composefs-rs".to_string(),
+            partitions: vec![
+                format!("CAS objects ({objects_size} bytes)"),
+                format!("EROFS image ({erofs_size} bytes)"),
+                format!("SQLite DB ({db_size} bytes)"),
+            ],
+        })
+    }
+
+    /// Walk the sysroot directory tree, store regular files in CAS, and collect entries.
+    ///
+    /// Skips excluded directories (var, tmp, proc, etc.) and non-regular files.
+    /// Symlinks are tracked but not stored as CAS objects (they are encoded
+    /// directly in the EROFS tree by the builder).
+    fn walk_sysroot_to_cas(
+        &mut self,
+        cas: &crate::filesystem::CasStore,
+        sysroot: &Path,
+        entries: &mut Vec<(String, String, u64, u32)>,
+    ) -> Result<(), ImageError> {
+        use crate::generation::metadata::is_excluded;
+
+        let mut stack: Vec<PathBuf> = vec![sysroot.to_path_buf()];
+
+        while let Some(dir) = stack.pop() {
+            let read_dir = match fs::read_dir(&dir) {
+                Ok(rd) => rd,
+                Err(e) => {
+                    warn!("Cannot read directory {}: {e}", dir.display());
+                    continue;
+                }
+            };
+
+            for entry in read_dir {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!("Error reading dir entry: {e}");
+                        continue;
+                    }
+                };
+
+                let path = entry.path();
+                let rel_path = path
+                    .strip_prefix(sysroot)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+
+                // Skip excluded directories
+                if is_excluded(&rel_path) {
+                    continue;
+                }
+
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!("Cannot stat {}: {e}", path.display());
+                        continue;
+                    }
+                };
+
+                if metadata.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+
+                if !metadata.is_file() {
+                    // Skip symlinks and special files for CAS storage.
+                    // Symlinks are handled by the EROFS builder via root symlinks.
+                    continue;
+                }
+
+                // Read file and store in CAS
+                let content = match fs::read(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!("Cannot read {}: {e}", path.display());
+                        continue;
+                    }
+                };
+
+                let hash = cas.store(&content).map_err(|e| {
+                    ImageError::CreationFailed(format!(
+                        "Failed to store {} in CAS: {e}",
+                        path.display()
+                    ))
+                })?;
+
+                #[cfg(unix)]
+                let permissions = {
+                    use std::os::unix::fs::MetadataExt;
+                    metadata.mode() & 0o7777
+                };
+                #[cfg(not(unix))]
+                let permissions = 0o644u32;
+
+                let size = metadata.len();
+                let abs_path = format!("/{rel_path}");
+
+                entries.push((abs_path, hash, size, permissions));
+            }
+        }
+
+        Ok(())
     }
 
     /// Build a raw disk image using systemd-repart (rootless, no loop devices).
@@ -1378,6 +1638,35 @@ impl Drop for ImageBuilder {
     }
 }
 
+/// Detect kernel version from the sysroot's `/usr/lib/modules/` directory.
+fn detect_kernel_in_sysroot(sysroot: &Path) -> Option<String> {
+    let modules_dir = sysroot.join("usr/lib/modules");
+    let entries = fs::read_dir(modules_dir).ok()?;
+
+    for entry in entries.flatten() {
+        if entry.file_type().ok()?.is_dir() {
+            return Some(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// Recursively compute the total size of a directory in bytes.
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(m) = fs::metadata(&p) {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1387,7 +1676,13 @@ mod tests {
         assert_eq!(ImageFormat::from_str("raw").unwrap(), ImageFormat::Raw);
         assert_eq!(ImageFormat::from_str("qcow2").unwrap(), ImageFormat::Qcow2);
         assert_eq!(ImageFormat::from_str("iso").unwrap(), ImageFormat::Iso);
+        assert_eq!(ImageFormat::from_str("erofs").unwrap(), ImageFormat::Erofs);
+        assert_eq!(
+            ImageFormat::from_str("composefs").unwrap(),
+            ImageFormat::Erofs
+        );
         assert_eq!(ImageFormat::from_str("RAW").unwrap(), ImageFormat::Raw);
+        assert_eq!(ImageFormat::from_str("EROFS").unwrap(), ImageFormat::Erofs);
         assert!(ImageFormat::from_str("invalid").is_err());
     }
 
@@ -1396,6 +1691,7 @@ mod tests {
         assert_eq!(ImageFormat::Raw.extension(), "img");
         assert_eq!(ImageFormat::Qcow2.extension(), "qcow2");
         assert_eq!(ImageFormat::Iso.extension(), "iso");
+        assert_eq!(ImageFormat::Erofs.extension(), "erofs");
     }
 
     #[test]
@@ -1445,5 +1741,132 @@ mod tests {
         // systemd-repart may or may not be installed -- just verify the fields exist
         let _ = tools.systemd_repart;
         let _ = tools.ukify;
+    }
+
+    #[test]
+    fn test_erofs_format_no_tools_required() {
+        let tools = ImageTools::check().unwrap();
+        // EROFS format should not require any external tools
+        assert!(tools.check_for_format(ImageFormat::Erofs).is_ok());
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn test_erofs_generation_from_sysroot() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sysroot = tmp.path().join("sysroot");
+        let output = tmp.path().join("output");
+
+        // Create a minimal sysroot
+        fs::create_dir_all(sysroot.join("usr/bin")).unwrap();
+        fs::create_dir_all(sysroot.join("usr/lib")).unwrap();
+        fs::create_dir_all(sysroot.join("etc")).unwrap();
+
+        fs::write(sysroot.join("usr/bin/hello"), b"#!/bin/sh\necho hello\n").unwrap();
+        fs::set_permissions(
+            sysroot.join("usr/bin/hello"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        fs::write(sysroot.join("usr/lib/libtest.so"), b"fake shared lib").unwrap();
+        fs::write(sysroot.join("etc/hostname"), b"conaryos\n").unwrap();
+
+        // Create ImageBuilder with EROFS format
+        let config = BootstrapConfig::new();
+        let mut builder = ImageBuilder::new(
+            tmp.path(),
+            &config,
+            &sysroot,
+            &output,
+            ImageFormat::Erofs,
+            ImageSize(0),
+        )
+        .unwrap();
+
+        let result = builder.build().unwrap();
+
+        // Verify output structure
+        assert_eq!(result.format, ImageFormat::Erofs);
+        assert_eq!(result.method, "composefs-rs");
+        assert!(result.size > 0);
+
+        // Verify directory structure
+        assert!(
+            output.join("objects").is_dir(),
+            "CAS objects dir must exist"
+        );
+        assert!(
+            output.join("generations/1/root.erofs").is_file(),
+            "EROFS image must exist"
+        );
+        assert!(
+            output.join("generations/1/.conary-gen.json").is_file(),
+            "Generation metadata must exist"
+        );
+        assert!(output.join("db.sqlite3").is_file(), "SQLite DB must exist");
+        assert!(
+            output.join("current").exists(),
+            "current symlink must exist"
+        );
+
+        // Verify EROFS magic
+        let erofs_bytes = fs::read(output.join("generations/1/root.erofs")).unwrap();
+        assert!(erofs_bytes.len() > 1028, "EROFS image too small");
+        let magic = u32::from_le_bytes([
+            erofs_bytes[1024],
+            erofs_bytes[1025],
+            erofs_bytes[1026],
+            erofs_bytes[1027],
+        ]);
+        assert_eq!(magic, 0xE0F5_E1E2, "EROFS magic mismatch");
+
+        // Verify database has records
+        let conn = rusqlite::Connection::open(output.join("db.sqlite3")).unwrap();
+        let trove_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(trove_count, 1, "Should have 1 trove (conaryos-base)");
+
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(file_count, 3, "Should have 3 file entries");
+
+        // Verify generation metadata
+        let metadata = crate::generation::metadata::GenerationMetadata::read_from(
+            &output.join("generations/1"),
+        )
+        .unwrap();
+        assert_eq!(metadata.generation, 1);
+        assert_eq!(metadata.format, "composefs");
+        assert_eq!(metadata.package_count, 1);
+        assert!(metadata.cas_objects_referenced.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_dir_size_helper() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join("a"), b"hello").unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/b"), b"world!").unwrap();
+
+        let size = dir_size(tmp.path());
+        assert_eq!(size, 11, "5 bytes + 6 bytes = 11 bytes");
+    }
+
+    #[test]
+    fn test_detect_kernel_in_sysroot() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // No modules dir
+        assert!(detect_kernel_in_sysroot(tmp.path()).is_none());
+
+        // Create modules dir with a version
+        fs::create_dir_all(tmp.path().join("usr/lib/modules/6.12.1-conary")).unwrap();
+        let version = detect_kernel_in_sysroot(tmp.path());
+        assert_eq!(version.as_deref(), Some("6.12.1-conary"));
     }
 }

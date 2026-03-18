@@ -98,8 +98,8 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
     println!("  Size: {}", size);
 
     // Parse format
-    let image_format =
-        ImageFormat::from_str(format).context("Invalid image format. Use: raw, qcow2, iso")?;
+    let image_format = ImageFormat::from_str(format)
+        .context("Invalid image format. Use: raw, qcow2, iso, erofs")?;
 
     // Parse size
     let image_size = ImageSize::from_str(size).context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
@@ -125,6 +125,9 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
                 println!("  - xorriso (ISO creation)");
                 println!("  - mksquashfs (squashfs creation)");
             }
+            ImageFormat::Erofs => {
+                println!("  (no external tools required -- composefs-rs builds in userspace)");
+            }
         }
         return Err(e.into());
     }
@@ -140,8 +143,16 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
     println!("  Base system: {}", sysroot.display());
 
     // Build the image
-    println!("\nThis will create a bootable {} image.", image_format);
-    println!("Image size: {}", image_size);
+    match image_format {
+        ImageFormat::Erofs => {
+            println!("\nThis will create composefs-native output (EROFS + CAS + DB).");
+            println!("Output directory: {}", output);
+        }
+        _ => {
+            println!("\nThis will create a bootable {} image.", image_format);
+            println!("Image size: {}", image_size);
+        }
+    }
     println!();
 
     let config = BootstrapConfig::new();
@@ -164,42 +175,57 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
         result.size,
         result.size as f64 / 1_073_741_824.0
     );
-    println!(
-        "  EFI bootable: {}",
-        if result.efi_bootable { "yes" } else { "no" }
-    );
-    println!(
-        "  BIOS bootable: {}",
-        if result.bios_bootable { "yes" } else { "no" }
-    );
+    println!("  Method: {}", result.method);
 
-    println!("\nUsage:");
     match image_format {
-        ImageFormat::Raw => {
-            println!(
-                "  QEMU: qemu-system-x86_64 -drive file={},format=raw -m 2G -enable-kvm",
-                output
-            );
-            println!(
-                "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
-                output
-            );
+        ImageFormat::Erofs => {
+            println!("\nOutput layout:");
+            for desc in &result.partitions {
+                println!("  - {desc}");
+            }
+            println!("\nThis is generation 1 -- the same artifact type as runtime generations.");
+            println!("To boot, wrap in a qcow2 image or deploy to a disk with:");
+            println!("  conary bootstrap image -f qcow2 -o conaryos.qcow2");
         }
-        ImageFormat::Qcow2 => {
+        _ => {
             println!(
-                "  QEMU: qemu-system-x86_64 -drive file={},format=qcow2 -m 2G -enable-kvm",
-                output
-            );
-        }
-        ImageFormat::Iso => {
-            println!(
-                "  QEMU: qemu-system-x86_64 -cdrom {} -m 2G -enable-kvm",
-                output
+                "  EFI bootable: {}",
+                if result.efi_bootable { "yes" } else { "no" }
             );
             println!(
-                "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
-                output
+                "  BIOS bootable: {}",
+                if result.bios_bootable { "yes" } else { "no" }
             );
+            println!("\nUsage:");
+            match image_format {
+                ImageFormat::Raw => {
+                    println!(
+                        "  QEMU: qemu-system-x86_64 -drive file={},format=raw -m 2G -enable-kvm",
+                        output
+                    );
+                    println!(
+                        "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
+                        output
+                    );
+                }
+                ImageFormat::Qcow2 => {
+                    println!(
+                        "  QEMU: qemu-system-x86_64 -drive file={},format=qcow2 -m 2G -enable-kvm",
+                        output
+                    );
+                }
+                ImageFormat::Iso => {
+                    println!(
+                        "  QEMU: qemu-system-x86_64 -cdrom {} -m 2G -enable-kvm",
+                        output
+                    );
+                    println!(
+                        "  USB:  sudo dd if={} of=/dev/sdX bs=4M status=progress",
+                        output
+                    );
+                }
+                ImageFormat::Erofs => unreachable!(),
+            }
         }
     }
 

@@ -38,7 +38,7 @@ pub enum BootstrapCommands {
         #[arg(short, long, default_value = "conaryos-base.qcow2")]
         output: String,
 
-        /// Image format (raw, qcow2, iso)
+        /// Image format (raw, qcow2, iso, erofs)
         #[arg(short, long, default_value = "qcow2")]
         format: String,
 
