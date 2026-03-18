@@ -22,6 +22,7 @@ pub mod mirror_selector;
 pub mod registry;
 pub mod remi;
 pub mod resolution;
+pub mod retry;
 pub mod substituter;
 mod sync;
 
@@ -37,6 +38,7 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::{RepositoryClient, RetryPolicy};
+pub use retry::{RetryConfig, with_retry};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
     resolve_dependencies_transitive_requests, resolve_dependency_requests,
