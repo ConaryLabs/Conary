@@ -41,10 +41,15 @@ mod build_helpers;
 mod build_runner;
 mod conary_stage;
 mod config;
+mod cross_tools;
+mod final_system;
 mod image;
 pub(crate) mod repart;
 mod stage1;
 mod stages;
+mod system_config;
+mod temp_tools;
+mod tier2;
 mod toolchain;
 
 pub use base::{
@@ -53,9 +58,14 @@ pub use base::{
 pub use build_runner::{BuildRunnerError, PackageBuildRunner};
 pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use config::{BootstrapConfig, TargetArch};
+pub use cross_tools::{CrossToolsBuilder, CrossToolsError};
+pub use final_system::{FinalSystemBuilder, FinalSystemError, SYSTEM_BUILD_ORDER};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
 pub use stages::{BootstrapStage, StageManager, StageState};
+pub use system_config::{SystemConfigError, configure_system};
+pub use temp_tools::{TempToolsBuilder, TempToolsError};
+pub use tier2::{Tier2Builder, Tier2Error};
 pub use toolchain::{Toolchain, ToolchainKind};
 
 use anyhow::Result;
