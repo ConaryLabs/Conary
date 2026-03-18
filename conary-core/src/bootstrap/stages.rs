@@ -11,86 +11,75 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Bootstrap stages in order
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum BootstrapStage {
-    /// Stage 0: Cross-compilation toolchain from crosstool-ng
-    Stage0,
-    /// Stage 1: Self-hosted toolchain built with Stage 0
-    Stage1,
-    /// Stage 2: Optional pure rebuild with Stage 1
-    Stage2,
-    /// Base system packages (kernel, glibc, coreutils, etc.)
-    BaseSystem,
-    /// Boot packages (grub, dracut, etc.)
-    Boot,
-    /// Networking packages (openssh, iproute2, etc.)
-    Networking,
-    /// Conary self-build (rust + conary)
-    Conary,
-    /// Bootable image generation
-    Image,
+    /// Phase 1: Cross-toolchain (LFS Ch5)
+    CrossTools,
+    /// Phase 2: Temporary tools (LFS Ch6-7)
+    TempTools,
+    /// Phase 3: Final system (LFS Ch8)
+    FinalSystem,
+    /// Phase 4: System configuration (LFS Ch9)
+    SystemConfig,
+    /// Phase 5: Bootable image (LFS Ch10)
+    BootableImage,
+    /// Phase 6: Tier 2 -- BLFS + Conary
+    Tier2,
 }
 
 impl BootstrapStage {
     /// Get all stages in order
     pub fn all() -> &'static [BootstrapStage] {
         &[
-            Self::Stage0,
-            Self::Stage1,
-            Self::Stage2,
-            Self::BaseSystem,
-            Self::Boot,
-            Self::Networking,
-            Self::Conary,
-            Self::Image,
+            Self::CrossTools,
+            Self::TempTools,
+            Self::FinalSystem,
+            Self::SystemConfig,
+            Self::BootableImage,
+            Self::Tier2,
         ]
     }
 
     /// Get the next stage after this one
     pub fn next(&self) -> Option<BootstrapStage> {
         match self {
-            Self::Stage0 => Some(Self::Stage1),
-            Self::Stage1 => Some(Self::Stage2),
-            Self::Stage2 => Some(Self::BaseSystem),
-            Self::BaseSystem => Some(Self::Boot),
-            Self::Boot => Some(Self::Networking),
-            Self::Networking => Some(Self::Conary),
-            Self::Conary => Some(Self::Image),
-            Self::Image => None,
+            Self::CrossTools => Some(Self::TempTools),
+            Self::TempTools => Some(Self::FinalSystem),
+            Self::FinalSystem => Some(Self::SystemConfig),
+            Self::SystemConfig => Some(Self::BootableImage),
+            Self::BootableImage => Some(Self::Tier2),
+            Self::Tier2 => None,
         }
     }
 
     /// Get the previous stage before this one
     pub fn previous(&self) -> Option<BootstrapStage> {
         match self {
-            Self::Stage0 => None,
-            Self::Stage1 => Some(Self::Stage0),
-            Self::Stage2 => Some(Self::Stage1),
-            Self::BaseSystem => Some(Self::Stage2),
-            Self::Boot => Some(Self::BaseSystem),
-            Self::Networking => Some(Self::Boot),
-            Self::Conary => Some(Self::Networking),
-            Self::Image => Some(Self::Conary),
+            Self::CrossTools => None,
+            Self::TempTools => Some(Self::CrossTools),
+            Self::FinalSystem => Some(Self::TempTools),
+            Self::SystemConfig => Some(Self::FinalSystem),
+            Self::BootableImage => Some(Self::SystemConfig),
+            Self::Tier2 => Some(Self::BootableImage),
         }
     }
 
     /// Get a human-readable name for the stage
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Stage0 => "Stage 0 (cross-toolchain)",
-            Self::Stage1 => "Stage 1 (self-hosted toolchain)",
-            Self::Stage2 => "Stage 2 (pure rebuild)",
-            Self::BaseSystem => "Base system packages",
-            Self::Boot => "Boot packages",
-            Self::Networking => "Networking packages",
-            Self::Conary => "Conary self-build",
-            Self::Image => "Bootable image",
+            Self::CrossTools => "Phase 1: Cross-toolchain (LFS Ch5)",
+            Self::TempTools => "Phase 2: Temporary tools (LFS Ch6-7)",
+            Self::FinalSystem => "Phase 3: Final system (LFS Ch8)",
+            Self::SystemConfig => "Phase 4: System configuration (LFS Ch9)",
+            Self::BootableImage => "Phase 5: Bootable image (LFS Ch10)",
+            Self::Tier2 => "Phase 6: Tier 2 (BLFS + Conary)",
         }
     }
 
     /// Check if this stage is required (vs optional)
     pub fn is_required(&self) -> bool {
-        !matches!(self, Self::Stage2)
+        // Tier 2 is optional -- a minimal LFS system can boot without it
+        !matches!(self, Self::Tier2)
     }
 }
 
@@ -297,28 +286,34 @@ mod tests {
 
     #[test]
     fn test_stage_ordering() {
-        assert!(BootstrapStage::Stage0 < BootstrapStage::Stage1);
-        assert!(BootstrapStage::Stage1 < BootstrapStage::BaseSystem);
-        assert!(BootstrapStage::BaseSystem < BootstrapStage::Image);
+        assert!(BootstrapStage::CrossTools < BootstrapStage::TempTools);
+        assert!(BootstrapStage::TempTools < BootstrapStage::FinalSystem);
+        assert!(BootstrapStage::FinalSystem < BootstrapStage::Tier2);
     }
 
     #[test]
     fn test_stage_next() {
-        assert_eq!(BootstrapStage::Stage0.next(), Some(BootstrapStage::Stage1));
-        assert_eq!(BootstrapStage::Stage1.next(), Some(BootstrapStage::Stage2));
-        assert_eq!(BootstrapStage::Image.next(), None);
+        assert_eq!(
+            BootstrapStage::CrossTools.next(),
+            Some(BootstrapStage::TempTools)
+        );
+        assert_eq!(
+            BootstrapStage::TempTools.next(),
+            Some(BootstrapStage::FinalSystem)
+        );
+        assert_eq!(BootstrapStage::Tier2.next(), None);
     }
 
     #[test]
     fn test_stage_previous() {
-        assert_eq!(BootstrapStage::Stage0.previous(), None);
+        assert_eq!(BootstrapStage::CrossTools.previous(), None);
         assert_eq!(
-            BootstrapStage::Stage1.previous(),
-            Some(BootstrapStage::Stage0)
+            BootstrapStage::TempTools.previous(),
+            Some(BootstrapStage::CrossTools)
         );
         assert_eq!(
-            BootstrapStage::Image.previous(),
-            Some(BootstrapStage::Conary)
+            BootstrapStage::Tier2.previous(),
+            Some(BootstrapStage::BootableImage)
         );
     }
 
@@ -339,12 +334,12 @@ mod tests {
         let mut manager = StageManager::new(temp.path()).unwrap();
 
         manager
-            .mark_complete(BootstrapStage::Stage0, "/tools")
+            .mark_complete(BootstrapStage::CrossTools, "/tools")
             .unwrap();
 
-        assert!(manager.is_complete(BootstrapStage::Stage0));
+        assert!(manager.is_complete(BootstrapStage::CrossTools));
         assert_eq!(
-            manager.get_artifact_path(BootstrapStage::Stage0),
+            manager.get_artifact_path(BootstrapStage::CrossTools),
             Some(PathBuf::from("/tools"))
         );
     }
@@ -357,14 +352,14 @@ mod tests {
         {
             let mut manager = StageManager::new(temp.path()).unwrap();
             manager
-                .mark_complete(BootstrapStage::Stage0, "/tools")
+                .mark_complete(BootstrapStage::CrossTools, "/tools")
                 .unwrap();
         }
 
         // Load again and verify
         {
             let manager = StageManager::new(temp.path()).unwrap();
-            assert!(manager.is_complete(BootstrapStage::Stage0));
+            assert!(manager.is_complete(BootstrapStage::CrossTools));
         }
     }
 
@@ -373,22 +368,22 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut manager = StageManager::new(temp.path()).unwrap();
 
-        // Mark some packages complete in the BaseSystem stage
+        // Mark some packages complete in the FinalSystem stage
         manager
-            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .mark_package_complete(BootstrapStage::FinalSystem, "zlib")
             .unwrap();
         manager
-            .mark_package_complete(BootstrapStage::BaseSystem, "ncurses")
+            .mark_package_complete(BootstrapStage::FinalSystem, "ncurses")
             .unwrap();
 
-        let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+        let completed = manager.completed_packages(BootstrapStage::FinalSystem);
         assert_eq!(completed.len(), 2);
         assert!(completed.contains(&"zlib".to_string()));
         assert!(completed.contains(&"ncurses".to_string()));
 
         // Other stages should have empty package lists
-        let stage0_pkgs = manager.completed_packages(BootstrapStage::Stage0);
-        assert!(stage0_pkgs.is_empty());
+        let cross_pkgs = manager.completed_packages(BootstrapStage::CrossTools);
+        assert!(cross_pkgs.is_empty());
     }
 
     #[test]
@@ -398,14 +393,14 @@ mod tests {
         {
             let mut manager = StageManager::new(temp.path()).unwrap();
             manager
-                .mark_package_complete(BootstrapStage::BaseSystem, "bash")
+                .mark_package_complete(BootstrapStage::FinalSystem, "bash")
                 .unwrap();
         }
 
         // Reload and verify
         {
             let manager = StageManager::new(temp.path()).unwrap();
-            let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+            let completed = manager.completed_packages(BootstrapStage::FinalSystem);
             assert_eq!(completed, vec!["bash"]);
         }
     }
@@ -416,13 +411,13 @@ mod tests {
         let mut manager = StageManager::new(temp.path()).unwrap();
 
         manager
-            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .mark_package_complete(BootstrapStage::FinalSystem, "zlib")
             .unwrap();
         manager
-            .mark_package_complete(BootstrapStage::BaseSystem, "zlib")
+            .mark_package_complete(BootstrapStage::FinalSystem, "zlib")
             .unwrap();
 
-        let completed = manager.completed_packages(BootstrapStage::BaseSystem);
+        let completed = manager.completed_packages(BootstrapStage::FinalSystem);
         assert_eq!(completed.len(), 1);
     }
 
@@ -433,22 +428,22 @@ mod tests {
 
         // Mark several stages complete
         manager
-            .mark_complete(BootstrapStage::Stage0, "/tools")
+            .mark_complete(BootstrapStage::CrossTools, "/tools")
             .unwrap();
         manager
-            .mark_complete(BootstrapStage::Stage1, "/stage1")
+            .mark_complete(BootstrapStage::TempTools, "/temp-tools")
             .unwrap();
         manager
-            .mark_complete(BootstrapStage::BaseSystem, "/base")
+            .mark_complete(BootstrapStage::FinalSystem, "/system")
             .unwrap();
 
-        // Reset from Stage1
-        manager.reset_from(BootstrapStage::Stage1).unwrap();
+        // Reset from TempTools
+        manager.reset_from(BootstrapStage::TempTools).unwrap();
 
-        // Stage0 should still be complete
-        assert!(manager.is_complete(BootstrapStage::Stage0));
-        // Stage1 and later should be reset
-        assert!(!manager.is_complete(BootstrapStage::Stage1));
-        assert!(!manager.is_complete(BootstrapStage::BaseSystem));
+        // CrossTools should still be complete
+        assert!(manager.is_complete(BootstrapStage::CrossTools));
+        // TempTools and later should be reset
+        assert!(!manager.is_complete(BootstrapStage::TempTools));
+        assert!(!manager.is_complete(BootstrapStage::FinalSystem));
     }
 }

@@ -175,7 +175,7 @@ impl Bootstrap {
         let toolchain = builder.build()?;
 
         self.stages
-            .mark_complete(BootstrapStage::Stage1, &toolchain.path)?;
+            .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;
 
         Ok(toolchain)
     }
@@ -183,7 +183,7 @@ impl Bootstrap {
     /// Get the Stage 1 toolchain if it's already built
     pub fn get_stage1_toolchain(&self) -> Option<Toolchain> {
         self.stages
-            .get_artifact_path(BootstrapStage::Stage1)
+            .get_artifact_path(BootstrapStage::CrossTools)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
 
@@ -210,7 +210,7 @@ impl Bootstrap {
         builder.build()?;
 
         self.stages
-            .mark_complete(BootstrapStage::BaseSystem, builder.target_root())?;
+            .mark_complete(BootstrapStage::FinalSystem, builder.target_root())?;
 
         Ok(builder.summary())
     }
@@ -234,7 +234,7 @@ impl Bootstrap {
         builder.build()?;
 
         self.stages
-            .mark_complete(BootstrapStage::Conary, &sysroot)?;
+            .mark_complete(BootstrapStage::Tier2, &sysroot)?;
 
         Ok(())
     }
@@ -344,7 +344,7 @@ impl Bootstrap {
 
     /// Get the base system sysroot path if built
     pub fn get_sysroot(&self) -> Option<PathBuf> {
-        self.stages.get_artifact_path(BootstrapStage::BaseSystem)
+        self.stages.get_artifact_path(BootstrapStage::FinalSystem)
     }
 
     /// Build a bootable image from the base system
@@ -371,7 +371,7 @@ impl Bootstrap {
         let result = builder.build()?;
 
         self.stages
-            .mark_complete(BootstrapStage::Image, &result.path)?;
+            .mark_complete(BootstrapStage::BootableImage, &result.path)?;
 
         Ok(result)
     }
@@ -380,7 +380,6 @@ impl Bootstrap {
 /// Prerequisites for bootstrap
 #[derive(Debug)]
 pub struct Prerequisites {
-    pub crosstool_ng: Option<String>,
     pub make: Option<String>,
     pub gcc: Option<String>,
     pub git: Option<String>,
@@ -390,7 +389,6 @@ impl Prerequisites {
     /// Check for required tools
     pub fn check() -> Result<Self> {
         Ok(Self {
-            crosstool_ng: Self::find_version("ct-ng", &["version"]),
             make: Self::find_version("make", &["--version"]),
             gcc: Self::find_version("gcc", &["--version"]),
             git: Self::find_version("git", &["--version"]),
@@ -399,18 +397,12 @@ impl Prerequisites {
 
     /// Check if all required prerequisites are met
     pub fn all_present(&self) -> bool {
-        self.crosstool_ng.is_some()
-            && self.make.is_some()
-            && self.gcc.is_some()
-            && self.git.is_some()
+        self.make.is_some() && self.gcc.is_some() && self.git.is_some()
     }
 
     /// Get list of missing prerequisites
     pub fn missing(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
-        if self.crosstool_ng.is_none() {
-            missing.push("crosstool-ng (ct-ng)");
-        }
         if self.make.is_none() {
             missing.push("make");
         }

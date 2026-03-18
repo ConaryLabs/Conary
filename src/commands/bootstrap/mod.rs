@@ -438,18 +438,15 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming from: {}", current);
 
     match current {
-        BootstrapStage::Stage0 => {
-            // Stage 0 (crosstool-ng) has been removed; skip to Stage 1
-            println!("[OK] Stage 0 is no longer required -- advancing to Stage 1.");
+        BootstrapStage::CrossTools => {
+            cmd_bootstrap_stage1(work_dir, None, None, verbose, false)
+        }
+        BootstrapStage::TempTools => {
+            // TODO: wire up temp-tools build once implemented
+            println!("[OK] Phase 2 (temp-tools) -- not yet implemented.");
             Ok(())
         }
-        BootstrapStage::Stage1 => cmd_bootstrap_stage1(work_dir, None, None, verbose, false),
-        BootstrapStage::Stage2 => {
-            // Stage 2 (purity rebuild) has been removed; skip to base system
-            println!("[OK] Stage 2 is no longer required -- advancing to Base System.");
-            Ok(())
-        }
-        BootstrapStage::BaseSystem => cmd_bootstrap_base(
+        BootstrapStage::FinalSystem => cmd_bootstrap_base(
             work_dir,
             "/conary/sysroot",
             None,
@@ -458,20 +455,17 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
             None,
             None,
         ),
-        BootstrapStage::Boot => {
-            // Boot is a checkpoint within the base system build (grub, dracut, etc.)
-            // These packages are built as part of the base stage, so advance to the next stage.
-            println!("[OK] Boot stage is a base-system checkpoint -- advancing to Networking.");
+        BootstrapStage::SystemConfig => {
+            // TODO: wire up system configuration once implemented
+            println!("[OK] Phase 4 (system-config) -- not yet implemented.");
             Ok(())
         }
-        BootstrapStage::Networking => {
-            // Networking is a checkpoint within the base system build (openssh, iproute2, etc.)
-            // These packages are built as part of the base stage, so advance to the next stage.
-            println!("[OK] Networking stage is a base-system checkpoint -- advancing to Conary.");
-            Ok(())
+        BootstrapStage::BootableImage => {
+            cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G")
         }
-        BootstrapStage::Conary => cmd_bootstrap_conary(work_dir, None, verbose, false, false),
-        BootstrapStage::Image => cmd_bootstrap_image(work_dir, "conary.img", "raw", "4G"),
+        BootstrapStage::Tier2 => {
+            cmd_bootstrap_conary(work_dir, None, verbose, false, false)
+        }
     }
 }
 
