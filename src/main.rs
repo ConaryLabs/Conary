@@ -1754,11 +1754,13 @@ fn run() -> Result<()> {
             generation,
             output,
             objects_dir,
+            db,
             oci: _,
         }) => commands::export_oci(
             generation,
             std::path::Path::new(&objects_dir),
             std::path::Path::new(&output),
+            &db,
         ),
 
         // =====================================================================

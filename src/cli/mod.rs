@@ -534,6 +534,10 @@ pub enum Commands {
         #[arg(long, default_value = "/conary/objects")]
         objects_dir: String,
 
+        /// Path to the Conary database (used to scope CAS objects to the generation)
+        #[arg(long, default_value = "/conary/conary.db")]
+        db: String,
+
         /// Export in OCI format (currently the only supported format)
         #[arg(long, default_value_t = true)]
         oci: bool,
