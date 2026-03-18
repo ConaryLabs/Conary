@@ -1,0 +1,64 @@
+# recipes/cross-tools/libstdcxx.toml
+#
+# LFS 13 Section 5.6 — Libstdc++ from GCC-15.2.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter05/gcc-libstdc++.html
+#
+# Libstdc++ is the C++ standard library. It is needed to compile C++ code,
+# but it depends on glibc which was not yet available when GCC Pass 1 was
+# built. This builds libstdc++ as a separate step using the GCC source tree.
+# A second copy is built later in Chapter 6 (temp-tools) for the temporary
+# toolchain.
+
+[package]
+name = "libstdcxx"
+version = "15.2.0"
+release = "1"
+summary = "GNU C++ Standard Library (cross-toolchain)"
+description = """
+Libstdc++ is the standard C++ library. It is built separately from GCC
+Pass 1 because it depends on glibc, which was not available during the
+initial compiler build. Uses the GCC source tree but only builds the
+libstdc++-v3 component.
+"""
+license = "GPL-3.0-or-later WITH GCC-exception-3.1"
+homepage = "https://gcc.gnu.org/"
+
+[source]
+# Same source tarball as gcc-pass1 — only libstdc++-v3 is built
+archive = "https://ftpmirror.gnu.org/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
+checksum = "md5:b861b092bf1af683c46a8aa2e689a6fd"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc"]
+makedepends = []
+
+configure = """
+mkdir -v build
+cd build
+
+../libstdc++-v3/configure \
+    --host=$LFS_TGT \
+    --build=$(../config.guess) \
+    --prefix=/usr \
+    --disable-multilib \
+    --disable-nls \
+    --disable-libstdcxx-pch \
+    --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/%(version)s
+"""
+
+make = """
+cd build
+make -j%(jobs)s
+"""
+
+install = """
+cd build
+make DESTDIR=$LFS install
+
+# Remove libtool archive files — they are harmful for cross-compilation
+rm -v $LFS/usr/lib/lib{stdc++{,exp,fs},supc++}.la
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"
