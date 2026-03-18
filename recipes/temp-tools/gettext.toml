@@ -1,0 +1,47 @@
+# recipes/temp-tools/gettext.toml
+#
+# LFS 13 Section 7.7 — Gettext-1.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter07/gettext.html
+#
+# Minimal Gettext build for the temporary toolchain. Only three programs
+# (msgfmt, msgmerge, xgettext) are needed — the full package is built
+# later in Chapter 8. Built natively in chroot (no --host).
+
+[package]
+name = "gettext"
+version = "1.0"
+release = "1"
+summary = "GNU internationalization utilities (temporary tools)"
+description = """
+Minimal build of Gettext for the temporary toolchain. Only msgfmt,
+msgmerge, and xgettext are installed — these are needed by build
+systems that process translations. The full package with libraries
+is built in Chapter 8.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gettext/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gettext/gettext-%(version)s.tar.xz"
+checksum = "md5:dc8b2911535929cec1e263706b0a13a1"
+
+[build]
+requires = ["gcc-pass2", "binutils-pass2", "glibc", "bash", "coreutils", "make"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --disable-shared
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+# Only install the three programs needed by the temporary toolchain
+cp -v gettext-tools/src/{msgfmt,msgmerge,xgettext} /usr/bin
+"""
+
+[variables]
+jobs = "$(nproc)"
