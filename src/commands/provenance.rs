@@ -965,18 +965,9 @@ fn verify_fulcio_chain(cert_pem: &[u8], integrated_time: i64) -> Result<(), Sigs
     Ok(())
 }
 
-// === Helper functions ===
+use super::package_parsing::parse_package_spec;
 
-/// Parse package@version format
-fn parse_package_spec(spec: &str) -> (String, Option<String>) {
-    if let Some(idx) = spec.rfind('@') {
-        let name = spec[..idx].to_string();
-        let version = spec[idx + 1..].to_string();
-        (name, Some(version))
-    } else {
-        (spec.to_string(), None)
-    }
-}
+// === Helper functions ===
 
 /// Find a trove by name and optional version
 fn find_trove(
