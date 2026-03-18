@@ -26,6 +26,10 @@ pub struct Component {
 }
 
 impl Component {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, parent_trove_id, name, description, installed_at, \
+         is_installed";
+
     /// Create a new Component
     pub fn new(parent_trove_id: i64, name: String) -> Self {
         Self {
@@ -75,20 +79,19 @@ impl Component {
 
     /// Find a component by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed \
-             FROM components WHERE id = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM components WHERE id = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let component = stmt.query_row([id], Self::from_row).optional()?;
         Ok(component)
     }
 
     /// Find all components for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed \
-             FROM components WHERE parent_trove_id = ?1 ORDER BY name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM components WHERE parent_trove_id = ?1 ORDER BY name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let components = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -101,10 +104,11 @@ impl Component {
         trove_id: i64,
         name: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed \
-             FROM components WHERE parent_trove_id = ?1 AND name = ?2",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM components WHERE parent_trove_id = ?1 AND name = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let component = stmt
             .query_row(params![trove_id, name], Self::from_row)
             .optional()?;
@@ -113,10 +117,11 @@ impl Component {
 
     /// Find all installed components for a trove
     pub fn find_installed_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_trove_id, name, description, installed_at, is_installed \
-             FROM components WHERE parent_trove_id = ?1 AND is_installed = 1 ORDER BY name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM components WHERE parent_trove_id = ?1 AND is_installed = 1 ORDER BY name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let components = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
