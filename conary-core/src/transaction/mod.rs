@@ -24,6 +24,7 @@ pub use planner::{
 
 use crate::Result;
 use crate::filesystem::CasStore;
+use crate::generation::metadata::EROFS_IMAGE_NAME;
 use crate::hash::HashAlgorithm;
 use fs2::FileExt;
 use rusqlite::Connection;
@@ -280,7 +281,7 @@ impl TransactionEngine {
                 .config
                 .generations_dir
                 .join(current_num.to_string())
-                .join("root.erofs");
+                .join(EROFS_IMAGE_NAME);
 
             if is_valid_erofs_image(&image_path) {
                 tracing::debug!(
@@ -361,7 +362,7 @@ impl TransactionEngine {
         let gen_dir = self.config.generations_dir.join(gen_num.to_string());
 
         crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
-            image_path: gen_dir.join("root.erofs"),
+            image_path: gen_dir.join(EROFS_IMAGE_NAME),
             basedir: self.config.objects_dir.clone(),
             mount_point: self.config.mount_point.clone(),
             verity: false,
@@ -400,7 +401,7 @@ impl TransactionEngine {
                 .config
                 .generations_dir
                 .join(gen_num.to_string())
-                .join("root.erofs");
+                .join(EROFS_IMAGE_NAME);
 
             if is_valid_erofs_image(&image_path) {
                 return Some(gen_num);
@@ -647,7 +648,7 @@ mod integration_tests {
 
         // Verify metadata JSON was written
         let gen_dir = generations_dir.join(gen_num.to_string());
-        let meta_path = gen_dir.join(".conary-gen.json");
+        let meta_path = gen_dir.join(GENERATION_METADATA_FILE);
         assert!(
             meta_path.exists(),
             "Metadata file must exist at {:?}",
@@ -656,7 +657,7 @@ mod integration_tests {
         let meta_json = std::fs::read_to_string(&meta_path).unwrap();
         let meta: GenerationMetadata = serde_json::from_str(&meta_json).unwrap();
         assert_eq!(meta.generation, gen_num);
-        assert_eq!(meta.format, "composefs");
+        assert_eq!(meta.format, GENERATION_FORMAT);
         assert_eq!(meta.package_count, 1);
 
         // Verify SystemState was created and is active
@@ -674,6 +675,7 @@ mod integration_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::metadata::{GENERATION_FORMAT, GENERATION_METADATA_FILE};
     use tempfile::TempDir;
 
     #[test]
@@ -797,7 +799,7 @@ mod tests {
         let generations_dir = root.join("generations");
         std::fs::create_dir_all(generations_dir.join("2")).unwrap();
 
-        let image_path = generations_dir.join("2").join("root.erofs");
+        let image_path = generations_dir.join("2").join(EROFS_IMAGE_NAME);
         write_stub_erofs(&image_path);
 
         // Create `current -> generations/2`
@@ -851,7 +853,7 @@ mod tests {
         // Create generation 5 directory without an EROFS image
         std::fs::create_dir_all(generations_dir.join("5")).unwrap();
 
-        let missing_image = generations_dir.join("5").join("root.erofs");
+        let missing_image = generations_dir.join("5").join(EROFS_IMAGE_NAME);
 
         // Confirm validation fails for missing file
         assert!(

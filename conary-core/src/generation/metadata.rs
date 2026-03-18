@@ -9,6 +9,15 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Name of the EROFS image file within a generation directory.
+pub const EROFS_IMAGE_NAME: &str = "root.erofs";
+
+/// Format identifier for composefs-based generations.
+pub const GENERATION_FORMAT: &str = "composefs";
+
+/// Name of the metadata JSON file within a generation directory.
+pub const GENERATION_METADATA_FILE: &str = ".conary-gen.json";
+
 /// Directories excluded from generation trees.
 ///
 /// These are runtime, user, or virtual filesystem directories that should
@@ -58,17 +67,17 @@ pub struct GenerationMetadata {
 }
 
 impl GenerationMetadata {
-    /// Write metadata to `.conary-gen.json` inside the given generation directory.
+    /// Write metadata to the generation metadata file inside the given generation directory.
     pub fn write_to(&self, gen_dir: &Path) -> Result<()> {
-        let path = gen_dir.join(".conary-gen.json");
+        let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
     }
 
-    /// Read metadata from `.conary-gen.json` inside the given generation directory.
+    /// Read metadata from the generation metadata file inside the given generation directory.
     pub fn read_from(gen_dir: &Path) -> Result<Self> {
-        let path = gen_dir.join(".conary-gen.json");
+        let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = std::fs::read_to_string(path)?;
         let metadata: Self = serde_json::from_str(&json)?;
         Ok(metadata)
@@ -102,7 +111,7 @@ pub fn gc_roots_dir() -> PathBuf {
 /// Detect kernel version(s) by scanning `gen_dir/usr/lib/modules/` for subdirectories.
 ///
 /// Used when a generation has a deployed file tree (reflink format).
-/// For composefs generations, use `detect_kernel_version_from_db` in the builder instead.
+/// For composefs generations, use `detect_kernel_version_from_troves` in the builder instead.
 #[allow(dead_code)] // Retained for future reflink-format generation support
 pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
     let modules_dir = gen_dir.join("usr/lib/modules");
@@ -125,7 +134,7 @@ pub fn is_excluded(path: &str) -> bool {
     let path = path.strip_prefix('/').unwrap_or(path);
     EXCLUDED_DIRS
         .iter()
-        .any(|dir| path == *dir || path.starts_with(&format!("{dir}/")))
+        .any(|dir| path == *dir || (path.starts_with(dir) && path.as_bytes().get(dir.len()) == Some(&b'/')))
 }
 
 #[cfg(test)]
@@ -138,7 +147,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let metadata = GenerationMetadata {
             generation: 42,
-            format: "composefs".to_string(),
+            format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(1_048_576),
             cas_objects_referenced: Some(320),
             fsverity_enabled: true,
@@ -153,7 +162,7 @@ mod tests {
         let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
 
         assert_eq!(loaded.generation, 42);
-        assert_eq!(loaded.format, "composefs");
+        assert_eq!(loaded.format, GENERATION_FORMAT);
         assert_eq!(loaded.erofs_size, Some(1_048_576));
         assert_eq!(loaded.cas_objects_referenced, Some(320));
         assert!(loaded.fsverity_enabled);
@@ -169,7 +178,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let metadata = GenerationMetadata {
             generation: 7,
-            format: "composefs".to_string(),
+            format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(512_000),
             cas_objects_referenced: Some(100),
             fsverity_enabled: false,
@@ -183,7 +192,7 @@ mod tests {
         metadata.write_to(tmp.path()).unwrap();
 
         // Verify the JSON does not contain erofs_verity_digest when None
-        let json = std::fs::read_to_string(tmp.path().join(".conary-gen.json")).unwrap();
+        let json = std::fs::read_to_string(tmp.path().join(GENERATION_METADATA_FILE)).unwrap();
         assert!(
             !json.contains("erofs_verity_digest"),
             "erofs_verity_digest=None should be skipped in serialization"
@@ -204,7 +213,7 @@ mod tests {
             "kernel_version": null,
             "summary": "old generation"
         }"#;
-        std::fs::write(tmp.path().join(".conary-gen.json"), old_json).unwrap();
+        std::fs::write(tmp.path().join(GENERATION_METADATA_FILE), old_json).unwrap();
 
         let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
         assert_eq!(loaded.generation, 10);

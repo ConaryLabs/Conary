@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use crate::db::models::{FileEntry, StateEngine, Trove};
-use crate::generation::metadata::GenerationMetadata;
+use crate::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_FORMAT, GenerationMetadata};
 #[cfg(feature = "composefs-rs")]
 use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
 
@@ -113,21 +113,17 @@ pub fn build_erofs_image(
 
         // Parse the hex digest; skip files with invalid hashes (e.g.,
         // directories or adopted files with placeholder hashes).
-        if hex_to_digest(&entry.sha256_hash).is_err() {
-            debug!(
-                "Skipping file with invalid digest ({} chars): {}",
-                entry.sha256_hash.len(),
-                entry.path
-            );
-            continue;
-        }
-
-        let hash = Sha256HashValue::from_hex(&entry.sha256_hash).map_err(|e| {
-            crate::error::Error::ParseError(format!(
-                "Failed to parse SHA-256 hash for {}: {e}",
-                entry.path
-            ))
-        })?;
+        let hash = match Sha256HashValue::from_hex(&entry.sha256_hash) {
+            Ok(h) => h,
+            Err(_) => {
+                debug!(
+                    "Skipping file with invalid digest ({} chars): {}",
+                    entry.sha256_hash.len(),
+                    entry.path
+                );
+                continue;
+            }
+        };
 
         // Ensure parent directories exist in the tree, then insert the file.
         let path = entry.path.strip_prefix('/').unwrap_or(&entry.path);
@@ -214,8 +210,8 @@ pub fn build_erofs_image(
     let image_bytes = mkfs_erofs(&fs);
     let image_size = image_bytes.len() as u64;
 
-    // Write to generation_dir/root.erofs
-    let image_path = generation_dir.join("root.erofs");
+    // Write EROFS image to generation directory
+    let image_path = generation_dir.join(EROFS_IMAGE_NAME);
     std::fs::write(&image_path, &*image_bytes).map_err(|e| {
         crate::error::Error::IoError(format!(
             "Failed to write EROFS image to {}: {e}",
@@ -290,34 +286,26 @@ pub fn build_generation_from_db(
         ))
     })?;
 
-    // Step 4: Collect file entries from all installed troves
+    // Step 4: Collect file entries from all installed troves (single bulk query)
     let troves = Trove::list_all(conn)?;
-    let mut file_refs = Vec::new();
+    let all_files = FileEntry::find_all_ordered(conn)?;
 
-    for trove in &troves {
-        let trove_id = match trove.id {
-            Some(id) => id,
-            None => {
-                debug!("Skipping trove without ID: {}", trove.name);
-                continue;
-            }
-        };
-
-        let files = FileEntry::find_by_trove(conn, trove_id)?;
-        for file in &files {
+    let file_refs: Vec<FileEntryRef> = all_files
+        .iter()
+        .map(|file| {
             #[allow(clippy::cast_sign_loss)]
             let permissions = file.permissions as u32;
             #[allow(clippy::cast_sign_loss)]
             let size = file.size as u64;
 
-            file_refs.push(FileEntryRef {
+            FileEntryRef {
                 path: file.path.clone(),
                 sha256_hash: file.sha256_hash.clone(),
                 size,
                 permissions,
-            });
-        }
-    }
+            }
+        })
+        .collect();
 
     // Step 5: Build EROFS image
     let result = build_erofs_image(&file_refs, &gen_dir)?;
@@ -326,14 +314,14 @@ pub fn build_generation_from_db(
     #[allow(clippy::cast_possible_wrap)]
     let metadata = GenerationMetadata {
         generation: gen_number,
-        format: "composefs".to_string(),
+        format: GENERATION_FORMAT.to_string(),
         erofs_size: Some(result.image_size as i64),
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false, // Caller can enable separately
         erofs_verity_digest: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
-        kernel_version: detect_kernel_version_from_db(conn),
+        kernel_version: detect_kernel_version_from_troves(&troves),
         summary: summary.to_string(),
     };
     metadata.write_to(&gen_dir).map_err(|e| {
@@ -350,13 +338,12 @@ pub fn build_generation_from_db(
     Ok((gen_number, result))
 }
 
-/// Get kernel version from DB rather than scanning the generation tree.
+/// Get kernel version from an already-loaded trove list.
 ///
 /// Looks for kernel-related packages in the trove list, falling back to
 /// the running kernel version from `/proc/version`.
-pub fn detect_kernel_version_from_db(conn: &rusqlite::Connection) -> Option<String> {
-    let troves = Trove::list_all(conn).ok()?;
-    for trove in &troves {
+pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
+    for trove in troves {
         if trove.name.starts_with("kernel") || trove.name.starts_with("linux-image") {
             return Some(trove.version.clone());
         }
@@ -516,8 +503,8 @@ mod tests {
             let _r1 = build_erofs_image(&entries, tmp1.path()).unwrap();
             let _r2 = build_erofs_image(&entries, tmp2.path()).unwrap();
 
-            let bytes1 = std::fs::read(tmp1.path().join("root.erofs")).unwrap();
-            let bytes2 = std::fs::read(tmp2.path().join("root.erofs")).unwrap();
+            let bytes1 = std::fs::read(tmp1.path().join(EROFS_IMAGE_NAME)).unwrap();
+            let bytes2 = std::fs::read(tmp2.path().join(EROFS_IMAGE_NAME)).unwrap();
 
             assert_eq!(
                 bytes1, bytes2,
@@ -527,16 +514,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // detect_kernel_version_from_db does not panic
+    // detect_kernel_version_from_troves does not panic
     // ---------------------------------------------------------------
 
     #[test]
     fn detect_kernel_version_does_not_panic() {
-        // Test with an in-memory DB that has no troves table
+        // Test with an empty trove list
         // Just ensure it does not panic (returns None gracefully)
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let result = detect_kernel_version_from_db(&conn);
-        // Either None or Some is fine -- no panic is the point
-        let _ = result;
+        let result = detect_kernel_version_from_troves(&[]);
+        assert!(result.is_some() || result.is_none());
     }
 }
