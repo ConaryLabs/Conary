@@ -183,6 +183,7 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
         erofs_size: Some(stats.image_size as i64),
         cas_objects_referenced: Some(stats.file_count as i64),
         fsverity_enabled: caps.fsverity,
+        erofs_verity_digest: None, // Populated by Task 3 when builder moves to conary-core
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: detect_kernel_version_from_db(conn),
