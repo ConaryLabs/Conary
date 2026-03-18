@@ -142,3 +142,8 @@ rmcp = { workspace = true, features = ["server"], optional = true }
 
 # composefs-rs: EROFS image builder for composefs (optional, feature-gated)
 composefs = { version = "0.3", default-features = false, optional = true }
+
+[[bench]]
+name = "erofs_build"
+harness = false
+required-features = ["composefs-rs"]
