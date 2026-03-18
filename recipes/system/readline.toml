@@ -1,0 +1,65 @@
+# recipes/system/readline.toml
+#
+# LFS 13 Section 8.12 — Readline-8.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/readline.html
+#
+# GNU Readline library for command-line editing and history. Several sed
+# fixes are required: removing old library versioning, preventing rpath
+# hardcoding, and fixing an upstream input bug.
+
+[package]
+name = "readline"
+version = "8.3"
+release = "1"
+summary = "GNU command-line editing library"
+description = """
+The Readline library provides a set of functions for use by applications
+that allow users to edit command lines as they are typed in. Both Emacs
+and vi editing modes are available. Programs using Readline include Bash,
+Python, and many other interactive tools.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://tiswww.case.edu/php/chet/readline/rltop.html"
+
+[source]
+archive = "https://ftpmirror.gnu.org/readline/readline-%(version)s.tar.gz"
+checksum = "md5:25a73bfb2a3ad7146c5e9d4408d9f6cd"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = []
+chroot = true
+
+configure = """
+# Prevent old libraries from being moved with a .old suffix
+sed -i '/MV.*old/d' Makefile.in
+
+# Prevent the old suffix mechanism from running
+sed -i '/{OLDSUFF}/c:' support/shlib-install
+
+# Remove hardcoded rpath from shared objects
+sed -i 's/-Wl,-rpath,[^ ]*//' support/shobj-conf
+
+# Fix an upstream input bug in this version
+sed -e '270a\\
+     else\\
+       chars_avail = 1;' \\
+    -e '288i\\   result = -1;' \\
+    -i.orig input.c
+
+./configure --prefix=/usr    \
+            --disable-static \
+            --with-curses    \
+            --docdir=/usr/share/doc/readline-%(version)s
+"""
+
+make = """
+make SHLIB_LIBS="-lncursesw" -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

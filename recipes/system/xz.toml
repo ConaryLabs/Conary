@@ -1,0 +1,46 @@
+# recipes/system/xz.toml
+#
+# LFS 13 Section 8.8 — Xz-5.8.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/xz.html
+#
+# XZ Utils provides lossless data compression using the LZMA2 algorithm.
+
+[package]
+name = "xz"
+version = "5.8.2"
+release = "1"
+summary = "LZMA2 compression utilities"
+description = """
+XZ Utils provides lossless data compression using the LZMA2 algorithm.
+It includes the xz compressor, xzdec decompressor, and liblzma library
+for in-process compression. Used extensively for compressing tarballs
+and package archives.
+"""
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later AND 0BSD"
+homepage = "https://tukaani.org/xz/"
+
+[source]
+archive = "https://github.com/tukaani-project/xz/releases/download/v%(version)s/xz-%(version)s.tar.xz"
+checksum = "md5:87c8bb8addf7189d3a51f6a5f03163fc"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr    \
+            --disable-static \
+            --docdir=/usr/share/doc/xz-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,97 @@
+# recipes/system/systemd.toml
+#
+# LFS 13 Section 8.74 — Systemd-259.5
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/systemd.html
+#
+# System and service manager. The most complex recipe after gcc/glibc.
+# Uses Meson build system with many -D flags to disable features not
+# needed or not available in a fresh LFS system.
+#
+# DEVIATION: -Dbootloader=true enables systemd-boot (replaces GRUB)
+# DEVIATION: -Dversion-tag=259.5-conary adds conaryOS branding
+
+[package]
+name = "systemd"
+version = "259.5"
+release = "1"
+summary = "System and service manager"
+description = """
+Systemd is a suite of basic building blocks for a Linux system. It
+provides a system and service manager, device management (udev),
+login management, journal logging, and many other system services.
+This build includes systemd-boot for UEFI booting (conaryOS deviation).
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://systemd.io/"
+
+[source]
+archive = "https://github.com/systemd/systemd/archive/v%(version)s/systemd-%(version)s.tar.gz"
+checksum = "md5:6ac65dfbd3c9dc14f3bf4086f83b8aae"
+
+[build]
+requires = ["glibc", "elfutils", "kmod", "libcap", "openssl", "util-linux", "zlib", "zstd", "xz", "lz4", "acl", "libxcrypt"]
+makedepends = ["meson", "ninja", "python", "jinja2", "gperf", "pkgconf"]
+chroot = true
+
+configure = """
+# Fix udev rules to use "video" group instead of "render"/"sgx"
+sed -e 's/GROUP="render"/GROUP="video"/' \
+    -e 's/GROUP="sgx", //'              \
+    -i rules.d/50-udev-default.rules.in
+
+mkdir -p build
+cd build
+
+meson setup ..                                    \
+      --prefix=/usr                               \
+      --buildtype=release                         \
+      -D default-dnssec=no                        \
+      -D firstboot=false                          \
+      -D install-tests=false                      \
+      -D ldconfig=false                           \
+      -D sysusers=false                           \
+      -D rpmmacrosdir=no                          \
+      -D homed=disabled                           \
+      -D man=disabled                             \
+      -D mode=release                             \
+      -D pamconfdir=no                            \
+      -D dev-kvm-mode=0660                        \
+      -D nobody-group=nogroup                     \
+      -D sysupdate=disabled                       \
+      -D ukify=disabled                           \
+      -D docdir=/usr/share/doc/systemd-%(version)s \
+      -D bootloader=true                          \
+      -D version-tag=%(version)s-conary
+"""
+
+make = """
+cd build
+ninja
+"""
+
+install = """
+cd build
+ninja install
+
+# Install pre-built man pages
+tar -xf ../../systemd-man-pages-%(version)s.tar.xz \
+    --no-same-owner --strip-components=1            \
+    -C /usr/share/man
+
+# Generate machine ID
+systemd-machine-id-setup
+
+# Enable default systemd presets
+systemctl preset-all
+"""
+
+[variables]
+jobs = "$(nproc)"
+
+[deviations]
+lfs_section = "8.74"
+lfs_url = "https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/systemd.html"
+changes = [
+    { flag = "-Dbootloader", lfs = "not set", conary = "true", reason = "systemd-boot replaces GRUB" },
+    { flag = "-Dversion-tag", lfs = "not set", conary = "259.5-conary", reason = "conaryOS branding" },
+]

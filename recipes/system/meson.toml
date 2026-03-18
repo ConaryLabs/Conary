@@ -1,0 +1,46 @@
+# recipes/system/meson.toml
+#
+# LFS 13 Section 8.56 — Meson-1.10.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/meson.html
+#
+# High-productivity build system. Installed via pip3 from local wheel
+# with bash and zsh completion scripts.
+
+[package]
+name = "meson"
+version = "1.10.1"
+release = "1"
+summary = "High-productivity build system"
+description = """
+Meson is a build system designed to be both extremely fast and as
+user-friendly as possible. It supports many languages and compilers,
+and provides built-in support for common build operations like
+dependency detection, code generation, and test execution.
+"""
+license = "Apache-2.0"
+homepage = "https://mesonbuild.com/"
+
+[source]
+archive = "https://github.com/mesonbuild/meson/releases/download/%(version)s/meson-%(version)s.tar.gz"
+checksum = "md5:e1c12d275f8aae9fae71dff3d6891746"
+
+[build]
+requires = ["python", "ninja", "setuptools"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+pip3 wheel -w dist --no-cache-dir --no-build-isolation --no-deps $PWD
+"""
+
+install = """
+pip3 install --no-index --find-links dist meson
+install -vDm644 data/shell-completions/bash/meson \
+    /usr/share/bash-completion/completions/meson
+install -vDm644 data/shell-completions/zsh/_meson \
+    /usr/share/zsh/site-functions/_meson
+"""
+
+[variables]

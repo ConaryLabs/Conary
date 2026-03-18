@@ -1,0 +1,45 @@
+# recipes/system/less.toml
+#
+# LFS 13 Section 8.40 — Less-692
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/less.html
+#
+# Terminal pager — displays file contents one screen at a time.
+# Used as the default pager by man and many other programs.
+
+[package]
+name = "less"
+version = "692"
+release = "1"
+summary = "Terminal pager"
+description = """
+Less is a terminal pager similar to more, but with the ability to
+scroll backwards as well as forwards. It does not need to read the
+entire file before starting, making it faster than most text editors
+for viewing large files. Used as the default pager by man.
+"""
+license = "GPL-3.0-or-later AND BSD-2-Clause"
+homepage = "https://www.greenwoodsoftware.com/less/"
+
+[source]
+archive = "https://www.greenwoodsoftware.com/less/less-%(version)s.tar.gz"
+checksum = "md5:4efd31e34ecf7682a6c62a3c53007600"
+
+[build]
+requires = ["glibc", "ncurses"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr --sysconfdir=/etc
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

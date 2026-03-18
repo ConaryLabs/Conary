@@ -1,0 +1,87 @@
+# recipes/tier2/linux-pam.toml
+#
+# BLFS — Linux-PAM-1.7.2
+# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/linux-pam.html
+#
+# Pluggable Authentication Modules — provides a flexible mechanism for
+# authenticating users. Uses Meson build system. After installing,
+# Shadow and systemd should be reinstalled to pick up PAM support.
+
+[package]
+name = "linux-pam"
+version = "1.7.2"
+release = "1"
+summary = "Pluggable Authentication Modules"
+description = """
+Linux-PAM (Pluggable Authentication Modules) provides a flexible
+mechanism for authenticating users. PAM modules can be stacked and
+combined to implement site-specific authentication policies without
+modifying individual applications.
+"""
+license = "BSD-3-Clause"
+homepage = "https://github.com/linux-pam/linux-pam"
+
+[source]
+archive = "https://github.com/linux-pam/linux-pam/releases/download/v%(version)s/Linux-PAM-%(version)s.tar.xz"
+checksum = "md5:VERIFY_BEFORE_BUILD"
+
+[build]
+requires = ["glibc", "systemd"]
+makedepends = ["meson", "ninja"]
+chroot = true
+
+configure = """
+mkdir -p build
+cd build
+
+meson setup ..                                         \
+      --prefix=/usr                                    \
+      --buildtype=release                              \
+      -D securedir=/usr/lib/security                   \
+      -D docdir=/usr/share/doc/Linux-PAM-%(version)s
+"""
+
+make = """
+cd build
+ninja
+"""
+
+install = """
+cd build
+ninja install
+
+chmod -v 4755 /usr/sbin/unix_chkpwd
+
+# Create /etc/pam.d with basic configuration
+install -vdm755 /etc/pam.d
+
+cat > /etc/pam.d/system-account << "PAMEOF"
+account   required    pam_unix.so
+PAMEOF
+
+cat > /etc/pam.d/system-auth << "PAMEOF"
+auth      required    pam_unix.so
+PAMEOF
+
+cat > /etc/pam.d/system-session << "PAMEOF"
+session   required    pam_unix.so
+PAMEOF
+
+cat > /etc/pam.d/system-password << "PAMEOF"
+password  required    pam_unix.so       sha512 shadow try_first_pass
+PAMEOF
+
+cat > /etc/pam.d/other << "PAMEOF"
+auth        required        pam_warn.so
+auth        required        pam_deny.so
+account     required        pam_warn.so
+account     required        pam_deny.so
+password    required        pam_warn.so
+password    required        pam_deny.so
+session     required        pam_warn.so
+session     required        pam_deny.so
+PAMEOF
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,46 @@
+# recipes/system/zstd.toml
+#
+# LFS 13 Section 8.10 — Zstd-1.5.7
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/zstd.html
+#
+# Zstandard — fast real-time compression algorithm. Uses make directly,
+# not autotools. Provides high compression ratios at very fast speeds.
+
+[package]
+name = "zstd"
+version = "1.5.7"
+release = "1"
+summary = "Fast real-time compression algorithm"
+description = """
+Zstandard (zstd) is a fast lossless compression algorithm targeting
+real-time compression scenarios at zlib-level and better compression
+ratios. It provides a very wide range of compression/speed trade-offs
+and is backed by a very fast decoder.
+"""
+license = "BSD-3-Clause AND GPL-2.0-only"
+homepage = "https://facebook.github.io/zstd/"
+
+[source]
+archive = "https://github.com/facebook/zstd/releases/download/v%(version)s/zstd-%(version)s.tar.gz"
+checksum = "md5:780fc1896922b1bc52a4e90980cdda48"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+make prefix=/usr -j%(jobs)s
+"""
+
+install = """
+make prefix=/usr install
+
+# Remove static library
+rm -v /usr/lib/libzstd.a
+"""
+
+[variables]
+jobs = "$(nproc)"

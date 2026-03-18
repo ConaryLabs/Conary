@@ -1,0 +1,48 @@
+# recipes/system/libtool.toml
+#
+# LFS 13 Section 8.35 — Libtool-2.5.4
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/libtool.html
+#
+# GNU generic library support script. Hides the complexity of using
+# shared libraries behind a consistent, portable interface.
+
+[package]
+name = "libtool"
+version = "2.5.4"
+release = "1"
+summary = "GNU generic library support script"
+description = """
+GNU Libtool hides the complexity of using shared libraries behind a
+consistent, portable interface. It provides a standardized way to
+build shared libraries on different platforms, handle versioning,
+and manage library dependencies.
+"""
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later"
+homepage = "https://www.gnu.org/software/libtool/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/libtool/libtool-%(version)s.tar.xz"
+checksum = "md5:22e0a29df8af5fdde276ea3a7d351d30"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Remove static library (only useful for the test suite)
+rm -fv /usr/lib/libltdl.a
+"""
+
+[variables]
+jobs = "$(nproc)"

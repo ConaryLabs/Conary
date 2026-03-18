@@ -1,0 +1,47 @@
+# recipes/tier2/conary.toml
+#
+# Conary — self-hosting package manager
+#
+# Builds Conary from the current source tree using the Rust toolchain
+# installed in the previous step. After this, the conaryOS system can
+# manage its own packages.
+#
+# The source is not fetched from an archive -- the bootstrap pipeline
+# copies the workspace into the build directory before invoking this
+# recipe.
+
+[package]
+name = "conary"
+version = "0.0.0"
+release = "1"
+summary = "Conary package manager"
+description = """
+Conary is a next-generation Linux package manager with content-
+addressable storage, atomic transactions, generation-based rollback,
+and cross-distribution package resolution. This recipe builds Conary
+from source to achieve self-hosting on conaryOS.
+"""
+license = "MIT"
+homepage = "https://conary.io/"
+
+[source]
+archive = ""
+checksum = ""
+
+[build]
+requires = ["glibc", "openssl", "sqlite", "rust"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+cargo build --release
+"""
+
+install = """
+install -Dm755 target/release/conary %(destdir)s/usr/bin/conary
+"""
+
+[variables]
+jobs = "$(nproc)"

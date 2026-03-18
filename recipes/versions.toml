@@ -1,0 +1,146 @@
+# recipes/versions.toml
+#
+# Package versions for LFS 13 (systemd) bootstrap alignment
+# Source: https://www.linuxfromscratch.org/lfs/view/systemd/chapter03/packages.html
+#
+# Last updated: 2026-03-17
+
+[toolchain]
+gcc = "15.2.0"
+glibc = "2.43"
+binutils = "2.46.0"
+linux = "6.19.8"
+
+# GCC companion libraries
+gmp = "6.3.0"
+mpfr = "4.2.2"
+mpc = "1.3.1"
+
+[target]
+triple = "x86_64-conary-linux-gnu"
+arch = "x86_64"
+kernel_arch = "x86_64"
+
+[paths]
+lfs_root = "/mnt/lfs"
+tools_prefix = "/mnt/lfs/tools"
+
+[system]
+# LFS Ch8 packages (alphabetical within categories)
+
+# Compression
+zlib = "1.3.2"
+bzip2 = "1.0.8"
+xz = "5.8.2"
+lz4 = "1.10.0"
+zstd = "1.5.7"
+gzip = "1.14"
+
+# Text/Terminal
+ncurses = "6.6"
+readline = "8.3"
+pcre2 = "10.47"
+
+# Crypto/Security
+openssl = "3.6.1"
+libcap = "2.77"
+libxcrypt = "4.5.2"
+attr = "2.5.2"
+acl = "2.3.2"
+shadow = "4.19.4"
+
+# System
+elfutils = "0.194"
+kmod = "34.2"
+dbus = "1.16.2"
+systemd = "259.5"
+e2fsprogs = "1.47.4"
+util-linux = "2.41.3"
+procps-ng = "4.0.6"
+psmisc = "23.7"
+iproute2 = "6.19.0"
+
+# Development
+make = "4.4.1"
+m4 = "1.4.21"
+autoconf = "2.72"
+automake = "1.18.1"
+libtool = "2.5.4"
+pkgconf = "2.5.1"
+bison = "3.8.2"
+flex = "2.6.4"
+gettext = "1.0"
+bc = "7.0.3"
+ninja = "1.13.2"
+meson = "1.10.1"
+cmake = "4.2.3"
+gperf = "3.3"
+
+# Languages
+perl = "5.42.1"
+python = "3.14.3"
+
+# Python packaging
+flit-core = "3.12.0"
+packaging = "26.0"
+wheel = "0.46.3"
+setuptools = "82.0.1"
+markupsafe = "3.0.3"
+jinja2 = "3.1.6"
+
+# XML/i18n
+expat = "2.7.4"
+xml-parser = "2.47"
+intltool = "0.51.0"
+
+# Database
+gdbm = "1.26"
+sqlite = "3510300"
+libffi = "3.5.2"
+
+# Text tools
+grep = "3.12"
+sed = "4.9"
+gawk = "5.4.0"
+less = "692"
+diffutils = "3.12"
+patch = "2.8"
+findutils = "4.10.0"
+file = "5.47"
+coreutils = "9.10"
+bash = "5.3"
+tar = "1.35"
+vim = "9.2.0161"
+
+# Documentation
+man-pages = "6.17"
+iana-etc = "20260306"
+groff = "1.24.0"
+texinfo = "7.3"
+man-db = "2.13.1"
+libpipeline = "1.5.8"
+
+# Network
+inetutils = "2.7"
+kbd = "2.9.0"
+
+# Test-only (not installed in final system)
+dejagnu = "1.6.3"
+expect = "5.45.4"
+tcl = "8.6.17"
+
+[tier2]
+# BLFS + Conary packages
+linux-pam = "1.7.2"
+openssh = "10.2p1"
+make-ca = "1.16.1"
+curl = "8.19.0"
+sudo = "1.9.17p2"
+nano = "8.7.1"
+rust = "1.94.0"
+
+[urls]
+gnu = "https://ftp.gnu.org/gnu"
+kernel = "https://cdn.kernel.org/pub/linux/kernel"
+github = "https://github.com"
+pypi = "https://pypi.org/packages/source"

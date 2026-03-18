@@ -1,0 +1,51 @@
+# recipes/cross-tools/linux-headers.toml
+#
+# LFS 13 Section 5.4 — Linux-6.19.8 API Headers
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter05/linux-headers.html
+#
+# Exposes the kernel API for use by Glibc. The recommended make target
+# "headers_install" is not used because it requires rsync, which may
+# not be available. Instead, "make headers" is used and non-header
+# files are removed manually.
+
+[package]
+name = "linux-headers"
+version = "6.19.8"
+release = "1"
+summary = "Linux kernel API headers"
+description = """
+The Linux API headers expose the kernel's API for use by Glibc.
+These headers are sanitized copies of the kernel's internal headers
+that define the userspace ABI (system calls, data structures, constants).
+"""
+license = "GPL-2.0-only"
+homepage = "https://www.kernel.org/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
+checksum = "md5:e23cdbfd397f77f7df9dfab9e2d24ec3"
+
+[build]
+requires = []
+makedepends = []
+
+configure = """
+# Ensure the source tree is clean
+make mrproper
+"""
+
+make = """
+# Generate the userspace API headers
+make headers
+
+# Remove non-header files from the generated tree
+find usr/include -type f ! -name '*.h' -delete
+"""
+
+install = """
+cp -rv usr/include $LFS/usr
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

@@ -1,0 +1,46 @@
+# recipes/system/tar.toml
+#
+# LFS 13 Section 8.69 — Tar-1.35
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/tar.html
+#
+# GNU tape archiver. Uses FORCE_UNSAFE_CONFIGURE=1 to allow building
+# as root. Installs HTML documentation.
+
+[package]
+name = "tar"
+version = "1.35"
+release = "1"
+summary = "GNU tape archiver"
+description = """
+GNU tar is an archiving program designed to store multiple files in a
+single archive file (tarball), and to manipulate such archives. It
+supports various compression methods and is the standard archiving
+tool on Unix-like systems.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/tar/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/tar/tar-%(version)s.tar.xz"
+checksum = "md5:a2d8042658cfd8ea939e6d911eaf4152"
+
+[build]
+requires = ["glibc", "acl", "attr"]
+makedepends = []
+chroot = true
+
+configure = """
+FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+make -C doc install-html docdir=/usr/share/doc/tar-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"

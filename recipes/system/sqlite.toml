@@ -1,0 +1,53 @@
+# recipes/system/sqlite.toml
+#
+# LFS 13 Section 8.49 — SQLite-3.51.3 (tarball 3510300)
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/sqlite.html
+#
+# Self-contained SQL database engine. Built with FTS4/FTS5 full-text
+# search, column metadata, unlock-notify, dbstat vtab, and secure
+# delete enabled via CPPFLAGS defines.
+
+[package]
+name = "sqlite"
+version = "3510300"
+release = "1"
+summary = "Self-contained SQL database engine"
+description = """
+SQLite is a self-contained, serverless, zero-configuration,
+transactional SQL database engine. This build enables FTS4/FTS5
+full-text search, column metadata access, unlock notification,
+dbstat virtual table, and secure delete functionality.
+"""
+license = "blessing"
+homepage = "https://www.sqlite.org/"
+
+[source]
+archive = "https://www.sqlite.org/2025/sqlite-autoconf-%(version)s.tar.gz"
+checksum = "md5:8cffdf75fb83add16322849f96e4a8a0"
+
+[build]
+requires = ["glibc", "readline", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr     \
+            --disable-static  \
+            --enable-fts4     \
+            --enable-fts5     \
+            CPPFLAGS="-DSQLITE_ENABLE_COLUMN_METADATA=1 \
+                      -DSQLITE_ENABLE_UNLOCK_NOTIFY=1   \
+                      -DSQLITE_ENABLE_DBSTAT_VTAB=1     \
+                      -DSQLITE_SECURE_DELETE=1"
+"""
+
+make = """
+make LDFLAGS.rpath="" -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

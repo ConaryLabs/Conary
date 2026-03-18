@@ -1,0 +1,41 @@
+# recipes/system/markupsafe.toml
+#
+# LFS 13 Section 8.72 — MarkupSafe-3.0.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/markupsafe.html
+#
+# Python library for safe string markup. Required by Jinja2.
+# Installed via pip3 from local wheel.
+
+[package]
+name = "markupsafe"
+version = "3.0.3"
+release = "1"
+summary = "Safe string markup for Python"
+description = """
+MarkupSafe implements a text object that escapes characters for safe
+use in HTML and XML. It is a dependency of Jinja2 and other Python
+template engines.
+"""
+license = "BSD-3-Clause"
+homepage = "https://palletsprojects.com/p/markupsafe/"
+
+[source]
+archive = "https://pypi.org/packages/source/m/markupsafe/markupsafe-%(version)s.tar.gz"
+checksum = "md5:13a73126d25afa72a1ff0daed072f5fe"
+
+[build]
+requires = ["python", "setuptools"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+pip3 wheel -w dist --no-cache-dir --no-build-isolation --no-deps $PWD
+"""
+
+install = """
+pip3 install --no-index --find-links dist Markupsafe
+"""
+
+[variables]

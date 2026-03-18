@@ -1,0 +1,49 @@
+# recipes/system/attr.toml
+#
+# LFS 13 Section 8.22 — Attr-2.5.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/attr.html
+#
+# Extended attributes library and utilities. Allows metadata beyond
+# the traditional file mode, ownership, and timestamps to be associated
+# with filesystem objects.
+
+[package]
+name = "attr"
+version = "2.5.2"
+release = "1"
+summary = "Extended file attributes library and utilities"
+description = """
+The attr package contains utilities for administering the extended
+attributes on filesystem objects. Extended attributes are name:value
+pairs associated permanently with files and directories, similar to
+environment variables for processes.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://savannah.nongnu.org/projects/attr"
+
+[source]
+archive = "https://download.savannah.gnu.org/releases/attr/attr-%(version)s.tar.gz"
+checksum = "md5:227043ec2f6ca03c0948df5517f9c927"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr     \
+            --disable-static  \
+            --sysconfdir=/etc \
+            --docdir=/usr/share/doc/attr-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

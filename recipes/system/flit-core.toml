@@ -1,0 +1,41 @@
+# recipes/system/flit-core.toml
+#
+# LFS 13 Section 8.51 — Flit-Core-3.12.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/flit-core.html
+#
+# Minimal PEP 517 build backend for Python packages. Installed via
+# pip3 wheel + pip3 install from local wheel.
+
+[package]
+name = "flit-core"
+version = "3.12.0"
+release = "1"
+summary = "PEP 517 build backend"
+description = """
+Flit-Core provides a minimal PEP 517 build backend for Python
+packages. It is the core component of Flit and is required by
+other Python packaging tools (packaging, wheel, setuptools).
+"""
+license = "BSD-3-Clause"
+homepage = "https://flit.pypa.io/"
+
+[source]
+archive = "https://pypi.org/packages/source/f/flit_core/flit_core-%(version)s.tar.gz"
+checksum = "md5:c538415c1f27bd69cbbbf3cdd5135d39"
+
+[build]
+requires = ["python"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+pip3 wheel -w dist --no-cache-dir --no-build-isolation --no-deps $PWD
+"""
+
+install = """
+pip3 install --no-index --find-links dist flit_core
+"""
+
+[variables]

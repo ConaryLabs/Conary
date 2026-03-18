@@ -1,0 +1,46 @@
+# recipes/system/gperf.toml
+#
+# LFS 13 Section 8.37 — Gperf-3.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/gperf.html
+#
+# Perfect hash function generator — generates a perfect hash function
+# from a key set. Used by systemd and other packages at build time.
+
+[package]
+name = "gperf"
+version = "3.3"
+release = "1"
+summary = "Perfect hash function generator"
+description = """
+GNU Gperf generates a perfect hash function from a key set. A perfect
+hash function is a hash function where every key maps to a distinct
+integer, with no collisions. It is used at build time by systemd,
+udev, and other packages.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gperf/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gperf/gperf-%(version)s.tar.gz"
+checksum = "md5:31753b021ea78a21f154bf9eecb8b079"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr \
+            --docdir=/usr/share/doc/gperf-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

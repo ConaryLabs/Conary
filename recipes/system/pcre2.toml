@@ -1,0 +1,56 @@
+# recipes/system/pcre2.toml
+#
+# LFS 13 Section 8.13 — Pcre2-10.47
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/pcre2.html
+#
+# Perl Compatible Regular Expressions library, version 2. Provides
+# pattern matching using the same syntax and semantics as Perl 5.
+# Built with Unicode, JIT, 16/32-bit, and compressed grep support.
+
+[package]
+name = "pcre2"
+version = "10.47"
+release = "1"
+summary = "Perl Compatible Regular Expressions library"
+description = """
+The PCRE2 library implements Perl 5-compatible regular expression
+pattern matching. It is used by many programs including grep, PHP,
+and the Apache HTTP server. This build enables Unicode support,
+JIT compilation, 16-bit and 32-bit character widths, and compressed
+file support in pcre2grep.
+"""
+license = "BSD-3-Clause"
+homepage = "https://www.pcre.org/"
+
+[source]
+archive = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-%(version)s/pcre2-%(version)s.tar.bz2"
+checksum = "md5:aded5840ab5a7d772dd4e16fc294b665"
+
+[build]
+requires = ["glibc", "zlib", "bzip2", "readline"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr                       \
+            --docdir=/usr/share/doc/pcre2-%(version)s \
+            --enable-unicode                    \
+            --enable-jit                        \
+            --enable-pcre2-16                   \
+            --enable-pcre2-32                   \
+            --enable-pcre2grep-libz             \
+            --enable-pcre2grep-libbz2           \
+            --enable-pcre2test-libreadline      \
+            --disable-static
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

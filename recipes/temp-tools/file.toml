@@ -1,0 +1,59 @@
+# recipes/temp-tools/file.toml
+#
+# LFS 13 Section 6.7 — File-5.47
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/file.html
+#
+# The file command determines file types. A host-native file tool must
+# be built first for creating signature files during cross-compilation.
+
+[package]
+name = "file"
+version = "5.47"
+release = "1"
+summary = "File type identification utility (temporary tools)"
+description = """
+The File package contains a utility for determining the type of a
+given file or files. This build first creates a host-native file
+utility needed during cross-compilation, then cross-compiles the
+target version.
+"""
+license = "BSD-2-Clause"
+homepage = "https://www.darwinsys.com/file/"
+
+[source]
+archive = "https://astron.com/pub/file/file-%(version)s.tar.gz"
+checksum = "md5:1023ef52a2fb64acdf80211e469d6939"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+# Build a host-native file command first (needed for magic file generation)
+mkdir build
+pushd build
+  ../configure --disable-bzlib      \
+               --disable-libseccomp \
+               --disable-xzlib      \
+               --disable-zlib
+  make
+popd
+
+# Configure for cross-compilation
+./configure --prefix=/usr --host=$LFS_TGT --build=$(./config.guess)
+"""
+
+make = """
+make FILE_COMPILE=$(pwd)/build/src/file -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+
+# Remove libtool archive — harmful for cross-compilation
+rm -v $LFS/usr/lib/libmagic.la
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

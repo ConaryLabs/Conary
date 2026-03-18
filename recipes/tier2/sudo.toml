@@ -1,0 +1,59 @@
+# recipes/tier2/sudo.toml
+#
+# BLFS — Sudo-1.9.17p2
+# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/sudo.html
+#
+# Sudo allows a permitted user to execute a command as the superuser
+# or another user. Configured with secure-path, env-editor, and
+# all-insults for a friendlier experience.
+
+[package]
+name = "sudo"
+version = "1.9.17p2"
+release = "1"
+summary = "Execute commands as another user"
+description = """
+Sudo (superuser do) allows a system administrator to delegate
+authority to give certain users the ability to run commands as root
+or another user while providing an audit trail of the commands and
+their arguments.
+"""
+license = "ISC"
+homepage = "https://www.sudo.ws/"
+
+[source]
+archive = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz"
+checksum = "md5:VERIFY_BEFORE_BUILD"
+
+[build]
+requires = ["glibc", "linux-pam", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr              \
+            --libexecdir=/usr/lib      \
+            --with-secure-path         \
+            --with-all-insults         \
+            --with-env-editor          \
+            --docdir=/usr/share/doc/sudo-%(version)s \
+            --with-passprompt="[sudo] password for %%p: "
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Create basic sudoers entry allowing wheel group
+cat > /etc/sudoers.d/wheel << "SUDOEOF"
+## Allow members of group wheel to execute any command
+%wheel ALL=(ALL:ALL) ALL
+SUDOEOF
+chmod 440 /etc/sudoers.d/wheel
+"""
+
+[variables]
+jobs = "$(nproc)"

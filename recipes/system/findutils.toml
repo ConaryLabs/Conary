@@ -1,0 +1,45 @@
+# recipes/system/findutils.toml
+#
+# LFS 13 Section 8.61 — Findutils-4.10.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/findutils.html
+#
+# GNU find, locate, updatedb, and xargs utilities.
+# Sets localstatedir for the locate database.
+
+[package]
+name = "findutils"
+version = "4.10.0"
+release = "1"
+summary = "GNU find utilities"
+description = """
+The GNU Find Utilities provide programs to find files: find searches
+directory trees, locate searches a database for quick lookups,
+updatedb builds the locate database, and xargs builds and executes
+command lines from standard input.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/findutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/findutils/findutils-%(version)s.tar.xz"
+checksum = "md5:870cfd71c07d37ebe56f9f4aaf4ad872"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr --localstatedir=/var/lib/locate
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,92 @@
+# recipes/cross-tools/glibc.toml
+#
+# LFS 13 Section 5.5 — Glibc-2.43
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter05/glibc.html
+#
+# The GNU C Library built for the target triplet. This is installed into
+# $LFS/usr so the cross-compiler can find it. After installation, a
+# sanity check verifies the cross-toolchain works correctly.
+
+[package]
+name = "glibc"
+version = "2.43"
+release = "1"
+summary = "GNU C Library for cross-toolchain"
+description = """
+The GNU C Library (glibc) provides the core C library functions
+(system calls, string handling, math, etc.) that all dynamically
+linked programs depend on. This cross-compiled version is installed
+into the target sysroot for use by the cross-toolchain.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://www.gnu.org/software/libc/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
+checksum = "md5:7ec2588300b299215a65aec7e6afa04f"
+
+[[source.patches]]
+url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
+checksum = "md5:9a5997c3452909b1769918c759eff8a2"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "linux-headers"]
+makedepends = []
+
+configure = """
+# Create a compatibility symlink for LSB compliance and dynamic loader
+# access from /lib64 (x86_64 only)
+case $(uname -m) in
+    i?86)   ln -sfv ld-linux.so.2 $LFS/lib/ld-lsb.so.3
+    ;;
+    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64
+            ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64/ld-lsb-x86-64.so.3
+    ;;
+esac
+
+# Apply FHS compliance patch
+patch -Np1 -i ../glibc-fhs-1.patch
+
+mkdir -v build
+cd build
+
+# Set rootsbindir to /usr/sbin for FHS compliance
+echo "rootsbindir=/usr/sbin" > configparms
+
+../configure \
+    --prefix=/usr \
+    --host=$LFS_TGT \
+    --build=$(../scripts/config.guess) \
+    --disable-nscd \
+    libc_cv_slibdir=/usr/lib \
+    --enable-kernel=5.4
+"""
+
+make = """
+cd build
+make -j%(jobs)s
+"""
+
+install = """
+cd build
+make DESTDIR=$LFS install
+
+# Fix the hardcoded path to the executable loader in the ldd script
+sed '/RTLDLIST=/s@/usr@@g' -i $LFS/usr/bin/ldd
+"""
+
+[build.sanity_check]
+# After installation, verify the cross-toolchain works
+script = """
+echo 'int main(){}' | $LFS_TGT-gcc -xc -
+readelf -l a.out | grep ld-linux
+
+# Verify the dynamic linker name is correct
+readelf -l a.out | grep 'ld-linux' || { echo "[FAILED] Dynamic linker check"; exit 1; }
+
+rm -v a.out
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

@@ -28,137 +28,6 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
-    /// Build Stage 0 cross-compilation toolchain
-    Stage0 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Path to custom crosstool-ng config
-        #[arg(short, long)]
-        config: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Only download sources, don't build
-        #[arg(long)]
-        download_only: bool,
-
-        /// Clean work directory before building
-        #[arg(long)]
-        clean: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
-    /// Build Stage 1 self-hosted toolchain
-    Stage1 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
-    /// Build Stage 2 (reproducibility rebuild)
-    Stage2 {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Number of parallel build jobs
-        #[arg(short, long)]
-        jobs: Option<usize>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
-    /// Build base system packages
-    Base {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Target root directory for installation
-        #[arg(long, default_value = "/conary/sysroot")]
-        root: String,
-
-        /// Directory containing recipes (default: recipes/core)
-        #[arg(short, long)]
-        recipe_dir: Option<String>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-
-        /// Build a single package by name
-        #[arg(short = 'P', long)]
-        package: Option<String>,
-
-        /// Build only packages for a specific tier (a, b, c)
-        #[arg(long)]
-        tier: Option<String>,
-    },
-
-    /// Build Conary stage (Rust + self-hosting)
-    Conary {
-        /// Directory for bootstrap work
-        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
-        work_dir: String,
-
-        /// Target root directory (sysroot)
-        #[arg(long)]
-        root: Option<String>,
-
-        /// Show verbose build output
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Skip this stage
-        #[arg(long)]
-        skip: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
-    },
-
     /// Generate bootable image
     Image {
         /// Directory for bootstrap work
@@ -166,11 +35,11 @@ pub enum BootstrapCommands {
         work_dir: String,
 
         /// Output image file
-        #[arg(short, long, default_value = "conary.img")]
+        #[arg(short, long, default_value = "conaryos-base.qcow2")]
         output: String,
 
         /// Image format (raw, qcow2, iso)
-        #[arg(short, long, default_value = "raw")]
+        #[arg(short, long, default_value = "qcow2")]
         format: String,
 
         /// Image size (e.g., "4G", "8G")
@@ -221,12 +90,124 @@ pub enum BootstrapCommands {
         #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
         work_dir: String,
 
-        /// Only clean specific stage (stage0, stage1, base, image)
+        /// Only clean specific stage (cross-tools, temp-tools, system, image)
         #[arg(short, long)]
         stage: Option<String>,
 
         /// Also remove downloaded source tarballs
         #[arg(long)]
         sources: bool,
+    },
+
+    /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
+    #[command(name = "cross-tools")]
+    CrossTools {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Build Phase 2: Temporary tools (LFS Chapters 6-7)
+    #[command(name = "temp-tools")]
+    TempTools {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Build Phase 3: Final system (LFS Chapter 8)
+    #[command(name = "system")]
+    System {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
+    },
+
+    /// Run Phase 4: System configuration (LFS Chapter 9)
+    #[command(name = "config")]
+    Config {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Show verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
+    #[command(name = "tier2")]
+    Tier2 {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+
+        /// Number of parallel build jobs
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Skip checksum verification (development only)
+        #[arg(long)]
+        skip_verify: bool,
     },
 }

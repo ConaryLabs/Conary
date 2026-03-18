@@ -1253,84 +1253,6 @@ fn run() -> Result<()> {
 
             cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose),
 
-            cli::BootstrapCommands::Stage0 {
-                work_dir,
-                config,
-                jobs,
-                verbose,
-                download_only,
-                clean,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage0(
-                &work_dir,
-                config,
-                jobs,
-                verbose,
-                download_only,
-                clean,
-                skip_verify,
-            ),
-
-            cli::BootstrapCommands::Stage1 {
-                work_dir,
-                recipe_dir,
-                jobs,
-                verbose,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage1(
-                &work_dir,
-                recipe_dir.as_deref(),
-                jobs,
-                verbose,
-                skip_verify,
-            ),
-
-            cli::BootstrapCommands::Stage2 {
-                work_dir,
-                recipe_dir,
-                jobs,
-                verbose,
-                skip_verify,
-            } => commands::cmd_bootstrap_stage2(
-                &work_dir,
-                recipe_dir.as_deref(),
-                jobs,
-                verbose,
-                skip_verify,
-            ),
-
-            cli::BootstrapCommands::Base {
-                work_dir,
-                root,
-                recipe_dir,
-                verbose,
-                skip_verify,
-                package,
-                tier,
-            } => commands::cmd_bootstrap_base(
-                &work_dir,
-                &root,
-                recipe_dir.as_deref(),
-                verbose,
-                skip_verify,
-                package.as_deref(),
-                tier.as_deref(),
-            ),
-
-            cli::BootstrapCommands::Conary {
-                work_dir,
-                root,
-                verbose,
-                skip,
-                skip_verify,
-            } => commands::cmd_bootstrap_conary(
-                &work_dir,
-                root.as_deref(),
-                verbose,
-                skip,
-                skip_verify,
-            ),
-
             cli::BootstrapCommands::Image {
                 work_dir,
                 output,
@@ -1357,6 +1279,72 @@ fn run() -> Result<()> {
                 stage,
                 sources,
             } => commands::cmd_bootstrap_clean(&work_dir, stage, sources),
+
+            cli::BootstrapCommands::CrossTools {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_cross_tools(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::TempTools {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_temp_tools(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::System {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_system(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::Config {
+                work_dir,
+                lfs_root,
+                verbose,
+            } => commands::cmd_bootstrap_config(
+                &work_dir,
+                verbose,
+                lfs_root.as_deref(),
+            ),
+
+            cli::BootstrapCommands::Tier2 {
+                work_dir,
+                lfs_root,
+                jobs,
+                verbose,
+                skip_verify,
+            } => commands::cmd_bootstrap_tier2(
+                &work_dir,
+                jobs,
+                verbose,
+                skip_verify,
+                lfs_root.as_deref(),
+            ),
         },
 
         Some(cli::Commands::Provenance(cmd)) => match cmd {

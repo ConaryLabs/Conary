@@ -1,0 +1,57 @@
+# recipes/system/python.toml
+#
+# LFS 13 Section 8.50 — Python-3.14.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/Python.html
+#
+# The Python 3 interpreter and standard library. Built with shared
+# library support, system expat, and profile-guided optimizations.
+# Includes pip configuration for root-user usage.
+
+[package]
+name = "python"
+version = "3.14.3"
+release = "1"
+summary = "Python 3 programming language"
+description = """
+Python is a high-level, general-purpose programming language. This
+build enables shared library support, uses the system-installed Expat
+library, and applies profile-guided optimizations for better runtime
+performance. Pip is configured for root-user operation.
+"""
+license = "PSF-2.0"
+homepage = "https://www.python.org/"
+
+[source]
+archive = "https://www.python.org/ftp/python/%(version)s/Python-%(version)s.tar.xz"
+checksum = "md5:ef513dcb836d219ae0e2b16ac9c87d0f"
+
+[build]
+requires = ["glibc", "expat", "libffi", "openssl", "zlib", "bzip2", "ncurses", "readline", "sqlite", "xz", "gdbm"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr               \
+            --enable-shared             \
+            --with-system-expat         \
+            --enable-optimizations      \
+            --without-static-libpython
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Configure pip for root-user operation
+cat > /etc/pip.conf << "EOF"
+[global]
+root-user-action = ignore
+disable-pip-version-check = true
+EOF
+"""
+
+[variables]
+jobs = "$(nproc)"

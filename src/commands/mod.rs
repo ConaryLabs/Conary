@@ -47,9 +47,9 @@ pub use automation::{
     cmd_automation_history, cmd_automation_status,
 };
 pub use bootstrap::{
-    cmd_bootstrap_base, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_conary,
+    cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_config, cmd_bootstrap_cross_tools,
     cmd_bootstrap_dry_run, cmd_bootstrap_image, cmd_bootstrap_init, cmd_bootstrap_resume,
-    cmd_bootstrap_stage0, cmd_bootstrap_stage1, cmd_bootstrap_stage2, cmd_bootstrap_status,
+    cmd_bootstrap_status, cmd_bootstrap_system, cmd_bootstrap_temp_tools, cmd_bootstrap_tier2,
 };
 pub use capability::{
     cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,

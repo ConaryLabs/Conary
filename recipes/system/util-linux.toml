@@ -1,0 +1,61 @@
+# recipes/system/util-linux.toml
+#
+# LFS 13 Section 8.78 — Util-linux-2.41.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/util-linux.html
+#
+# Essential system utilities (mount, fdisk, hwclock, dmesg, lsblk, etc.).
+# Many programs are disabled because they are provided by other packages
+# (shadow, systemd) or require PAM. Uses ADJTIME_PATH for hwclock.
+
+[package]
+name = "util-linux"
+version = "2.41.3"
+release = "1"
+summary = "Essential system utilities"
+description = """
+Util-linux provides a wide collection of essential system utilities:
+mount/umount, fdisk, mkfs, hwclock, dmesg, lsblk, kill, more, su,
+login, and many others. Several utilities that overlap with other
+packages (shadow, systemd) are disabled in this build.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://github.com/util-linux/util-linux"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/util-linux/v2.41/util-linux-%(version)s.tar.xz"
+checksum = "md5:d2faa85303dea29e7f6ee40a9465e528"
+
+[build]
+requires = ["glibc", "ncurses", "readline", "zlib", "libcap", "systemd"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --bindir=/usr/bin    \
+            --libdir=/usr/lib    \
+            --runstatedir=/run   \
+            --sbindir=/usr/sbin  \
+            --disable-chfn-chsh  \
+            --disable-login      \
+            --disable-nologin    \
+            --disable-su         \
+            --disable-setpriv    \
+            --disable-runuser    \
+            --disable-pylibmount \
+            --disable-liblastlog2 \
+            --disable-static     \
+            --without-python     \
+            ADJTIME_PATH=/var/lib/hwclock/adjtime \
+            --docdir=/usr/share/doc/util-linux-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

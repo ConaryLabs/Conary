@@ -1,0 +1,48 @@
+# recipes/system/iproute2.toml
+#
+# LFS 13 Section 8.64 — IPRoute2-6.19.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/iproute2.html
+#
+# Linux networking utilities (ip, ss, bridge, tc, etc.). Does NOT use
+# autotools — builds via Makefile directly. The arpd program is removed
+# as it depends on Berkeley DB which is not installed.
+
+[package]
+name = "iproute2"
+version = "6.19.0"
+release = "1"
+summary = "Linux networking utilities"
+description = """
+IPRoute2 is a collection of utilities for controlling TCP/IP networking
+and traffic control in Linux. The ip command replaces ifconfig, route,
+and arp. Also includes ss (socket statistics), bridge, tc (traffic
+control), and other networking tools.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://wiki.linuxfoundation.org/networking/iproute2"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-%(version)s.tar.xz"
+checksum = "md5:90590c3c593a33d7d8eca997c2c18d1c"
+
+[build]
+requires = ["glibc", "elfutils"]
+makedepends = []
+chroot = true
+
+configure = """
+# Remove arpd references (requires Berkeley DB)
+sed -i /ARPD/d Makefile
+rm -fv man/man8/arpd.8
+"""
+
+make = """
+make NETNS_RUN_DIR=/run/netns -j%(jobs)s
+"""
+
+install = """
+make SBINDIR=/usr/sbin install
+"""
+
+[variables]
+jobs = "$(nproc)"

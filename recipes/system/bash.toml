@@ -1,0 +1,49 @@
+# recipes/system/bash.toml
+#
+# LFS 13 Section 8.34 — Bash-5.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/bash.html
+#
+# The Bourne-Again Shell — default interactive shell for conaryOS.
+# Built with system readline (not the bundled copy) and without
+# bash's internal malloc (which causes issues on some platforms).
+
+[package]
+name = "bash"
+version = "5.3"
+release = "1"
+summary = "The Bourne-Again Shell"
+description = """
+Bash is the GNU Project's shell — the Bourne-Again Shell. It is an
+sh-compatible shell that incorporates useful features from the Korn
+shell (ksh) and C shell (csh). It is the default interactive shell
+for conaryOS.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bash/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/bash/bash-%(version)s.tar.gz"
+checksum = "md5:977c8c0c5ae6309191e7768e28ebc951"
+
+[build]
+requires = ["glibc", "readline", "ncurses"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr             \
+            --without-bash-malloc     \
+            --with-installed-readline \
+            --docdir=/usr/share/doc/bash-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

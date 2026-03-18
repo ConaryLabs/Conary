@@ -1,0 +1,45 @@
+# recipes/temp-tools/bison.toml
+#
+# LFS 13 Section 7.8 — Bison-3.8.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter07/bison.html
+#
+# GNU Bison parser generator for the temporary toolchain. Built natively
+# in chroot (no --host).
+
+[package]
+name = "bison"
+version = "3.8.2"
+release = "1"
+summary = "GNU parser generator (temporary tools)"
+description = """
+Bison is a general-purpose parser generator that converts annotated
+context-free grammars into deterministic LR or generalized LR parsers.
+This chroot-native build provides bison for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bison/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/bison/bison-%(version)s.tar.xz"
+checksum = "md5:c28f119f405a2304ff0a7ccdcc629713"
+
+[build]
+requires = ["gcc-pass2", "binutils-pass2", "glibc", "bash", "coreutils", "make", "m4"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr \
+            --docdir=/usr/share/doc/bison-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

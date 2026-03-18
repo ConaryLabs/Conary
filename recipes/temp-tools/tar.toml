@@ -1,0 +1,45 @@
+# recipes/temp-tools/tar.toml
+#
+# LFS 13 Section 6.15 — Tar-1.35
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/tar.html
+#
+# GNU tar archiving utility for the temporary toolchain.
+
+[package]
+name = "tar"
+version = "1.35"
+release = "1"
+summary = "GNU tape archiver (temporary tools)"
+description = """
+The Tar package provides the ability to create tar archives as well
+as perform various other kinds of archive manipulation. This
+cross-compiled version provides tar for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/tar/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/tar/tar-%(version)s.tar.xz"
+checksum = "md5:a2d8042658cfd8ea939e6d911eaf4152"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess)
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"
