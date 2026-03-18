@@ -267,17 +267,33 @@ impl TransactionEngine {
         use crate::generation::builder::build_generation_from_db;
         use crate::generation::mount::current_generation;
 
+        // Early return if no generations directory or it's empty
+        if !self.config.generations_dir.exists() {
+            return Ok(());
+        }
+        let has_entries = self
+            .config
+            .generations_dir
+            .read_dir()
+            .map(|mut rd| rd.next().is_some())
+            .unwrap_or(false);
+        if !has_entries {
+            return Ok(());
+        }
+
         // Query the DB for the expected generation number
-        let expected_gen: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(id) FROM generations WHERE status = 'active'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(None);
+        let expected_gen: Option<i64> = match conn.query_row(
+            "SELECT MAX(state_number) FROM system_states WHERE is_active = 1",
+            [],
+            |row| row.get(0),
+        ) {
+            Ok(val) => val,
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
 
         let Some(expected) = expected_gen else {
-            // No generations in DB — nothing to recover
+            // No active system state in DB — nothing to recover
             return Ok(());
         };
 
@@ -286,43 +302,43 @@ impl TransactionEngine {
 
         if current == Some(expected) {
             // Already consistent — no recovery needed
-            log::debug!(
+            tracing::debug!(
                 "Generation {} already mounted, no recovery needed",
                 expected
             );
             return Ok(());
         }
 
-        log::info!(
+        tracing::info!(
             "Recovery: expected generation {} but found {:?}, rebuilding",
             expected,
             current
         );
 
         // Rebuild EROFS image from DB state
-        let (_gen_num, _build_result) = build_generation_from_db(
+        let (gen_num, _build_result) = build_generation_from_db(
             conn,
             &self.config.generations_dir,
             &format!("Recovery rebuild of generation {expected}"),
         )?;
 
-        let gen_dir = self.config.generations_dir.join(expected.to_string());
+        let gen_dir = self.config.generations_dir.join(gen_num.to_string());
 
         // Mount the rebuilt generation
         crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
-            image_path: gen_dir.join("rootfs.erofs"),
+            image_path: gen_dir.join("root.erofs"),
             basedir: self.config.objects_dir.clone(),
             mount_point: self.config.mount_point.clone(),
             verity: false,
             digest: None,
-            upperdir: Some(self.config.etc_state_dir.join(expected.to_string())),
-            workdir: Some(self.config.etc_state_dir.join(format!("{expected}-work"))),
+            upperdir: Some(self.config.etc_state_dir.join(gen_num.to_string())),
+            workdir: Some(self.config.etc_state_dir.join(format!("{gen_num}-work"))),
         })?;
 
         // Update the current symlink
-        crate::generation::mount::update_current_symlink(&self.config.root, expected)?;
+        crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
 
-        log::info!("Recovery: generation {} rebuilt and mounted", expected);
+        tracing::info!("Recovery: generation {} rebuilt and mounted", gen_num);
         Ok(())
     }
 }
