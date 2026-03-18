@@ -1,190 +1,108 @@
 // conary-core/src/transaction/mod.rs
 
-//! Transaction engine for atomic package operations
+//! Composefs-native transaction engine.
 //!
-//! This module provides crash-safe, atomic semantics for package install/upgrade/remove
-//! operations. Key features:
-//!
-//! - **Journal-based recovery**: Append-only log enables roll-forward or roll-back after crash
-//! - **Backup-before-overwrite**: Original files preserved until DB commits
-//! - **VFS preflight planning**: Conflict detection before any filesystem changes
-//! - **State machine**: Clear phases with deterministic recovery at each point
+//! Every transaction follows: resolve -> fetch -> DB commit -> EROFS build -> mount.
+//! No journal, no backup phase, no staging. Database is the source of truth.
+//! Everything after DB commit is re-derivable from the DB state.
 //!
 //! # Transaction Lifecycle
 //!
 //! ```text
-//! NEW -> PLANNED -> PREPARED -> PRE_SCRIPTS -> BACKED_UP -> STAGED -> FS_APPLIED -> DB_APPLIED -> POST_SCRIPTS -> DONE
-//!                                                                                       ^
-//!                                                                     Point of no return (roll-forward after)
+//! NEW -> RESOLVED -> FETCHED -> COMMITTED -> BUILT -> MOUNTED -> DONE
 //! ```
+//!
+//! The point of no return is `Committed` — at that point the DB has the new
+//! package state. Building the EROFS image and mounting it are idempotent
+//! recovery operations that can be retried if they fail.
 
-mod journal;
-mod planner;
-mod recovery;
+pub mod planner;
 
-pub use journal::{JournalRecord, TransactionJournal};
 pub use planner::{
     BackupInfo, ConflictInfo, PlannedOperation, StageInfo, TransactionPlan, TransactionPlanner,
 };
-pub use recovery::RecoveryOutcome;
 
 use crate::Result;
-use crate::db::paths::objects_dir;
-use crate::filesystem::path::safe_join;
-use crate::filesystem::{CasStore, FileDeployer};
+use crate::filesystem::CasStore;
 use crate::hash::HashAlgorithm;
-use crate::progress::ProgressTracker;
-use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use uuid::Uuid;
+use std::path::{Path, PathBuf};
 
-/// Move a file atomically, falling back to copy+sync+delete for cross-filesystem moves.
+/// Transaction state machine phases.
 ///
-/// This handles the EXDEV error that occurs when source and destination are on
-/// different filesystems (e.g., staging on /var and target on /usr).
-///
-/// # Arguments
-/// * `src` - Source file path
-/// * `dst` - Destination file path
-///
-/// # Safety
-/// Uses fsync to ensure data durability before removing source file.
-pub(crate) fn move_file_atomic(src: &Path, dst: &Path) -> io::Result<()> {
-    match fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-            // Cross-filesystem: copy + fsync + delete
-            log::debug!(
-                "Cross-filesystem move detected ({} -> {}), using copy fallback",
-                src.display(),
-                dst.display()
-            );
+/// The composefs-native lifecycle replaces the old 10-state journal-based
+/// state machine. Recovery is simple: if the DB says generation N should be
+/// active but the mount does not match, rebuild the EROFS image and remount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionState {
+    /// Transaction created, nothing resolved yet
+    New,
+    /// Dependencies resolved, install plan computed
+    Resolved,
+    /// Package content fetched into CAS
+    Fetched,
+    /// Database transaction committed (point of no return)
+    Committed,
+    /// EROFS image built for the new generation
+    Built,
+    /// New generation mounted and symlink updated
+    Mounted,
+    /// Transaction complete
+    Done,
+}
 
-            // Capture metadata before copy (for ownership preservation)
-            #[cfg(unix)]
-            let src_meta = fs::metadata(src)?;
+impl TransactionState {
+    /// Check whether a transition from `self` to `next` is valid.
+    pub fn can_transition_to(&self, next: &Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::New, Self::Resolved)
+                | (Self::Resolved, Self::Fetched)
+                | (Self::Fetched, Self::Committed)
+                | (Self::Committed, Self::Built)
+                | (Self::Built, Self::Mounted)
+                | (Self::Mounted, Self::Done)
+        )
+    }
 
-            // Copy file content (preserves permissions but not ownership)
-            fs::copy(src, dst)?;
+    /// Returns true if the transaction has not yet committed to the DB.
+    /// Before commit, we can simply discard the transaction with no side effects.
+    pub fn is_before_commit(&self) -> bool {
+        matches!(self, Self::New | Self::Resolved | Self::Fetched)
+    }
 
-            // Preserve ownership (uid/gid) on Unix -- fs::copy does not do this
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let uid = nix::unistd::Uid::from_raw(src_meta.uid());
-                let gid = nix::unistd::Gid::from_raw(src_meta.gid());
-                if let Err(e) = nix::unistd::chown(dst, Some(uid), Some(gid)) {
-                    log::warn!("Failed to preserve ownership on {}: {}", dst.display(), e);
-                }
-            }
-
-            // fsync the destination file to ensure data is on disk
-            let file = File::open(dst)?;
-            file.sync_all()?;
-            drop(file);
-
-            // fsync the parent directory to ensure directory entry is persisted
-            if let Some(parent) = dst.parent()
-                && let Ok(dir) = File::open(parent)
-            {
-                // Ignore errors from fsync on directory - not all filesystems support it
-                let _ = dir.sync_all();
-            }
-
-            // Now safe to remove source
-            fs::remove_file(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
+    /// Returns true if the transaction is past the point of no return.
+    /// After commit, recovery means re-deriving the EROFS image and remounting.
+    pub fn is_committed(&self) -> bool {
+        matches!(self, Self::Committed | Self::Built | Self::Mounted | Self::Done)
     }
 }
 
-/// Validate that a symlink target does not escape the install root.
+/// Transaction engine configuration.
 ///
-/// Absolute targets are normalized and checked against `install_root`.
-/// Relative targets with `..` components are resolved from the link's parent directory.
-fn validate_symlink_target_for_root(
-    install_root: &Path,
-    link_path: &Path,
-    target: &Path,
-) -> crate::Result<()> {
-    if target.is_absolute() {
-        let mut normalized = PathBuf::from("/");
-        for component in target.components() {
-            match component {
-                Component::Normal(c) => normalized.push(c),
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                Component::RootDir | Component::Prefix(_) => {
-                    normalized = PathBuf::from("/");
-                }
-            }
-        }
-        // Absolute symlinks inside a package are relative to the install root.
-        // Prepend install_root so the check is against the target filesystem,
-        // not the host root.
-        let rooted = install_root.join(normalized.strip_prefix("/").unwrap_or(&normalized));
-        if !rooted.starts_with(install_root) {
-            return Err(crate::Error::PathTraversal(format!(
-                "Symlink target escapes install root: {}",
-                target.display()
-            )));
-        }
-    } else {
-        let has_parent_traversal = target
-            .components()
-            .any(|c| matches!(c, Component::ParentDir));
-        if has_parent_traversal {
-            let resolved_link = safe_join(install_root, link_path)?;
-            let link_parent = resolved_link.parent().unwrap_or(install_root);
-            let mut resolved = link_parent.to_path_buf();
-            for component in target.components() {
-                match component {
-                    Component::Normal(c) => resolved.push(c),
-                    Component::CurDir => {}
-                    Component::ParentDir => {
-                        resolved.pop();
-                    }
-                    Component::Prefix(_) | Component::RootDir => {}
-                }
-            }
-            if !resolved.starts_with(install_root) {
-                return Err(crate::Error::PathTraversal(format!(
-                    "Symlink target escapes install root: {}",
-                    target.display()
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Transaction engine configuration
+/// In the composefs-native model, there is no staging directory or journal
+/// directory. The CAS (`objects_dir`) stores file content, the database
+/// records package state, and `generations_dir` holds EROFS images.
 #[derive(Debug, Clone)]
 pub struct TransactionConfig {
     /// Root filesystem path (usually "/")
     pub root: PathBuf,
     /// Path to conary database
     pub db_path: PathBuf,
-    /// Transaction working directory for backup/stage operations
-    pub txn_dir: PathBuf,
-    /// Directory for transaction journals
-    pub journal_dir: PathBuf,
+    /// CAS objects directory
+    pub objects_dir: PathBuf,
+    /// Directory for EROFS generation images
+    pub generations_dir: PathBuf,
+    /// Directory for /etc state (three-way merge)
+    pub etc_state_dir: PathBuf,
+    /// Mount point for the active generation
+    pub mount_point: PathBuf,
     /// Hash algorithm for CAS operations
     pub hash_algorithm: HashAlgorithm,
-    /// Whether to preserve old file content in CAS for long-term rollback
-    pub preserve_old_content: bool,
-    /// Maximum time to wait for the transaction lock, in seconds.
-    /// Defaults to 30 seconds. Increase for systems with very long transactions.
+    /// Maximum time to wait for the transaction lock, in seconds
     pub lock_timeout_secs: u64,
 }
 
@@ -192,216 +110,96 @@ impl TransactionConfig {
     /// Default lock timeout in seconds (30s)
     pub const DEFAULT_LOCK_TIMEOUT_SECS: u64 = 30;
 
-    /// Create a new config with sensible defaults based on db_path
-    pub fn new(root: PathBuf, db_path: PathBuf) -> Self {
+    /// Create a new config with sensible defaults rooted at the given path.
+    ///
+    /// Layout:
+    /// ```text
+    /// {root}/
+    ///   conary.db
+    ///   objects/          # CAS
+    ///   generations/      # EROFS images
+    ///   etc-state/        # /etc merge state
+    /// ```
+    pub fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            db_path: root.join("conary.db"),
+            objects_dir: root.join("objects"),
+            generations_dir: root.join("generations"),
+            etc_state_dir: root.join("etc-state"),
+            mount_point: PathBuf::from("/"),
+            hash_algorithm: HashAlgorithm::Sha256,
+            lock_timeout_secs: Self::DEFAULT_LOCK_TIMEOUT_SECS,
+        }
+    }
+
+    /// Create a config from explicit root and db_path.
+    ///
+    /// This constructor derives `objects_dir` and `generations_dir` from the
+    /// database directory, matching the layout used by `conary system init`.
+    pub fn from_paths(root: PathBuf, db_path: PathBuf) -> Self {
         let db_dir = db_path.parent().unwrap_or(Path::new(".")).to_path_buf();
         Self {
             root,
             db_path,
-            txn_dir: db_dir.join("txn"),
-            journal_dir: db_dir.join("journal"),
+            objects_dir: db_dir.join("objects"),
+            generations_dir: db_dir.join("generations"),
+            etc_state_dir: db_dir.join("etc-state"),
+            mount_point: PathBuf::from("/"),
             hash_algorithm: HashAlgorithm::Sha256,
-            preserve_old_content: true,
             lock_timeout_secs: Self::DEFAULT_LOCK_TIMEOUT_SECS,
         }
     }
 }
 
-/// Transaction state machine phases
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TransactionState {
-    /// Transaction created, no changes made
-    New,
-    /// Plan computed, conflicts checked
-    Planned,
-    /// Content prepared in CAS
-    Prepared,
-    /// Pre-install scriptlets executed
-    PreScriptsComplete,
-    /// Original files backed up
-    BackedUp,
-    /// New files staged from CAS
-    Staged,
-    /// Filesystem changes applied (atomic renames)
-    FsApplied,
-    /// Database transaction committed - POINT OF NO RETURN
-    DbApplied,
-    /// Post-install scriptlets and triggers executed
-    PostScriptsComplete,
-    /// Transaction complete, cleanup done
-    Done,
-    /// Transaction aborted (rolled back)
-    Aborted,
-    /// Transaction failed (may need recovery)
-    Failed,
-}
-
-impl TransactionState {
-    /// Returns true if this state is before the point of no return
-    pub fn is_recoverable(&self) -> bool {
-        matches!(
-            self,
-            Self::New
-                | Self::Planned
-                | Self::Prepared
-                | Self::PreScriptsComplete
-                | Self::BackedUp
-                | Self::Staged
-                | Self::FsApplied
-        )
-    }
-
-    /// Returns true if transaction should roll forward on recovery
-    pub fn should_roll_forward(&self) -> bool {
-        matches!(
-            self,
-            Self::DbApplied | Self::PostScriptsComplete | Self::Done
-        )
-    }
-}
-
-/// Information about the package being transacted
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageInfo {
-    pub name: String,
-    pub version: String,
-    pub release: Option<String>,
-    pub arch: Option<String>,
-}
-
-/// Operations to perform in a transaction
-#[derive(Debug, Clone)]
-pub struct TransactionOperations {
-    /// Package being installed/upgraded
-    pub package: PackageInfo,
-    /// Files to add (from extracted package)
-    pub files_to_add: Vec<ExtractedFile>,
-    /// Files to remove (from old version during upgrade)
-    pub files_to_remove: Vec<FileToRemove>,
-    /// Whether this is an upgrade of an existing package
-    pub is_upgrade: bool,
-    /// Old package info (for upgrades)
-    pub old_package: Option<PackageInfo>,
-}
-
-/// A file extracted from a package
-#[derive(Debug, Clone)]
-pub struct ExtractedFile {
-    pub path: String,
-    pub content: Vec<u8>,
-    pub mode: u32,
-    pub is_symlink: bool,
-    pub symlink_target: Option<String>,
-}
-
-/// A file to be removed
-#[derive(Debug, Clone)]
-pub struct FileToRemove {
-    pub path: String,
-    pub hash: String,
-    pub size: i64,
-    pub mode: u32,
-}
-
-/// Result of applying filesystem changes
-#[derive(Debug, Clone)]
-pub struct FsApplyResult {
-    pub files_added: usize,
-    pub files_replaced: usize,
-    pub files_removed: usize,
-    pub dirs_created: usize,
-    pub dirs_removed: usize,
-}
-
-impl FsApplyResult {
-    pub fn total_operations(&self) -> usize {
-        self.files_added
-            + self.files_replaced
-            + self.files_removed
-            + self.dirs_created
-            + self.dirs_removed
-    }
-}
-
-/// Result of a completed transaction
-#[derive(Debug, Clone)]
-pub struct TransactionResult {
-    pub tx_uuid: String,
-    pub changeset_id: i64,
-    pub duration_ms: u64,
-    pub fs_result: FsApplyResult,
-}
-
-/// File type for backup/restore operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FileType {
-    Regular,
-    Directory,
-    Symlink,
-}
-
-/// Operation type for planning
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OperationType {
-    Mkdir,
-    AddFile,
-    ReplaceFile,
-    RemoveFile,
-    AddSymlink,
-    ReplaceSymlink,
-    RemoveSymlink,
-    Rmdir,
-}
-
-/// The main transaction engine
+/// The composefs-native transaction engine.
+///
+/// Replaces the old journal/backup/stage/apply pipeline with:
+/// 1. CAS store for content
+/// 2. SQLite DB as authoritative package state
+/// 3. EROFS image build from DB state
+/// 4. composefs mount of the new generation
 pub struct TransactionEngine {
     config: TransactionConfig,
     cas: CasStore,
-    #[allow(dead_code)] // Reserved: will be used when TransactionEngine performs file deployment directly
-    deployer: FileDeployer,
+    lock_file: Option<File>,
 }
 
 impl TransactionEngine {
-    /// Create a new transaction engine
+    /// Create a new transaction engine, ensuring required directories exist.
     pub fn new(config: TransactionConfig) -> Result<Self> {
-        // Ensure directories exist
-        fs::create_dir_all(&config.txn_dir)?;
-        fs::create_dir_all(&config.journal_dir)?;
-        fs::create_dir_all(config.journal_dir.join("archive"))?;
+        fs::create_dir_all(&config.objects_dir)?;
+        fs::create_dir_all(&config.generations_dir)?;
+        fs::create_dir_all(&config.etc_state_dir)?;
 
-        // Create CAS store
-        let cas_dir = objects_dir(&config.db_path.to_string_lossy());
-        let cas = CasStore::with_algorithm(cas_dir, config.hash_algorithm)?;
-        let deployer = FileDeployer::with_cas(cas.clone(), &config.root)?;
+        let cas = CasStore::with_algorithm(
+            config.objects_dir.clone(),
+            config.hash_algorithm,
+        )?;
 
         Ok(Self {
             config,
             cas,
-            deployer,
+            lock_file: None,
         })
     }
 
-    /// Get the configuration
+    /// Get the configuration.
     pub fn config(&self) -> &TransactionConfig {
         &self.config
     }
 
-    /// Get the CAS store
+    /// Get the CAS store.
     pub fn cas(&self) -> &CasStore {
         &self.cas
     }
 
-    /// Recover any incomplete transactions from previous runs
-    pub fn recover(&self, conn: &mut Connection) -> Result<Vec<RecoveryOutcome>> {
-        recovery::recover_all(self, conn)
-    }
-
-    /// Begin a new transaction
-    pub fn begin(&self, description: &str) -> Result<Transaction<'_>> {
-        let tx_uuid = Uuid::new_v4().to_string();
-
-        // Acquire exclusive lock with retry logic and exponential backoff
-        let lock_path = self.config.txn_dir.join("conary.lock");
+    /// Acquire the transaction lock.
+    ///
+    /// Only one transaction can be active at a time. Uses file locking with
+    /// exponential backoff up to the configured timeout.
+    pub fn begin(&mut self) -> Result<()> {
+        let lock_path = self.config.objects_dir.join("conary.lock");
         let lock_file = File::create(&lock_path)?;
 
         let timeout = std::time::Duration::from_secs(self.config.lock_timeout_secs);
@@ -420,14 +218,11 @@ impl TransactionEngine {
                     if elapsed >= timeout {
                         break;
                     }
-                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms, then cap at 2s.
-                    // Use saturating arithmetic to avoid overflow at high attempt counts.
                     let delay_ms = std::cmp::min(
                         100u64.saturating_mul(1u64.checked_shl(attempt).unwrap_or(u64::MAX)),
                         2000,
                     );
                     let delay = std::time::Duration::from_millis(delay_ms);
-                    // Do not sleep past the timeout
                     let remaining = timeout.saturating_sub(elapsed);
                     std::thread::sleep(std::cmp::min(delay, remaining));
                     attempt += 1;
@@ -448,631 +243,210 @@ impl TransactionEngine {
             )));
         }
 
-        // Create transaction working directory
-        let txn_work_dir = self.config.txn_dir.join(&tx_uuid);
-        fs::create_dir_all(txn_work_dir.join("backup"))?;
-        fs::create_dir_all(txn_work_dir.join("stage"))?;
-
-        // Create journal
-        let journal = TransactionJournal::create(&self.config.journal_dir, &tx_uuid)?;
-
-        let mut txn = Transaction {
-            engine: self,
-            uuid: tx_uuid.clone(),
-            journal,
-            state: TransactionState::New,
-            plan: None,
-            start_time: Utc::now(),
-            description: description.to_string(),
-            lock_file: Some(lock_file),
-            options: TransactionOptions::default(),
-            changeset_id: None,
-            fs_result: None,
-        };
-
-        // Write begin record
-        txn.journal.write_barrier(JournalRecord::Begin {
-            tx_uuid,
-            root: self.config.root.clone(),
-            db_path: self.config.db_path.clone(),
-            description: description.to_string(),
-            timestamp: Utc::now(),
-        })?;
-
-        Ok(txn)
-    }
-
-    /// Get the working directory for a transaction
-    pub fn txn_work_dir(&self, tx_uuid: &str) -> PathBuf {
-        self.config.txn_dir.join(tx_uuid)
-    }
-}
-
-/// Options for controlling transaction execution
-#[derive(Default)]
-pub struct TransactionOptions {
-    /// Cancel token - set to true to request cancellation
-    pub cancel: Option<Arc<AtomicBool>>,
-    /// Progress tracker for reporting operation progress
-    pub progress: Option<Arc<dyn ProgressTracker>>,
-}
-
-impl TransactionOptions {
-    /// Create new transaction options with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the cancel token
-    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Set the progress tracker
-    pub fn with_progress(mut self, progress: Arc<dyn ProgressTracker>) -> Self {
-        self.progress = Some(progress);
-        self
-    }
-
-    /// Check if cancellation has been requested
-    fn is_cancelled(&self) -> bool {
-        self.cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
-    }
-
-    /// Return Cancelled error if cancellation requested
-    fn check_cancelled(&self, operation: &str) -> crate::Result<()> {
-        if self.is_cancelled() {
-            Err(crate::Error::Cancelled(operation.to_string()))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Report progress if a tracker is available
-    fn report_progress(&self, current: u64, total: u64, message: &str) {
-        if let Some(ref progress) = self.progress {
-            progress.set_position(current);
-            progress.set_length(total);
-            progress.set_message(message);
-        }
-    }
-}
-
-/// Represents an active transaction
-pub struct Transaction<'a> {
-    engine: &'a TransactionEngine,
-    uuid: String,
-    journal: TransactionJournal,
-    state: TransactionState,
-    plan: Option<TransactionPlan>,
-    start_time: DateTime<Utc>,
-    #[allow(dead_code)] // Reserved for journal/log output
-    description: String,
-    lock_file: Option<File>,
-    /// Options for controlling execution (cancel, progress)
-    options: TransactionOptions,
-    /// Changeset ID recorded after DB commit
-    changeset_id: Option<i64>,
-    /// Filesystem result recorded after apply
-    fs_result: Option<FsApplyResult>,
-}
-
-impl<'a> Transaction<'a> {
-    /// Get the transaction UUID
-    pub fn uuid(&self) -> &str {
-        &self.uuid
-    }
-
-    /// Get the current state
-    pub fn state(&self) -> TransactionState {
-        self.state
-    }
-
-    /// Get the transaction plan (if planned)
-    pub fn plan(&self) -> Option<&TransactionPlan> {
-        self.plan.as_ref()
-    }
-
-    /// Set execution options (cancel token, progress tracker)
-    pub fn set_options(&mut self, options: TransactionOptions) {
-        self.options = options;
-    }
-
-    /// Set the cancel token for this transaction
-    pub fn set_cancel_token(&mut self, cancel: Arc<AtomicBool>) {
-        self.options.cancel = Some(cancel);
-    }
-
-    /// Set the progress tracker for this transaction
-    pub fn set_progress(&mut self, progress: Arc<dyn ProgressTracker>) {
-        self.options.progress = Some(progress);
-    }
-
-    /// Check if cancellation has been requested
-    pub fn is_cancelled(&self) -> bool {
-        self.options.is_cancelled()
-    }
-
-    /// Plan the transaction using VfsTree for conflict detection
-    pub fn plan_operations(
-        &mut self,
-        operations: TransactionOperations,
-        conn: &Connection,
-    ) -> Result<&TransactionPlan> {
-        if self.state != TransactionState::New {
-            return Err(crate::Error::IoError(format!(
-                "Cannot plan transaction in state {:?}",
-                self.state
-            )));
-        }
-
-        let mut planner =
-            TransactionPlanner::new(conn, &self.engine.config.root, self.engine.cas());
-
-        let plan = planner.plan_install(
-            &operations.files_to_add,
-            &operations.files_to_remove,
-            &operations.package.name,
-            operations.is_upgrade,
-        )?;
-
-        // Write plan to journal
-        self.journal.write_barrier(JournalRecord::Plan {
-            operations: plan.operations.clone(),
-            package_name: operations.package.name.clone(),
-            package_version: operations.package.version.clone(),
-            is_upgrade: operations.is_upgrade,
-            old_version: operations.old_package.map(|p| p.version),
-        })?;
-
-        self.plan = Some(plan);
-        self.state = TransactionState::Planned;
-
-        self.plan.as_ref().ok_or_else(|| {
-            crate::Error::TransactionError("Failed to store plan in transaction".to_string())
-        })
-    }
-
-    /// Prepare content in CAS (store all new file content)
-    pub fn prepare(&mut self, files: &[ExtractedFile]) -> Result<()> {
-        if self.state != TransactionState::Planned {
-            return Err(crate::Error::IoError(format!(
-                "Cannot prepare transaction in state {:?}",
-                self.state
-            )));
-        }
-
-        let mut total_bytes = 0u64;
-        for file in files {
-            if !file.is_symlink {
-                self.engine.cas.store(&file.content)?;
-                total_bytes += file.content.len() as u64;
-            }
-        }
-
-        self.journal.write_barrier(JournalRecord::Prepared {
-            files_in_cas: files.len(),
-            total_bytes,
-        })?;
-
-        self.state = TransactionState::Prepared;
+        self.lock_file = Some(lock_file);
         Ok(())
     }
 
-    /// Execute filesystem backup phase
-    pub fn backup_files(&mut self) -> Result<()> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
-
-        let backup_dir = self.engine.txn_work_dir(&self.uuid).join("backup");
-        let total = plan.files_to_backup.len() as u64;
-
-        for (i, backup_info) in plan.files_to_backup.iter().enumerate() {
-            // Check for cancellation
-            self.options.check_cancelled("backup")?;
-
-            // Report progress
-            self.options.report_progress(
-                i as u64,
-                total,
-                &format!("Backing up {}", backup_info.path.display()),
-            );
-
-            let source = safe_join(&self.engine.config.root, &backup_info.path)?;
-            let backup_path = backup_dir.join(
-                backup_info
-                    .path
-                    .strip_prefix("/")
-                    .unwrap_or(&backup_info.path),
-            );
-
-            // Create parent directories in backup area
-            if let Some(parent) = backup_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            // Handle different file types
-            let metadata = fs::symlink_metadata(&source)?;
-            if metadata.is_symlink() {
-                // Backup symlink target as sidecar file for rollback safety
-                let target = fs::read_link(&source)?;
-                let meta_path = backup_path.with_extension("symlink-target");
-                #[cfg(unix)]
-                {
-                    use std::os::unix::ffi::OsStrExt;
-                    fs::write(&meta_path, target.as_os_str().as_bytes())?;
-                }
-                #[cfg(not(unix))]
-                fs::write(&meta_path, target.to_string_lossy().as_bytes())?;
-                fs::write(&backup_path, b"")?;
-            } else if metadata.is_dir() {
-                // For directories, we just note they exist
-                fs::create_dir_all(&backup_path)?;
-            } else {
-                // Regular file - move to backup location (handles cross-FS)
-                move_file_atomic(&source, &backup_path)?;
-            }
-
-            self.journal.write(JournalRecord::Backup {
-                path: backup_info.path.clone(),
-                backup_path: backup_path.clone(),
-                old_type: backup_info.file_type,
-                old_hash: backup_info.current_hash.clone(),
-                old_mode: backup_info.mode,
-                old_size: backup_info.size,
-            })?;
-        }
-
-        self.journal.write_barrier(JournalRecord::BackupsComplete {
-            count: plan.files_to_backup.len(),
-        })?;
-
-        self.state = TransactionState::BackedUp;
-        Ok(())
-    }
-
-    /// Stage files from CAS to staging directory
-    pub fn stage_files(&mut self) -> Result<()> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
-
-        let stage_dir = self.engine.txn_work_dir(&self.uuid).join("stage");
-        let total = plan.files_to_stage.len() as u64;
-
-        for (i, stage_info) in plan.files_to_stage.iter().enumerate() {
-            // Check for cancellation
-            self.options.check_cancelled("stage")?;
-
-            // Report progress
-            self.options.report_progress(
-                i as u64,
-                total,
-                &format!("Staging {}", stage_info.path.display()),
-            );
-
-            let relative_path = stage_info
-                .path
-                .strip_prefix("/")
-                .unwrap_or(&stage_info.path);
-            let stage_path = stage_dir.join(relative_path);
-
-            // Create parent directories
-            if let Some(parent) = stage_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            if let Some(ref target) = stage_info.symlink_target {
-                // Validate symlink target does not escape install root
-                validate_symlink_target_for_root(
-                    &self.engine.config.root,
-                    &stage_info.path,
-                    target,
-                )?;
-
-                // Create symlink in stage area
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(target, &stage_path)?;
-                #[cfg(not(unix))]
-                fs::write(&stage_path, format!("SYMLINK:{}", target.display()))?;
-            } else {
-                // Try hardlink from CAS, fall back to copy with fsync
-                let cas_path = self.engine.cas.hash_to_path(&stage_info.hash)?;
-                if fs::hard_link(&cas_path, &stage_path).is_err() {
-                    let content = self.engine.cas.retrieve(&stage_info.hash)?;
-                    let staged_file = File::create(&stage_path)?;
-                    {
-                        let mut writer = io::BufWriter::new(&staged_file);
-                        writer.write_all(&content)?;
-                        writer.flush()?;
-                    }
-                    staged_file.sync_all()?;
-                }
-
-                // Set permissions
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let perms = fs::Permissions::from_mode(stage_info.mode);
-                    fs::set_permissions(&stage_path, perms)?;
-                }
-            }
-
-            self.journal.write(JournalRecord::Stage {
-                path: stage_info.path.clone(),
-                stage_path: stage_path.clone(),
-                new_hash: stage_info.hash.clone(),
-                new_mode: stage_info.mode,
-                new_type: stage_info.file_type,
-            })?;
-        }
-
-        self.journal.write_barrier(JournalRecord::StagingComplete {
-            count: plan.files_to_stage.len(),
-        })?;
-
-        self.state = TransactionState::Staged;
-        Ok(())
-    }
-
-    /// Apply filesystem changes (atomic renames from stage to final)
-    pub fn apply_filesystem(&mut self) -> Result<FsApplyResult> {
-        let plan = self
-            .plan
-            .as_ref()
-            .ok_or_else(|| crate::Error::IoError("Transaction not planned".to_string()))?;
-
-        let stage_dir = self.engine.txn_work_dir(&self.uuid).join("stage");
-        let mut result = FsApplyResult {
-            files_added: 0,
-            files_replaced: 0,
-            files_removed: 0,
-            dirs_created: 0,
-            dirs_removed: 0,
-        };
-
-        // Calculate total operations for progress tracking
-        let total_ops = (plan.dirs_to_create.len()
-            + plan.files_to_stage.len()
-            + plan
-                .operations
-                .iter()
-                .filter(|op| {
-                    matches!(
-                        op.op_type,
-                        OperationType::RemoveFile | OperationType::RemoveSymlink
-                    )
-                })
-                .count()
-            + plan.dirs_to_remove.len()) as u64;
-        let mut current_op = 0u64;
-
-        // Create directories first (parent to child order)
-        for dir in &plan.dirs_to_create {
-            self.options.check_cancelled("apply")?;
-            self.options.report_progress(
-                current_op,
-                total_ops,
-                &format!("Creating {}", dir.display()),
-            );
-            current_op += 1;
-
-            let target = safe_join(&self.engine.config.root, dir)?;
-            fs::create_dir_all(&target)?;
-            result.dirs_created += 1;
-        }
-
-        // Move staged files to final locations
-        for stage_info in &plan.files_to_stage {
-            self.options.check_cancelled("apply")?;
-            self.options.report_progress(
-                current_op,
-                total_ops,
-                &format!("Installing {}", stage_info.path.display()),
-            );
-            current_op += 1;
-            let relative_path = stage_info
-                .path
-                .strip_prefix("/")
-                .unwrap_or(&stage_info.path);
-            let stage_path = stage_dir.join(relative_path);
-            let target = safe_join(&self.engine.config.root, &stage_info.path)?;
-
-            // Ensure parent exists
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            // Move from stage to final location (handles cross-FS)
-            move_file_atomic(&stage_path, &target)?;
-
-            // Record per-file move for granular crash recovery
-            self.journal.write(JournalRecord::FileMoved {
-                path: stage_info.path.clone(),
-                stage_path: stage_path.clone(),
-            })?;
-
-            // Count as add or replace based on whether we backed it up
-            let was_replaced = plan
-                .files_to_backup
-                .iter()
-                .any(|b| b.path == stage_info.path);
-            if was_replaced {
-                result.files_replaced += 1;
-            } else {
-                result.files_added += 1;
-            }
-        }
-
-        // Remove files that should be deleted (upgrade case)
-        for op in &plan.operations {
-            if matches!(
-                op.op_type,
-                OperationType::RemoveFile | OperationType::RemoveSymlink
-            ) {
-                self.options.check_cancelled("apply")?;
-                self.options.report_progress(
-                    current_op,
-                    total_ops,
-                    &format!("Removing {}", op.path.display()),
-                );
-                current_op += 1;
-
-                let target = safe_join(&self.engine.config.root, &op.path)?;
-                if target.exists() || target.symlink_metadata().is_ok() {
-                    fs::remove_file(&target)?;
-                    result.files_removed += 1;
-
-                    // Record per-file removal for granular crash recovery
-                    self.journal.write(JournalRecord::FileRemoved {
-                        path: op.path.clone(),
-                    })?;
-                }
-            }
-        }
-
-        // Remove empty directories (child to parent order)
-        for dir in plan.dirs_to_remove.iter().rev() {
-            self.options.check_cancelled("apply")?;
-            self.options.report_progress(
-                current_op,
-                total_ops,
-                &format!("Cleanup {}", dir.display()),
-            );
-            current_op += 1;
-
-            let target = safe_join(&self.engine.config.root, dir)?;
-            if target.is_dir() && fs::read_dir(&target)?.next().is_none() {
-                fs::remove_dir(&target)?;
-                result.dirs_removed += 1;
-            }
-        }
-
-        self.journal.write_barrier(JournalRecord::FsApplied {
-            files_added: result.files_added,
-            files_replaced: result.files_replaced,
-            files_removed: result.files_removed,
-            dirs_created: result.dirs_created,
-        })?;
-
-        self.fs_result = Some(result.clone());
-        self.state = TransactionState::FsApplied;
-        Ok(result)
-    }
-
-    /// Write DB commit intent (for recovery correlation)
-    pub fn write_db_commit_intent(&mut self) -> Result<()> {
-        self.journal.write_barrier(JournalRecord::DbCommitIntent {
-            tx_uuid: self.uuid.clone(),
-        })?;
-        Ok(())
-    }
-
-    /// Record successful DB commit
-    pub fn record_db_commit(&mut self, changeset_id: i64, trove_id: i64) -> Result<()> {
-        self.journal.write_barrier(JournalRecord::DbApplied {
-            changeset_id,
-            trove_id,
-        })?;
-        self.changeset_id = Some(changeset_id);
-        self.state = TransactionState::DbApplied;
-        Ok(())
-    }
-
-    /// Mark post-scripts complete
-    pub fn mark_post_scripts_complete(&mut self) -> Result<()> {
-        self.state = TransactionState::PostScriptsComplete;
-        Ok(())
-    }
-
-    /// Finish the transaction (cleanup and finalize)
-    pub fn finish(mut self) -> Result<TransactionResult> {
-        let duration = Utc::now()
-            .signed_duration_since(self.start_time)
-            .num_milliseconds()
-            .max(0) as u64;
-
-        // Clean up working directory
-        let work_dir = self.engine.txn_work_dir(&self.uuid);
-        if work_dir.exists() {
-            fs::remove_dir_all(&work_dir)?;
-        }
-
-        // Archive journal
-        self.journal.write_barrier(JournalRecord::Done {
-            duration_ms: duration,
-            success: true,
-        })?;
-
-        // Take ownership of journal for archiving
-        let journal =
-            std::mem::replace(&mut self.journal, TransactionJournal::create_placeholder()?);
-        journal.archive()?;
-
-        self.state = TransactionState::Done;
-
-        // Release lock
-        if let Some(lock) = self.lock_file.take() {
-            lock.unlock()?;
-        }
-
-        Ok(TransactionResult {
-            tx_uuid: self.uuid.clone(),
-            changeset_id: self.changeset_id.unwrap_or(0),
-            duration_ms: duration,
-            fs_result: self.fs_result.take().unwrap_or(FsApplyResult {
-                files_added: 0,
-                files_replaced: 0,
-                files_removed: 0,
-                dirs_created: 0,
-                dirs_removed: 0,
-            }),
-        })
-    }
-
-    /// Abort the transaction (rollback all changes)
-    pub fn abort(mut self) -> Result<()> {
-        // Read records before replacing journal
-        let records = self.journal.read_all()?;
-
-        // Perform rollback based on current state
-        recovery::rollback_transaction(self.engine, &self.uuid, &records)?;
-
-        // Clean up working directory
-        let work_dir = self.engine.txn_work_dir(&self.uuid);
-        if work_dir.exists() {
-            fs::remove_dir_all(&work_dir)?;
-        }
-
-        // Take ownership of journal for deletion
-        let journal =
-            std::mem::replace(&mut self.journal, TransactionJournal::create_placeholder()?);
-        journal.delete()?;
-
-        self.state = TransactionState::Aborted;
-
-        // Release lock
-        if let Some(lock) = self.lock_file.take() {
-            lock.unlock()?;
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for Transaction<'_> {
-    fn drop(&mut self) {
-        // Release lock if still held
+    /// Release the transaction lock.
+    pub fn release_lock(&mut self) {
         if let Some(ref lock) = self.lock_file {
             let _ = lock.unlock();
         }
+        self.lock_file = None;
     }
+
+    /// Recover from an interrupted transaction.
+    ///
+    /// In the composefs-native model, recovery is simple:
+    /// - Check what generation the DB says should be active
+    /// - If the mounted generation does not match, rebuild the EROFS image
+    ///   from the DB state and remount
+    ///
+    /// This replaces the old journal-based roll-forward/roll-back recovery.
+    pub fn recover(&self, conn: &Connection) -> Result<()> {
+        use crate::generation::builder::build_generation_from_db;
+        use crate::generation::mount::current_generation;
+
+        // Query the DB for the expected generation number
+        let expected_gen: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(id) FROM generations WHERE status = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(None);
+
+        let Some(expected) = expected_gen else {
+            // No generations in DB — nothing to recover
+            return Ok(());
+        };
+
+        // Check what is currently mounted
+        let current = current_generation(&self.config.root).unwrap_or(None);
+
+        if current == Some(expected) {
+            // Already consistent — no recovery needed
+            log::debug!(
+                "Generation {} already mounted, no recovery needed",
+                expected
+            );
+            return Ok(());
+        }
+
+        log::info!(
+            "Recovery: expected generation {} but found {:?}, rebuilding",
+            expected,
+            current
+        );
+
+        // Rebuild EROFS image from DB state
+        let (_gen_num, _build_result) = build_generation_from_db(
+            conn,
+            &self.config.generations_dir,
+            &format!("Recovery rebuild of generation {expected}"),
+        )?;
+
+        let gen_dir = self.config.generations_dir.join(expected.to_string());
+
+        // Mount the rebuilt generation
+        crate::generation::mount::mount_generation(
+            &crate::generation::mount::MountOptions {
+                image_path: gen_dir.join("rootfs.erofs"),
+                basedir: self.config.objects_dir.clone(),
+                mount_point: self.config.mount_point.clone(),
+                verity: false,
+                digest: None,
+                upperdir: Some(
+                    self.config
+                        .etc_state_dir
+                        .join(expected.to_string()),
+                ),
+                workdir: Some(
+                    self.config
+                        .etc_state_dir
+                        .join(format!("{expected}-work")),
+                ),
+            },
+        )?;
+
+        // Update the current symlink
+        crate::generation::mount::update_current_symlink(&self.config.root, expected)?;
+
+        log::info!("Recovery: generation {} rebuilt and mounted", expected);
+        Ok(())
+    }
+}
+
+impl Drop for TransactionEngine {
+    fn drop(&mut self) {
+        self.release_lock();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility types for CLI consumers (Task 6 will replace these usages)
+// ---------------------------------------------------------------------------
+
+/// Information about the package being transacted.
+///
+/// Preserved for CLI install/batch compatibility. Task 6 will adapt these
+/// call sites to the new composefs-native flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageInfo {
+    pub name: String,
+    pub version: String,
+    pub release: Option<String>,
+    pub arch: Option<String>,
+}
+
+/// Operations to perform in a transaction.
+///
+/// Preserved for CLI install/batch compatibility.
+#[derive(Debug, Clone)]
+pub struct TransactionOperations {
+    /// Package being installed/upgraded
+    pub package: PackageInfo,
+    /// Files to add (from extracted package)
+    pub files_to_add: Vec<ExtractedFile>,
+    /// Files to remove (from old version during upgrade)
+    pub files_to_remove: Vec<FileToRemove>,
+    /// Whether this is an upgrade of an existing package
+    pub is_upgrade: bool,
+    /// Old package info (for upgrades)
+    pub old_package: Option<PackageInfo>,
+}
+
+/// A file extracted from a package.
+///
+/// Used by both the transaction planner and the CLI install commands.
+#[derive(Debug, Clone)]
+pub struct ExtractedFile {
+    pub path: String,
+    pub content: Vec<u8>,
+    pub mode: u32,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
+}
+
+/// A file to be removed.
+#[derive(Debug, Clone)]
+pub struct FileToRemove {
+    pub path: String,
+    pub hash: String,
+    pub size: i64,
+    pub mode: u32,
+}
+
+/// File type for planning operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileType {
+    Regular,
+    Directory,
+    Symlink,
+}
+
+/// Operation type for planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OperationType {
+    Mkdir,
+    AddFile,
+    ReplaceFile,
+    RemoveFile,
+    AddSymlink,
+    ReplaceSymlink,
+    RemoveSymlink,
+    Rmdir,
+}
+
+/// Result of applying filesystem changes.
+///
+/// Preserved for CLI compatibility. In the composefs-native model, the
+/// equivalent information comes from the EROFS build result.
+#[derive(Debug, Clone)]
+pub struct FsApplyResult {
+    pub files_added: usize,
+    pub files_replaced: usize,
+    pub files_removed: usize,
+    pub dirs_created: usize,
+    pub dirs_removed: usize,
+}
+
+impl FsApplyResult {
+    pub fn total_operations(&self) -> usize {
+        self.files_added
+            + self.files_replaced
+            + self.files_removed
+            + self.dirs_created
+            + self.dirs_removed
+    }
+}
+
+/// Result of a completed transaction.
+#[derive(Debug, Clone)]
+pub struct TransactionResult {
+    pub generation_number: i64,
+    pub duration_ms: u64,
+    pub packages_changed: usize,
 }
 
 #[cfg(test)]
@@ -1081,68 +455,98 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_transaction_config_defaults() {
-        let config = TransactionConfig::new(
+    fn transaction_config_new_defaults() {
+        let config = TransactionConfig::new(Path::new("/conary"));
+        assert_eq!(config.root, PathBuf::from("/conary"));
+        assert_eq!(config.db_path, PathBuf::from("/conary/conary.db"));
+        assert_eq!(config.objects_dir, PathBuf::from("/conary/objects"));
+        assert_eq!(config.generations_dir, PathBuf::from("/conary/generations"));
+        assert_eq!(config.etc_state_dir, PathBuf::from("/conary/etc-state"));
+        assert_eq!(config.mount_point, PathBuf::from("/"));
+        assert_eq!(
+            config.lock_timeout_secs,
+            TransactionConfig::DEFAULT_LOCK_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn transaction_config_from_paths() {
+        let config = TransactionConfig::from_paths(
             PathBuf::from("/"),
             PathBuf::from("/var/lib/conary/conary.db"),
         );
-
         assert_eq!(config.root, PathBuf::from("/"));
-        assert_eq!(config.txn_dir, PathBuf::from("/var/lib/conary/txn"));
-        assert_eq!(config.journal_dir, PathBuf::from("/var/lib/conary/journal"));
+        assert_eq!(config.objects_dir, PathBuf::from("/var/lib/conary/objects"));
+        assert_eq!(
+            config.generations_dir,
+            PathBuf::from("/var/lib/conary/generations")
+        );
     }
 
     #[test]
-    fn test_transaction_state_recovery() {
-        assert!(TransactionState::New.is_recoverable());
-        assert!(TransactionState::Planned.is_recoverable());
-        assert!(TransactionState::FsApplied.is_recoverable());
-        assert!(!TransactionState::DbApplied.is_recoverable());
-        assert!(!TransactionState::Done.is_recoverable());
+    fn state_valid_transitions() {
+        assert!(TransactionState::New.can_transition_to(&TransactionState::Resolved));
+        assert!(TransactionState::Resolved.can_transition_to(&TransactionState::Fetched));
+        assert!(TransactionState::Fetched.can_transition_to(&TransactionState::Committed));
+        assert!(TransactionState::Committed.can_transition_to(&TransactionState::Built));
+        assert!(TransactionState::Built.can_transition_to(&TransactionState::Mounted));
+        assert!(TransactionState::Mounted.can_transition_to(&TransactionState::Done));
     }
 
     #[test]
-    fn test_transaction_state_roll_forward() {
-        assert!(!TransactionState::FsApplied.should_roll_forward());
-        assert!(TransactionState::DbApplied.should_roll_forward());
-        assert!(TransactionState::PostScriptsComplete.should_roll_forward());
-        assert!(TransactionState::Done.should_roll_forward());
+    fn state_invalid_transitions() {
+        assert!(!TransactionState::New.can_transition_to(&TransactionState::Built));
+        assert!(!TransactionState::New.can_transition_to(&TransactionState::Committed));
+        assert!(!TransactionState::Fetched.can_transition_to(&TransactionState::Mounted));
+        assert!(!TransactionState::Done.can_transition_to(&TransactionState::New));
     }
 
     #[test]
-    fn test_engine_creation() {
+    fn state_before_commit() {
+        assert!(TransactionState::New.is_before_commit());
+        assert!(TransactionState::Resolved.is_before_commit());
+        assert!(TransactionState::Fetched.is_before_commit());
+        assert!(!TransactionState::Committed.is_before_commit());
+        assert!(!TransactionState::Built.is_before_commit());
+        assert!(!TransactionState::Done.is_before_commit());
+    }
+
+    #[test]
+    fn state_is_committed() {
+        assert!(!TransactionState::New.is_committed());
+        assert!(!TransactionState::Fetched.is_committed());
+        assert!(TransactionState::Committed.is_committed());
+        assert!(TransactionState::Built.is_committed());
+        assert!(TransactionState::Mounted.is_committed());
+        assert!(TransactionState::Done.is_committed());
+    }
+
+    #[test]
+    fn engine_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("conary.db");
-
-        let config = TransactionConfig::new(temp_dir.path().to_path_buf(), db_path);
-
+        let config = TransactionConfig::new(temp_dir.path());
         let engine = TransactionEngine::new(config).unwrap();
 
-        assert!(engine.config.txn_dir.exists());
-        assert!(engine.config.journal_dir.exists());
+        assert!(engine.config.objects_dir.exists());
+        assert!(engine.config.generations_dir.exists());
+        assert!(engine.config.etc_state_dir.exists());
     }
 
     #[test]
-    fn test_begin_transaction() {
+    fn engine_begin_and_release_lock() {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("conary.db");
+        let config = TransactionConfig::new(temp_dir.path());
+        let mut engine = TransactionEngine::new(config).unwrap();
 
-        let config = TransactionConfig::new(temp_dir.path().to_path_buf(), db_path);
-        let engine = TransactionEngine::new(config).unwrap();
+        engine.begin().unwrap();
+        assert!(engine.lock_file.is_some());
 
-        let txn = engine.begin("Test transaction").unwrap();
-
-        assert_eq!(txn.state(), TransactionState::New);
-        assert!(!txn.uuid().is_empty());
-
-        // Work directory should exist
-        let work_dir = engine.txn_work_dir(txn.uuid());
-        assert!(work_dir.join("backup").exists());
-        assert!(work_dir.join("stage").exists());
+        engine.release_lock();
+        assert!(engine.lock_file.is_none());
     }
 
     #[test]
-    fn test_fs_apply_result() {
+    fn fs_apply_result_total() {
         let result = FsApplyResult {
             files_added: 5,
             files_replaced: 3,
@@ -1150,40 +554,6 @@ mod tests {
             dirs_created: 1,
             dirs_removed: 0,
         };
-
         assert_eq!(result.total_operations(), 11);
-    }
-
-    #[test]
-    fn test_move_file_atomic_same_fs() {
-        let temp_dir = TempDir::new().unwrap();
-        let src = temp_dir.path().join("source.txt");
-        let dst = temp_dir.path().join("dest.txt");
-
-        fs::write(&src, "test content").unwrap();
-        assert!(src.exists());
-
-        move_file_atomic(&src, &dst).unwrap();
-
-        assert!(!src.exists());
-        assert!(dst.exists());
-        assert_eq!(fs::read_to_string(&dst).unwrap(), "test content");
-    }
-
-    #[test]
-    fn test_move_file_atomic_preserves_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let src = temp_dir.path().join("binary_file");
-        let dst = temp_dir.path().join("moved_binary");
-
-        // Create a file with binary content
-        let content: Vec<u8> = (0..=255).collect();
-        fs::write(&src, &content).unwrap();
-
-        move_file_atomic(&src, &dst).unwrap();
-
-        assert!(!src.exists());
-        let read_content = fs::read(&dst).unwrap();
-        assert_eq!(read_content, content);
     }
 }

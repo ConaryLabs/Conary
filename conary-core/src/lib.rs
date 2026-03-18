@@ -81,7 +81,6 @@ pub use provenance::{
 };
 pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
 pub use transaction::{
-    RecoveryOutcome, Transaction, TransactionConfig, TransactionEngine, TransactionPlan,
-    TransactionState,
+    TransactionConfig, TransactionEngine, TransactionPlan, TransactionState,
 };
 pub use trust::TrustError;
