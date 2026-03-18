@@ -2,9 +2,10 @@
 //! CLI implementations for generation list, info, and gc commands
 
 use super::metadata::{GenerationMetadata, gc_roots_dir, generation_path, generations_dir};
-use super::switch::current_generation;
 use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
+use conary_core::generation::mount::current_generation;
+use std::path::Path;
 use tracing::info;
 
 /// List all generations with a summary table.
@@ -19,7 +20,7 @@ pub fn cmd_generation_list() -> Result<()> {
         return Ok(());
     }
 
-    let current = current_generation()?;
+    let current = current_generation(Path::new("/conary"))?;
 
     let mut generations: Vec<(i64, GenerationMetadata)> = Vec::new();
 
@@ -72,7 +73,7 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
     }
 
     let meta = GenerationMetadata::read_from(&gen_dir)?;
-    let current = current_generation()?;
+    let current = current_generation(Path::new("/conary"))?;
     let is_active = current == Some(gen_number);
 
     let status = if is_active { "active" } else { "inactive" };
@@ -118,7 +119,7 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
 ///
 /// Also removes the corresponding BLS boot loader entry files.
 pub fn cmd_generation_gc(keep: usize) -> Result<()> {
-    let current = current_generation()?;
+    let current = current_generation(Path::new("/conary"))?;
     let gc_roots = load_gc_roots();
     let dir = generations_dir();
 

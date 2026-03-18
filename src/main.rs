@@ -501,7 +501,10 @@ fn run() -> Result<()> {
                     Ok(())
                 }
                 cli::GenerationCommands::Rollback => {
-                    let current = commands::generation::switch::current_generation()?
+                    let current =
+                        conary_core::generation::mount::current_generation(std::path::Path::new(
+                            "/conary",
+                        ))?
                         .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
 
                     // Find the highest generation below current that actually exists

@@ -1,12 +1,16 @@
 // src/commands/generation/switch.rs
 //! Generation switching via composefs mounts
 //!
-//! Replaces the old renameat2-based directory exchange with composefs
-//! mount-based switching. The EROFS image is mounted via composefs,
-//! /usr is bind-mounted read-only, and /etc uses an overlayfs.
+//! CLI wrapper around `conary_core::generation::mount`. Core mount/unmount
+//! logic lives in the core crate; this file handles CLI output and the
+//! step-by-step orchestration that is specific to live system switching.
 
-use super::metadata::{GenerationMetadata, current_link, generation_path};
+use super::metadata::{GenerationMetadata, generation_path};
 use anyhow::{Context, Result, anyhow};
+use conary_core::generation::mount::{
+    MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
+};
+use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -42,29 +46,37 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let staging = "/conary/mnt-new";
 
     // Step 0: Unmount old composefs mount if present
-    if std::path::Path::new(old_mnt).exists()
-        && let Err(e) = run_command("umount", &[old_mnt])
-    {
-        warn!("Failed to unmount old composefs at {old_mnt}: {e}");
+    if Path::new(old_mnt).exists() {
+        if let Err(e) = unmount_generation(Path::new(old_mnt)) {
+            warn!("Failed to unmount old composefs at {old_mnt}: {e}");
+        }
     }
 
     // Step 1: Mount new generation's composefs at staging point
     std::fs::create_dir_all(staging).context("Failed to create composefs staging directory")?;
 
-    // Try with verity_check first, fall back without
-    let mount_opts_verity = format!("basedir={cas_dir},verity_check=1");
-    let mount_opts_plain = format!("basedir={cas_dir}");
+    // Try with verity first, fall back without
+    let opts_verity = MountOptions {
+        image_path: erofs_img.clone(),
+        basedir: cas_dir.into(),
+        mount_point: staging.into(),
+        verity: true,
+        digest: metadata.erofs_verity_digest.clone(),
+        upperdir: None,
+        workdir: None,
+    };
+    let opts_plain = MountOptions {
+        verity: false,
+        digest: None,
+        ..opts_verity.clone()
+    };
 
-    let mounted = run_mount_composefs(&erofs_img.to_string_lossy(), staging, &mount_opts_verity)
+    mount_generation(&opts_verity)
         .or_else(|_| {
-            warn!("composefs mount with verity_check failed, retrying without");
-            run_mount_composefs(&erofs_img.to_string_lossy(), staging, &mount_opts_plain)
+            warn!("composefs mount with verity failed, retrying without");
+            mount_generation(&opts_plain)
         })
-        .context("Failed to mount composefs image")?;
-
-    if !mounted {
-        return Err(anyhow!("composefs mount command failed"));
-    }
+        .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?;
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)
     // WARNING: This overwrites the live /usr. Processes with open file descriptors
@@ -72,13 +84,12 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // for full consistency (printed at the end of this function).
     let mnt_usr = format!("{staging}/usr");
     if let Err(e) = run_command("mount", &["--bind", &mnt_usr, "/usr"]) {
-        // Clean up staging composefs mount before returning error
-        let _ = run_command("umount", &[staging]);
+        let _ = unmount_generation(Path::new(staging));
         return Err(e).context("Failed to bind-mount /usr from composefs");
     }
     if let Err(e) = run_command("mount", &["-o", "remount,ro", "/usr"]) {
         let _ = run_command("umount", &["/usr"]);
-        let _ = run_command("umount", &[staging]);
+        let _ = unmount_generation(Path::new(staging));
         return Err(e).context("Failed to remount /usr read-only");
     }
 
@@ -88,7 +99,8 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let staging_etc = format!("{staging}/etc");
     // Unmount existing /etc overlay only if it is currently an overlay mount.
     // If /etc is not an overlay, unmounting it would leave the system with no /etc.
-    if is_overlay_mount("/etc") {
+    let etc_is_overlay = is_overlay_mount(Path::new("/etc")).unwrap_or(false);
+    if etc_is_overlay {
         let _ = run_command("umount", &["/etc"]);
     }
 
@@ -114,28 +126,19 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // Step 4: Move staging mount to permanent mount point
     std::fs::create_dir_all(old_mnt).context("Failed to create permanent composefs mount dir")?;
     if let Err(e) = run_command("mount", &["--move", staging, old_mnt]) {
-        // Clean up mounts before returning error
         let _ = run_command("umount", &["/usr"]);
-        let _ = run_command("umount", &[staging]);
+        let _ = unmount_generation(Path::new(staging));
         return Err(e).context("Failed to move composefs mount to permanent location");
     }
 
-    // Step 5: Update current symlink
-    update_current_symlink(gen_number).context("Failed to update current generation symlink")?;
+    // Step 5: Update current symlink (delegates to conary-core)
+    update_current_symlink(Path::new("/conary"), gen_number)
+        .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
 
     info!("Switched to generation {gen_number} (composefs)");
     println!("Switched to generation {gen_number}. Reboot recommended for full consistency.");
 
     Ok(())
-}
-
-/// Mount a composefs image at the given mountpoint.
-fn run_mount_composefs(image: &str, mountpoint: &str, opts: &str) -> Result<bool> {
-    let status = Command::new("mount")
-        .args(["-t", "composefs", image, mountpoint, "-o", opts])
-        .status()
-        .context("Failed to execute mount command")?;
-    Ok(status.success())
 }
 
 /// Run a simple command, returning Ok on success.
@@ -149,74 +152,4 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     } else {
         Err(anyhow!("{cmd} exited with status {status}"))
     }
-}
-
-/// Atomically update the `/conary/current` symlink to point to the given generation.
-///
-/// Creates a temporary symlink and renames it over the existing one for atomicity.
-pub fn update_current_symlink(gen_number: i64) -> Result<()> {
-    let link = current_link();
-    let target = generation_path(gen_number);
-    let tmp_link = link.with_extension("tmp");
-
-    // Remove stale temp link if it exists
-    let _ = std::fs::remove_file(&tmp_link);
-
-    std::os::unix::fs::symlink(&target, &tmp_link).with_context(|| {
-        format!(
-            "Failed to create temp symlink {} -> {}",
-            tmp_link.display(),
-            target.display()
-        )
-    })?;
-
-    std::fs::rename(&tmp_link, &link).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_link.display(),
-            link.display()
-        )
-    })?;
-
-    info!("Updated {} -> {}", link.display(), target.display());
-    Ok(())
-}
-
-/// Read the current generation number from the `/conary/current` symlink.
-///
-/// Returns `None` if the symlink does not exist.
-pub fn current_generation() -> Result<Option<i64>> {
-    let link = current_link();
-
-    if !link.exists() {
-        return Ok(None);
-    }
-
-    let target = std::fs::read_link(&link)
-        .with_context(|| format!("Failed to read symlink {}", link.display()))?;
-
-    let component = target
-        .file_name()
-        .ok_or_else(|| anyhow!("Symlink target has no filename: {}", target.display()))?
-        .to_string_lossy();
-
-    let gen_number: i64 = component
-        .parse()
-        .with_context(|| format!("Failed to parse generation number from '{component}'"))?;
-
-    Ok(Some(gen_number))
-}
-
-/// Check whether the given path is currently an overlay mount by parsing /proc/mounts.
-fn is_overlay_mount(path: &str) -> bool {
-    let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
-        return false;
-    };
-    mounts.lines().any(|line| {
-        let mut parts = line.split_whitespace();
-        let _device = parts.next();
-        let mount_point = parts.next();
-        let fs_type = parts.next();
-        mount_point == Some(path) && fs_type == Some("overlay")
-    })
 }
