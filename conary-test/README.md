@@ -25,7 +25,7 @@ by CI pipelines and LLM agents.
 | `src/server/routes.rs` | Router construction (HTTP + MCP) |
 | `src/server/service.rs` | Shared business logic for HTTP and MCP |
 | `src/server/state.rs` | AppState with DashMap for concurrent run tracking |
-| `src/server/mcp.rs` | MCP server (13 tools via rmcp) |
+| `src/server/mcp.rs` | MCP server (23 tools via rmcp) |
 | `src/cli.rs` | Binary entrypoint |
 
 ## CLI Usage

@@ -52,9 +52,12 @@ for CCS chunk operations.
 - `client.rs` -- `RepositoryClient`, `RetryPolicy`, `validate_url_scheme()`
 - `sync.rs` -- `sync_repository()`, `needs_sync()`, timestamp helpers
 - `parsers/` -- `arch.rs`, `debian.rs`, `fedora.rs` format-specific metadata parsers
+- `parsers/common.rs` -- shared parser helpers (version constraint extraction, MAX_PACKAGE_SIZE)
 - `dependency_model.rs` -- cross-distro normalized dependency/provide types
 - `versioning.rs` -- scheme-aware version comparison (RPM, Debian, ALPM)
 - `resolution_policy.rs` -- policy types for request scope, mixing, and candidate filtering
+- `retry.rs` -- shared retry logic with exponential backoff (consolidates duplicated retry loops)
+- `error_helpers.rs` -- error context extension trait (`.download_context()`, `.sync_context()`)
 - `selector.rs` -- package candidate selection logic
 - `mirror_health.rs` -- per-mirror tracking
 - `remi.rs` -- Remi CCS server client

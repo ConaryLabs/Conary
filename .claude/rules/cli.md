@@ -58,5 +58,9 @@ conary-core -- no business logic lives in the CLI layer.
 - `mod.rs` -- re-exports all `cmd_*` functions, defines `open_db()` helper
 - `install/` -- install command with `batch.rs` for multi-package
 - `adopt/` -- system adoption with `conflicts.rs`, `convert.rs`
-- `generation/` -- generation management with `switch.rs`
+- `generation/` -- generation management with `switch.rs`, `builder.rs`, `boot.rs`, `composefs.rs`, `metadata.rs`, `takeover.rs`, `commands.rs`
+- `export.rs` -- OCI image export
+- `composefs_ops.rs` -- rebuild_and_mount helper for composefs operations
+- `replatform_rendering.rs` -- replatform plan rendering
+- `package_parsing.rs` -- shared package parsing helpers
 - Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, `self_update.rs`, `update_channel.rs`, etc.

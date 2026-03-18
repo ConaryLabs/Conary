@@ -27,7 +27,9 @@ of source format.
 
 ## Gotchas
 - `common.rs` imports from `crate::packages::traits`, not from the format parsers
-- `dpkg_query` and `pacman_query` query the system package DB, not parse files
+- `dpkg_query`, `pacman_query`, and `rpm_query` query the system package DB, not parse files
+- `query_common.rs` provides shared types (`InstalledFileInfo`, `DependencyInfo`) and
+  `run_query_command` used by all native package manager query modules
 - `archive_utils` handles tar/cpio extraction shared across formats
 - Architecture strings vary by format -- always normalize before comparison
 
@@ -35,7 +37,12 @@ of source format.
 - `common.rs` -- `PackageMetadata`, `normalize_architecture()`, `MAX_EXTRACTION_FILE_SIZE`
 - `rpm.rs` -- RPM format parser
 - `deb.rs` -- DEB format parser
+- `arch.rs` -- Arch package format parser
 - `dpkg_query.rs` -- queries dpkg database on Debian systems
 - `pacman_query.rs` -- queries pacman database on Arch systems
+- `rpm_query.rs` -- queries RPM database on Fedora/RHEL systems
+- `query_common.rs` -- shared `InstalledFileInfo`, `DependencyInfo`, `run_query_command`
 - `archive_utils.rs` -- shared tar/cpio extraction utilities
+- `cpio.rs` -- CPIO archive handling
+- `registry.rs` -- package format detection and parser creation
 - `traits.rs` -- `PackageFile`, `Dependency`, `Scriptlet`, `ConfigFileInfo` trait types

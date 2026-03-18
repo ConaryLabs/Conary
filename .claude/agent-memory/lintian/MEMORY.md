@@ -34,7 +34,7 @@
 - Repository.id is Option<i64> -- None before insert, Some after
 - `ServerState` behind `Arc<RwLock<>>`, config.db_path used to open fresh connections per request
 - External admin API scopes: admin, ci:read, ci:trigger, repos:read, repos:write, federation:read, federation:write
-- Schema version is v48 (admin_audit_log added in v48)
+- Schema version is v52 (admin_audit_log added in v48, latest migration is v52)
 - `audit_log` model uses free functions (insert/query/purge) not struct methods -- differs from Trove/Repository pattern
 - MCP endpoint at /mcp on :8082 requires admin scope
 - SSE broadcast channel bounded at 1024 -- adequate for admin API volume
@@ -124,3 +124,6 @@
 - QEMU test SSH uses `BatchMode=yes` -- incompatible with password-based auth, needs key-based auth
 - `ssh-keygen -A -f <prefix>` does NOT re-root key generation; `-f` is ignored by `-A`
 - systemd-boot EFI binary (`systemd-bootx64.efi`) requires systemd built with `-Dbootloader=true`
+
+## Documentation Audit (2026-03-18)
+- [doc_audit_2026_03_18](doc_audit_2026_03_18.md) -- systemic doc staleness after composefs-native and LFS 13 alignment

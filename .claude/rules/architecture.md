@@ -22,7 +22,7 @@
 | `src/compression/` | Unified decompression (Gzip, Xz, Zstd) with format detection |
 | `src/repository/` | Remote repos, metadata sync, mirror health, metalink, substituters |
 | `src/resolver/` | SAT-based dependency resolution (resolvo) |
-| `src/filesystem/` | CAS, file deployment, VFS tree |
+| `src/filesystem/` | CAS, VFS tree, fsverity, path utilities |
 | `src/delta/` | Binary delta updates (zstd dictionary compression) |
 | `src/version/` | Version parsing, constraints |
 | `src/container/` | Scriptlet sandboxing, namespace isolation |
@@ -33,7 +33,8 @@
 | `src/components/` | Component classification |
 | `src/dependencies/` | Dependency type definitions, provider matching |
 | `src/derived/` | Derived package builder |
-| `src/transaction/` | Crash-safe atomic operations, journal-based recovery |
+| `src/transaction/` | Composefs-native transaction engine (resolve/fetch/commit/build/mount) |
+| `src/generation/` | EROFS generation building, composefs mounting, /etc merge, CAS GC, deltas |
 | `src/model/` | System Model - declarative OS state |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
 | `src/recipe/` | Recipe system for building packages from source |

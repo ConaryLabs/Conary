@@ -34,6 +34,10 @@ no file content is stored in the image itself.
 
 ## Gotchas
 - This is a standalone crate -- does not depend on conary-core
+- Generation building now primarily uses composefs-rs (v0.3.0) via
+  `conary-core/src/generation/builder.rs` instead of conary-erofs directly.
+  The conary-erofs crate still exists for low-level EROFS construction but is
+  not the primary builder for generations.
 - No file content is stored in the image -- only metadata and CAS digest xattrs
 - `build_composefs_xattrs()` creates the xattr entries for CAS references
 - `tail_pack::pack_tail()` handles inline data packing for small files/symlinks

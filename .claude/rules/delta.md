@@ -33,6 +33,12 @@ compression ratios for similar files (e.g., updated binaries).
 - Delta path is caller-provided -- not stored in CAS
 - Both old and new content are loaded fully into memory for compression
 
+## Related: Generation-Level Deltas
+
+In addition to CAS-level file deltas in this module, there is a separate
+`conary-core/src/generation/delta.rs` for EROFS image deltas. That module
+computes diffs between entire generation images rather than individual files.
+
 ## Files
 - `mod.rs` -- module re-exports, integration tests
 - `generator.rs` -- `DeltaGenerator`, `COMPRESSION_LEVEL`, zstd dictionary compression
