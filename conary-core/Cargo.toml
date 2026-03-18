@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 default = []
 server = ["dep:async-trait", "dep:futures"]
 mcp = ["dep:rmcp"]
+composefs-rs = ["dep:composefs"]
 
 [dependencies]
 # Database
@@ -138,3 +139,6 @@ futures = { workspace = true, optional = true }
 
 # MCP helpers (optional, feature-gated)
 rmcp = { workspace = true, features = ["server"], optional = true }
+
+# composefs-rs: EROFS image builder for composefs (optional, feature-gated)
+composefs = { version = "0.3", default-features = false, optional = true }

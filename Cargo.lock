@@ -1020,6 +1020,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "composefs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f187ddbe2c34b14ed54442df9844c321ddf299facaab11d0942bed6fb95e970"
+dependencies = [
+ "anyhow",
+ "hex",
+ "log",
+ "once_cell",
+ "rustix 1.1.4",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "xxhash-rust",
+ "zerocopy",
+ "zstd",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1089,6 +1108,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ciborium",
+ "composefs",
  "const-oid",
  "crc32fast",
  "diffy",
@@ -1408,6 +1428,12 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "critical-section"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "crossbeam-channel"
@@ -4111,6 +4137,10 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+dependencies = [
+ "critical-section",
+ "portable-atomic",
+]
 
 [[package]]
 name = "once_cell_polyfill"
