@@ -111,7 +111,10 @@ pub fn unmount_generation(mount_point: &Path) -> crate::Result<()> {
         .map_err(|e| Error::IoError(format!("Failed to execute umount: {e}")))?;
 
     if status.success() {
-        info!("Unmounted composefs generation at {}", mount_point.display());
+        info!(
+            "Unmounted composefs generation at {}",
+            mount_point.display()
+        );
         Ok(())
     } else {
         Err(Error::IoError(format!(
@@ -151,11 +154,7 @@ pub fn update_current_symlink(conary_root: &Path, generation_number: i64) -> cra
         ))
     })?;
 
-    info!(
-        "Updated {} -> {}",
-        link.display(),
-        target.display()
-    );
+    info!("Updated {} -> {}", link.display(), target.display());
     Ok(())
 }
 
@@ -170,9 +169,8 @@ pub fn current_generation(conary_root: &Path) -> crate::Result<Option<i64>> {
         return Ok(None);
     }
 
-    let target = std::fs::read_link(&link).map_err(|e| {
-        Error::IoError(format!("Failed to read symlink {}: {e}", link.display()))
-    })?;
+    let target = std::fs::read_link(&link)
+        .map_err(|e| Error::IoError(format!("Failed to read symlink {}: {e}", link.display())))?;
 
     let component = target
         .file_name()
@@ -210,9 +208,8 @@ pub fn symlink_target_for_generation(n: i64) -> PathBuf {
 /// at the given path. Returns `false` (not `Err`) if `/proc/mounts` cannot
 /// be read, as this is treated as "unknown, assume not overlay".
 pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
-    let mounts = std::fs::read_to_string("/proc/mounts").map_err(|e| {
-        Error::IoError(format!("Failed to read /proc/mounts: {e}"))
-    })?;
+    let mounts = std::fs::read_to_string("/proc/mounts")
+        .map_err(|e| Error::IoError(format!("Failed to read /proc/mounts: {e}")))?;
 
     let path_str = path.to_string_lossy();
     let found = mounts.lines().any(|line| {
@@ -265,7 +262,10 @@ mod tests {
         assert_eq!(args[3], "-o");
 
         let opts_str = &args[4];
-        assert!(opts_str.contains("basedir=/conary/objects"), "basedir missing");
+        assert!(
+            opts_str.contains("basedir=/conary/objects"),
+            "basedir missing"
+        );
         assert!(opts_str.contains("verity=on"), "verity=on missing");
         assert!(opts_str.contains("digest=abc123def456"), "digest missing");
         assert!(

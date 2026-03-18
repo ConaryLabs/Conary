@@ -346,7 +346,8 @@ pub struct ImageBuilder {
     work_dir: PathBuf,
 
     /// Bootstrap configuration
-    #[allow(dead_code)] // Only target_arch accessed currently; full config retained for future build steps
+    #[allow(dead_code)]
+    // Only target_arch accessed currently; full config retained for future build steps
     config: BootstrapConfig,
 
     /// Base system root
@@ -459,13 +460,11 @@ impl ImageBuilder {
         let has_kernel = boot_dir.exists()
             && std::fs::read_dir(&boot_dir)
                 .map(|entries| {
-                    entries
-                        .flatten()
-                        .any(|e| {
-                            e.file_name()
-                                .to_str()
-                                .is_some_and(|n| n.starts_with("vmlinuz"))
-                        })
+                    entries.flatten().any(|e| {
+                        e.file_name()
+                            .to_str()
+                            .is_some_and(|n| n.starts_with("vmlinuz"))
+                    })
                 })
                 .unwrap_or(false);
 

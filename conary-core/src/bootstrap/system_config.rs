@@ -293,7 +293,8 @@ mod tests {
         assert!(inputrc.contains("set input-meta on"));
         assert!(inputrc.contains("show-all-if-ambiguous"));
 
-        let dhcp = std::fs::read_to_string(root.join("etc/systemd/network/80-dhcp.network")).unwrap();
+        let dhcp =
+            std::fs::read_to_string(root.join("etc/systemd/network/80-dhcp.network")).unwrap();
         assert!(dhcp.contains("[Match]"));
         assert!(dhcp.contains("DHCP=yes"));
 
@@ -332,12 +333,14 @@ mod tests {
 
         // Verify symlinks exist
         assert!(root.join("etc/systemd/system/default.target").exists());
-        assert!(root
-            .join("etc/systemd/system/multi-user.target.wants/systemd-networkd.service")
-            .exists());
-        assert!(root
-            .join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
-            .exists());
+        assert!(
+            root.join("etc/systemd/system/multi-user.target.wants/systemd-networkd.service")
+                .exists()
+        );
+        assert!(
+            root.join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
+                .exists()
+        );
 
         // Verify symlink targets
         let target = std::fs::read_link(root.join("etc/systemd/system/default.target")).unwrap();

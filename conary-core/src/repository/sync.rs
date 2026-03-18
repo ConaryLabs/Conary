@@ -664,9 +664,8 @@ fn fetch_and_persist_canonical_map(conn: &Connection, endpoint: &str) -> Result<
     let client = RepositoryClient::new()?;
     let bytes = client.download_to_bytes(&url)?;
 
-    let map: CanonicalMapResponse = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::ParseError(format!("Failed to parse canonical map from {url}: {e}"))
-    })?;
+    let map: CanonicalMapResponse = serde_json::from_slice(&bytes)
+        .map_err(|e| Error::ParseError(format!("Failed to parse canonical map from {url}: {e}")))?;
 
     let tx = conn.unchecked_transaction()?;
     let mut count = 0u64;

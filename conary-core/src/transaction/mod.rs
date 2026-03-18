@@ -483,11 +483,8 @@ mod integration_tests {
         fe.insert(&conn).unwrap();
 
         // Run build_generation_from_db
-        let result = build_generation_from_db(
-            &conn,
-            &generations_dir,
-            "Full transaction round-trip test",
-        );
+        let result =
+            build_generation_from_db(&conn, &generations_dir, "Full transaction round-trip test");
         assert!(
             result.is_ok(),
             "build_generation_from_db failed: {:?}",

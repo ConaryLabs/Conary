@@ -80,7 +80,5 @@ pub use provenance::{
     SignatureScope, SourceProvenance, TransparencyLog,
 };
 pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
-pub use transaction::{
-    TransactionConfig, TransactionEngine, TransactionPlan, TransactionState,
-};
+pub use transaction::{TransactionConfig, TransactionEngine, TransactionPlan, TransactionState};
 pub use trust::TrustError;

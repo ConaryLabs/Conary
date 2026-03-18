@@ -108,12 +108,10 @@ impl TestManifest {
     pub fn is_qemu_only(&self) -> bool {
         let has_tests = !self.test.is_empty();
         has_tests
-            && self.test.iter().all(|t| {
-                !t.step.is_empty()
-                    && t.step
-                        .iter()
-                        .all(|s| s.qemu_boot.is_some())
-            })
+            && self
+                .test
+                .iter()
+                .all(|t| !t.step.is_empty() && t.step.iter().all(|s| s.qemu_boot.is_some()))
     }
 }
 

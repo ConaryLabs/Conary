@@ -25,7 +25,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct RemiClient {
     client: reqwest::Client,
     base_url: String,
-    #[allow(dead_code)] // Injected into default headers at construction; stored for potential re-auth
+    #[allow(dead_code)]
+    // Injected into default headers at construction; stored for potential re-auth
     token: String,
 }
 

@@ -1244,11 +1244,7 @@ mod tests {
         // interfere -- the direct candidate should be used.
         let (_dir, conn) = setup_test_db();
 
-        insert_canonical(
-            &conn,
-            "kernel",
-            &[("fedora", "kernel"), ("arch", "linux")],
-        );
+        insert_canonical(&conn, "kernel", &[("fedora", "kernel"), ("arch", "linux")]);
 
         let mut repo = Repository::new(
             "fedora-main".to_string(),

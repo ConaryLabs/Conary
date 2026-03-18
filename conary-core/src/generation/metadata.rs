@@ -183,8 +183,7 @@ mod tests {
         metadata.write_to(tmp.path()).unwrap();
 
         // Verify the JSON does not contain erofs_verity_digest when None
-        let json =
-            std::fs::read_to_string(tmp.path().join(".conary-gen.json")).unwrap();
+        let json = std::fs::read_to_string(tmp.path().join(".conary-gen.json")).unwrap();
         assert!(
             !json.contains("erofs_verity_digest"),
             "erofs_verity_digest=None should be skipped in serialization"
@@ -254,10 +253,7 @@ mod tests {
     fn test_generation_paths() {
         assert_eq!(generations_dir(), PathBuf::from("/conary/generations"));
         assert_eq!(generation_path(1), PathBuf::from("/conary/generations/1"));
-        assert_eq!(
-            generation_path(42),
-            PathBuf::from("/conary/generations/42")
-        );
+        assert_eq!(generation_path(42), PathBuf::from("/conary/generations/42"));
         assert_eq!(current_link(), PathBuf::from("/conary/current"));
         assert_eq!(gc_roots_dir(), PathBuf::from("/conary/gc-roots"));
     }

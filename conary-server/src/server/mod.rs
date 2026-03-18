@@ -17,11 +17,11 @@
 pub mod admin_service;
 pub mod analytics;
 pub mod audit;
-pub mod chunk_gc;
 pub mod auth;
 mod bloom;
 mod cache;
 pub mod canonical_job;
+pub mod chunk_gc;
 pub mod config;
 mod conversion;
 pub mod delta_manifests;

@@ -47,7 +47,9 @@ pub fn build_referenced_set(conn: &Connection) -> Result<HashSet<String>> {
 
     // Collect hashes from converted_packages.chunk_hashes_json
     let mut stmt = conn
-        .prepare("SELECT chunk_hashes_json FROM converted_packages WHERE chunk_hashes_json IS NOT NULL")
+        .prepare(
+            "SELECT chunk_hashes_json FROM converted_packages WHERE chunk_hashes_json IS NOT NULL",
+        )
         .context("prepare converted_packages query")?;
 
     let rows = stmt
@@ -91,9 +93,7 @@ pub fn scan_local_chunks(objects_dir: &Path) -> Result<Vec<String>> {
         return Ok(hashes);
     }
 
-    let walker = walkdir::WalkDir::new(objects_dir)
-        .min_depth(2)
-        .max_depth(2);
+    let walker = walkdir::WalkDir::new(objects_dir).min_depth(2).max_depth(2);
 
     for entry in walker {
         let entry = entry.context("walk chunk directory")?;
@@ -102,11 +102,7 @@ pub fn scan_local_chunks(objects_dir: &Path) -> Result<Vec<String>> {
         }
 
         // Skip .tmp files (in-flight writes)
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|ext| ext == "tmp")
-        {
+        if entry.path().extension().is_some_and(|ext| ext == "tmp") {
             continue;
         }
 
@@ -218,7 +214,11 @@ pub async fn run_chunk_gc(
             let mut access_map: std::collections::HashMap<String, Option<String>> =
                 std::collections::HashMap::new();
             if !orphan_strings.is_empty() {
-                let placeholders = orphan_strings.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let placeholders = orphan_strings
+                    .iter()
+                    .map(|_| "?")
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql = format!(
                     "SELECT hash, last_accessed FROM chunk_access WHERE hash IN ({})",
                     placeholders
