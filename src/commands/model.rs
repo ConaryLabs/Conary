@@ -23,7 +23,7 @@ use conary_core::model::parser::SystemModel;
 use conary_core::model::remote::fetch_remote_collection;
 use conary_core::model::{
     DiffAction, ModelDerivedPackage, ModelDiff, ModelDiffSummary, ReplatformEstimate,
-    ReplatformExecutionPlan, ReplatformStatus, SystemState, VisibleRealignmentProposal,
+    ReplatformStatus, SystemState, VisibleRealignmentProposal,
     capture_current_state, compute_diff, compute_diff_with_includes_offline, parse_model_file,
     parse_trove_spec, planned_replatform_actions, replatform_estimate_from_affinities,
     replatform_execution_plan, snapshot_to_model, source_policy_replatform_snapshot,
@@ -256,93 +256,7 @@ fn render_realignment_proposal_preview(proposals: &[VisibleRealignmentProposal])
     Some(line)
 }
 
-fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -> String {
-    let mut lines = vec![format!(
-        "Planned replatform transactions ({}):",
-        plan.transactions.len()
-    )];
-
-    for transaction in &plan.transactions {
-        let current = transaction
-            .current_distro
-            .as_deref()
-            .unwrap_or("unknown source");
-        let status = if transaction.executable {
-            "executable"
-        } else {
-            "blocked"
-        };
-        let mut line = format!(
-            "  > [{}] remove {} {} from {}, install {} {}",
-            status,
-            transaction.package,
-            transaction.current_version,
-            current,
-            transaction.target_distro,
-            transaction.target_version
-        );
-        if let Some(arch) = &transaction.architecture {
-            line.push_str(&format!(" [{}]", arch));
-        }
-        match (
-            transaction.install_repository.as_deref(),
-            transaction.install_repository_package_id,
-        ) {
-            (Some(repo), Some(pkg_id)) => {
-                line.push_str(&format!(" via {} [repo-pkg:{}]", repo, pkg_id));
-                if let Some(route) = &transaction.install_route {
-                    line.push_str(&format!(" [route:{}]", route));
-                }
-                if let Some(reason) = transaction.blocked_reason.as_ref() {
-                    line.push_str(&format!(" [{}]", render_replatform_blocked_reason(reason)));
-                }
-            }
-            _ => {
-                let reason = transaction
-                    .blocked_reason
-                    .as_ref()
-                    .map(render_replatform_blocked_reason)
-                    .unwrap_or("pending repo/package resolution");
-                line.push_str(&format!(" [{}]", reason));
-            }
-        }
-        if !transaction.unresolved_dependencies.is_empty() {
-            line.push_str(&format!(
-                " [deps:{}]",
-                transaction.unresolved_dependencies.join(", ")
-            ));
-        }
-        lines.push(line);
-    }
-
-    lines.join("\n")
-}
-
-fn render_replatform_blocked_reason(
-    reason: &conary_core::model::ReplatformBlockedReason,
-) -> &'static str {
-    match reason {
-        conary_core::model::ReplatformBlockedReason::MissingRepositoryMetadata => {
-            "missing repository metadata"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingRepositoryPackageId => {
-            "missing repository package id"
-        }
-        conary_core::model::ReplatformBlockedReason::AnyVersionRouteOnly => {
-            "only any-version install route"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute => {
-            "missing versioned install route"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => "missing install route",
-        conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
-            "unsatisfied target dependencies"
-        }
-        conary_core::model::ReplatformBlockedReason::ArchitectureMismatch => {
-            "architecture mismatch"
-        }
-    }
-}
+use super::replatform_rendering::render_replatform_execution_plan;
 
 fn collect_lock_data(
     model: &SystemModel,
@@ -1505,7 +1419,7 @@ mod tests {
         RepositoryPackage, ResolutionStrategy, Trove,
     };
     use conary_core::db::schema;
-    use conary_core::model::ReplatformBlockedReason;
+    use conary_core::model::{ReplatformBlockedReason, ReplatformExecutionPlan};
     use conary_core::model::parser::SystemModel;
     use tempfile::{NamedTempFile, tempdir};
 

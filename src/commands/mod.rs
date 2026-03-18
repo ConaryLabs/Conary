@@ -24,6 +24,7 @@ mod model;
 pub mod progress;
 mod provenance;
 mod query;
+mod replatform_rendering;
 mod redirect;
 pub mod registry;
 mod remove;

@@ -12,7 +12,7 @@ use conary_core::db::models::{
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
 use conary_core::model::{
-    DiffAction, ReplatformExecutionPlan, capture_current_state, planned_replatform_actions,
+    DiffAction, capture_current_state, planned_replatform_actions,
     replatform_execution_plan, source_policy_replatform_snapshot,
 };
 use conary_core::repository::{
@@ -110,93 +110,7 @@ fn render_replatform_action_preview(actions: &[DiffAction]) -> Option<String> {
     Some(line)
 }
 
-fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -> String {
-    let mut lines = vec![format!(
-        "Planned replatform transactions ({}):",
-        plan.transactions.len()
-    )];
-
-    for transaction in &plan.transactions {
-        let current = transaction
-            .current_distro
-            .as_deref()
-            .unwrap_or("unknown source");
-        let status = if transaction.executable {
-            "executable"
-        } else {
-            "blocked"
-        };
-        let mut line = format!(
-            "  > [{}] remove {} {} from {}, install {} {}",
-            status,
-            transaction.package,
-            transaction.current_version,
-            current,
-            transaction.target_distro,
-            transaction.target_version
-        );
-        if let Some(arch) = &transaction.architecture {
-            line.push_str(&format!(" [{}]", arch));
-        }
-        match (
-            transaction.install_repository.as_deref(),
-            transaction.install_repository_package_id,
-        ) {
-            (Some(repo), Some(pkg_id)) => {
-                line.push_str(&format!(" via {} [repo-pkg:{}]", repo, pkg_id));
-                if let Some(route) = &transaction.install_route {
-                    line.push_str(&format!(" [route:{}]", route));
-                }
-                if let Some(reason) = transaction.blocked_reason.as_ref() {
-                    line.push_str(&format!(" [{}]", render_replatform_blocked_reason(reason)));
-                }
-            }
-            _ => {
-                let reason = transaction
-                    .blocked_reason
-                    .as_ref()
-                    .map(render_replatform_blocked_reason)
-                    .unwrap_or("pending repo/package resolution");
-                line.push_str(&format!(" [{}]", reason));
-            }
-        }
-        if !transaction.unresolved_dependencies.is_empty() {
-            line.push_str(&format!(
-                " [deps:{}]",
-                transaction.unresolved_dependencies.join(", ")
-            ));
-        }
-        lines.push(line);
-    }
-
-    lines.join("\n")
-}
-
-fn render_replatform_blocked_reason(
-    reason: &conary_core::model::ReplatformBlockedReason,
-) -> &'static str {
-    match reason {
-        conary_core::model::ReplatformBlockedReason::MissingRepositoryMetadata => {
-            "missing repository metadata"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingRepositoryPackageId => {
-            "missing repository package id"
-        }
-        conary_core::model::ReplatformBlockedReason::AnyVersionRouteOnly => {
-            "only any-version install route"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingVersionedInstallRoute => {
-            "missing versioned install route"
-        }
-        conary_core::model::ReplatformBlockedReason::MissingInstallRoute => "missing install route",
-        conary_core::model::ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
-            "unsatisfied target dependencies"
-        }
-        conary_core::model::ReplatformBlockedReason::ArchitectureMismatch => {
-            "architecture mismatch"
-        }
-    }
-}
+use super::replatform_rendering::render_replatform_execution_plan;
 
 /// Check whether the repository version is strictly newer than the installed version.
 ///
@@ -1021,7 +935,7 @@ mod tests {
         RepositoryPackage, ResolutionStrategy, TroveType,
     };
     use conary_core::db::schema;
-    use conary_core::model::ReplatformBlockedReason;
+    use conary_core::model::{ReplatformBlockedReason, ReplatformExecutionPlan};
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, String) {
