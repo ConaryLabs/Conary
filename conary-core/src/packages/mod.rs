@@ -18,7 +18,7 @@ pub mod rpm;
 pub mod rpm_query;
 pub mod traits;
 
-pub use common::{PackageMetadata, PackageMetadataBuilder};
+pub use common::PackageMetadata;
 pub use registry::{PackageFormatType, detect_format, parse_package};
 
 use crate::error::Result;

@@ -124,122 +124,6 @@ impl PackageMetadata {
     }
 }
 
-/// Builder for PackageMetadata to make construction cleaner
-#[derive(Debug, Default)]
-pub struct PackageMetadataBuilder {
-    package_path: Option<PathBuf>,
-    name: Option<String>,
-    version: Option<String>,
-    architecture: Option<String>,
-    description: Option<String>,
-    files: Vec<PackageFile>,
-    dependencies: Vec<Dependency>,
-    scriptlets: Vec<Scriptlet>,
-    config_files: Vec<ConfigFileInfo>,
-}
-
-impl PackageMetadataBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the package path
-    pub fn package_path(mut self, path: PathBuf) -> Self {
-        self.package_path = Some(path);
-        self
-    }
-
-    /// Set the package name
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set the package version
-    pub fn version(mut self, version: impl Into<String>) -> Self {
-        self.version = Some(version.into());
-        self
-    }
-
-    /// Set the architecture
-    pub fn architecture(mut self, arch: impl Into<String>) -> Self {
-        self.architecture = Some(arch.into());
-        self
-    }
-
-    /// Set the description
-    pub fn description(mut self, desc: impl Into<String>) -> Self {
-        self.description = Some(desc.into());
-        self
-    }
-
-    /// Set the files list
-    pub fn files(mut self, files: Vec<PackageFile>) -> Self {
-        self.files = files;
-        self
-    }
-
-    /// Set the dependencies list
-    pub fn dependencies(mut self, deps: Vec<Dependency>) -> Self {
-        self.dependencies = deps;
-        self
-    }
-
-    /// Set the scriptlets list
-    pub fn scriptlets(mut self, scriptlets: Vec<Scriptlet>) -> Self {
-        self.scriptlets = scriptlets;
-        self
-    }
-
-    /// Set the config files list
-    pub fn config_files(mut self, config_files: Vec<ConfigFileInfo>) -> Self {
-        self.config_files = config_files;
-        self
-    }
-
-    /// Build the PackageMetadata, returning an error if required fields are missing.
-    pub fn build(self) -> crate::error::Result<PackageMetadata> {
-        Ok(PackageMetadata {
-            package_path: self.package_path.ok_or_else(|| {
-                crate::error::Error::InitError(
-                    "PackageMetadataBuilder: package_path is required".to_string(),
-                )
-            })?,
-            name: self.name.ok_or_else(|| {
-                crate::error::Error::InitError(
-                    "PackageMetadataBuilder: name is required".to_string(),
-                )
-            })?,
-            version: self.version.ok_or_else(|| {
-                crate::error::Error::InitError(
-                    "PackageMetadataBuilder: version is required".to_string(),
-                )
-            })?,
-            architecture: self.architecture,
-            description: self.description,
-            files: self.files,
-            dependencies: self.dependencies,
-            scriptlets: self.scriptlets,
-            config_files: self.config_files,
-        })
-    }
-
-    /// Try to build the PackageMetadata, returning None if required fields are missing
-    pub fn try_build(self) -> Option<PackageMetadata> {
-        Some(PackageMetadata {
-            package_path: self.package_path?,
-            name: self.name?,
-            version: self.version?,
-            architecture: self.architecture,
-            description: self.description,
-            files: self.files,
-            dependencies: self.dependencies,
-            scriptlets: self.scriptlets,
-            config_files: self.config_files,
-        })
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -261,15 +145,14 @@ mod tests {
     }
 
     #[test]
-    fn test_package_metadata_builder() {
-        let meta = PackageMetadataBuilder::new()
-            .package_path(PathBuf::from("/tmp/test.rpm"))
-            .name("my-package")
-            .version("2.0.0")
-            .architecture("x86_64")
-            .description("A test package")
-            .build()
-            .unwrap();
+    fn test_package_metadata_with_optional_fields() {
+        let mut meta = PackageMetadata::new(
+            PathBuf::from("/tmp/test.rpm"),
+            "my-package".to_string(),
+            "2.0.0".to_string(),
+        );
+        meta.architecture = Some("x86_64".to_string());
+        meta.description = Some("A test package".to_string());
 
         assert_eq!(meta.name(), "my-package");
         assert_eq!(meta.version(), "2.0.0");
@@ -279,14 +162,13 @@ mod tests {
 
     #[test]
     fn test_to_trove() {
-        let meta = PackageMetadataBuilder::new()
-            .package_path(PathBuf::from("/tmp/test.deb"))
-            .name("example")
-            .version("1.2.3")
-            .architecture("aarch64")
-            .description("Example package")
-            .build()
-            .unwrap();
+        let mut meta = PackageMetadata::new(
+            PathBuf::from("/tmp/test.deb"),
+            "example".to_string(),
+            "1.2.3".to_string(),
+        );
+        meta.architecture = Some("aarch64".to_string());
+        meta.description = Some("Example package".to_string());
 
         let trove = meta.to_trove();
 
@@ -294,13 +176,6 @@ mod tests {
         assert_eq!(trove.version, "1.2.3");
         assert_eq!(trove.architecture, Some("aarch64".to_string()));
         assert_eq!(trove.description, Some("Example package".to_string()));
-    }
-
-    #[test]
-    fn test_try_build_missing_fields() {
-        let result = PackageMetadataBuilder::new().name("incomplete").try_build();
-
-        assert!(result.is_none());
     }
 
     #[test]
