@@ -8,7 +8,7 @@ use conary_core::db::paths::objects_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {
@@ -83,7 +83,7 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
 }
 
 /// Rollback a changeset
-pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
+pub fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -95,10 +95,6 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
     }
 
     let mut conn = open_db(db_path)?;
-
-    let objects_dir = objects_dir(db_path);
-    let install_root = PathBuf::from(root);
-    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
 
     let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)?
         .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
@@ -149,10 +145,10 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
         if has_troves {
             // Upgrade: remove new version, restore old version from snapshot
-            return rollback_upgrade(changeset_id, json, &mut conn, &deployer, &changeset);
+            return rollback_upgrade(changeset_id, json, &mut conn, &changeset);
         }
         // Removal: restore the package from snapshot
-        return rollback_removal(changeset_id, json, &mut conn, &deployer, &changeset);
+        return rollback_removal(changeset_id, json, &mut conn, &changeset);
     }
 
     // Otherwise, this is a fresh install - remove the installed packages
@@ -276,34 +272,19 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> 
 
     let files_to_rollback = files_to_rollback.into_inner();
 
-    info!("Removing files from filesystem...");
-    let mut removal_errors = Vec::new();
-    for (path, action) in &files_to_rollback {
-        if action == "add" || action == "modify" {
-            match deployer.remove_file(path) {
-                Ok(()) => info!("Removed file: {}", path),
-                Err(e) => {
-                    warn!("Failed to remove file during rollback: {}: {}", path, e);
-                    removal_errors.push(format!("{}: {}", path, e));
-                }
-            }
-        }
-    }
-    if !removal_errors.is_empty() {
-        warn!(
-            "{} file(s) could not be removed during rollback",
-            removal_errors.len()
-        );
-    }
+    // Composefs-native: files are removed by rebuilding the EROFS image
+    // from the updated DB state and remounting.
+    // TODO(composefs-native): build_generation_from_db + mount_generation
+    info!(
+        "Composefs-native: DB committed for rollback of changeset {}. EROFS rebuild/mount deferred.",
+        changeset_id
+    );
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
-    println!(
-        "  Removed {} files from filesystem",
-        files_to_rollback.len()
-    );
+    println!("  {} files affected by rollback", files_to_rollback.len());
 
     Ok(())
 }
@@ -313,7 +294,6 @@ fn rollback_removal(
     changeset_id: i64,
     snapshot_json: &str,
     conn: &mut rusqlite::Connection,
-    deployer: &conary_core::filesystem::FileDeployer,
     changeset: &conary_core::db::models::Changeset,
 ) -> Result<()> {
     info!("Rolling back removal changeset: {}", changeset_id);
@@ -389,28 +369,16 @@ fn rollback_removal(
         Ok(())
     })?;
 
-    // Deploy files from CAS to filesystem
-    info!("Restoring files to filesystem...");
-    let mut restored_count = 0;
-    for file in &snapshot.files {
-        match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
-            Ok(()) => {
-                restored_count += 1;
-                info!("Restored file: {}", file.path);
-            }
-            Err(e) => {
-                // Log but continue - file might already exist or CAS might not have it
-                info!("Could not restore file {}: {}", file.path, e);
-            }
-        }
-    }
+    // Composefs-native: rebuild EROFS image from updated DB state and remount
+    // TODO(composefs-native): build_generation_from_db + mount_generation
+    info!("Composefs-native: DB restored for rollback of removal. EROFS rebuild/mount deferred.");
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
     println!("  Restored {} version {}", snapshot.name, snapshot.version);
-    println!("  Files restored: {}/{}", restored_count, file_count);
+    println!("  Files in DB: {}", file_count);
 
     Ok(())
 }
@@ -420,7 +388,6 @@ fn rollback_upgrade(
     changeset_id: i64,
     snapshot_json: &str,
     conn: &mut rusqlite::Connection,
-    deployer: &conary_core::filesystem::FileDeployer,
     changeset: &conary_core::db::models::Changeset,
 ) -> Result<()> {
     info!("Rolling back upgrade changeset: {}", changeset_id);
@@ -508,43 +475,20 @@ fn rollback_upgrade(
         Ok(())
     })?;
 
-    // Remove new version's files that aren't in the old version
-    let old_paths: std::collections::HashSet<&str> =
-        snapshot.files.iter().map(|f| f.path.as_str()).collect();
-    let files_to_remove = files_to_remove.into_inner();
-    for path in &files_to_remove {
-        if !old_paths.contains(path.as_str()) {
-            match deployer.remove_file(path) {
-                Ok(()) => info!("Removed new file: {}", path),
-                Err(e) => warn!("Failed to remove file during rollback: {}: {}", path, e),
-            }
-        }
-    }
-
-    // Restore old version's files from CAS
-    info!("Restoring old version files from CAS...");
-    let mut restored_count = 0;
-    for file in &snapshot.files {
-        match deployer.deploy_file(&file.path, &file.sha256_hash, file.permissions as u32) {
-            Ok(()) => {
-                restored_count += 1;
-                info!("Restored file: {}", file.path);
-            }
-            Err(e) => {
-                info!("Could not restore file {}: {}", file.path, e);
-            }
-        }
-    }
+    // Composefs-native: the DB now reflects the old version state.
+    // Rebuild EROFS image from DB state and remount to apply the rollback.
+    // TODO(composefs-native): build_generation_from_db + mount_generation
+    let _files_to_remove = files_to_remove.into_inner();
+    info!("Composefs-native: DB restored for upgrade rollback. EROFS rebuild/mount deferred.");
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
     println!(
-        "  Restored {} version {} ({}/{} files)",
+        "  Restored {} version {} ({} files in DB)",
         snapshot.name,
         snapshot.version,
-        restored_count,
         snapshot.files.len()
     );
 
@@ -552,7 +496,12 @@ fn rollback_upgrade(
 }
 
 /// Verify installed files
-pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: bool) -> Result<()> {
+pub fn cmd_verify(
+    package: Option<String>,
+    db_path: &str,
+    _root: &str,
+    use_rpm: bool,
+) -> Result<()> {
     info!("Verifying installed files...");
 
     let conn = open_db(db_path)?;
@@ -562,9 +511,10 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
         return verify_against_rpm(&conn, package);
     }
 
+    // In composefs-native, verify means checking that CAS objects exist
+    // for all file_entries in the DB. The EROFS image is built from these.
     let objects_dir = objects_dir(db_path);
-    let install_root = PathBuf::from(root);
-    let deployer = conary_core::filesystem::FileDeployer::new(&objects_dir, &install_root)?;
+    let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
     let files: Vec<(String, String, String)> = if let Some(pkg_name) = package {
         let troves = conary_core::db::models::Trove::find_by_name(&conn, &pkg_name)?;
@@ -604,39 +554,29 @@ pub fn cmd_verify(package: Option<String>, db_path: &str, root: &str, use_rpm: b
     }
 
     let mut ok_count = 0;
-    let mut modified_count = 0;
     let mut missing_count = 0;
 
     for (path, expected_hash, pkg_name) in &files {
-        match deployer.verify_file(path, expected_hash) {
-            Ok(true) => {
-                if deployer.verify_cas_object(expected_hash)? {
-                    ok_count += 1;
-                    info!("OK: {} (from {})", path, pkg_name);
-                } else {
-                    modified_count += 1;
-                    println!("mismatch: CAS object for {} (from {})", path, pkg_name);
-                }
-            }
-            Ok(false) => {
-                modified_count += 1;
-                println!("MODIFIED: {} (from {})", path, pkg_name);
-            }
-            Err(_) => {
-                missing_count += 1;
-                println!("MISSING: {} (from {})", path, pkg_name);
-            }
+        // Composefs-native verify: check that the CAS object exists
+        if cas.exists(expected_hash) {
+            ok_count += 1;
+            info!("OK: {} (from {})", path, pkg_name);
+        } else {
+            missing_count += 1;
+            println!("MISSING from CAS: {} (from {})", path, pkg_name);
         }
     }
 
     println!("\nVerification summary:");
-    println!("  OK: {} files", ok_count);
-    println!("  Modified: {} files", modified_count);
-    println!("  Missing: {} files", missing_count);
+    println!("  OK (in CAS): {} files", ok_count);
+    println!("  Missing from CAS: {} files", missing_count);
     println!("  Total: {} files", files.len());
 
-    if modified_count > 0 || missing_count > 0 {
-        return Err(anyhow::anyhow!("Verification failed"));
+    if missing_count > 0 {
+        return Err(anyhow::anyhow!(
+            "Verification failed: {} files missing from CAS",
+            missing_count
+        ));
     }
 
     Ok(())

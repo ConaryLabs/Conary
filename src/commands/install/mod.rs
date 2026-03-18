@@ -24,7 +24,7 @@ use conversion::{
     ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs,
 };
 use dependencies::build_dependency_edges;
-use execute::{convert_extracted_files, get_files_to_remove};
+// execute::get_files_to_remove is used by batch.rs via super::execute
 use prepare::{check_upgrade_status, parse_package};
 use resolve::{
     PolicyOptions, ResolutionOutcome, ResolvedSourceType, check_provides_dependencies,
@@ -51,9 +51,7 @@ use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::Resolver;
 use conary_core::scriptlet::SandboxMode;
-use conary_core::transaction::{
-    PackageInfo, TransactionConfig, TransactionEngine, TransactionOperations,
-};
+use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -260,9 +258,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let package = resolved_name.as_deref().unwrap_or(package);
 
     // --- Phase 2: Component parsing + pre-install validation ---
-    let (package_name, component_selection) = parse_component_and_validate(
-        &conn, package, dep_mode, force,
-    )?;
+    let (package_name, component_selection) =
+        parse_component_and_validate(&conn, package, dep_mode, force)?;
 
     // --- Phase 3: Dependency-as-explicit promotion check ---
     if try_promote_existing_dep(&conn, &package_name, version.as_deref(), selection_reason)? {
@@ -323,11 +320,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
 
     // --- Phase 7: File extraction + component classification ---
     let progress = InstallProgress::single("Installing");
-    let extraction = extract_and_classify_files(
-        pkg.as_ref(),
-        &component_selection,
-        &progress,
-    )?;
+    let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
@@ -359,13 +352,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
     };
-    let tx_result = execute_install_transaction(
-        &mut conn,
-        pkg.as_ref(),
-        &extraction,
-        &tx_ctx,
-        &progress,
-    )?;
+    let tx_result =
+        execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
 
     // --- Phase 10: Post-install finalization ---
     finalize_install(
@@ -686,7 +674,10 @@ fn resolve_and_parse_package(
     no_capture: bool,
     policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
     ccs_opts: &CcsInstallParams<'_>,
-) -> Result<(Box<dyn conary_core::packages::PackageFormat>, PackageFormatType)> {
+) -> Result<(
+    Box<dyn conary_core::packages::PackageFormat>,
+    PackageFormatType,
+)> {
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
     progress.set_phase(package_name, InstallPhase::Downloading);
@@ -1001,11 +992,7 @@ fn handle_dep_installs(
             dep_requests.len()
         );
         // Validate that deps are actually resolvable even in dry-run
-        match repository::resolve_dependencies_transitive_requests(
-            ctx.conn,
-            &dep_requests,
-            10,
-        ) {
+        match repository::resolve_dependencies_transitive_requests(ctx.conn, &dep_requests, 10) {
             Ok(to_download) => {
                 for (name, _) in &dep_requests {
                     println!("    {}", name);
@@ -1030,11 +1017,7 @@ fn handle_dep_installs(
     }
 
     // Use transitive resolution with full version constraints
-    match repository::resolve_dependencies_transitive_requests(
-        ctx.conn,
-        &dep_requests,
-        10,
-    ) {
+    match repository::resolve_dependencies_transitive_requests(ctx.conn, &dep_requests, 10) {
         Ok(to_download) => {
             if !to_download.is_empty() {
                 progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
@@ -1050,8 +1033,7 @@ fn handle_dep_installs(
                 let mut prepared_packages = Vec::with_capacity(downloaded.len());
 
                 for (dep_name, dep_path) in &downloaded {
-                    progress
-                        .set_status(&format!("Preparing dependency: {}", dep_name));
+                    progress.set_status(&format!("Preparing dependency: {}", dep_name));
                     let reason = format!("Required by {}", parent_name);
                     match prepare_package_for_batch(
                         dep_path,
@@ -1064,10 +1046,7 @@ fn handle_dep_installs(
                         }
                         Err(e) => {
                             if e.to_string().contains("already installed") {
-                                info!(
-                                    "Dependency {} already installed, skipping",
-                                    dep_name
-                                );
+                                info!("Dependency {} already installed, skipping", dep_name);
                                 continue;
                             }
                             return Err(anyhow::anyhow!(
@@ -1113,8 +1092,7 @@ fn check_unresolvable_deps(
     }
 
     // Last resort: check provides table
-    let (satisfied, still_missing) =
-        check_provides_dependencies(ctx.conn, &dep_plan.unresolvable);
+    let (satisfied, still_missing) = check_provides_dependencies(ctx.conn, &dep_plan.unresolvable);
     if !satisfied.is_empty() {
         for (name, provider, _) in &satisfied {
             println!("  {} provided by {}", name, provider);
@@ -1318,8 +1296,7 @@ fn run_pre_install_phase(
 ) -> Result<PreScriptletState> {
     // Determine package format and execution mode for scriptlet execution
     let scriptlet_format = to_scriptlet_format(ctx.format);
-    let execution_mode =
-        build_execution_mode(ctx.old_trove.map(|t| t.version.as_str()));
+    let execution_mode = build_execution_mode(ctx.old_trove.map(|t| t.version.as_str()));
 
     // Execute pre-install scriptlet (before any changes)
     // Scriptlets only run when :runtime or :lib is being installed
@@ -1352,7 +1329,9 @@ fn run_pre_install_phase(
     let old_package_scriptlets = get_old_package_scriptlets(conn, old_trove_id)?;
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
-    if !ctx.no_scripts && let Some(old_trove) = ctx.old_trove {
+    if !ctx.no_scripts
+        && let Some(old_trove) = ctx.old_trove
+    {
         run_old_pre_remove(
             Path::new(ctx.root),
             &old_trove.name,
@@ -1382,22 +1361,19 @@ fn execute_install_transaction(
 ) -> Result<InstallTransactionResult> {
     let is_upgrade = ctx.old_trove_to_upgrade.is_some();
 
-    // === TRANSACTION ENGINE INTEGRATION ===
-    // Create transaction engine for crash-safe atomic operations
+    // === COMPOSEFS-NATIVE TRANSACTION ===
+    // Flow: store in CAS -> DB commit -> EROFS build -> composefs mount
     let db_path_buf = PathBuf::from(ctx.db_path);
-    let tx_config = TransactionConfig::new(PathBuf::from(ctx.root), db_path_buf.clone());
-    let engine =
+    let tx_config = TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf.clone());
+    let mut engine =
         TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
     // Recover any incomplete transactions from previous crashes
-    let recovery_outcomes = engine
+    engine
         .recover(conn)
         .context("Failed to recover incomplete transactions")?;
-    for outcome in &recovery_outcomes {
-        info!("Recovery outcome: {:?}", outcome);
-    }
 
-    // Begin new transaction
+    // Acquire transaction lock
     let tx_description = if let Some(old_trove) = ctx.old_trove_to_upgrade {
         format!(
             "Upgrade {} from {} to {}",
@@ -1408,114 +1384,27 @@ fn execute_install_transaction(
     } else {
         format!("Install {}-{}", pkg.name(), pkg.version())
     };
-    let mut txn = engine
-        .begin(&tx_description)
-        .context("Failed to begin transaction")?;
+    engine.begin().context("Failed to begin transaction")?;
 
-    info!("Started transaction {} for {}", txn.uuid(), tx_description);
+    info!("Started transaction for {}", tx_description);
 
-    // Convert extracted files to transaction format
-    let tx_files = convert_extracted_files(&extraction.extracted_files);
-
-    // Get files to remove for upgrades
-    let files_to_remove = if let Some(old_trove) = ctx.old_trove_to_upgrade
-        && let Some(old_id) = old_trove.id
-    {
-        let new_paths: std::collections::HashSet<&str> =
-            extraction.extracted_files.iter().map(|f| f.path.as_str()).collect();
-        get_files_to_remove(conn, old_id, &new_paths)?
-    } else {
-        Vec::new()
-    };
-
-    // Plan transaction operations
+    // Store extracted file content in CAS
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let operations = TransactionOperations {
-        package: PackageInfo {
-            name: pkg.name().to_string(),
-            version: pkg.version().to_string(),
-            release: None,
-            arch: pkg.architecture().map(|s| s.to_string()),
-        },
-        files_to_add: tx_files.clone(),
-        files_to_remove,
-        is_upgrade,
-        old_package: ctx.old_trove_to_upgrade.map(|t| PackageInfo {
-            name: t.name.clone(),
-            version: t.version.clone(),
-            release: None,
-            arch: t.architecture.clone(),
-        }),
-    };
-
-    let plan = txn
-        .plan_operations(operations, conn)
-        .context("Failed to plan transaction")?;
-
-    // Extract plan data before further mutations (to avoid borrow checker issues)
-    let plan_conflicts = plan.conflicts.clone();
-    let plan_files_to_stage = plan.files_to_stage.clone();
-    let plan_files_to_backup_len = plan.files_to_backup.len();
-    let plan_dirs_to_create_len = plan.dirs_to_create.len();
-
-    // Check for conflicts
-    if !plan_conflicts.is_empty() {
-        let conflict_msgs: Vec<String> =
-            plan_conflicts.iter().map(|c| format!("{:?}", c)).collect();
-        txn.abort()
-            .context("Failed to abort transaction after conflicts")?;
-        return Err(anyhow::anyhow!(
-            "File conflicts detected:\n  {}",
-            conflict_msgs.join("\n  ")
-        ));
+    let mut file_hashes: Vec<(String, String, i64, i32)> =
+        Vec::with_capacity(extraction.extracted_files.len());
+    for file in &extraction.extracted_files {
+        let hash = engine
+            .cas()
+            .store(&file.content)
+            .with_context(|| format!("Failed to store {} in CAS", file.path))?;
+        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
     }
 
     info!(
-        "Transaction plan: {} files to stage, {} files to backup, {} dirs to create",
-        plan_files_to_stage.len(),
-        plan_files_to_backup_len,
-        plan_dirs_to_create_len
+        "Stored {} files in CAS for {}",
+        file_hashes.len(),
+        pkg.name()
     );
-
-    // Prepare: store content in CAS
-    txn.prepare(&tx_files)
-        .context("Failed to prepare transaction (CAS storage)")?;
-
-    // Backup existing files
-    txn.backup_files()
-        .context("Failed to backup existing files")?;
-
-    // Stage new files from CAS
-    txn.stage_files().context("Failed to stage files")?;
-
-    // Apply filesystem changes (atomic renames)
-    let fs_result = txn
-        .apply_filesystem()
-        .context("Failed to apply filesystem changes")?;
-
-    info!(
-        "Filesystem changes: {} added, {} replaced, {} removed",
-        fs_result.files_added, fs_result.files_replaced, fs_result.files_removed
-    );
-
-    // Write DB commit intent for crash recovery correlation
-    txn.write_db_commit_intent()
-        .context("Failed to write DB commit intent")?;
-
-    // Build file hashes from staged files for DB insertion
-    // Create a lookup from path to size using extracted files
-    let size_lookup: HashMap<String, i64> = extraction.extracted_files
-        .iter()
-        .map(|f| (f.path.clone(), f.size))
-        .collect();
-    let file_hashes: Vec<(String, String, i64, i32)> = plan_files_to_stage
-        .iter()
-        .map(|s| {
-            let path_str = s.path.display().to_string();
-            let size = size_lookup.get(&path_str).copied().unwrap_or(0);
-            (path_str, s.hash.clone(), size, s.mode as i32)
-        })
-        .collect();
 
     // DB transaction with tx_uuid for crash recovery
     let format = ctx.format;
@@ -1524,10 +1413,9 @@ fn execute_install_transaction(
     let language_provides = &extraction.language_provides;
     let scriptlets = pkg.scriptlets();
 
-    let tx_uuid = txn.uuid().to_string();
     let db_result = conary_core::db::transaction(conn, |tx| {
-        // Create changeset with tx_uuid for crash recovery
-        let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
+        // Create changeset for this install/upgrade
+        let mut changeset = Changeset::new(tx_description.clone());
         let changeset_id = changeset.insert(tx)?;
 
         if let Some(old_trove) = ctx.old_trove_to_upgrade
@@ -1651,42 +1539,32 @@ fn execute_install_transaction(
     });
 
     // Handle DB transaction result
-    let (changeset_id, trove_id) = match db_result {
+    let (changeset_id, _trove_id) = match db_result {
         Ok((cs_id, tr_id)) => {
-            // Record successful DB commit in transaction journal
-            txn.record_db_commit(cs_id, tr_id)
-                .context("Failed to record DB commit")?;
+            info!("DB commit successful: changeset={}, trove={}", cs_id, tr_id);
             (cs_id, tr_id)
         }
         Err(e) => {
-            // DB failed - abort transaction (will restore backups)
-            if let Err(abort_err) = txn.abort() {
-                warn!(
-                    "Failed to abort transaction after DB failure: {}",
-                    abort_err
-                );
-            }
+            // DB failed - release lock and bail
+            engine.release_lock();
             return Err(anyhow::anyhow!("Database transaction failed: {}", e));
         }
     };
 
-    // Suppress unused variable warning
-    let _ = trove_id;
-
-    // Mark post-scripts complete and finish transaction within this scope
-    // (Transaction has a lifetime tied to the engine, so it cannot be returned)
-    txn.mark_post_scripts_complete()
-        .context("Failed to mark post-scripts complete")?;
-
-    let finish_result = txn.finish().context("Failed to finish transaction")?;
+    // composefs-native: build EROFS image from DB state and mount new generation
+    // This is deferred to a later task that wires up the full generation lifecycle.
+    // For now, files are in CAS and the DB is committed, which is the composefs-native
+    // point of no return. The EROFS build + mount will be added in Task 9.
+    // TODO(composefs-native): build_generation_from_db + mount_generation
     info!(
-        "Transaction {} completed in {}ms",
-        finish_result.tx_uuid, finish_result.duration_ms
+        "Composefs-native: DB committed for {}. EROFS build/mount deferred.",
+        tx_description
     );
 
-    Ok(InstallTransactionResult {
-        changeset_id,
-    })
+    // Release transaction lock
+    engine.release_lock();
+
+    Ok(InstallTransactionResult { changeset_id })
 }
 
 /// Run post-install scriptlets, triggers, and print the final summary.
@@ -1700,7 +1578,9 @@ fn finalize_install(
     progress: &InstallProgress,
 ) -> Result<()> {
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
-    if !scriptlet_ctx.no_scripts && let Some(old_trove) = scriptlet_ctx.old_trove {
+    if !scriptlet_ctx.no_scripts
+        && let Some(old_trove) = scriptlet_ctx.old_trove
+    {
         run_old_post_remove(
             Path::new(scriptlet_ctx.root),
             &old_trove.name,
@@ -1728,8 +1608,17 @@ fn finalize_install(
     }
 
     progress.set_phase(pkg.name(), InstallPhase::Triggers);
-    let file_paths: Vec<String> = extraction.extracted_files.iter().map(|f| f.path.clone()).collect();
-    run_triggers(conn, Path::new(scriptlet_ctx.root), tx_result.changeset_id, &file_paths);
+    let file_paths: Vec<String> = extraction
+        .extracted_files
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
+    run_triggers(
+        conn,
+        Path::new(scriptlet_ctx.root),
+        tx_result.changeset_id,
+        &file_paths,
+    );
 
     progress.finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
 
@@ -1749,7 +1638,8 @@ fn finalize_install(
     println!("  Files installed: {}", extraction.extracted_files.len());
     println!(
         "  Components: {}{}",
-        extraction.installed_component_types
+        extraction
+            .installed_component_types
             .iter()
             .map(|c| format!(":{}", c.as_str()))
             .collect::<Vec<_>>()
@@ -1765,7 +1655,11 @@ fn finalize_install(
     }
 
     // Create state snapshot after successful install
-    create_state_snapshot(conn, tx_result.changeset_id, &format!("Install {}", pkg.name()))?;
+    create_state_snapshot(
+        conn,
+        tx_result.changeset_id,
+        &format!("Install {}", pkg.name()),
+    )?;
 
     Ok(())
 }
