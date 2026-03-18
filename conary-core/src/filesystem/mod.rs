@@ -5,18 +5,16 @@
 //! This module provides:
 //! - Content-addressable storage (CAS) for files, similar to git's object storage
 //! - Virtual filesystem (VFS) tree for building in-memory file hierarchies
-//! - File deployment from CAS to the actual filesystem
 //!
 //! Files are stored by their SHA-256 hash, enabling deduplication and
-//! efficient rollback support.
+//! efficient rollback support. File deployment is handled by composefs-native
+//! generation building (see `crate::generation`).
 
 mod cas;
-mod deployer;
 pub mod fsverity;
 pub mod path;
 pub mod vfs;
 
 pub use cas::CasStore;
-pub use deployer::FileDeployer;
 pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};
