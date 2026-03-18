@@ -117,8 +117,10 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
 /// Garbage-collect old generations, keeping the current generation, GC roots,
 /// and the most recent `keep` generations.
 ///
-/// Also removes the corresponding BLS boot loader entry files.
-pub fn cmd_generation_gc(keep: usize) -> Result<()> {
+/// After removing old generation directories and their BLS entries, performs
+/// CAS garbage collection: queries the database for hashes referenced by
+/// surviving generations and removes unreferenced objects from the CAS store.
+pub fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
     let current = current_generation(Path::new("/conary"))?;
     let gc_roots = load_gc_roots();
     let dir = generations_dir();
@@ -208,9 +210,71 @@ pub fn cmd_generation_gc(keep: usize) -> Result<()> {
     }
 
     println!(
-        "Collected {removed_count} generation(s), {}. CAS objects shared across generations are preserved.",
+        "Collected {removed_count} generation(s), freed {}.",
         format_bytes(freed_bytes)
     );
+
+    // --- CAS garbage collection ---
+    // Determine which state IDs correspond to surviving generations, then
+    // remove any CAS objects not referenced by those states.
+    let surviving_numbers: Vec<i64> = all_numbers
+        .iter()
+        .filter(|n| keep_set.contains(n))
+        .copied()
+        .collect();
+
+    cas_gc(db_path, &surviving_numbers)?;
+
+    Ok(())
+}
+
+/// Run CAS garbage collection for the given surviving generation numbers.
+///
+/// Opens the database, maps generation numbers to state IDs, queries for
+/// live CAS hashes, and removes unreferenced objects from the CAS store.
+fn cas_gc(db_path: &str, surviving_gen_numbers: &[i64]) -> Result<()> {
+    use conary_core::db::models::SystemState;
+    use conary_core::db::paths::objects_dir;
+    use conary_core::generation::gc::{gc_cas_objects, live_cas_hashes};
+
+    let conn = crate::commands::open_db(db_path)?;
+
+    // Map surviving generation numbers to system_state IDs.
+    // Generation numbers correspond to state_number in system_states.
+    let mut surviving_state_ids: Vec<i64> = Vec::new();
+    for &gen_num in surviving_gen_numbers {
+        if let Some(state) = SystemState::find_by_number(&conn, gen_num)?
+            && let Some(id) = state.id
+        {
+            surviving_state_ids.push(id);
+        }
+    }
+
+    if surviving_state_ids.is_empty() {
+        info!("No surviving states found in database; skipping CAS GC.");
+        println!("CAS GC: no surviving states in database, skipped.");
+        return Ok(());
+    }
+
+    let live_hashes = live_cas_hashes(&conn, &surviving_state_ids)?;
+    info!("{} live CAS hashes across {} surviving states", live_hashes.len(), surviving_state_ids.len());
+
+    let obj_dir = objects_dir(db_path);
+    let stats = gc_cas_objects(&obj_dir, &live_hashes)?;
+
+    if stats.objects_removed > 0 {
+        println!(
+            "CAS GC: removed {} of {} objects, freed {}.",
+            stats.objects_removed,
+            stats.objects_checked,
+            format_bytes(stats.bytes_freed)
+        );
+    } else {
+        println!(
+            "CAS GC: checked {} objects, all referenced.",
+            stats.objects_checked
+        );
+    }
 
     Ok(())
 }
