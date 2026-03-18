@@ -110,9 +110,9 @@ pub fn gc_roots_dir() -> PathBuf {
 
 /// Detect kernel version(s) by scanning `gen_dir/usr/lib/modules/` for subdirectories.
 ///
-/// Used when a generation has a deployed file tree (reflink format).
+/// Used when a generation has a deployed file tree (reflink format) and
+/// by the bootstrap image builder to discover the kernel in the sysroot.
 /// For composefs generations, use `detect_kernel_version_from_troves` in the builder instead.
-#[allow(dead_code)] // Retained for future reflink-format generation support
 pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
     let modules_dir = gen_dir.join("usr/lib/modules");
     let entries = std::fs::read_dir(modules_dir).ok()?;
