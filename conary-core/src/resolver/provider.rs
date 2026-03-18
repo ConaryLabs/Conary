@@ -494,10 +494,7 @@ impl<'db> ConaryProvider<'db> {
     }
 
     /// Collect dependency names not already in `known`, avoiding redundant allocations.
-    pub fn new_dependency_names(
-        &self,
-        known: &std::collections::HashSet<String>,
-    ) -> Vec<String> {
+    pub fn new_dependency_names(&self, known: &std::collections::HashSet<String>) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         for dep_list in self.dependencies.values() {
             for dep in dep_list {
@@ -679,13 +676,9 @@ impl<'db> ConaryProvider<'db> {
         //    Same logic as `load_installed_packages` but WITHOUT the
         //    `.filter(|d| !ProvideEntry::is_virtual_provide(...))`.
         //    Batch-load all deps in one query instead of N per-solvable queries.
-        let removal_trove_ids: Vec<i64> = self
-            .solvables
-            .iter()
-            .filter_map(|s| s.trove_id)
-            .collect();
-        let all_removal_deps =
-            DependencyEntry::find_by_troves(self.conn, &removal_trove_ids)?;
+        let removal_trove_ids: Vec<i64> =
+            self.solvables.iter().filter_map(|s| s.trove_id).collect();
+        let all_removal_deps = DependencyEntry::find_by_troves(self.conn, &removal_trove_ids)?;
 
         for (idx, solvable) in self.solvables.iter().enumerate() {
             let Some(tid) = solvable.trove_id else {
@@ -801,10 +794,7 @@ impl<'db> ConaryProvider<'db> {
         while let Some(row) = rows.next()? {
             let from: String = row.get(0)?;
             let to: String = row.get(1)?;
-            self.canonical_equivalents
-                .entry(from)
-                .or_default()
-                .push(to);
+            self.canonical_equivalents.entry(from).or_default().push(to);
         }
         Ok(())
     }
@@ -1117,11 +1107,7 @@ impl DependencyProvider for ConaryProvider<'_> {
                     if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
                         let equiv_candidates = self.solvables_for_name(equiv_name_id);
                         if !equiv_candidates.is_empty() {
-                            tracing::debug!(
-                                "Canonical fallback: {} -> {}",
-                                name_str,
-                                equiv
-                            );
+                            tracing::debug!("Canonical fallback: {} -> {}", name_str, equiv);
                             candidates.extend(equiv_candidates);
                             break;
                         }

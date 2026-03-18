@@ -88,9 +88,7 @@ pub fn build_erofs_image(
 
     use composefs::erofs::writer::mkfs_erofs;
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
-    use composefs::tree::{
-        Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat,
-    };
+    use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
 
     /// Helper: create a Stat with default root ownership and the given mode.
     fn dir_stat(mode: u32) -> Stat {
@@ -273,9 +271,7 @@ pub fn build_generation_from_db(
     // Step 2: Create system state snapshot
     let engine = StateEngine::new(conn);
     let state = engine.create_snapshot(summary, None, None).map_err(|e| {
-        crate::error::Error::InternalError(format!(
-            "Failed to create system state snapshot: {e}"
-        ))
+        crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
     })?;
     let gen_number = state.state_number;
 
@@ -417,17 +413,15 @@ mod tests {
             let entries = vec![
                 FileEntryRef {
                     path: "/usr/bin/hello".to_string(),
-                    sha256_hash:
-                        "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
-                            .to_string(),
+                    sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                        .to_string(),
                     size: 1024,
                     permissions: 0o755,
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
-                    sha256_hash:
-                        "1122334411223344112233441122334411223344112233441122334411223344"
-                            .to_string(),
+                    sha256_hash: "1122334411223344112233441122334411223344112233441122334411223344"
+                        .to_string(),
                     size: 4096,
                     permissions: 0o644,
                 },
@@ -459,17 +453,15 @@ mod tests {
             let entries = vec![
                 FileEntryRef {
                     path: "/usr/bin/hello".to_string(),
-                    sha256_hash:
-                        "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
-                            .to_string(),
+                    sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                        .to_string(),
                     size: 1024,
                     permissions: 0o755,
                 },
                 FileEntryRef {
                     path: "/var/log/messages".to_string(),
-                    sha256_hash:
-                        "1122334411223344112233441122334411223344112233441122334411223344"
-                            .to_string(),
+                    sha256_hash: "1122334411223344112233441122334411223344112233441122334411223344"
+                        .to_string(),
                     size: 2048,
                     permissions: 0o644,
                 },
@@ -507,17 +499,15 @@ mod tests {
             let entries = vec![
                 FileEntryRef {
                     path: "/usr/bin/hello".to_string(),
-                    sha256_hash:
-                        "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
-                            .to_string(),
+                    sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                        .to_string(),
                     size: 1024,
                     permissions: 0o755,
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
-                    sha256_hash:
-                        "1122334411223344112233441122334411223344112233441122334411223344"
-                            .to_string(),
+                    sha256_hash: "1122334411223344112233441122334411223344112233441122334411223344"
+                        .to_string(),
                     size: 4096,
                     permissions: 0o644,
                 },

@@ -70,7 +70,9 @@ pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
 
     if prereqs.all_present() {
         println!("[OK] All prerequisites are satisfied.");
-        println!("\nYou can proceed with 'conary bootstrap cross-tools' to build the cross-toolchain.");
+        println!(
+            "\nYou can proceed with 'conary bootstrap cross-tools' to build the cross-toolchain."
+        );
     } else {
         println!("[MISSING] Some prerequisites are not installed:");
         for missing in prereqs.missing() {
@@ -254,21 +256,13 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         BootstrapStage::CrossTools => {
             cmd_bootstrap_cross_tools(work_dir, None, verbose, false, None)
         }
-        BootstrapStage::TempTools => {
-            cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None)
-        }
-        BootstrapStage::FinalSystem => {
-            cmd_bootstrap_system(work_dir, None, verbose, false, None)
-        }
-        BootstrapStage::SystemConfig => {
-            cmd_bootstrap_config(work_dir, verbose, None)
-        }
+        BootstrapStage::TempTools => cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None),
+        BootstrapStage::FinalSystem => cmd_bootstrap_system(work_dir, None, verbose, false, None),
+        BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None),
         BootstrapStage::BootableImage => {
             cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G")
         }
-        BootstrapStage::Tier2 => {
-            cmd_bootstrap_tier2(work_dir, None, verbose, false, None)
-        }
+        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, false, None),
     }
 }
 
@@ -434,16 +428,11 @@ pub fn cmd_bootstrap_system(
 }
 
 /// Run Phase 4: System configuration (LFS Chapter 9)
-pub fn cmd_bootstrap_config(
-    work_dir: &str,
-    verbose: bool,
-    lfs_root: Option<&str>,
-) -> Result<()> {
+pub fn cmd_bootstrap_config(work_dir: &str, verbose: bool, lfs_root: Option<&str>) -> Result<()> {
     println!("Running Phase 4: System Configuration (LFS Ch9)...");
     println!("  Work directory: {}", work_dir);
 
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose);
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
     if let Some(root) = lfs_root {
         config = config.with_lfs_root(root);
     }

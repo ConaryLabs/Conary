@@ -161,8 +161,7 @@ impl TempToolsBuilder {
             // TODO: implement recipe-driven cross-compile for each package
             debug!(
                 "  build_cross_package({}) -- placeholder (toolchain={})",
-                pkg,
-                self.cross_toolchain.target
+                pkg, self.cross_toolchain.target
             );
         }
 
@@ -175,7 +174,10 @@ impl TempToolsBuilder {
     /// Creates essential directories, device nodes, and virtual kernel
     /// filesystems (`/dev`, `/proc`, `/sys`, `/run`) inside `$LFS/`.
     pub fn setup_chroot(&self) -> Result<(), TempToolsError> {
-        info!("Setting up chroot environment at {}", self.lfs_root.display());
+        info!(
+            "Setting up chroot environment at {}",
+            self.lfs_root.display()
+        );
 
         // TODO: create directory hierarchy, mount virtual filesystems,
         //       create essential symlinks and files
@@ -317,8 +319,7 @@ mod tests {
             is_static: false,
         };
 
-        let builder =
-            TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
+        let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
         assert!(builder.build_cross_packages().is_ok());
     }
 }

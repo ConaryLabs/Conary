@@ -118,10 +118,12 @@ mod tests {
         )
         .unwrap();
 
-        let repo_id: i64 =
-            conn.query_row("SELECT id FROM repositories WHERE name = 'fedora-43'", [], |r| {
-                r.get(0)
-            })
+        let repo_id: i64 = conn
+            .query_row(
+                "SELECT id FROM repositories WHERE name = 'fedora-43'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
 
         // Insert test packages
@@ -215,8 +217,11 @@ mod tests {
 
         // Verify the curated rule took effect
         let conn = conary_core::db::open(&db_path).unwrap();
-        let pkg = conary_core::db::models::CanonicalPackage::find_by_name(&conn, "curl-tools")
-            .unwrap();
-        assert!(pkg.is_some(), "curated rule should create 'curl-tools' canonical entry");
+        let pkg =
+            conary_core::db::models::CanonicalPackage::find_by_name(&conn, "curl-tools").unwrap();
+        assert!(
+            pkg.is_some(),
+            "curated rule should create 'curl-tools' canonical entry"
+        );
     }
 }

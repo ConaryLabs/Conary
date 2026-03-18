@@ -22,9 +22,7 @@ mod tests {
 
     use composefs::erofs::writer::mkfs_erofs;
     use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
-    use composefs::tree::{
-        Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat,
-    };
+    use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
 
     /// Helper: create a default Stat with root ownership and 0o755 mode.
     fn default_stat() -> Stat {
@@ -162,12 +160,7 @@ mod tests {
             image.len() > 1028,
             "[FAIL] Image too small to contain EROFS superblock"
         );
-        let magic = u32::from_le_bytes([
-            image[1024],
-            image[1025],
-            image[1026],
-            image[1027],
-        ]);
+        let magic = u32::from_le_bytes([image[1024], image[1025], image[1026], image[1027]]);
         assert_eq!(
             magic, 0xE0F5_E1E2,
             "[FAIL] EROFS magic mismatch: got {magic:#010X}, expected 0xE0F5E1E2"
@@ -271,12 +264,7 @@ mod tests {
             "[FAIL] Empty filesystem produced empty image"
         );
 
-        let magic = u32::from_le_bytes([
-            image[1024],
-            image[1025],
-            image[1026],
-            image[1027],
-        ]);
+        let magic = u32::from_le_bytes([image[1024], image[1025], image[1026], image[1027]]);
         assert_eq!(
             magic, 0xE0F5_E1E2,
             "[FAIL] Empty filesystem EROFS magic mismatch"
@@ -331,12 +319,7 @@ mod tests {
 
         let image = mkfs_erofs(&fs);
 
-        let magic = u32::from_le_bytes([
-            image[1024],
-            image[1025],
-            image[1026],
-            image[1027],
-        ]);
+        let magic = u32::from_le_bytes([image[1024], image[1025], image[1026], image[1027]]);
         assert_eq!(
             magic, 0xE0F5_E1E2,
             "[FAIL] Mixed content EROFS magic mismatch"
@@ -387,12 +370,7 @@ mod tests {
         );
 
         // Also verify the image is non-empty and has valid EROFS magic
-        let magic = u32::from_le_bytes([
-            image[1024],
-            image[1025],
-            image[1026],
-            image[1027],
-        ]);
+        let magic = u32::from_le_bytes([image[1024], image[1025], image[1026], image[1027]]);
         assert_eq!(magic, 0xE0F5_E1E2, "[FAIL] EROFS magic mismatch");
 
         println!(

@@ -132,10 +132,7 @@ impl CrossToolsBuilder {
         );
         info!("  LFS_TGT = {}", LFS_TGT);
         info!("  LFS root: {}", self.lfs_root.display());
-        info!(
-            "  Host compiler: {}",
-            self.host_toolchain.gcc().display()
-        );
+        info!("  Host compiler: {}", self.host_toolchain.gcc().display());
 
         for (i, pkg) in CROSS_TOOLS_ORDER.iter().enumerate() {
             info!(
@@ -302,8 +299,7 @@ mod tests {
             is_static: false,
         };
 
-        let builder =
-            CrossToolsBuilder::new(work.path(), lfs.path(), config, host);
+        let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host);
         assert!(builder.is_ok());
     }
 
@@ -322,8 +318,7 @@ mod tests {
             is_static: false,
         };
 
-        let builder =
-            CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
+        let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
         let toolchain = builder.build_all().unwrap();
 
         assert_eq!(toolchain.kind, ToolchainKind::CrossTools);

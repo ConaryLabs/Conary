@@ -237,7 +237,12 @@ impl RepositoryClient {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.client.get(&metadata_url).timeout(self.timeouts.metadata).send() {
+            match self
+                .client
+                .get(&metadata_url)
+                .timeout(self.timeouts.metadata)
+                .send()
+            {
                 Ok(response) => {
                     let status = response.status();
 

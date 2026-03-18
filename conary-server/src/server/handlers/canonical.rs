@@ -245,8 +245,10 @@ pub async fn canonical_map(
              ORDER BY cp.name, pi.distro",
         )?;
 
-        let mut entries_map: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
-            std::collections::BTreeMap::new();
+        let mut entries_map: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, String>,
+        > = std::collections::BTreeMap::new();
 
         let rows = stmt.query_map([], |row| {
             Ok((

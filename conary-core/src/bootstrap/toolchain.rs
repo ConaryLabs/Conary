@@ -421,18 +421,9 @@ mod tests {
             is_static: true,
         };
 
-        assert_eq!(
-            toolchain.gcc(),
-            bin.join("x86_64-conary-linux-gnu-gcc")
-        );
-        assert_eq!(
-            toolchain.gxx(),
-            bin.join("x86_64-conary-linux-gnu-g++")
-        );
-        assert_eq!(
-            toolchain.ar(),
-            bin.join("x86_64-conary-linux-gnu-ar")
-        );
+        assert_eq!(toolchain.gcc(), bin.join("x86_64-conary-linux-gnu-gcc"));
+        assert_eq!(toolchain.gxx(), bin.join("x86_64-conary-linux-gnu-g++"));
+        assert_eq!(toolchain.ar(), bin.join("x86_64-conary-linux-gnu-ar"));
     }
 
     #[test]

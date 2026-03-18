@@ -164,7 +164,10 @@ impl Tier2Builder {
     /// Returns `Tier2Error::SshConfig` if `ssh-keygen` is not found in the
     /// sysroot or if key generation fails.
     pub fn add_ssh_config(&self) -> Result<(), Tier2Error> {
-        info!("Configuring SSH in sysroot at {}", self.system_root.display());
+        info!(
+            "Configuring SSH in sysroot at {}",
+            self.system_root.display()
+        );
 
         let root = &self.system_root;
 
@@ -247,9 +250,7 @@ Subsystem sftp /usr/libexec/sftp-server
                 .args(["-N", "", "-q"])
                 .status()
                 .map_err(|e| {
-                    Tier2Error::SshConfig(format!(
-                        "failed to run ssh-keygen for {key_type}: {e}"
-                    ))
+                    Tier2Error::SshConfig(format!("failed to run ssh-keygen for {key_type}: {e}"))
                 })?;
 
             if !status.success() {
@@ -296,14 +297,8 @@ Subsystem sftp /usr/libexec/sftp-server
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(
-                    &auth_keys,
-                    std::fs::Permissions::from_mode(0o600),
-                )?;
-                std::fs::set_permissions(
-                    &dot_ssh,
-                    std::fs::Permissions::from_mode(0o700),
-                )?;
+                std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600))?;
+                std::fs::set_permissions(&dot_ssh, std::fs::Permissions::from_mode(0o700))?;
             }
 
             info!("Installed test public key to {}", auth_keys.display());

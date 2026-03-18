@@ -239,7 +239,7 @@ mod tests {
         let prefix = "chunks/";
         let keys = vec![
             "chunks/abc123def456",
-            "chunks/",       // empty hash after strip
+            "chunks/", // empty hash after strip
             "chunks/xyz789",
             "other/notchunk", // different prefix
         ];

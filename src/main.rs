@@ -501,11 +501,10 @@ fn run() -> Result<()> {
                     Ok(())
                 }
                 cli::GenerationCommands::Rollback => {
-                    let current =
-                        conary_core::generation::mount::current_generation(std::path::Path::new(
-                            "/conary",
-                        ))?
-                        .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
+                    let current = conary_core::generation::mount::current_generation(
+                        std::path::Path::new("/conary"),
+                    )?
+                    .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
 
                     // Find the highest generation below current that actually exists
                     let gen_dir = commands::generation::metadata::generations_dir();
@@ -1329,11 +1328,7 @@ fn run() -> Result<()> {
                 work_dir,
                 lfs_root,
                 verbose,
-            } => commands::cmd_bootstrap_config(
-                &work_dir,
-                verbose,
-                lfs_root.as_deref(),
-            ),
+            } => commands::cmd_bootstrap_config(&work_dir, verbose, lfs_root.as_deref()),
 
             cli::BootstrapCommands::Tier2 {
                 work_dir,

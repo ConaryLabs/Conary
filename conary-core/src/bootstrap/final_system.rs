@@ -209,7 +209,10 @@ impl FinalSystemBuilder {
             self.completed.push((*pkg).to_string());
         }
 
-        info!("Phase 3 complete: all {} packages built", SYSTEM_BUILD_ORDER.len());
+        info!(
+            "Phase 3 complete: all {} packages built",
+            SYSTEM_BUILD_ORDER.len()
+        );
         Ok(())
     }
 
@@ -380,8 +383,7 @@ mod tests {
             is_static: false,
         };
 
-        let mut builder =
-            FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+        let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
         assert!(builder.build_all().is_ok());
         assert_eq!(builder.completed().len(), 77);
     }
@@ -403,8 +405,7 @@ mod tests {
             is_static: false,
         };
 
-        let mut builder =
-            FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+        let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
         assert!(builder.build_from("gcc").is_ok());
         // gcc is at index 25, so 77 - 25 = 52 remaining
         assert_eq!(builder.completed().len(), 52);
@@ -427,8 +428,7 @@ mod tests {
             is_static: false,
         };
 
-        let mut builder =
-            FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+        let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
         let result = builder.build_from("nonexistent-package");
         assert!(result.is_err());
     }

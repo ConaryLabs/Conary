@@ -191,21 +191,16 @@ impl Bootstrap {
     /// Uses the host compiler to build a cross-toolchain targeting `LFS_TGT`.
     /// The output lives under `$LFS/tools/` and is consumed by Phase 2.
     pub fn build_cross_tools(&mut self) -> Result<Toolchain> {
-        let host = Toolchain::host()
-            .map_err(|e| anyhow::anyhow!("Host toolchain not found: {e}"))?;
+        let host =
+            Toolchain::host().map_err(|e| anyhow::anyhow!("Host toolchain not found: {e}"))?;
 
         let lfs_root = &self.config.lfs_root.clone();
         std::fs::create_dir_all(lfs_root)?;
 
-        let builder = CrossToolsBuilder::new(
-            &self.work_dir,
-            lfs_root,
-            self.config.clone(),
-            host,
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        let toolchain = builder.build_all()
+        let builder = CrossToolsBuilder::new(&self.work_dir, lfs_root, self.config.clone(), host)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let toolchain = builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;
@@ -218,24 +213,22 @@ impl Bootstrap {
     /// Uses the Phase 1 cross-toolchain to cross-compile utilities, then
     /// sets up a chroot and builds additional packages natively inside it.
     pub fn build_temp_tools(&mut self) -> Result<()> {
-        let cross_tc = self
-            .get_cross_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Phase 1 cross-toolchain not found. Run cross-tools first."))?;
+        let cross_tc = self.get_cross_toolchain().ok_or_else(|| {
+            anyhow::anyhow!("Phase 1 cross-toolchain not found. Run cross-tools first.")
+        })?;
 
         let lfs_root = &self.config.lfs_root.clone();
 
-        let builder = TempToolsBuilder::new(
-            &self.work_dir,
-            lfs_root,
-            self.config.clone(),
-            cross_tc,
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let builder =
+            TempToolsBuilder::new(&self.work_dir, lfs_root, self.config.clone(), cross_tc)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.build_cross_packages()
+        builder
+            .build_cross_packages()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        builder.setup_chroot()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        builder.build_chroot_packages()
+        builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder
+            .build_chroot_packages()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
@@ -261,15 +254,11 @@ impl Bootstrap {
             is_static: false,
         };
 
-        let mut builder = FinalSystemBuilder::new(
-            &self.work_dir,
-            lfs_root,
-            self.config.clone(),
-            toolchain,
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut builder =
+            FinalSystemBuilder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.build_all()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::FinalSystem, lfs_root)?;
@@ -283,8 +272,7 @@ impl Bootstrap {
     pub fn configure_system(&mut self) -> Result<()> {
         let lfs_root = &self.config.lfs_root.clone();
 
-        system_config::configure_system(lfs_root)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        system_config::configure_system(lfs_root).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::SystemConfig, lfs_root)?;
@@ -309,18 +297,12 @@ impl Bootstrap {
             is_static: false,
         };
 
-        let builder = Tier2Builder::new(
-            &self.work_dir,
-            lfs_root,
-            self.config.clone(),
-            toolchain,
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        builder.build_all()
+        let builder = Tier2Builder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        self.stages
-            .mark_complete(BootstrapStage::Tier2, lfs_root)?;
+        builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
 
         Ok(())
     }
@@ -453,9 +435,9 @@ impl Bootstrap {
         size: ImageSize,
     ) -> Result<ImageResult> {
         // Get sysroot path
-        let sysroot = self
-            .get_sysroot()
-            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run 'bootstrap system' first."))?;
+        let sysroot = self.get_sysroot().ok_or_else(|| {
+            anyhow::anyhow!("Base system not found. Run 'bootstrap system' first.")
+        })?;
 
         let mut builder = ImageBuilder::new(
             &self.work_dir,
